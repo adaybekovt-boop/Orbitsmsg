@@ -610,6 +610,12 @@ Future<AcceptHelloResult> acceptHello({
     _resetPendingReady(session);
   }
 
+  // Clear any X3DH bootstrap secret left over from a previous handshake on
+  // this session. Only a freshly-derived v4 secret (set just below) may feed
+  // the `??` fallback at the `shared` derivation; otherwise a stale secret
+  // would desync the ratchet when a non-X3DH hello/rekey arrives.
+  session.bootstrapSk = null;
+
   // v4 responder: replay the X3DH DHs against our local prekey privates.
   if (v4Extras != null) {
     final boot = await deriveResponderBootstrap(

@@ -1050,8 +1050,8 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       }
     }
     final sticker = msg['sticker'];
-    if (sticker is Map && sticker['dataUrl'] is String) {
-      final url = sticker['dataUrl'] as String;
+    if (sticker is Map && sticker['url'] is String) {
+      final url = sticker['url'] as String;
       if (url.length > _maxStickerLen) {
         msg['sticker'] = null;
       }

@@ -51,14 +51,29 @@ class _CallOverlayState extends ConsumerState<_CallOverlay> {
   /// Reset on call end. Defaults to bottom-right.
   Offset? _pipOffset;
 
+  /// Renderers expose a usable texture only once `initialize()` resolves.
+  /// Assigning `srcObject` before then can silently drop the stream and
+  /// leave a black view, so we hold off syncing until this flips true.
+  bool _renderersReady = false;
+
   @override
   void initState() {
     super.initState();
-    _localRenderer.initialize();
-    _remoteRenderer.initialize();
-    // Sync renderers with the current state immediately — there's no
-    // didChangeDependencies path for the very first frame because the
-    // notifier emits `inCall` *before* this widget mounts.
+    _initRenderers();
+  }
+
+  Future<void> _initRenderers() async {
+    try {
+      await _localRenderer.initialize();
+      await _remoteRenderer.initialize();
+    } catch (_) {
+      // Init can fail if the widget was torn down mid-call; the mounted
+      // guard below stops us from touching disposed renderers.
+    }
+    if (!mounted) return;
+    setState(() => _renderersReady = true);
+    // Sync with the current state now that the textures exist — the notifier
+    // emits `inCall` before this widget mounts, so there's no other hook.
     _syncRenderers(ref.read(callsNotifierProvider));
   }
 
@@ -72,6 +87,7 @@ class _CallOverlayState extends ConsumerState<_CallOverlay> {
   }
 
   void _syncRenderers(CallState s) {
+    if (!_renderersReady) return;
     if (_localRenderer.srcObject != s.localStream) {
       _localRenderer.srcObject = s.localStream;
     }

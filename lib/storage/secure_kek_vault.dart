@@ -1,4 +1,13 @@
-// Biometric-gated guardian for the 32-byte vault KEK.
+// Guardian for the 32-byte vault KEK.
+//
+// NOTE: the per-read biometric prompt described below is NOT yet wired (see
+// the platform-option builders near the bottom). As implemented, the KEK is
+// stored hardware-backed (iOS keychain / Android Keystore via
+// EncryptedSharedPreferences) and gated only by device unlock — there is no
+// Face ID / Touch ID prompt on retrieve. Wiring that needs the `local_auth`
+// package plus iOS/Android platform config; until then this class is also not
+// referenced by the auth flow. Treat the "triggers Face ID" wording below as
+// the intended end state, not current behaviour.
 //
 // Layered design, per research/07_Secure_device_storage.md:
 //

@@ -145,6 +145,10 @@ class BlackjackEngine {
   final List<BjEvent> _events = [];
   int _balance;
   int _bet = defaultBet;
+  // The player's chosen stake, independent of an in-round double-down. `_bet`
+  // is mutated to `2×` by `doubleDown`; without this snapshot the doubled
+  // stake would silently carry into every subsequent round.
+  int _baseBet = defaultBet;
   int _pot = 0;
   bool _doubled = false;
   int _lastDelta = 0;
@@ -163,6 +167,7 @@ class BlackjackEngine {
     final stepped = (next ~/ betStep) * betStep;
     final clamped = max(minBet, min(stepped, _balance));
     _bet = clamped;
+    _baseBet = clamped;
     return true;
   }
 
@@ -193,6 +198,9 @@ class BlackjackEngine {
   }
 
   bool deal() {
+    // Restore the chosen stake — a prior round's double-down leaves `_bet`
+    // doubled, and that must not bleed into the next deal.
+    _bet = _baseBet;
     if (_balance < _bet) return false;
     _deck = _shuffle(_createDeck(), _rng);
     _player = [_draw(), _draw()];
@@ -344,6 +352,7 @@ class BlackjackEngine {
     _events.clear();
     _balance = defaultBalance;
     _bet = defaultBet;
+    _baseBet = defaultBet;
     _pot = 0;
     _doubled = false;
     _lastDelta = 0;

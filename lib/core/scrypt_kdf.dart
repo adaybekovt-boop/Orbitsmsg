@@ -104,6 +104,7 @@ class ScryptParams {
 /// without running scrypt a second time.
 class ScryptRecord {
   const ScryptRecord({
+    required this.username,
     required this.saltB64,
     required this.n,
     required this.r,
@@ -114,6 +115,12 @@ class ScryptRecord {
   });
   final String algo = 'scrypt';
   final int v = 2;
+
+  /// The username folded into the key material at derivation time. Persisted
+  /// so verification always reuses the *original* value even if the user later
+  /// renames their profile — otherwise the re-derived key would diverge and
+  /// lock the user out of their own vault.
+  final String username;
   final String saltB64;
   final int n;
   final int r;
@@ -126,6 +133,7 @@ class ScryptRecord {
   Map<String, Object?> toJson() => {
         'algo': algo,
         'v': v,
+        'kdfUsername': username,
         'saltB64': saltB64,
         'N': n,
         'r': r,
@@ -159,6 +167,7 @@ Future<ScryptRecord> deriveScryptRecord({
   );
   final verifier = await _computeVerifier(dk);
   return ScryptRecord(
+    username: username.trim(),
     saltB64: bytesToBase64(salt),
     n: n,
     r: r,
@@ -180,6 +189,7 @@ class ScryptStoredRecord {
     required this.dkLen,
     this.verifierB64,
     this.dkB64,
+    this.kdfUsername,
   });
 
   final String saltB64;
@@ -189,6 +199,11 @@ class ScryptStoredRecord {
   final int dkLen;
   final String? verifierB64;
   final String? dkB64;
+
+  /// The username persisted at derivation time, if present. Records written
+  /// before this field existed return null; callers fall back to the current
+  /// profile name for those.
+  final String? kdfUsername;
 
   static ScryptStoredRecord? fromJson(Map<String, Object?> json) {
     if (json['algo'] != 'scrypt') return null;
@@ -207,6 +222,7 @@ class ScryptStoredRecord {
       dkLen: dkLen,
       verifierB64: json['verifierB64'] as String?,
       dkB64: json['dkB64'] as String?,
+      kdfUsername: json['kdfUsername'] as String?,
     );
   }
 }

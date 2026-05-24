@@ -228,6 +228,10 @@ class _SignalingSocket {
       ch.sink.add(jsonEncode(frame));
     } catch (e) {
       _errors.add(PeerError('socket-error', e.toString()));
+      // A write failure means the sink is wedged. Tear down (emitting close)
+      // so the client reconnects, instead of the heartbeat re-firing the same
+      // error every interval against a dead socket.
+      _teardown(emitClose: true);
     }
   }
 
@@ -580,6 +584,9 @@ class PeerJsClient {
 
   final Map<String, _Negotiator> _conns = {};
   final Map<String, List<RTCIceCandidate>> _pendingIce = {};
+  // Per-connection grace timers for ICE "disconnected" — a transient blip is
+  // given time to recover before the connection is reaped.
+  final Map<String, Timer> _iceDropTimers = {};
 
   final _openCtl = StreamController<String>.broadcast();
   final _disconnectCtl = StreamController<void>.broadcast();
@@ -611,6 +618,12 @@ class PeerJsClient {
   }
 
   Future<void> _openSocket() async {
+    // Fully dispose any prior socket before replacing it. `disconnect()` only
+    // `close()`s the socket (tears down the WebSocket) but leaves its three
+    // broadcast StreamControllers + our listeners alive; without this every
+    // reconnect would leak them and a stale frame from the old socket could
+    // flip `_open`/`_disconnected` back on.
+    await _sock?.dispose();
     final sock = _SignalingSocket(
       endpoint: endpoint,
       peerId: _desiredId ?? '',
@@ -799,6 +812,10 @@ class PeerJsClient {
     _destroyed = true;
     _open = false;
     _disconnected = true;
+    for (final t in _iceDropTimers.values) {
+      t.cancel();
+    }
+    _iceDropTimers.clear();
     final conns = List<_Negotiator>.from(_conns.values);
     _conns.clear();
     _pendingIce.clear();
@@ -965,6 +982,7 @@ class PeerJsClient {
   }
 
   void _forgetConnection(String cid) {
+    _iceDropTimers.remove(cid)?.cancel();
     _conns.remove(cid);
     _pendingIce.remove(cid);
   }
@@ -972,10 +990,34 @@ class PeerJsClient {
   void _wirePcLifecycle(RTCPeerConnection pc, String cid) {
     pc.onIceConnectionState = (state) {
       if (_destroyed) return;
-      if (state == RTCIceConnectionState.RTCIceConnectionStateFailed ||
-          state == RTCIceConnectionState.RTCIceConnectionStateClosed) {
-        final n = _conns.remove(cid);
-        if (n != null) unawaited(n.dispose());
+      switch (state) {
+        case RTCIceConnectionState.RTCIceConnectionStateFailed:
+        case RTCIceConnectionState.RTCIceConnectionStateClosed:
+          _iceDropTimers.remove(cid)?.cancel();
+          final n = _conns.remove(cid);
+          _pendingIce.remove(cid);
+          if (n != null) unawaited(n.dispose());
+          break;
+        case RTCIceConnectionState.RTCIceConnectionStateConnected:
+        case RTCIceConnectionState.RTCIceConnectionStateCompleted:
+          // Recovered — cancel any pending reap.
+          _iceDropTimers.remove(cid)?.cancel();
+          break;
+        case RTCIceConnectionState.RTCIceConnectionStateDisconnected:
+          // Often a transient blip that recovers on its own; give it a window
+          // before reaping so a brief drop doesn't kill a live peer, but a
+          // permanently-stuck "disconnected" can't leak the RTCPeerConnection.
+          _iceDropTimers[cid]?.cancel();
+          _iceDropTimers[cid] = Timer(const Duration(seconds: 20), () {
+            _iceDropTimers.remove(cid);
+            if (_destroyed) return;
+            final n = _conns.remove(cid);
+            _pendingIce.remove(cid);
+            if (n != null) unawaited(n.dispose());
+          });
+          break;
+        default:
+          break;
       }
     };
   }

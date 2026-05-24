@@ -622,26 +622,11 @@ bool dispatchReliablePlaintext(
       'voice': voiceRef,
       'attachment': attachmentRef,
     };
+    // Persist exactly once, via the canonical inbound handler. It clamps
+    // oversize fields and drops messages from blocked peers — a second direct
+    // `db.saveMessage` here would race that write (last-writer-wins) and
+    // bypass both the clamp and the block filter.
     ctx.pushMessage(remoteId, uiMsg);
-    unawaited(db.saveMessage(<String, Object?>{
-      'id': msgId,
-      'peerId': remoteId,
-      'timestamp': ts,
-      'direction': 'in',
-      'status': 'delivered',
-      'payload': <String, Object?>{
-        'id': msgId,
-        'from': remoteId,
-        'to': ctx.selfPeerId,
-        'text': text,
-        'ts': ts,
-        'type': msgType,
-        'sticker': sticker,
-        'replyTo': replyTo,
-        'voice': voiceRef,
-        'attachment': attachmentRef,
-      },
-    }));
     sendReply(<String, Object?>{
       'type': 'ack',
       'id': msgId,
@@ -712,8 +697,11 @@ List<double>? _numListToDoubles(Object? v) {
 /// and matches JS's `Math.random().toString(16).slice(2)`.
 String _randomHex() {
   final rng = Random();
-  final lo = rng.nextInt(1 << 32);
-  final hi = rng.nextInt(1 << 32);
+  // Use a literal, not `1 << 32`: on web `<<` is 32-bit so `1 << 32` wraps to
+  // 1 and `nextInt(1)` would always return 0, making every id collide.
+  const u32 = 0x100000000; // 2^32
+  final lo = rng.nextInt(u32);
+  final hi = rng.nextInt(u32);
   return hi.toRadixString(16).padLeft(8, '0') +
       lo.toRadixString(16).padLeft(8, '0');
 }

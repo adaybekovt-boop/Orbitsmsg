@@ -72,6 +72,8 @@ class PeerConnectionManager {
   Timer? _signalNoiseClearTimer;
   Timer? _initialConnectTimer;
   bool _swapping = false;
+  bool _swapPending = false;
+  String? _pendingSwapId;
   List<StreamSubscription<dynamic>>? _subs;
   final Random _jitter = Random.secure();
 
@@ -159,7 +161,15 @@ class PeerConnectionManager {
   /// Recreate peer under a new id. Used for host rotation and
   /// `unavailable-id` recovery. Mirrors swapPeerId in JS.
   Future<void> swapPeerId(String nextId) async {
-    if (_swapping) return;
+    // A swap requested while one is already running must not be silently
+    // dropped — otherwise an `unavailable-id`/host-rotation that lands during
+    // an in-flight swap abandons recovery and the status sticks on
+    // "connecting". Coalesce it into a single follow-up swap instead.
+    if (_swapping) {
+      _swapPending = true;
+      _pendingSwapId = nextId;
+      return;
+    }
     if (isDropInProgress) return;
     _swapping = true;
     try {
@@ -178,6 +188,12 @@ class PeerConnectionManager {
       } catch (_) {}
     } finally {
       _swapping = false;
+      if (_swapPending) {
+        _swapPending = false;
+        final pending = _pendingSwapId ?? nextId;
+        _pendingSwapId = null;
+        unawaited(swapPeerId(pending));
+      }
     }
   }
 
@@ -321,7 +337,17 @@ class PeerConnectionManager {
       });
       cb.onError?.call(err);
     } else {
-      if (isSignalNoise) _signalNoiseStreak += 1;
+      if (isSignalNoise) {
+        _signalNoiseStreak += 1;
+        // Still arm the quiet-period reset, otherwise once the streak passes
+        // the swallow threshold it never decays and every later blip keeps
+        // showing the red banner even after the network recovers.
+        _signalNoiseClearTimer?.cancel();
+        _signalNoiseClearTimer = Timer(const Duration(seconds: 10), () {
+          _signalNoiseClearTimer = null;
+          _signalNoiseStreak = 0;
+        });
+      }
       cb.setError?.call(mapPeerError(err.toMap()));
       cb.onError?.call(err);
     }

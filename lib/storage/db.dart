@@ -685,7 +685,12 @@ Future<List<Map<String, Object?>>> getMessages(
   int? beforeTimestamp,
 }) async {
   if (peerId.isEmpty) return const [];
-  final before = beforeTimestamp ?? (1 << 62);
+  // Web (dart2js/dart2wasm) evaluates `<<` with 32-bit semantics, so
+  // `1 << 62` collapses to a tiny value and would exclude every real
+  // ms-epoch message. Use a literal that's web-safe (≤ 2^53-1) yet far above
+  // any plausible timestamp.
+  const maxTimestampSentinel = 9007199254740991; // 2^53 - 1
+  final before = beforeTimestamp ?? maxTimestampSentinel;
   final db = orbitsDb();
   final rows = await (db.select(db.messagesTable)
         ..where((t) =>
@@ -844,22 +849,22 @@ Stream<List<Map<String, Object?>>> watchChatMetas() {
   final query = db.customSelect(
     '''
     SELECT
-      m.peerId AS peerId,
+      m.peer_id AS peerId,
       MAX(m.timestamp) AS lastTs,
       (
         SELECT data FROM messages
-        WHERE peerId = m.peerId
+        WHERE peer_id = m.peer_id
         ORDER BY timestamp DESC
         LIMIT 1
       ) AS lastData,
       SUM(CASE
         WHEN m.direction = 'in'
-             AND m.timestamp > IFNULL(p.lastReadAt, 0)
+             AND m.timestamp > IFNULL(p.last_read_at, 0)
         THEN 1 ELSE 0
       END) AS unreadCount
     FROM messages m
-    LEFT JOIN peers p ON p.id = m.peerId
-    GROUP BY m.peerId
+    LEFT JOIN peers p ON p.id = m.peer_id
+    GROUP BY m.peer_id
     ''',
     readsFrom: {db.messagesTable, db.peersTable},
   );

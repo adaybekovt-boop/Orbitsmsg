@@ -162,6 +162,16 @@ class CallsNotifier extends StateNotifier<CallState> {
   /// sharing, so we can restore it without re-asking for permission.
   MediaStreamTrack? _cameraTrackBackup;
 
+  /// The active screen-share track, retained so we can detach its `onEnded`
+  /// handler when sharing stops — otherwise a stale handler could fire a
+  /// toggle against a later call.
+  MediaStreamTrack? _shareTrack;
+
+  /// Guards [toggleScreenShare] against re-entrancy — the user tapping the
+  /// button and the browser's "Stop sharing" `onEnded` can otherwise race
+  /// and corrupt the camera/share swap.
+  bool _toggling = false;
+
   // ─── Public API ───────────────────────────────────────────────
 
   /// Dial [remotePeerId]. If [video] is true, requests camera too;
@@ -285,72 +295,82 @@ class CallsNotifier extends StateNotifier<CallState> {
   /// support (`flutter_webrtc` mobile) this surfaces an error and
   /// the state stays unchanged.
   Future<void> toggleScreenShare() async {
+    if (_toggling) return;
     final conn = _conn;
     final local = state.localStream;
     if (conn == null || local == null) return;
-
-    if (state.screenSharing) {
-      // Restore camera. Use the track we backed up when share started;
-      // if it's gone (user disabled video before sharing) re-acquire.
-      MediaStreamTrack? cameraTrack = _cameraTrackBackup;
-      if (cameraTrack == null) {
-        try {
-          final tmp = await navigator.mediaDevices
-              .getUserMedia({'audio': false, 'video': true});
-          cameraTrack = tmp.getVideoTracks().firstOrNull;
-        } catch (_) {
-          state = state.copyWith(lastError: 'Не удалось вернуть камеру');
-          return;
+    _toggling = true;
+    try {
+      if (state.screenSharing) {
+        // Restore camera. Use the track we backed up when share started;
+        // if it's gone (user disabled video before sharing) re-acquire.
+        MediaStreamTrack? cameraTrack = _cameraTrackBackup;
+        if (cameraTrack == null) {
+          try {
+            final tmp = await navigator.mediaDevices
+                .getUserMedia({'audio': false, 'video': true});
+            cameraTrack = tmp.getVideoTracks().firstOrNull;
+          } catch (_) {
+            state = state.copyWith(lastError: 'Не удалось вернуть камеру');
+            return;
+          }
         }
+        // Detach the stale handler before the share track is torn down.
+        _shareTrack?.onEnded = null;
+        _shareTrack = null;
+        if (cameraTrack != null) {
+          await _replaceVideoTrack(cameraTrack, local);
+        }
+        _cameraTrackBackup = null;
+        state = state.copyWith(
+          screenSharing: false,
+          videoEnabled: true,
+          lastError: null,
+        );
+        return;
       }
-      if (cameraTrack != null) {
-        await _replaceVideoTrack(cameraTrack, local);
+
+      // Start screen share. Browser shows the picker dialog; user can
+      // cancel it, in which case we just no-op silently.
+      MediaStream? display;
+      try {
+        display = await navigator.mediaDevices.getDisplayMedia({
+          'video': true,
+          'audio': false,
+        });
+      } catch (_) {
+        // User cancelled or permission denied. Don't surface an error
+        // popup for the cancel case — that's not a failure, just a
+        // change of mind.
+        return;
       }
-      _cameraTrackBackup = null;
+      final shareTrack = display.getVideoTracks().firstOrNull;
+      if (shareTrack == null) {
+        state = state.copyWith(lastError: 'Не удалось получить экран');
+        return;
+      }
+      final cameraTrack = local.getVideoTracks().firstOrNull;
+      _cameraTrackBackup = cameraTrack;
+      _shareTrack = shareTrack;
+      await _replaceVideoTrack(shareTrack, local);
+
+      // When the user clicks the browser's "Stop sharing" button we want
+      // to seamlessly fall back to the camera. The track's `onEnded`
+      // hook fires for both cases (user-initiated stop AND we ended it
+      // ourselves), so we guard with `screenSharing` + the re-entrancy flag
+      // to avoid recursion and stale-call toggles.
+      shareTrack.onEnded = () {
+        if (state.screenSharing && !_toggling) unawaited(toggleScreenShare());
+      };
+
       state = state.copyWith(
-        screenSharing: false,
+        screenSharing: true,
         videoEnabled: true,
         lastError: null,
       );
-      return;
+    } finally {
+      _toggling = false;
     }
-
-    // Start screen share. Browser shows the picker dialog; user can
-    // cancel it, in which case we just no-op silently.
-    MediaStream? display;
-    try {
-      display = await navigator.mediaDevices.getDisplayMedia({
-        'video': true,
-        'audio': false,
-      });
-    } catch (_) {
-      // User cancelled or permission denied. Don't surface an error
-      // popup for the cancel case — that's not a failure, just a
-      // change of mind.
-      return;
-    }
-    final shareTrack = display.getVideoTracks().firstOrNull;
-    if (shareTrack == null) {
-      state = state.copyWith(lastError: 'Не удалось получить экран');
-      return;
-    }
-    final cameraTrack = local.getVideoTracks().firstOrNull;
-    _cameraTrackBackup = cameraTrack;
-    await _replaceVideoTrack(shareTrack, local);
-
-    // When the user clicks the browser's "Stop sharing" button we want
-    // to seamlessly fall back to the camera. The track's `onEnded`
-    // hook fires for both cases (user-initiated stop AND we ended it
-    // ourselves), so we guard with `screenSharing` to avoid recursion.
-    shareTrack.onEnded = () {
-      if (state.screenSharing) toggleScreenShare();
-    };
-
-    state = state.copyWith(
-      screenSharing: true,
-      videoEnabled: true,
-      lastError: null,
-    );
   }
 
   /// End the active call (or cancel a still-dialing one). Both sides
@@ -360,6 +380,8 @@ class CallsNotifier extends StateNotifier<CallState> {
     final stream = state.localStream;
     _conn = null;
     _cameraTrackBackup = null;
+    _shareTrack?.onEnded = null;
+    _shareTrack = null;
     try {
       _remoteStreamSub?.cancel();
     } catch (_) {}

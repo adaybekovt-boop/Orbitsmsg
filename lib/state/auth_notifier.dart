@@ -198,8 +198,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
       throw const AuthException('corrupt_record', 'Повреждённый профиль');
     }
 
+    // Use the username captured at derivation time, not the current
+    // displayName — otherwise renaming the profile changes the KDF input and
+    // permanently locks the user out. Older records that predate the stored
+    // field fall back to the displayName they were created with.
+    final kdfUsername = stored.kdfUsername ?? profile.displayName;
+
     final result = await verifyScryptRecordEx(
-      username: profile.displayName,
+      username: kdfUsername,
       password: password,
       record: stored,
     );
@@ -208,14 +214,15 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
     await setVaultKek(result.dkBytes!);
 
-    // v1 → v2 migration — re-derive with the stored cost parameters so the
-    // next unlock reads a safe record. Failure is non-fatal; we'll try again
-    // next time the user signs in.
+    // Migration: re-derive when the record is v1 (legacy raw-dk) OR is missing
+    // the persisted KDF username, so the next unlock survives a future rename.
+    // Re-derivation reuses the stored cost parameters and the resolved
+    // username; failure is non-fatal and retried on the next sign-in.
     final storedVersion = (rawRecord['v'] as num?)?.toInt() ?? 1;
-    if (storedVersion != 2) {
+    if (storedVersion != 2 || stored.kdfUsername == null) {
       try {
         final fresh = await deriveScryptRecord(
-          username: profile.displayName,
+          username: kdfUsername,
           password: password,
           params: ScryptParams(
             n: stored.n,

@@ -152,7 +152,7 @@ String _buildPreview(Map<String, Object?>? lastData) {
       return '🖼 Стикер';
     case 'voice':
       return '🎤 Голосовое сообщение';
-    case 'attachment':
+    case 'file':
       final att = payload['attachment'];
       if (att is Map) {
         final kind = att['kind'];

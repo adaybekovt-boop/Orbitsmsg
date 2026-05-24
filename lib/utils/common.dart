@@ -53,7 +53,9 @@ String formatLastSeen(int? ts, {int? now}) {
   final t = ts ?? 0;
   if (t == 0) return '';
   final currentMs = now ?? DateTime.now().millisecondsSinceEpoch;
-  final diff = (currentMs - t).clamp(0, 1 << 53);
+  // Literal upper bound, not `1 << 53`: web `<<` is 32-bit and would collapse
+  // it to ~2 M ms (~35 min), clamping every older "last seen" to that.
+  final diff = (currentMs - t).clamp(0, 9007199254740991); // 2^53 - 1
   const min = 60 * 1000;
   const hour = 60 * min;
   const day = 24 * hour;

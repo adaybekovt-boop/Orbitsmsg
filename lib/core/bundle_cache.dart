@@ -109,7 +109,7 @@ String _pinStatusName(PinStatus s) {
     case PinStatus.pinned:
       return 'pinned';
     case PinStatus.newPin:
-      return 'new';
+      return 'newPin';
     case PinStatus.mismatch:
       return 'mismatch';
   }

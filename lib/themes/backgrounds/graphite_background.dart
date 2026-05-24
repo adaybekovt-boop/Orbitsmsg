@@ -43,7 +43,9 @@ class _GraphiteBackgroundState extends ConsumerState<GraphiteBackground>
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 44),
-    )..repeat();
+    );
+    // Started/stopped in build() based on the perf budget — a frozen or
+    // reduced-motion tier must not keep a vsync callback firing every frame.
   }
 
   @override
@@ -59,6 +61,14 @@ class _GraphiteBackgroundState extends ConsumerState<GraphiteBackground>
     final showOrbs =
         budget.tier != PerfTier.frozen && budget.particles > 0;
     final motion = budget.motion;
+
+    // Drive the drift controller only when orbs are actually moving; a frozen
+    // frame (t = 0.5) needs no per-frame ticks.
+    if (showOrbs && motion) {
+      if (!_controller.isAnimating) _controller.repeat();
+    } else if (_controller.isAnimating) {
+      _controller.stop();
+    }
 
     return IgnorePointer(
       ignoring: true,

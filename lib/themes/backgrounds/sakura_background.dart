@@ -48,7 +48,8 @@ class _SakuraBackgroundState extends ConsumerState<SakuraBackground>
       if (!mounted) return;
       setState(() => _elapsed = d);
     });
-    _ticker.start();
+    // The ticker is started lazily in build() only when there's motion to
+    // animate — see the start/stop control there.
   }
 
   @override
@@ -72,6 +73,14 @@ class _SakuraBackgroundState extends ConsumerState<SakuraBackground>
         budget.motion && budget.tier != PerfTier.frozen;
     final count = motion ? budget.particles : 0;
     _ensurePetals(count);
+
+    // Only run the per-frame ticker while there are petals to move; a
+    // frozen/reduced-motion background must do zero per-frame work.
+    if (count > 0) {
+      if (!_ticker.isActive) _ticker.start();
+    } else if (_ticker.isActive) {
+      _ticker.stop();
+    }
 
     return IgnorePointer(
       ignoring: true,

@@ -64,7 +64,7 @@ class OrbitsDatabase extends _$OrbitsDatabase {
           // "trusted" filters to verified peers first.
           await customStatement(
             'CREATE INDEX IF NOT EXISTS idx_peers_last_seen '
-            'ON peers(lastSeenAt)',
+            'ON peers(last_seen_at)',
           );
           await customStatement(
             'CREATE INDEX IF NOT EXISTS idx_peers_trusted '
@@ -74,13 +74,13 @@ class OrbitsDatabase extends _$OrbitsDatabase {
           // Chat paging: `WHERE peerId=? ORDER BY timestamp DESC`.
           await customStatement(
             'CREATE INDEX IF NOT EXISTS idx_messages_peer_ts '
-            'ON messages(peerId, timestamp)',
+            'ON messages(peer_id, timestamp)',
           );
 
           // Pending queue per peer: `WHERE peerId=? AND status='pending'`.
           await customStatement(
             'CREATE INDEX IF NOT EXISTS idx_messages_peer_status_ts '
-            'ON messages(peerId, status, timestamp)',
+            'ON messages(peer_id, status, timestamp)',
           );
 
           // Global pending queue.
@@ -92,11 +92,11 @@ class OrbitsDatabase extends _$OrbitsDatabase {
           // Sticker pack list ordering.
           await customStatement(
             'CREATE INDEX IF NOT EXISTS idx_sticker_packs_installed '
-            'ON sticker_packs(installedAt)',
+            'ON sticker_packs(installed_at)',
           );
           await customStatement(
             'CREATE INDEX IF NOT EXISTS idx_recent_stickers_used '
-            'ON recent_stickers(usedAt)',
+            'ON recent_stickers(used_at)',
           );
         },
         onUpgrade: (Migrator m, int from, int to) async {

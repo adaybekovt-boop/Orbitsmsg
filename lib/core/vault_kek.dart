@@ -10,6 +10,7 @@
 // password. The wire format must stay byte-compatible with the JS build:
 //   "orb-wrap-v1:<b64 iv(12)>:<b64 ct+tag(n+16)>"
 
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
@@ -49,7 +50,10 @@ Future<Object?> wrapBytes(Object? plaintext) async {
   final List<int> bytes = plaintext is List<int>
       ? plaintext
       : plaintext is String
-          ? plaintext.codeUnits
+          // UTF-8, not codeUnits — code units can exceed a byte for non-Latin1
+          // text and corrupt the ciphertext. (No current caller passes a
+          // String; this keeps the defensive path byte-correct.)
+          ? utf8.encode(plaintext)
           : (throw ArgumentError('vault: wrapBytes expects bytes'));
   final iv = _aes.newNonce();
   final box = await _aes.encrypt(bytes, secretKey: key, nonce: iv);

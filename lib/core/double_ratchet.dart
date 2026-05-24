@@ -295,13 +295,14 @@ void _trimSkipped(RatchetState state) {
   }
 }
 
-Future<void> _skipRecvKeys(RatchetState state, int until) async {
+Future<void> _skipRecvKeys(RatchetState state, int until,
+    {int maxGap = maxSkipPerStep}) async {
   if (state.recvCk == null) return;
   final gap = until - state.nr;
   if (gap < 0) {
     throw StateError('ratchet: header.n is behind Nr — possible replay');
   }
-  if (gap > maxSkipPerStep) {
+  if (gap > maxGap) {
     throw StateError('ratchet: too many skipped messages in one step');
   }
   final remoteKey =
@@ -433,7 +434,12 @@ Future<Uint8List> ratchetDecrypt(
   //    header.pn so late-arrivals under the old chain still decrypt.
   if (!_bytesEqual(state.remoteDhPub, header.dhPubSpki)) {
     if (state.recvCk != null) {
-      await _skipRecvKeys(state, header.pn);
+      // The previous sending chain can legitimately carry more than a single
+      // intra-chain step's worth of messages, so bound this catch-up by the
+      // skipped-key cache size rather than the per-step limit — otherwise a
+      // peer that sent >maxSkipPerStep messages before ratcheting wedges
+      // decryption permanently.
+      await _skipRecvKeys(state, header.pn, maxGap: maxSkipped);
     }
     await _dhRatchetStep(state, header.dhPubSpki);
   }

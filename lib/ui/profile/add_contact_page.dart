@@ -81,9 +81,12 @@ class _AddContactPageState extends ConsumerState<AddContactPage>
       return;
     }
     if (!mounted) return;
-    // Close the add-contact page, then push the chat view on top.
-    Navigator.of(context).pop();
-    Navigator.of(context).push(
+    // Capture the navigator before popping — after `pop()` this State's
+    // element is defunct, so a second `Navigator.of(context)` would resolve
+    // against a dead context. Close the add-contact page, then push the chat.
+    final nav = Navigator.of(context);
+    nav.pop();
+    nav.push(
       MaterialPageRoute(
         builder: (_) => ChatViewPage(peerId: normalized),
       ),
