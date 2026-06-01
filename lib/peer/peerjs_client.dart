@@ -107,6 +107,7 @@ class _SignalingSocket {
     this.key = 'peerjs',
     this.version = '1.5.5',
     this.pingInterval = const Duration(seconds: 5),
+    this.serverEchoesHeartbeat = false,
   });
 
   final ResolvedSignalingEndpoint endpoint;
@@ -115,6 +116,12 @@ class _SignalingSocket {
   final String key;
   final String version;
   final Duration pingInterval;
+
+  /// Whether the signaling server echoes our HEARTBEAT frames back. Only then
+  /// can the inbound-silence watchdog distinguish "idle" from "half-open" — so
+  /// it runs ONLY when true (embedded Orbits server). Public peerjs.com is
+  /// silent on idle and must NOT be watchdog-killed (see [_startWatchdog]).
+  final bool serverEchoesHeartbeat;
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
@@ -241,19 +248,21 @@ class _SignalingSocket {
     });
   }
 
-  /// Liveness watchdog. Checks every 5 s: if the socket is open but no frame
-  /// has arrived for `pingInterval * 5` (≈25 s), the link is presumed
-  /// half-open and we tear it down with `emitClose: true` so the manager's
-  /// backoff loop reconnects right away.
+  /// Liveness watchdog — ONLY for servers that echo our HEARTBEAT
+  /// ([serverEchoesHeartbeat], i.e. the embedded Orbits server). Checks every
+  /// 5 s: if the socket is open but no frame has arrived for `pingInterval * 5`
+  /// (≈25 s), the link is presumed half-open and we tear it down with
+  /// `emitClose: true` so the manager's backoff loop reconnects right away.
   ///
-  /// NOTE: this relies on the server emitting *some* inbound traffic within
-  /// the window (heartbeat echo or other frames). A PeerJS server that stays
-  /// completely silent on an idle connection would trip this watchdog on a
-  /// healthy link — the `* 5` window (raised from `* 3`, audit finding 7) gives
-  /// idle links more slack to avoid false-positive reconnects; widen further or
-  /// add a server-side heartbeat echo if you still see periodic idle reconnects.
+  /// CRITICAL: public peerjs.com does NOT echo HEARTBEAT and is silent on an
+  /// idle connection, so inbound silence there is NORMAL — running this
+  /// watchdog against it tore down a healthy idle socket every ~25 s, driving
+  /// a reconnect storm and breaking incoming connections during the dead
+  /// window. For those servers the watchdog is disabled and we rely on the
+  /// protocol-level WS ping/pong (see [connect]) to detect truly-dead links.
   void _startWatchdog() {
     _watchdogTimer?.cancel();
+    if (!serverEchoesHeartbeat) return; // public/idle-silent server: no-op
     _lastFrameTime = DateTime.now();
     _watchdogTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       if (_closed || !_opened) return;
@@ -622,10 +631,12 @@ class PeerJsClient {
     String version = '1.5.5',
     Duration pingInterval = const Duration(seconds: 5),
     String? token,
+    bool serverEchoesHeartbeat = false,
   })  : _desiredId = id,
         _key = key,
         _version = version,
         _pingInterval = pingInterval,
+        _serverEchoesHeartbeat = serverEchoesHeartbeat,
         _token = token ?? _randomToken(),
         _rtcConfig = {
           'iceServers': iceServers,
@@ -641,6 +652,7 @@ class PeerJsClient {
   final String _key;
   final String _version;
   final Duration _pingInterval;
+  final bool _serverEchoesHeartbeat;
   final String _token;
   final Map<String, Object> _rtcConfig;
 
@@ -709,6 +721,7 @@ class PeerJsClient {
       key: _key,
       version: _version,
       pingInterval: _pingInterval,
+      serverEchoesHeartbeat: _serverEchoesHeartbeat,
     );
     _sock = sock;
     sock.frames.listen(_handleFrame);

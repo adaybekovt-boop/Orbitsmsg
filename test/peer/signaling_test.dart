@@ -100,6 +100,48 @@ void main() {
     });
   });
 
+  group('TURN / relay policy (cross-network)', () {
+    test('TURN creds from env are added to the ICE list', () {
+      final cfg = buildRtcConfig(const PeerEnv(
+        turnUrl: 'turn:turn.example:3478',
+        turnUsername: 'user',
+        turnCredential: 'secret',
+      ));
+      final turn = cfg.iceServers.firstWhere(
+        (s) => (s['urls'] as String).startsWith('turn:'),
+        orElse: () => const {},
+      );
+      expect(turn['urls'], 'turn:turn.example:3478');
+      expect(turn['username'], 'user');
+      expect(turn['credential'], 'secret');
+    });
+
+    test('relayOnly + TURN forces iceTransportPolicy=relay', () {
+      final cfg = buildRtcConfig(const PeerEnv(
+        turnUrl: 'turn:t:3478',
+        turnUsername: 'u',
+        turnCredential: 'c',
+        relayOnly: true,
+      ));
+      expect(cfg.iceTransportPolicy, 'relay');
+    });
+
+    test('relayOnly WITHOUT TURN does not force relay (would block all ICE)',
+        () {
+      final cfg = buildRtcConfig(const PeerEnv(relayOnly: true));
+      expect(cfg.iceTransportPolicy, isNull);
+    });
+
+    test('no TURN configured → no relay policy, STUN-only', () {
+      final cfg = buildRtcConfig(const PeerEnv());
+      expect(cfg.iceTransportPolicy, isNull);
+      expect(
+        cfg.iceServers.any((s) => (s['urls'] as String).startsWith('turn:')),
+        isFalse,
+      );
+    });
+  });
+
   group('computeBackoffMs', () {
     test('grows with attempt and stays within [exp, exp+jitter]', () {
       for (var attempt = 0; attempt < 10; attempt++) {
