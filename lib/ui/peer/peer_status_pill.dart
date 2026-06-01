@@ -30,6 +30,14 @@ class PeerStatusPill extends ConsumerWidget {
     final pending = ref.watch(outboxCountProvider);
     final tokens = OrbitsTokens.of(context);
 
+    // Hide the pill entirely in the calm "connected" state — the persistent
+    // "В сети" chip is just visual clutter. It only surfaces when something
+    // actually needs attention: a connection problem (tap to reconnect) or
+    // queued/unsent messages.
+    if (conn.status == 'connected' && pending == 0) {
+      return const SizedBox.shrink();
+    }
+
     // Status colour comes from theme tokens — `success` for the happy path,
     // `accent2` for transient/connecting (the JS picked amber via accent2),
     // `danger` for hard errors, `muted` for the quiet idle state.
@@ -42,11 +50,13 @@ class PeerStatusPill extends ConsumerWidget {
     };
 
     final peerId = conn.peerId;
-    final idText = peerId == null || peerId.isEmpty
-        ? '—'
-        : peerId.length > 14
-            ? '${peerId.substring(0, 14)}…'
-            : peerId;
+    // The raw profile code is NOT shown inline in the global pill (too
+    // technical) — it lives in the long-press tooltip, with any error.
+    final tipParts = <String>[
+      if (peerId != null && peerId.isNotEmpty) 'Код: $peerId',
+      if (conn.error != null && conn.error!.isNotEmpty) conn.error!,
+    ];
+    final tip = tipParts.join('\n');
 
     // Pill background reads as a semi-opaque surface — works on both light
     // (Paper, Sakura) and dark (Graphite, Matrix) themes because we pull
@@ -55,10 +65,10 @@ class PeerStatusPill extends ConsumerWidget {
     final labelColor = tokens.text;
 
     return Tooltip(
-      // Error string surfaces on long-press — mirrors the `title` attr the
-      // JS pill carried. Users who want the full text tap-and-hold.
-      message: conn.error ?? '',
-      triggerMode: conn.error == null
+      // Long-press reveals the profile code + any error. Nothing technical is
+      // shown inline in the pill.
+      message: tip,
+      triggerMode: tip.isEmpty
           ? TooltipTriggerMode.manual
           : TooltipTriggerMode.longPress,
       child: Material(
@@ -85,16 +95,6 @@ class PeerStatusPill extends ConsumerWidget {
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
                     fontFamily: tokens.fontBody,
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text(
-                  idText,
-                  style: TextStyle(
-                    color: tokens.muted,
-                    fontSize: 11,
-                    fontFamily: tokens.fontMono,
-                    fontFeatures: const [FontFeature.tabularFigures()],
                   ),
                 ),
                 if (pending > 0) ...[

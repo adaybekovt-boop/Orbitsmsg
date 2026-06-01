@@ -119,8 +119,10 @@ Future<String?> readAuthToken() => idbGetString(_tokenId);
 Future<void> clearAuthToken() => idbDel(_tokenId);
 
 /// Validate a token. Returns the decoded body on success, or null on any
-/// failure (format error, bad signature, expired). Constant-time MAC
-/// comparison — the helper [_verify] avoids early exit.
+/// failure (format error, bad signature, expired). [_verify] compares the two
+/// MACs byte-by-byte without an early exit on mismatch; it does return early
+/// when the lengths differ, but both are fixed 32-byte HMAC-SHA256 outputs so
+/// that branch leaks nothing useful to an attacker (audit L2).
 Future<Map<String, Object?>?> verifyAuthToken(String? token) async {
   if (token == null || token.isEmpty) return null;
   final parts = token.split('.');

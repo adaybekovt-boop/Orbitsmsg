@@ -16,11 +16,17 @@
 // display name / pub key / trust level alone.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/identity_key.dart' as identity_key;
+import '../../core/peer_pins.dart' as peer_pins;
 import '../../state/chat_list_provider.dart';
 import '../../storage/db.dart' as db;
 import '../../state/peers_provider.dart';
+import '../primitives/orbits_glass_button.dart';
+import '../primitives/orbits_glass_dialog.dart';
+import '../primitives/orbits_glass_switch.dart';
 
 class ChatSettingsSheet extends ConsumerStatefulWidget {
   const ChatSettingsSheet({super.key, required this.peerId});
@@ -44,10 +50,35 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
   /// user from double-tapping and queuing two DELETEs back-to-back.
   bool _clearing = false;
 
+  /// Safety-number state (audit H1). Loaded once on open. `_remoteFp` is null
+  /// until the peer's identity has been pinned via a verified handshake.
+  String? _localFp;
+  String? _remoteFp;
+  bool _fpLoading = true;
+
   @override
   void initState() {
     super.initState();
     _nameCtl = TextEditingController();
+    _loadFingerprints();
+  }
+
+  Future<void> _loadFingerprints() async {
+    String? local;
+    String? remote;
+    try {
+      local = await identity_key.getLocalIdentityFingerprint();
+    } catch (_) {}
+    try {
+      final pin = await peer_pins.getPin(widget.peerId);
+      remote = pin?.fingerprint;
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() {
+      _localFp = local;
+      _remoteFp = (remote != null && remote.isNotEmpty) ? remote : null;
+      _fpLoading = false;
+    });
   }
 
   @override
@@ -80,30 +111,34 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
       );
   }
 
+  Future<void> _copyFingerprints() async {
+    final mine = _localFp ?? '';
+    final theirs = _remoteFp ?? '';
+    await Clipboard.setData(ClipboardData(
+      text: 'Мой код:\n$mine\n\nКод собеседника:\n$theirs',
+    ));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(const SnackBar(
+        content: Text('Код скопирован'),
+        duration: Duration(seconds: 2),
+      ));
+  }
+
   Future<void> _handleClearHistory() async {
     // Two-step confirm — clearing a chat is destructive and there's no
     // undo. Matches the "Очистить" confirm in the JS Settings page.
-    final ok = await showDialog<bool>(
+    final ok = await showOrbitsConfirm(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Очистить историю?'),
-        content: const Text(
-          'Все сообщения в этом чате будут удалены только на этом '
+      title: 'Очистить историю?',
+      message: 'Все сообщения в этом чате будут удалены только на этом '
           'устройстве. Собеседник сохранит свою копию.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Отмена'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text('Удалить'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Удалить',
+      confirmIcon: Icons.delete_outline,
+      danger: true,
     );
-    if (ok != true || !mounted) return;
+    if (!ok || !mounted) return;
     setState(() => _clearing = true);
     try {
       final deleted = await db.clearMessagesForPeer(widget.peerId);
@@ -195,7 +230,7 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          widget.peerId,
+                          'Код контакта · ${widget.peerId}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -211,7 +246,7 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
             ),
 
             // ── Rename ──────────────────────────────────────────────
-            _SectionLabel(text: 'Локальное имя'),
+            const _SectionLabel(text: 'Локальное имя'),
             const SizedBox(height: 8),
             TextField(
               controller: _nameCtl,
@@ -243,18 +278,18 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
             const SizedBox(height: 20),
 
             // ── Trust level ─────────────────────────────────────────
-            _SectionLabel(text: 'Доверие'),
+            const _SectionLabel(text: 'Статус контакта'),
             const SizedBox(height: 8),
             SegmentedButton<ChatTrust>(
               segments: const [
                 ButtonSegment(
                   value: ChatTrust.unknown,
-                  label: Text('Неизвестно'),
+                  label: Text('Нужно проверить'),
                   icon: Icon(Icons.help_outline),
                 ),
                 ButtonSegment(
                   value: ChatTrust.tofu,
-                  label: Text('TOFU'),
+                  label: Text('Защищён'),
                   icon: Icon(Icons.lock_outline),
                 ),
                 ButtonSegment(
@@ -276,12 +311,26 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
             ),
             const SizedBox(height: 6),
             Text(
-              'TOFU — ключ запомнен при первой встрече. «Проверен» '
-              'устанавливается вручную после сверки отпечатков.',
+              '«Защищён» — связь зашифрована автоматически при первом '
+              'соединении. «Проверен» отметьте сами, когда сверите код '
+              'безопасности с собеседником.',
               style: TextStyle(
                 fontSize: 11,
                 color: scheme.onSurface.withValues(alpha: 0.6),
               ),
+            ),
+
+            const SizedBox(height: 20),
+
+            // ── Safety number (key fingerprints) ────────────────────
+            const _SectionLabel(text: 'Код безопасности контакта'),
+            const SizedBox(height: 8),
+            _SafetyNumber(
+              loading: _fpLoading,
+              localFp: _localFp,
+              remoteFp: _remoteFp,
+              verified: trust == ChatTrust.verified,
+              onCopy: _copyFingerprints,
             ),
 
             const SizedBox(height: 20),
@@ -295,9 +344,14 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
                   color: scheme.onSurface.withValues(alpha: 0.12),
                 ),
               ),
-              child: SwitchListTile(
-                value: isBlocked,
-                onChanged: (v) => db.setPeerBlocked(widget.peerId, v),
+              child: ListTile(
+                onTap: () => db.setPeerBlocked(widget.peerId, !isBlocked),
+                leading: Icon(
+                  Icons.block,
+                  color: isBlocked
+                      ? scheme.error
+                      : scheme.onSurface.withValues(alpha: 0.5),
+                ),
                 title: const Text('Заблокировать'),
                 subtitle: Text(
                   isBlocked
@@ -309,11 +363,10 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
                     color: scheme.onSurface.withValues(alpha: 0.6),
                   ),
                 ),
-                secondary: Icon(
-                  Icons.block,
-                  color: isBlocked
-                      ? scheme.error
-                      : scheme.onSurface.withValues(alpha: 0.5),
+                trailing: OrbitsGlassSwitch(
+                  value: isBlocked,
+                  onChanged: (v) => db.setPeerBlocked(widget.peerId, v),
+                  semanticLabel: 'Заблокировать собеседника',
                 ),
               ),
             ),
@@ -321,23 +374,13 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
             const SizedBox(height: 20),
 
             // ── Destructive: clear history ──────────────────────────
-            OutlinedButton.icon(
+            OrbitsGlassButton(
+              label: _clearing ? 'Удаление...' : 'Очистить историю',
+              icon: Icons.delete_outline,
+              variant: OrbitsGlassVariant.danger,
+              expand: true,
+              enabled: !_clearing,
               onPressed: _clearing ? null : _handleClearHistory,
-              icon: _clearing
-                  ? const SizedBox(
-                      height: 18,
-                      width: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : Icon(Icons.delete_outline, color: scheme.error),
-              label: Text(
-                _clearing ? 'Удаление...' : 'Очистить историю',
-                style: TextStyle(color: scheme.error),
-              ),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                side: BorderSide(color: scheme.error.withValues(alpha: 0.4)),
-              ),
             ),
           ],
         ),
@@ -357,6 +400,139 @@ ChatTrust _decodeTrust(Object? raw) {
     1 => ChatTrust.tofu,
     _ => ChatTrust.unknown,
   };
+}
+
+/// Group a 64-hex-char SHA-256 fingerprint into space-separated 4-char blocks,
+/// uppercased, for easier out-of-band reading ("compare these aloud").
+String _formatFingerprint(String fp) {
+  final s = fp.toUpperCase();
+  final buf = StringBuffer();
+  for (var i = 0; i < s.length; i += 4) {
+    if (i > 0) buf.write(' ');
+    buf.write(s.substring(i, i + 4 > s.length ? s.length : i + 4));
+  }
+  return buf.toString();
+}
+
+/// Safety-number block: shows the local + remote key fingerprints so the user
+/// can compare them out-of-band before trusting the channel (audit H1).
+class _SafetyNumber extends StatelessWidget {
+  const _SafetyNumber({
+    required this.loading,
+    required this.localFp,
+    required this.remoteFp,
+    required this.verified,
+    required this.onCopy,
+  });
+
+  final bool loading;
+  final String? localFp;
+  final String? remoteFp;
+  final bool verified;
+  final VoidCallback onCopy;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final hint = TextStyle(
+      fontSize: 11,
+      color: scheme.onSurface.withValues(alpha: 0.6),
+    );
+
+    if (loading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 12),
+        child: Center(
+          child: SizedBox(
+            height: 18,
+            width: 18,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+    }
+
+    if (remoteFp == null) {
+      return Text(
+        'Код безопасности появится после первого защищённого '
+        'соединения с этим контактом.',
+        style: hint,
+      );
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: scheme.onSurface.withValues(alpha: 0.12)),
+        color: scheme.surfaceContainerHighest.withValues(alpha: 0.4),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                verified ? Icons.verified_user : Icons.shield_outlined,
+                size: 16,
+                color: verified
+                    ? scheme.primary
+                    : scheme.onSurface.withValues(alpha: 0.6),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                verified ? 'Контакт проверен' : 'Проверь контакт',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: verified ? scheme.primary : scheme.onSurface,
+                ),
+              ),
+              const Spacer(),
+              OrbitsGlassIconButton(
+                icon: Icons.copy,
+                tooltip: 'Скопировать',
+                variant: OrbitsGlassVariant.subtle,
+                size: OrbitsGlassSize.small,
+                onPressed: onCopy,
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text('Собеседник', style: hint),
+          const SizedBox(height: 2),
+          SelectableText(
+            _formatFingerprint(remoteFp!),
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 12,
+              height: 1.4,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text('Вы', style: hint),
+          const SizedBox(height: 2),
+          SelectableText(
+            localFp == null ? '—' : _formatFingerprint(localFp!),
+            style: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 12,
+              height: 1.4,
+              letterSpacing: 0.5,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Сравните этот код с собеседником, чтобы убедиться, что '
+            'переписку никто не подменил. Сверять удобно лично или по '
+            'звонку. Совпал — отметьте «Проверен» выше.',
+            style: hint,
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _SectionLabel extends StatelessWidget {

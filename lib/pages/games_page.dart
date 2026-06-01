@@ -1,8 +1,6 @@
-// Games tab — mirrors `src/pages/Games.jsx`. Layout is a simple vertical
-// list of game rows (the JS uses a 2-column grid, but on Flutter we keep
-// it list-shaped so the row dimensions feel right on phones — tiny grid
-// cells were one of the "icons too big / tiles weird" complaints from
-// the design pass).
+// Games tab. Adaptive: a single-column glass list on narrow screens, a glass
+// card grid (2–3 columns) on wide desktop/web. Content is width-constrained and
+// centered so it never stretches edge-to-edge.
 
 import 'package:flutter/material.dart';
 
@@ -12,6 +10,9 @@ import '../games/blockblast/block_blast_page.dart';
 import '../games/chess/chess_page.dart';
 import '../themes/orbits_tokens.dart';
 import '../ui/peer/peer_status_pill.dart';
+import '../ui/primitives/adaptive_page_frame.dart';
+import '../ui/primitives/orbits_glass_list_tile.dart';
+import '../ui/primitives/orbits_glass_surface.dart';
 
 class GamesPage extends StatelessWidget {
   const GamesPage({super.key});
@@ -19,112 +20,140 @@ class GamesPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
+    final desktop = isDesktopLayout(context);
+
+    void open(Widget Function(VoidCallback onExit) builder) {
+      hapticTap();
+      Navigator.of(context).push(
+        MaterialPageRoute<void>(
+          builder: (_) => builder(() => Navigator.of(context).maybePop()),
+        ),
+      );
+    }
+
+    final games = <_GameItem>[
+      _GameItem(
+        title: 'Block Blast',
+        subtitle: 'Собирай линии, ставь рекорды',
+        icon: Icons.grid_view,
+        onTap: () => open((onExit) => BlockBlastPage(onExit: onExit)),
+      ),
+      _GameItem(
+        title: '21 очко',
+        subtitle: 'Классический блекджек',
+        icon: Icons.style,
+        onTap: () => open((onExit) => BlackjackPage(onExit: onExit)),
+      ),
+      _GameItem(
+        title: 'Шахматы',
+        subtitle: 'Игра вдвоём на одном устройстве',
+        icon: Icons.extension,
+        onTap: () => open((onExit) => ChessPage(onExit: onExit)),
+      ),
+    ];
+
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        flexibleSpace: const OrbitsGlassSurface(
+          role: OrbitsGlassRole.appBar,
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+          child: SizedBox.expand(),
+        ),
         title: Text(
           'Игры',
           style: TextStyle(
             fontFamily: tokens.fontHeading,
             fontWeight: FontWeight.w600,
+            color: tokens.text,
           ),
         ),
       ),
-      body: ListView(
-        padding: EdgeInsets.only(top: kPillReserveHeight + 8, bottom: 24),
-        children: [
-          // Hero strip
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: tokens.accentAlpha(0.16),
-                    shape: BoxShape.circle,
-                  ),
-                  alignment: Alignment.center,
-                  child: Icon(Icons.sports_esports,
-                      color: tokens.accent, size: 18),
+      body: AdaptivePageFrame(
+        maxWidth: 920,
+        child: ListView(
+          padding: const EdgeInsets.only(top: kPillReserveHeight + 8, bottom: 24),
+          children: [
+            _Hero(tokens: tokens),
+            const SizedBox(height: 4),
+            if (desktop)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: [for (final g in games) _GameCard(item: g)],
                 ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Мини-игры',
-                        style: TextStyle(
-                          fontFamily: tokens.fontHeading,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w600,
-                          color: tokens.text,
-                        ),
-                      ),
-                      Text(
-                        'Прямо в мессенджере',
-                        style: TextStyle(
-                          fontFamily: tokens.fontBody,
-                          fontSize: 12,
-                          color: tokens.muted,
-                        ),
-                      ),
-                    ],
+              )
+            else
+              for (final g in games) _GameRow(item: g),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _GameItem {
+  const _GameItem({
+    required this.title,
+    required this.subtitle,
+    required this.icon,
+    required this.onTap,
+  });
+  final String title;
+  final String subtitle;
+  final IconData icon;
+  final VoidCallback onTap;
+}
+
+class _Hero extends StatelessWidget {
+  const _Hero({required this.tokens});
+  final OrbitsTokens tokens;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 4, 20, 12),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: tokens.accentAlpha(0.16),
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Icon(Icons.sports_esports, color: tokens.accent, size: 18),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Мини-игры',
+                  style: TextStyle(
+                    fontFamily: tokens.fontHeading,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                    color: tokens.text,
+                  ),
+                ),
+                Text(
+                  'Прямо в мессенджере',
+                  style: TextStyle(
+                    fontFamily: tokens.fontBody,
+                    fontSize: 12,
+                    color: tokens.muted,
                   ),
                 ),
               ],
             ),
-          ),
-
-          // Game rows
-          _GameRow(
-            title: 'Block Blast',
-            subtitle: 'Собирай линии, ставь рекорды',
-            icon: Icons.grid_view,
-            comingSoon: false,
-            onTap: () {
-              hapticTap();
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => BlockBlastPage(
-                    onExit: () => Navigator.of(context).maybePop(),
-                  ),
-                ),
-              );
-            },
-          ),
-          _GameRow(
-            title: '21 очко',
-            subtitle: 'Классический блекджек',
-            icon: Icons.style,
-            comingSoon: false,
-            onTap: () {
-              hapticTap();
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => BlackjackPage(
-                    onExit: () => Navigator.of(context).maybePop(),
-                  ),
-                ),
-              );
-            },
-          ),
-          _GameRow(
-            title: 'Шахматы',
-            subtitle: 'Игра вдвоём на одном устройстве',
-            icon: Icons.extension,
-            comingSoon: false,
-            onTap: () {
-              hapticTap();
-              Navigator.of(context).push(
-                MaterialPageRoute<void>(
-                  builder: (_) => ChessPage(
-                    onExit: () => Navigator.of(context).maybePop(),
-                  ),
-                ),
-              );
-            },
           ),
         ],
       ),
@@ -132,118 +161,114 @@ class GamesPage extends StatelessWidget {
   }
 }
 
+/// Single-column row (narrow screens).
 class _GameRow extends StatelessWidget {
-  const _GameRow({
-    required this.title,
-    required this.subtitle,
-    required this.icon,
-    required this.comingSoon,
-    this.onTap,
-  });
-
-  final String title;
-  final String subtitle;
-  final IconData icon;
-  final bool comingSoon;
-  final VoidCallback? onTap;
+  const _GameRow({required this.item});
+  final _GameItem item;
 
   @override
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: comingSoon
-              ? () {
-                  // Disabled tiles still react to taps with a hint —
-                  // matches the JS UX (tile shakes / shows "СКОРО"
-                  // toast). Better than feeling broken.
-                  hapticTap();
-                  ScaffoldMessenger.of(context)
-                    ..clearSnackBars()
-                    ..showSnackBar(
-                      const SnackBar(
-                        content: Text('Скоро добавим'),
-                        duration: Duration(seconds: 1),
-                      ),
-                    );
-                }
-              : onTap,
-          borderRadius: BorderRadius.circular(tokens.radiusCard),
-          child: Opacity(
-            opacity: comingSoon ? 0.65 : 1,
-            child: Container(
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: Color.lerp(tokens.bg, tokens.surface, 0.35),
-                borderRadius: BorderRadius.circular(tokens.radiusCard),
-                border: Border.all(color: tokens.border),
-              ),
-              child: Row(
+      child: OrbitsGlassListTile(
+        onTap: item.onTap,
+        leading: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: tokens.accentAlpha(0.16),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: tokens.accentAlpha(0.22)),
+          ),
+          alignment: Alignment.center,
+          child: Icon(item.icon, color: tokens.text, size: 18),
+        ),
+        title: Text(item.title),
+        subtitle: Text(item.subtitle),
+        trailing: Icon(Icons.chevron_right, color: tokens.muted),
+      ),
+    );
+  }
+}
+
+/// Fixed-size glass card (wide desktop/web grid).
+class _GameCard extends StatelessWidget {
+  const _GameCard({required this.item});
+  final _GameItem item;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
+    final radius = BorderRadius.circular(tokens.radiusCard);
+    return SizedBox(
+      width: 264,
+      height: 156,
+      child: OrbitsGlassSurface(
+        role: OrbitsGlassRole.card,
+        borderRadius: radius,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: item.onTap,
+            borderRadius: radius,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Compact 36-px icon square — was 44 with poor contrast
-                  // gradient before. Matches the size of avatar trios in
-                  // chat list and feels balanced next to title text.
                   Container(
-                    width: 36,
-                    height: 36,
+                    width: 42,
+                    height: 42,
                     decoration: BoxDecoration(
-                      color: tokens.accentAlpha(0.18),
-                      borderRadius: BorderRadius.circular(10),
+                      color: tokens.accentAlpha(0.16),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: tokens.accentAlpha(0.22)),
                     ),
                     alignment: Alignment.center,
-                    child: Icon(icon, color: tokens.accent, size: 18),
+                    child: Icon(item.icon, color: tokens.text, size: 22),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          title,
-                          style: TextStyle(
-                            fontFamily: tokens.fontHeading,
-                            fontSize: 15,
-                            fontWeight: FontWeight.w600,
-                            color: tokens.text,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          subtitle,
-                          style: TextStyle(
-                            fontFamily: tokens.fontBody,
-                            fontSize: 12,
-                            color: tokens.muted,
-                          ),
-                        ),
-                      ],
+                  const SizedBox(height: 12),
+                  Text(
+                    item.title,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontFamily: tokens.fontHeading,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: tokens.text,
                     ),
                   ),
-                  if (comingSoon)
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: tokens.muted.withValues(alpha: 0.16),
-                        borderRadius: BorderRadius.circular(8),
+                  const SizedBox(height: 4),
+                  Expanded(
+                    child: Text(
+                      item.subtitle,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontFamily: tokens.fontBody,
+                        fontSize: 12.5,
+                        height: 1.3,
+                        color: tokens.muted,
                       ),
-                      child: Text(
-                        'СКОРО',
+                    ),
+                  ),
+                  Row(
+                    children: [
+                      Text(
+                        'Открыть',
                         style: TextStyle(
-                          fontSize: 10,
+                          fontFamily: tokens.fontBody,
+                          fontSize: 12,
                           fontWeight: FontWeight.w600,
-                          fontFamily: tokens.fontMono,
-                          color: tokens.muted,
-                          letterSpacing: 1.0,
+                          color: tokens.text,
                         ),
                       ),
-                    )
-                  else
-                    Icon(Icons.chevron_right, color: tokens.muted),
+                      const SizedBox(width: 2),
+                      Icon(Icons.chevron_right, color: tokens.muted, size: 18),
+                    ],
+                  ),
                 ],
               ),
             ),

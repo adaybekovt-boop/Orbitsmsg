@@ -21,6 +21,8 @@
 // wants tokens reads them from `OrbitsTokens.of(context)` and re-renders
 // automatically when the active manifest changes.
 
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 
@@ -30,9 +32,46 @@ import 'orbits_tokens.dart';
 /// Build a `ThemeData` from a [manifest]. The returned theme is what gets
 /// passed to `MaterialApp.theme` (and re-built whenever `ThemeNotifier`
 /// emits a new id).
+/// Brightness-derived Liquid-Glass palette. Pure (no fonts / ThemeData) so it
+/// can be unit-tested directly. A frosted-white film on Light, a thin luminous
+/// film on Dark, each with a hairline + ambient shadow that reads on its
+/// canvas.
+({Color tint, Color border, Color highlight, Color shadow, double blurSigma})
+    glassPaletteForBrightness(Brightness brightness) {
+  final isDark = brightness == Brightness.dark;
+  return (
+    tint: isDark ? const Color(0x14FFFFFF) : const Color(0x8AFFFFFF),
+    border: isDark ? const Color(0x2EFFFFFF) : const Color(0x1F1B2533),
+    highlight: isDark ? const Color(0x3DFFFFFF) : const Color(0xCCFFFFFF),
+    shadow: isDark ? const Color(0x59000000) : const Color(0x1A1B2533),
+    // Kept inside the deep-research budget (effective blur radius ≤ ~40px on
+    // compact phones; ≤ 3 simultaneous blur layers). 26/22 over-frosted and
+    // over-spent GPU; 18/16 reads as clear frosted glass for less cost.
+    blurSigma: isDark ? 18.0 : 16.0,
+  );
+}
+
 ThemeData buildOrbitsTheme(ThemeManifest manifest) {
   final colors = manifest.tokens;
   final brightness = manifest.colorScheme;
+
+  // Real BackdropFilter blur ONLY where Impeller makes it cheap and correct:
+  // Android / iOS / macOS. Web (CanvasKit/Skwasm) and Windows fall back to
+  // painted fake-glass — the strengthened OrbitsGlassSurface stack reads as
+  // glass without a live blur, and Windows gets its real translucency from
+  // flutter_acrylic at the OS-window level (not from BackdropFilter inside the
+  // app). OrbitsGlassSurface further restricts real blur to large, low-churn
+  // chrome (nav/appbar/sheet/dialog/sidebar/input) and never blurs list-
+  // repeated surfaces (cards/buttons/bubbles). The painted path is also the
+  // fallback whenever glassBlurSigma is 0.
+  final allowRealBlur = !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS ||
+          defaultTargetPlatform == TargetPlatform.macOS);
+
+  // Glass palette is brightness-derived (pure helper so it's unit-testable
+  // without booting fonts/ThemeData).
+  final glass = glassPaletteForBrightness(brightness);
 
   // ColorScheme drives default Material widgets. We map our 9 token colours
   // to the closest `ColorScheme` slot — anything that doesn't fit (accent2,
@@ -66,6 +105,7 @@ ThemeData buildOrbitsTheme(ThemeManifest manifest) {
     danger: colors.danger,
     scrim: colors.scrim,
     deliveryRead: colors.deliveryRead,
+    bubbleOut: colors.bubbleOut,
     radiusButton: manifest.shape.radiusButton,
     radiusCard: manifest.shape.radiusCard,
     radiusModal: manifest.shape.radiusModal,
@@ -80,6 +120,14 @@ ThemeData buildOrbitsTheme(ThemeManifest manifest) {
     durationMedium: manifest.motion.durationMedium,
     durationLong: manifest.motion.durationLong,
     easing: manifest.motion.easing,
+    // Liquid Glass + motion tokens (the rest fall back to OrbitsTokens
+    // defaults — pressScale / curves / durationFast are theme-agnostic).
+    glassBlurSigma: glass.blurSigma,
+    allowRealBlur: allowRealBlur,
+    glassTint: glass.tint,
+    glassBorder: glass.border,
+    glassHighlight: glass.highlight,
+    glassShadow: glass.shadow,
   );
 
   // TextTheme — body uses fontBody, large/headline uses fontHeading, with

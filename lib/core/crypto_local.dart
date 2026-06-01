@@ -22,8 +22,6 @@ import 'package:cryptography/cryptography.dart';
 
 import 'base64_helpers.dart';
 
-const _ivLength = 12;
-
 class CryptoLocal {
   SecretKey? _vaultKey;
 

@@ -70,45 +70,53 @@ Future<void> main(List<String> args) async {
 void unawaited(Future<void> _) {}
 
 Future<void> _handle(HttpRequest req, String root) async {
-  // Always set the cross-origin isolation headers — they're cheap and
-  // browsers ignore them on responses that don't matter (image bytes etc).
-  req.response.headers
-    ..set('Cross-Origin-Embedder-Policy', 'require-corp')
-    ..set('Cross-Origin-Opener-Policy', 'same-origin')
-    // `cross-origin` lets sub-resources (the wasm + worker scripts that
-    // Drift loads) be embedded into a require-corp document. Without
-    // this, Chrome refuses to instantiate the worker even with COEP set.
-    ..set('Cross-Origin-Resource-Policy', 'cross-origin');
+  try {
+    // Always set the cross-origin isolation headers — they're cheap and
+    // browsers ignore them on responses that don't matter (image bytes etc).
+    req.response.headers
+      ..set('Cross-Origin-Embedder-Policy', 'require-corp')
+      ..set('Cross-Origin-Opener-Policy', 'same-origin')
+      // `cross-origin` lets sub-resources (the wasm + worker scripts that
+      // Drift loads) be embedded into a require-corp document. Without
+      // this, Chrome refuses to instantiate the worker even with COEP set.
+      ..set('Cross-Origin-Resource-Policy', 'cross-origin');
 
-  // Map URL → file. Treat `/` as `/index.html`. Strip query strings.
-  var path = req.uri.path;
-  if (path.endsWith('/')) path += 'index.html';
-  // Reject path traversal attempts so we never serve outside `root`.
-  if (path.contains('..')) {
-    req.response.statusCode = HttpStatus.forbidden;
-    await req.response.close();
-    return;
+    // Map URL → file. Treat `/` as `/index.html`. Strip query strings.
+    var path = req.uri.path;
+    if (path.endsWith('/')) path += 'index.html';
+    // Reject path traversal attempts so we never serve outside `root`.
+    if (path.contains('..')) {
+      req.response.statusCode = HttpStatus.forbidden;
+      await req.response.close();
+      return;
+    }
+    final file = File('$root$path');
+    if (!file.existsSync()) {
+      req.response
+        ..statusCode = HttpStatus.notFound
+        ..write('404: $path');
+      await req.response.close();
+      return;
+    }
+
+    // Set Content-Type from the extension. The browser will refuse to run
+    // .wasm without `application/wasm`, refuse to import `.js` modules
+    // without `text/javascript`, etc.
+    final ext = path.contains('.') ? path.split('.').last.toLowerCase() : '';
+    final mime = _mimeFor(ext);
+    if (mime != null) req.response.headers.contentType = ContentType.parse(mime);
+
+    // Stream the file directly — `pipe` handles backpressure for big assets
+    // (canvaskit.wasm is ~3 MB, the main.dart.js bundle in debug mode can
+    // run much larger).
+    await file.openRead().pipe(req.response);
+  } catch (e) {
+    // Gracefully catch and ignore socket/disconnect errors from the client
+    // so the server doesn't crash on page refreshes or quick exits.
+    try {
+      await req.response.close();
+    } catch (_) {}
   }
-  final file = File('$root$path');
-  if (!file.existsSync()) {
-    req.response
-      ..statusCode = HttpStatus.notFound
-      ..write('404: $path');
-    await req.response.close();
-    return;
-  }
-
-  // Set Content-Type from the extension. The browser will refuse to run
-  // .wasm without `application/wasm`, refuse to import `.js` modules
-  // without `text/javascript`, etc.
-  final ext = path.contains('.') ? path.split('.').last.toLowerCase() : '';
-  final mime = _mimeFor(ext);
-  if (mime != null) req.response.headers.contentType = ContentType.parse(mime);
-
-  // Stream the file directly — `pipe` handles backpressure for big assets
-  // (canvaskit.wasm is ~3 MB, the main.dart.js bundle in debug mode can
-  // run much larger).
-  await file.openRead().pipe(req.response);
 }
 
 String _envOr(String key, String fallback) {

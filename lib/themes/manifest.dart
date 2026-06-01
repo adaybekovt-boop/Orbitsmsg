@@ -77,6 +77,7 @@ class ThemeTokenColors {
     required this.danger,
     this.scrim = const Color(0xCC000000),
     this.deliveryRead = const Color(0xFFBFDBFE),
+    this.bubbleOut = const Color(0xFF222B3C),
   });
 
   final Color bg;
@@ -90,6 +91,12 @@ class ThemeTokenColors {
   final Color danger;
   final Color scrim;
   final Color deliveryRead;
+
+  /// Outgoing ("mine") message-bubble fill. Deliberately decoupled from
+  /// `accent` so dark themes don't paint blinding near-white bubbles at night
+  /// — a deep graphite-blue glass tone is used instead. Light themes put their
+  /// confident dark ink here. The white accent stays reserved for buttons.
+  final Color bubbleOut;
 }
 
 /// Shape tokens. Maps the JS shape strings (`'10px'`, `'0 4px 16px ...'`) to

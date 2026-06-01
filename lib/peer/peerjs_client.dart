@@ -41,6 +41,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'signaling.dart';
+import 'ws_channel.dart';
 
 // ─────────────────────────────────────────────────────────────────────────
 // Error taxonomy — byte-compatible with PeerJS `err.type` strings so the
@@ -118,6 +119,16 @@ class _SignalingSocket {
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
   Timer? _pingTimer;
+
+  // ── Liveness watchdog ──
+  // Timestamp of the last inbound frame of ANY type (including server
+  // heartbeat echoes). If the socket stays open but silent past
+  // `pingInterval * 3`, we assume a half-open link (mobile NAT drop, tower
+  // handoff) and force a teardown so the manager reconnects immediately
+  // instead of waiting on the OS TCP timeout.
+  Timer? _watchdogTimer;
+  DateTime? _lastFrameTime;
+
   bool _opened = false;
   bool _closed = false;
   final List<Map<String, Object?>> _outbound = [];
@@ -156,7 +167,21 @@ class _SignalingSocket {
     if (_closed) throw const PeerError('disconnected', 'socket already closed');
     try {
       final uri = _buildUri();
-      final ch = WebSocketChannel.connect(uri);
+      // Native sockets get a protocol-level ping so a half-open TCP link
+      // (mobile NAT timeout / network switch) is detected within ~2 ping
+      // intervals and reconnected, instead of hanging for the OS TCP timeout
+      // (audit M4). Web ignores pingInterval — the browser handles keepalive.
+      final ch = await openSignalingChannel(
+        uri,
+        pingInterval: pingInterval * 2,
+      );
+      if (_closed) {
+        // close() raced the await — don't leak the socket.
+        try {
+          await ch.sink.close();
+        } catch (_) {}
+        return;
+      }
       _channel = ch;
       _sub = ch.stream.listen(
         _handleRaw,
@@ -179,6 +204,9 @@ class _SignalingSocket {
 
   void _handleRaw(dynamic raw) {
     if (_closed) return;
+    // Any inbound byte counts as liveness — stamp before we even parse, so a
+    // malformed-but-present frame still resets the watchdog.
+    _lastFrameTime = DateTime.now();
     Map<String, Object?>? frame;
     try {
       final decoded = raw is String
@@ -195,6 +223,7 @@ class _SignalingSocket {
     if (frame['type'] == _ServerMessageType.open) {
       _opened = true;
       _startHeartbeat();
+      _startWatchdog();
       final queue = List<Map<String, Object?>>.from(_outbound);
       _outbound.clear();
       for (final f in queue) {
@@ -209,6 +238,30 @@ class _SignalingSocket {
     _pingTimer = Timer.periodic(pingInterval, (_) {
       if (_closed) return;
       _writeRaw({'type': _ServerMessageType.heartbeat});
+    });
+  }
+
+  /// Liveness watchdog. Checks every 5 s: if the socket is open but no frame
+  /// has arrived for `pingInterval * 5` (≈25 s), the link is presumed
+  /// half-open and we tear it down with `emitClose: true` so the manager's
+  /// backoff loop reconnects right away.
+  ///
+  /// NOTE: this relies on the server emitting *some* inbound traffic within
+  /// the window (heartbeat echo or other frames). A PeerJS server that stays
+  /// completely silent on an idle connection would trip this watchdog on a
+  /// healthy link — the `* 5` window (raised from `* 3`, audit finding 7) gives
+  /// idle links more slack to avoid false-positive reconnects; widen further or
+  /// add a server-side heartbeat echo if you still see periodic idle reconnects.
+  void _startWatchdog() {
+    _watchdogTimer?.cancel();
+    _lastFrameTime = DateTime.now();
+    _watchdogTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (_closed || !_opened) return;
+      final last = _lastFrameTime;
+      if (last == null) return;
+      if (DateTime.now().difference(last) > pingInterval * 5) {
+        _teardown(emitClose: true);
+      }
     });
   }
 
@@ -241,6 +294,8 @@ class _SignalingSocket {
     _opened = false;
     _pingTimer?.cancel();
     _pingTimer = null;
+    _watchdogTimer?.cancel();
+    _watchdogTimer = null;
     try {
       unawaited(_sub?.cancel());
     } catch (_) {}
@@ -324,11 +379,22 @@ class PeerDataConnection {
     };
     dc.onMessage = (msg) {
       if (_closed) return;
+      // Anti-OOM cap (audit finding 3): drop any frame larger than the biggest
+      // legitimate payload before we allocate/decode it. The largest real frame
+      // is an inline file message (≤16 MiB base64 + JSON envelope — see
+      // `messaging_notifier` `_maxFileB64Len`); Drop chunks are 64 KiB. A
+      // hostile peer with an open DataChannel could otherwise send a
+      // hundreds-of-MB (or deeply nested) frame and OOM the app on
+      // `Uint8List.fromList` / `jsonDecode`.
+      const maxFrameBytes = 24 * 1024 * 1024;
       Object? payload;
       if (msg.isBinary) {
-        payload = Uint8List.fromList(msg.binary);
+        final bin = msg.binary;
+        if (bin.length > maxFrameBytes) return;
+        payload = Uint8List.fromList(bin);
       } else {
         final text = msg.text;
+        if (text.length > maxFrameBytes) return;
         try {
           payload = jsonDecode(text);
         } catch (_) {
@@ -410,6 +476,7 @@ class PeerMediaConnection {
     required PeerJsClient client,
     MediaStream? localStream,
     RTCSessionDescription? pendingOffer,
+    this.metadata = const <String, Object?>{},
   })  : _pc = pc,
         _client = client,
         _localStream = localStream,
@@ -418,6 +485,11 @@ class PeerMediaConnection {
   final String peer;
   final String connectionId;
   final bool initiator;
+
+  /// Application metadata carried in the OFFER. Room voice calls tag themselves
+  /// with `{channel:'room-voice', roomId, channelId}` so CallsNotifier can skip
+  /// them and RoomManager can claim them (audit item 6). Empty for 1:1 calls.
+  final Map<String, Object?> metadata;
   final RTCPeerConnection _pc;
   final PeerJsClient _client;
   MediaStream? _localStream;
@@ -581,6 +653,25 @@ class PeerJsClient {
   final Map<String, _Negotiator> _conns = {};
   final Map<String, List<RTCIceCandidate>> _pendingIce = {};
 
+  // ── Inbound-OFFER flood protection (audit H2) ──
+  // An OFFER from the untrusted relay triggers a native RTCPeerConnection
+  // allocation. Without a cap an attacker can spray unique connectionIds and
+  // exhaust memory / native handles. We bound both the number of concurrent
+  // half-open connections and the per-source OFFER rate before allocating.
+  static const int _maxConcurrentConns = 64;
+  static const int _maxOffersPerSrcPerWindow = 16;
+  static const Duration _offerRateWindow = Duration(seconds: 10);
+
+  /// src → recent inbound-OFFER timestamps (epoch ms), pruned to the window.
+  final Map<String, List<int>> _offerTimes = {};
+
+  // ── Pending-ICE buffer bounds (audit L1) ──
+  // Candidates for a cid that has no OFFER yet are buffered. Without a cap they
+  // accumulate forever for connectionIds that never materialise. Bound both
+  // the per-cid depth and the number of distinct buffered cids.
+  static const int _maxPendingIcePerCid = 32;
+  static const int _maxPendingIceCids = 64;
+
   final _openCtl = StreamController<String>.broadcast();
   final _disconnectCtl = StreamController<void>.broadcast();
   final _closeCtl = StreamController<void>.broadcast();
@@ -739,10 +830,12 @@ class PeerJsClient {
 
   /// Place a media call to [targetId] using [localStream].
   Future<PeerMediaConnection> callPeer(
-      String targetId, MediaStream localStream) async {
+      String targetId, MediaStream localStream,
+      {Map<String, Object?>? metadata}) async {
     if (_destroyed) {
       throw const PeerError('disconnected', 'client is destroyed');
     }
+    final meta = metadata ?? const <String, Object?>{};
     final cid = _newMediaConnectionId();
     final pc = await createPeerConnection(_rtcConfig);
     final conn = PeerMediaConnection._(
@@ -752,6 +845,7 @@ class PeerJsClient {
       pc: pc,
       client: this,
       localStream: localStream,
+      metadata: meta,
     );
     conn._wireRemoteTracks();
     for (final track in localStream.getTracks()) {
@@ -769,6 +863,7 @@ class PeerJsClient {
         'sdp': {'type': offer.type, 'sdp': offer.sdp},
         'type': 'media',
         'connectionId': cid,
+        if (meta.isNotEmpty) 'metadata': meta,
       },
     });
     return conn;
@@ -826,11 +921,19 @@ class PeerJsClient {
     final src = frame['src']?.toString();
     final payload = frame['payload'];
     if (src == null || payload is! Map) return;
+    // Basic source sanity before we spend anything on this frame.
+    if (src.isEmpty || src.length > 128) return;
     final map = payload.map((k, v) => MapEntry(k.toString(), v));
     final kind = map['type']?.toString(); // 'data' | 'media'
     final cid = map['connectionId']?.toString();
     final sdpMap = map['sdp'];
-    if (cid == null || sdpMap is! Map) return;
+    if (cid == null || cid.isEmpty || cid.length > 128 || sdpMap is! Map) return;
+    // Drop duplicate OFFERs for a connectionId we're already negotiating.
+    if (_conns.containsKey(cid)) return;
+    // Flood protection — bound concurrent half-open conns and per-source rate
+    // before allocating a native RTCPeerConnection (audit H2).
+    if (_conns.length >= _maxConcurrentConns) return;
+    if (!_admitOffer(src)) return;
     final sdp = RTCSessionDescription(
       sdpMap['sdp']?.toString() ?? '',
       sdpMap['type']?.toString() ?? 'offer',
@@ -846,6 +949,10 @@ class PeerJsClient {
         pc: pc,
         client: this,
         pendingOffer: sdp,
+        metadata: (map['metadata'] is Map)
+            ? (map['metadata'] as Map)
+                .map((k, v) => MapEntry(k.toString(), v))
+            : const <String, Object?>{},
       );
       media._wireRemoteTracks();
       _wirePcLifecycle(pc, cid);
@@ -931,19 +1038,54 @@ class PeerJsClient {
 
     final n = _conns[cid];
     if (n == null) {
-      (_pendingIce[cid] ??= <RTCIceCandidate>[]).add(ice);
+      _bufferIce(cid, ice);
       return;
     }
     try {
       final desc = await n.pc.getRemoteDescription();
       if (desc == null) {
-        (_pendingIce[cid] ??= <RTCIceCandidate>[]).add(ice);
+        _bufferIce(cid, ice);
         return;
       }
       await n.pc.addCandidate(ice);
     } catch (e) {
       _errorCtl.add(PeerError('webrtc', 'addCandidate: $e'));
     }
+  }
+
+  /// Buffer an ICE candidate for a not-yet-negotiated [cid], enforcing the
+  /// per-cid depth and distinct-cid bounds (audit L1) so candidates for a cid
+  /// that never gets an OFFER can't accumulate without limit.
+  void _bufferIce(String cid, RTCIceCandidate ice) {
+    final existing = _pendingIce[cid];
+    if (existing == null) {
+      if (_pendingIce.length >= _maxPendingIceCids) {
+        // Evict the oldest insertion-ordered bucket to make room.
+        _pendingIce.remove(_pendingIce.keys.first);
+      }
+      _pendingIce[cid] = <RTCIceCandidate>[ice];
+      return;
+    }
+    if (existing.length >= _maxPendingIcePerCid) {
+      existing.removeAt(0); // drop oldest, keep the most recent candidates
+    }
+    existing.add(ice);
+  }
+
+  /// Per-source token-bucket-ish gate: returns false (drop the OFFER) when
+  /// [src] has exceeded [_maxOffersPerSrcPerWindow] within [_offerRateWindow].
+  bool _admitOffer(String src) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final cutoff = now - _offerRateWindow.inMilliseconds;
+    final times = _offerTimes.putIfAbsent(src, () => <int>[]);
+    times.removeWhere((t) => t < cutoff);
+    if (times.length >= _maxOffersPerSrcPerWindow) return false;
+    times.add(now);
+    // Opportunistic cleanup so the map can't grow unbounded across many srcs.
+    if (_offerTimes.length > 256) {
+      _offerTimes.removeWhere((_, v) => v.isEmpty || v.last < cutoff);
+    }
+    return true;
   }
 
   void _handlePeerLeave(String src) {

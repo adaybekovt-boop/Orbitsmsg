@@ -31,7 +31,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show File, Platform;
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -415,7 +414,7 @@ class _FileTileState extends State<FileTile> {
     setState(() => _busy = true);
     try {
       final bytes = await _loadBytes();
-      if (!mounted) return;
+      if (!mounted || !context.mounted) return;
       if (bytes == null) {
         _showToast('Изображение недоступно');
         return;

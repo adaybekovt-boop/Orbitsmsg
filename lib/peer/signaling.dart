@@ -6,6 +6,11 @@ import 'dart:math';
 
 const String peerServerSentinel = '__URL__';
 
+/// Shared jitter source for [computeBackoffMs]. Reused across calls rather than
+/// allocating a fresh `Random` every time (audit L9). Not security-sensitive —
+/// jitter only needs to de-correlate reconnect timing across clients.
+final Random _jitterRng = Random();
+
 const List<Map<String, Object>> defaultIceServers = [
   {'urls': 'stun:stun.l.google.com:19302'},
   {'urls': 'stun:stun1.l.google.com:19302'},
@@ -28,6 +33,24 @@ class PeerEnv {
   final String? turnCredential;
   final bool relayOnly;
 
+  /// Escape hatch for local development against a plaintext signaling server.
+  /// When false (the default), [resolveEndpoint] hard-upgrades any insecure
+  /// (`ws://`/`http`) configuration to `wss://` so peer-id, SDP and ICE
+  /// candidates can't travel — or be tampered with — in the clear on a public
+  /// relay (audit H3). Only set true behind an explicit debug build flag.
+  final bool allowInsecureTransport;
+
+  /// Optional override for the ICE (STUN/TURN) server list. When non-null and
+  /// non-empty it fully replaces [defaultIceServers] (audit L7) — lets a
+  /// deployment point at self-hosted STUN/TURN instead of the hardcoded public
+  /// Google/Mozilla/Twilio servers, which otherwise leak who/when/IP to third
+  /// parties. A configured TURN (`turnUrl`) is still appended on top.
+  final List<Map<String, Object>>? iceServers;
+
+  /// Optional override for the signaling host rotation list. When non-null and
+  /// non-empty it replaces the hardcoded `*.peerjs.com` fallback (audit L7).
+  final List<String>? signalingHosts;
+
   const PeerEnv({
     this.peerServer,
     this.peerHost,
@@ -38,6 +61,9 @@ class PeerEnv {
     this.turnUsername,
     this.turnCredential,
     this.relayOnly = false,
+    this.allowInsecureTransport = false,
+    this.iceServers,
+    this.signalingHosts,
   });
 }
 
@@ -45,6 +71,10 @@ class PeerEnv {
 List<String> buildSignalingHosts(PeerEnv env) {
   if (env.peerServer != null) return [peerServerSentinel];
   if (env.peerHost != null) return [env.peerHost!];
+  // Explicit deployment-provided hosts take precedence over the public
+  // peerjs.com fallback (audit L7).
+  final override = env.signalingHosts;
+  if (override != null && override.isNotEmpty) return List<String>.from(override);
   return const ['0.peerjs.com', '1.peerjs.com', '2.peerjs.com'];
 }
 
@@ -58,14 +88,19 @@ bool canRotateHosts(PeerEnv env, List<String> hosts) {
 int computeBackoffMs(int attempt, {int base = 800, int maxMs = 30000, int jitter = 500}) {
   final safe = attempt < 0 ? 0 : attempt;
   final expMs = min(maxMs, (base * pow(2, safe)).toInt());
-  return expMs + Random().nextInt(jitter);
+  return expMs + _jitterRng.nextInt(jitter);
 }
 
 /// Build the ICE servers list for an RTCPeerConnection. When TURN creds are
 /// configured and the user enabled "relay only", we force iceTransportPolicy.
 ({List<Map<String, Object>> iceServers, String? iceTransportPolicy}) buildRtcConfig(PeerEnv env) {
   final hasTurn = env.turnUrl != null && env.turnUsername != null && env.turnCredential != null;
-  final servers = [...defaultIceServers];
+  // Deployment-provided STUN/TURN fully replaces the public defaults when set
+  // (audit L7); otherwise fall back to the bundled public servers.
+  final base = (env.iceServers != null && env.iceServers!.isNotEmpty)
+      ? env.iceServers!
+      : defaultIceServers;
+  final servers = [...base];
   if (hasTurn) {
     servers.add({
       'urls': env.turnUrl!,
@@ -99,16 +134,26 @@ ResolvedSignalingEndpoint resolveEndpoint({required String host, required PeerEn
   var resolvedHost = host;
   var path = env.peerPath ?? '/';
   var secure = env.peerSecure ?? true;
-  var port = env.peerPort ?? (secure ? 443 : 80);
+  int? explicitPort = env.peerPort;
 
   final peerServer = env.peerServer;
   if (peerServer != null) {
     final uri = Uri.parse(peerServer);
     resolvedHost = uri.host;
     secure = uri.scheme == 'https' || uri.scheme == 'wss';
-    port = uri.hasPort ? uri.port : (secure ? 443 : 80);
+    explicitPort = uri.hasPort ? uri.port : null;
     path = uri.path.isEmpty ? '/' : uri.path;
   }
+
+  // Hard-upgrade insecure transport to wss unless explicitly allowed for dev
+  // (audit H3). An explicit non-standard port is dropped on upgrade so we don't
+  // dial wss against a plaintext-only port; 443 is used instead.
+  if (!secure && !env.allowInsecureTransport) {
+    secure = true;
+    explicitPort = null;
+  }
+
+  final port = explicitPort ?? (secure ? 443 : 80);
 
   return ResolvedSignalingEndpoint(
     host: resolvedHost == peerServerSentinel ? '' : resolvedHost,

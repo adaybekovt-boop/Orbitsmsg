@@ -12,8 +12,8 @@ void setBjSoundEnabled(bool v) {
 
 bool isBjSoundEnabled() => _enabled;
 
-class _BjSfx {
-  const _BjSfx();
+class BjSfx {
+  const BjSfx();
   void deal() {}
   void hit() {}
   void flip() {}
@@ -24,4 +24,4 @@ class _BjSfx {
   void push() {}
 }
 
-const _BjSfx bjSfx = _BjSfx();
+const BjSfx bjSfx = BjSfx();

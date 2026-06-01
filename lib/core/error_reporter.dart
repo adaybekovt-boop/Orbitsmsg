@@ -8,7 +8,6 @@
 // receive a payload map identical to the JS shape. The console is always
 // written to via `developer.log` so the payload shows up in the debug console.
 
-import 'dart:async';
 import 'dart:developer' as developer;
 import 'dart:io' show Platform;
 

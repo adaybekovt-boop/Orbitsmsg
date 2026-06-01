@@ -11,14 +11,13 @@
 // 2026-04 equivalent so users who upgrade don't land on a broken theme.
 
 import 'manifest.dart';
-import 'catalog/atmospheric/sakura_zen_manifest.dart';
-import 'catalog/classic/graphite_manifest.dart';
-import 'catalog/classic/light_manifest.dart';
-import 'catalog/classic/matrix_manifest.dart';
+import 'catalog/orbits_dark_manifest.dart';
+import 'catalog/orbits_light_manifest.dart';
 
 /// Stable id of the theme used when the user has never picked one (or when
-/// the persisted id can't be resolved). Matches JS `DEFAULT_THEME_ID`.
-const String defaultThemeId = 'classic-graphite';
+/// the persisted id can't be resolved). The 2026-05 Liquid Glass redesign
+/// collapsed the catalog to two user-facing themes; Dark is the default.
+const String defaultThemeId = 'orbits-dark';
 
 /// SharedPreferences key holding the user's persisted choice. Same value
 /// as the JS localStorage key so a cross-platform user shares preferences.
@@ -32,10 +31,8 @@ const String themePrefsKey = 'orbits_theme';
 /// as a compile-time constant. The function bodies still close over the
 /// matching `graphiteManifest` (etc.) without breaking const evaluation.
 const Map<String, ThemeManifest> themeCatalog = <String, ThemeManifest>{
-  'classic-graphite': graphiteManifest,
-  'classic-light': paperManifest,
-  'classic-matrix': matrixManifest,
-  'sakura-zen': sakuraZenManifest,
+  'orbits-dark': orbitsDarkManifest,
+  'orbits-light': orbitsLightManifest,
 };
 
 /// Legacy → current id mapping. Applied once on read so a user with an old
@@ -48,25 +45,33 @@ const Map<String, ThemeManifest> themeCatalog = <String, ThemeManifest>{
 ///  - themeManager's own legacy list — `aurora`, `stellar`, `retro`, `japan`,
 ///    `abyss`, `draft`
 const Map<String, String> legacyThemeMap = <String, String>{
-  // Retired pre-refresh dark themes → Graphite (the 2026-04 default).
-  'classic-dark': 'classic-graphite',
-  'obsidian': 'classic-graphite',
-  'sakura': 'classic-graphite',
-  'matrix': 'classic-matrix',
+  // 2026-05 Liquid Glass redesign collapsed every prior theme to Light/Dark.
+  // Dark-family ids → orbits-dark; the light/paper id → orbits-light.
+  'classic-graphite': 'orbits-dark',
+  'classic-matrix': 'orbits-dark',
+  'sakura-zen': 'orbits-light',
+  'classic-light': 'orbits-light',
+  'classic-dark': 'orbits-dark',
+  'obsidian': 'orbits-dark',
+  'sakura': 'orbits-light',
+  'matrix': 'orbits-dark',
+  'paper': 'orbits-light',
+  'light': 'orbits-light',
+  'dark': 'orbits-dark',
 
   // From the (now-dead) themeManager catalog.
-  'sakura_zen': 'sakura-zen',
-  'aurora_flow': 'classic-graphite',
-  'retro_synth': 'classic-graphite',
-  'none': 'classic-graphite',
+  'sakura_zen': 'orbits-light',
+  'aurora_flow': 'orbits-dark',
+  'retro_synth': 'orbits-dark',
+  'none': 'orbits-dark',
 
   // From themeManager's own legacy fallbacks.
-  'aurora': 'classic-graphite',
-  'stellar': 'classic-graphite',
-  'retro': 'classic-graphite',
-  'japan': 'classic-graphite',
-  'abyss': 'classic-graphite',
-  'draft': 'classic-graphite',
+  'aurora': 'orbits-dark',
+  'stellar': 'orbits-dark',
+  'retro': 'orbits-dark',
+  'japan': 'orbits-light',
+  'abyss': 'orbits-dark',
+  'draft': 'orbits-dark',
 };
 
 /// All currently-valid theme ids in catalog order.

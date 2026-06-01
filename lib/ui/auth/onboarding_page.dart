@@ -12,6 +12,11 @@ import '../../core/haptics.dart';
 import '../../core/identity.dart';
 import '../../state/auth_notifier.dart';
 import '../../themes/orbits_tokens.dart';
+import '../primitives/orbits_glass_button.dart';
+import '../primitives/orbits_glass_surface.dart';
+import 'crypto_busy_view.dart';
+import 'keygen_overlay_stub.dart'
+    if (dart.library.html) 'keygen_overlay_web.dart' as crypto_overlay;
 import 'terms_text.dart';
 
 class OnboardingPage extends ConsumerStatefulWidget {
@@ -91,6 +96,22 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
       _busy = true;
       _error = null;
     });
+    // Show the loading screen, then let it actually paint/composite before the
+    // CPU-heavy scrypt runs. On web scrypt blocks the single UI thread, so:
+    //  • the in-Flutter `CryptoBusyView` paints first (native animates it —
+    //    the KDF runs in a background isolate there), and
+    //  • a compositor-driven CSS overlay is shown on web so something keeps
+    //    animating even while the main thread is blocked (no "frozen" look).
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    await WidgetsBinding.instance.endOfFrame;
+    crypto_overlay.showCryptoBusyOverlay(
+      isDark: isDark,
+      title: 'Готовим профиль…',
+      subtitle: 'Это занимает пару секунд и происходит только на этом устройстве.',
+    );
+    // Give the browser a beat to commit the overlay and start its compositor
+    // animation before scrypt seizes the thread.
+    await Future<void>.delayed(const Duration(milliseconds: 120));
     try {
       await ref.read(authNotifierProvider.notifier).completeOnboarding(
             displayName: _displayNameCtrl.text,
@@ -103,6 +124,7 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
     } catch (e) {
       if (mounted) setState(() => _error = 'Ошибка: $e');
     } finally {
+      crypto_overlay.hideCryptoBusyOverlay();
       if (mounted) setState(() => _busy = false);
     }
   }
@@ -117,6 +139,21 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
   @override
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
+    // While the vault key is being derived, take over the whole screen with an
+    // explicit loading view so it never reads as a frozen wizard (on web a
+    // compositor overlay also animates on top — see `_submit`).
+    if (_busy) {
+      return const Scaffold(
+        body: SafeArea(
+          child: CryptoBusyView(
+            title: 'Готовим профиль…',
+            subtitle:
+                'Это занимает пару секунд и происходит только на этом '
+                'устройстве.',
+          ),
+        ),
+      );
+    }
     return Scaffold(
       body: SafeArea(
         child: Center(
@@ -212,7 +249,7 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
                   if (!mounted) return;
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text('Peer ID скопирован'),
+                      content: Text('Код скопирован'),
                       duration: Duration(seconds: 1),
                     ),
                   );
@@ -272,7 +309,7 @@ class _Header extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'ORBITS P2P',
+                'ORBITS',
                 style: TextStyle(
                   fontFamily: tokens.fontHeading,
                   fontSize: 15,
@@ -294,9 +331,11 @@ class _Header extends StatelessWidget {
           ),
         ),
         if (onBack != null)
-          IconButton(
+          OrbitsGlassIconButton(
+            icon: Icons.chevron_left,
             tooltip: 'Назад',
-            icon: const Icon(Icons.chevron_left),
+            variant: OrbitsGlassVariant.subtle,
+            size: OrbitsGlassSize.small,
             onPressed: onBack,
           ),
       ],
@@ -376,7 +415,7 @@ class _StepWelcome extends StatelessWidget {
                     Text(
                       'Чаты и звонки идут напрямую между устройствами. '
                       'Мы не просим телефон, не храним сообщения на сервере, '
-                      'и весь трафик зашифрован end-to-end.',
+                      'а переписка надёжно защищена.',
                       style: TextStyle(
                         fontFamily: tokens.fontBody,
                         fontSize: 14,
@@ -536,7 +575,7 @@ class _StepPeerId extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Твой Peer ID',
+                'Твой код профиля',
                 style: TextStyle(
                   fontFamily: tokens.fontHeading,
                   fontSize: 15,
@@ -569,18 +608,20 @@ class _StepPeerId extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    IconButton(
-                      tooltip: reveal ? 'Скрыть' : 'Показать',
-                      icon: Icon(reveal
+                    OrbitsGlassIconButton(
+                      icon: reveal
                           ? Icons.visibility_off_outlined
-                          : Icons.visibility_outlined),
-                      color: tokens.muted,
+                          : Icons.visibility_outlined,
+                      tooltip: reveal ? 'Скрыть' : 'Показать',
+                      variant: OrbitsGlassVariant.subtle,
+                      size: OrbitsGlassSize.small,
                       onPressed: onToggleReveal,
                     ),
-                    IconButton(
+                    OrbitsGlassIconButton(
+                      icon: Icons.copy_outlined,
                       tooltip: reveal ? 'Копировать' : 'Сначала покажи',
-                      icon: const Icon(Icons.copy_outlined),
-                      color: tokens.muted,
+                      variant: OrbitsGlassVariant.subtle,
+                      size: OrbitsGlassSize.small,
                       onPressed: onCopy,
                     ),
                   ],
@@ -588,8 +629,8 @@ class _StepPeerId extends StatelessWidget {
               ),
               const SizedBox(height: 10),
               Text(
-                'ID скрыт по умолчанию. Показывай и отправляй его только тем, '
-                'кому доверяешь.',
+                'Этот код — адрес твоего профиля. По умолчанию он скрыт. '
+                'Показывай и отправляй его только тем, кому доверяешь.',
                 style: TextStyle(
                   fontFamily: tokens.fontBody,
                   fontSize: 13,
@@ -603,7 +644,7 @@ class _StepPeerId extends StatelessWidget {
         const SizedBox(height: 20),
         _BigButton(
           label: 'Далее',
-          icon: const Icon(Icons.arrow_forward, size: 18),
+          icon: Icons.arrow_forward,
           onPressed: onNext,
         ),
       ],
@@ -720,14 +761,10 @@ class _StepTerms extends StatelessWidget {
         const SizedBox(height: 14),
 
         _BigButton(
-          label: busy ? 'Готовим ключи…' : 'Принять и завершить',
-          icon: busy
-              ? const SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
-                )
-              : const Icon(Icons.login, size: 18),
+          // Busy state is handled by the full-screen CryptoBusyView, so the
+          // button itself only ever shows its resting label here.
+          label: 'Принять и продолжить',
+          icon: Icons.login,
           onPressed: (busy || !accepted) ? null : onFinish,
         ),
       ],
@@ -767,64 +804,42 @@ class _Checkbox extends StatelessWidget {
 
 // ─── Reusable atoms ──────────────────────────────────────────
 
-/// Glass card wrapper — `rounded-[28px] bg-surface/30 ring-1 ring-white/[0.08]`.
+/// Glass card wrapper — now a real Liquid-Glass surface. `realBlur: true`
+/// opts this large, standalone panel into a BackdropFilter (it isn't inside a
+/// scrolling list), so it refracts the monochrome backdrop behind it.
 class _GlassCard extends StatelessWidget {
   const _GlassCard({required this.child});
   final Widget child;
 
   @override
   Widget build(BuildContext context) {
-    final tokens = OrbitsTokens.of(context);
-    return Container(
+    return OrbitsGlassSurface(
+      role: OrbitsGlassRole.card,
+      realBlur: true,
+      borderRadius: BorderRadius.circular(28),
       padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: Color.lerp(tokens.bg, tokens.surface, 0.5),
-        borderRadius: BorderRadius.circular(28),
-        border: Border.all(color: tokens.border),
-        boxShadow: tokens.shadowCard,
-      ),
       child: child,
     );
   }
 }
 
-/// h-12 full-width primary button.
+/// Full-width primary Liquid-Glass CTA.
 class _BigButton extends StatelessWidget {
   const _BigButton({required this.label, this.icon, this.onPressed});
   final String label;
-  final Widget? icon;
+  final IconData? icon;
   final VoidCallback? onPressed;
 
   @override
   Widget build(BuildContext context) {
-    final tokens = OrbitsTokens.of(context);
-    final child = Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (icon != null) ...[
-          icon!,
-          const SizedBox(width: 8),
-        ],
-        Text(
-          label,
-          style: TextStyle(
-            fontFamily: tokens.fontHeading,
-            fontSize: 15,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ],
-    );
-    return FilledButton(
+    return OrbitsGlassButton(
+      label: label,
+      icon: icon,
       onPressed: onPressed,
-      style: FilledButton.styleFrom(
-        minimumSize: const Size.fromHeight(50),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(tokens.radiusCard),
-        ),
-      ),
-      child: child,
+      enabled: onPressed != null,
+      variant: OrbitsGlassVariant.primary,
+      size: OrbitsGlassSize.large,
+      expand: true,
     );
   }
 }

@@ -6,11 +6,11 @@
 // on first run as inline SVG data URLs wrapping a big emoji.
 //
 // In Flutter the persistence target is Drift (the same DB that backs the
-// rest of the app — see pubspec.yaml drift/drift_flutter entries). The
-// Drift schema for sticker packs isn't merged yet, so the DB-backed helpers
-// are exposed as pluggable interfaces: the main agent can wire a concrete
-// [StickerStore] once the schema lands, and until then the default packs
-// plus the recent list work fully from the in-memory fallback.
+// rest of the app). Persistence is pluggable via [StickerStore]: the concrete
+// Drift-backed implementation lives in `storage/drift_sticker_store.dart` and
+// is wired at startup (`installDriftStickerStore()` in main.dart). The
+// in-memory fallback below is kept for tests and for any early call before
+// the store is installed.
 //
 // API shape mirrors the JS exports:
 //   DEFAULT_PACKS / defaultPacks
@@ -21,9 +21,6 @@
 //   recordStickerUsage(packId, stickerId)
 //   getRecents({limit})
 //   resolveSticker(packId, stickerId)
-//
-// TODO(port): once the Drift table exists, add a concrete StickerStore
-// implementation in core/db.dart and wire it via [setStickerStore].
 
 import 'dart:convert';
 

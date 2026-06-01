@@ -22,13 +22,49 @@
 // these into dataclasses once it lands (Phase 11).
 
 import 'dart:convert';
-import 'dart:typed_data';
+import 'dart:math';
 
 import 'package:drift/drift.dart';
 
+import '../core/vault_kek.dart';
+import '../utils/common.dart';
 import 'database.dart';
 import 'row_codec.dart';
-import 'tables.dart';
+
+// ─── At-rest content encryption (audit L3) ──────────────────────────
+//
+// Message and peer `data` blobs carry conversation content and contact
+// metadata. They're encrypted under the vault KEK before hitting the DB and
+// decrypted on read, so the on-disk SQLite / IndexedDB store is opaque without
+// the password. Uses the synchronous blob cipher from `vault_kek.dart` (Drift
+// row decoders are synchronous). Long-term keys/ratchets are protected
+// separately at the field level (audit C2); these helpers cover history.
+//
+// Migration is lazy and lossless: [_secureDecode] passes a legacy plaintext
+// blob straight through (the cipher frame is self-identifying), and the next
+// write re-stores it encrypted. Writes while locked fall back to plaintext
+// (content is lower-sensitivity than keys) — in practice messages/peers are
+// only written while unlocked.
+
+Uint8List _secureEncode(Map<String, Object?> row) {
+  final plain = encodeRow(row);
+  return wrapBlobSync(plain) ?? plain;
+}
+
+/// Decode an encrypted-or-legacy `data` blob. Throws if the blob is encrypted
+/// but the vault is locked — callers on one-shot read paths run while unlocked.
+Map<String, Object?> _secureDecode(List<int> data) =>
+    decodeRow(unwrapBlobSync(data));
+
+/// Null-tolerant variant for `.watch().map` streams — a blob that can't be
+/// decrypted (locked vault) or parsed drops out instead of killing the stream.
+Map<String, Object?>? _secureDecodeOrNull(List<int> data) {
+  try {
+    return decodeRow(unwrapBlobSync(data));
+  } catch (_) {
+    return null;
+  }
+}
 
 // ─── Constants mirrored from JS ─────────────────────────────────────
 
@@ -190,6 +226,11 @@ Future<bool> saveVoiceBlob(
   List<double>? waveform,
 }) async {
   if (id.isEmpty) return false;
+  // Defense-in-depth byte cap (audit finding 4): mirror the send-side raw cap
+  // `_maxVoiceRawBytes` (6 MiB). A blob larger than any legitimate voice
+  // message is a hostile/buggy peer — refuse rather than bloat the DB / risk
+  // an oversized write.
+  if (bytes.length > 6 * 1024 * 1024) return false;
   // Waveform is ≤48 normalized amplitudes in 0..1 — matches the JS wire
   // format (`audioRecorder.js` `compressSamples(..., 48)`). Persisting as
   // doubles keeps the player's bar-height math trivial (no scale-guess)
@@ -262,6 +303,9 @@ Future<bool> saveFileBlob(
   int duration = 0,
 }) async {
   if (id.isEmpty) return false;
+  // Defense-in-depth byte cap (audit finding 4): mirror the send-side raw cap
+  // `_maxFileRawBytes` (12 MiB).
+  if (bytes.length > 12 * 1024 * 1024) return false;
   // JS trims name to 200 chars — keep parity so inbound rows don't diverge.
   final trimmedName = _clipName(name ?? 'file');
   final db = orbitsDb();
@@ -400,99 +444,105 @@ Future<bool> savePeer(Map<String, Object?> peer) async {
   if (id.isEmpty) return false;
 
   final db = orbitsDb();
-  // Merge semantics — partial updates must not wipe existing displayName / pubKey
-  // (same as JS).
-  final existing = await _getPeerRaw(id);
-  final existingMap = existing ?? const <String, Object?>{};
+  // Merge semantics — partial updates must not wipe existing displayName /
+  // pubKey (same as JS). The read-modify-write runs inside a transaction so
+  // concurrent callers (markChatRead, setPeerBlocked, an inbound profile
+  // packet) can't interleave and clobber each other with a stale merge —
+  // e.g. a block flag being overwritten by a profile update that read the
+  // row before the block landed (audit M6).
+  return db.transaction<bool>(() async {
+    final existing = await _getPeerRaw(id);
+    final existingMap = existing ?? const <String, Object?>{};
 
-  final nextDisplayName = () {
-    final v = peer['displayName'];
-    if (v is String && v.isNotEmpty) {
-      return v.length > 64 ? v.substring(0, 64) : v;
-    }
-    return (existingMap['displayName'] as String?) ?? '';
-  }();
+    final nextDisplayName = () {
+      final v = peer['displayName'];
+      if (v is String && v.isNotEmpty) {
+        return v.length > 64 ? v.substring(0, 64) : v;
+      }
+      return (existingMap['displayName'] as String?) ?? '';
+    }();
 
-  // Local-only rename override. Unlike `displayName` (which comes off the
-  // remote profile packet and would overwrite user edits every time the
-  // peer broadcasts a new profile) `customName` is never touched by the
-  // packet router — only by the chat settings sheet. Merge preserves the
-  // existing value when the incoming patch doesn't mention it.
-  final customName = () {
-    final v = peer['customName'];
-    if (v is String) {
-      return v.length > 64 ? v.substring(0, 64) : v;
-    }
-    return (existingMap['customName'] as String?) ?? '';
-  }();
+    // Local-only rename override. Unlike `displayName` (which comes off the
+    // remote profile packet and would overwrite user edits every time the
+    // peer broadcasts a new profile) `customName` is never touched by the
+    // packet router — only by the chat settings sheet. Merge preserves the
+    // existing value when the incoming patch doesn't mention it.
+    final customName = () {
+      final v = peer['customName'];
+      if (v is String) {
+        return v.length > 64 ? v.substring(0, 64) : v;
+      }
+      return (existingMap['customName'] as String?) ?? '';
+    }();
 
-  final lastSeenAt = (peer['lastSeenAt'] as num?)?.toInt() ??
-      (existingMap['lastSeenAt'] as num?)?.toInt() ??
-      0;
+    final lastSeenAt = (peer['lastSeenAt'] as num?)?.toInt() ??
+        (existingMap['lastSeenAt'] as num?)?.toInt() ??
+        0;
 
-  // Watermark for unread counts: timestamp of the newest message the user
-  // has "seen" (set by `markChatRead`). Inbound messages with a larger
-  // timestamp count as unread in the chat list badge.
-  final lastReadAt = (peer['lastReadAt'] as num?)?.toInt() ??
-      (existingMap['lastReadAt'] as num?)?.toInt() ??
-      0;
+    // Watermark for unread counts: timestamp of the newest message the user
+    // has "seen" (set by `markChatRead`). Inbound messages with a larger
+    // timestamp count as unread in the chat list badge.
+    final lastReadAt = (peer['lastReadAt'] as num?)?.toInt() ??
+        (existingMap['lastReadAt'] as num?)?.toInt() ??
+        0;
 
-  final trustedBool = peer['trusted'] == true ||
-      existingMap['trusted'] == true ||
-      (existingMap['trusted'] is num &&
-          (existingMap['trusted'] as num).toInt() == 1);
-  final trustedInt = trustedBool ? 1 : 0;
+    final trustedBool = peer['trusted'] == true ||
+        existingMap['trusted'] == true ||
+        (existingMap['trusted'] is num &&
+            (existingMap['trusted'] as num).toInt() == 1);
+    final trustedInt = trustedBool ? 1 : 0;
 
-  final trustLevel = (peer['trustLevel'] as num?)?.toInt() ??
-      (existingMap['trustLevel'] as num?)?.toInt() ??
-      (trustedBool ? 1 : 0);
+    final trustLevel = (peer['trustLevel'] as num?)?.toInt() ??
+        (existingMap['trustLevel'] as num?)?.toInt() ??
+        (trustedBool ? 1 : 0);
 
-  // Blocked flag: accept `true` / `1` / `false` / `0` / absent.  Treated
-  // like a tri-state merge — if the caller didn't mention `blocked`,
-  // preserve the existing value (default `false`).
-  final blockedBool = () {
-    final v = peer['blocked'];
-    if (v == true || v == 1) return true;
-    if (v == false || v == 0) return false;
-    final ev = existingMap['blocked'];
-    if (ev == true || ev == 1) return true;
-    return false;
-  }();
-  final blockedInt = blockedBool ? 1 : 0;
+    // Blocked flag: accept `true` / `1` / `false` / `0` / absent.  Treated
+    // like a tri-state merge — if the caller didn't mention `blocked`,
+    // preserve the existing value (default `false`).
+    final blockedBool = () {
+      final v = peer['blocked'];
+      if (v == true || v == 1) return true;
+      if (v == false || v == 0) return false;
+      final ev = existingMap['blocked'];
+      if (ev == true || ev == 1) return true;
+      return false;
+    }();
+    final blockedInt = blockedBool ? 1 : 0;
 
-  final addedAt = (existingMap['addedAt'] as num?)?.toInt() ??
-      (peer['addedAt'] as num?)?.toInt() ??
-      _now();
+    final addedAt = (existingMap['addedAt'] as num?)?.toInt() ??
+        (peer['addedAt'] as num?)?.toInt() ??
+        _now();
 
-  final pubKey = peer['pubKey'] ?? existingMap['pubKey'];
+    final pubKey = peer['pubKey'] ?? existingMap['pubKey'];
 
-  final row = <String, Object?>{
-    'id': id,
-    'displayName': nextDisplayName,
-    'customName': customName,
-    'lastSeenAt': lastSeenAt,
-    'lastReadAt': lastReadAt,
-    'trusted': trustedBool,
-    'blocked': blockedBool,
-    'pubKey': pubKey,
-    'trustLevel': trustLevel,
-    'addedAt': addedAt,
-  };
+    final row = <String, Object?>{
+      'id': id,
+      'displayName': nextDisplayName,
+      'customName': customName,
+      'lastSeenAt': lastSeenAt,
+      'lastReadAt': lastReadAt,
+      'trusted': trustedBool,
+      'blocked': blockedBool,
+      'pubKey': pubKey,
+      'trustLevel': trustLevel,
+      'addedAt': addedAt,
+    };
 
-  await db.into(db.peersTable).insertOnConflictUpdate(
-        PeersTableCompanion.insert(
-          id: id,
-          displayName: Value(nextDisplayName),
-          lastSeenAt: Value(lastSeenAt),
-          trusted: Value(trustedInt),
-          trustLevel: Value(trustLevel),
-          addedAt: Value(addedAt),
-          blocked: Value(blockedInt),
-          lastReadAt: Value(lastReadAt),
-          data: encodeRow(row),
-        ),
-      );
-  return true;
+    await db.into(db.peersTable).insertOnConflictUpdate(
+          PeersTableCompanion.insert(
+            id: id,
+            displayName: Value(nextDisplayName),
+            lastSeenAt: Value(lastSeenAt),
+            trusted: Value(trustedInt),
+            trustLevel: Value(trustLevel),
+            addedAt: Value(addedAt),
+            blocked: Value(blockedInt),
+            lastReadAt: Value(lastReadAt),
+            data: _secureEncode(row),
+          ),
+        );
+    return true;
+  });
 }
 
 // ─── Chat-settings helpers ──────────────────────────────────────────
@@ -519,6 +569,18 @@ Future<bool> setPeerCustomName(String peerId, String customName) =>
 Future<bool> setPeerTrustLevel(String peerId, int level) =>
     savePeer({'id': peerId, 'trustLevel': level});
 
+/// Promote a peer to TOFU trust (level 1) on first verified handshake, but
+/// only from `unknown` (0). Never downgrades a user-confirmed `verified` (2)
+/// and never re-promotes if the user explicitly reset to unknown after having
+/// been ≥1 — we only act when the stored level is exactly 0 (audit H1).
+Future<bool> ensurePeerTofuTrust(String peerId) async {
+  if (peerId.isEmpty) return false;
+  final existing = await getPeer(peerId);
+  final cur = (existing?['trustLevel'] as num?)?.toInt() ?? 0;
+  if (cur >= 1) return false;
+  return setPeerTrustLevel(peerId, 1);
+}
+
 /// Mark the chat as "read up to now". Stamps `lastReadAt = now()` so the
 /// unread-count query stops counting everything older than this moment.
 /// Called by the chat view on mount and whenever a new inbound message
@@ -532,8 +594,29 @@ Future<bool> markChatRead(String peerId, {int? at}) =>
 Future<int> clearMessagesForPeer(String peerId) async {
   if (peerId.isEmpty) return 0;
   final db = orbitsDb();
-  return (db.delete(db.messagesTable)..where((t) => t.peerId.equals(peerId)))
+  final n = await (db.delete(db.messagesTable)
+        ..where((t) => t.peerId.equals(peerId)))
       .go();
+  // The just-deleted messages may have owned voice/file blobs — reap them.
+  await sweepOrphanBlobs();
+  return n;
+}
+
+/// Orphan-blob garbage collector. Voice/file blobs are keyed by the owning
+/// message id (`voice_blobs.id` / `file_blobs.id` == `messages.id`), so a row
+/// whose id no longer appears in `messages` is dead weight bloating the SQLite
+/// file. A single `NOT IN (SELECT id FROM messages)` subquery per table sweeps
+/// them. Call after chat deletions, message revokes, and once at app start.
+Future<void> sweepOrphanBlobs() async {
+  final db = orbitsDb();
+  await db.transaction(() async {
+    await db.customStatement(
+      'DELETE FROM voice_blobs WHERE id NOT IN (SELECT id FROM messages)',
+    );
+    await db.customStatement(
+      'DELETE FROM file_blobs WHERE id NOT IN (SELECT id FROM messages)',
+    );
+  });
 }
 
 Future<Map<String, Object?>?> getPeer(String peerId) async => _getPeerRaw(peerId);
@@ -541,7 +624,7 @@ Future<Map<String, Object?>?> getPeer(String peerId) async => _getPeerRaw(peerId
 Future<List<Map<String, Object?>>> getAllPeers() async {
   final db = orbitsDb();
   final rows = await db.select(db.peersTable).get();
-  return rows.map((r) => decodeRow(r.data)).toList();
+  return rows.map((r) => _secureDecode(r.data)).toList();
 }
 
 Future<bool> deletePeer(String peerId) async {
@@ -556,7 +639,7 @@ Future<Map<String, Object?>?> _getPeerRaw(String peerId) async {
   final db = orbitsDb();
   final row = await (db.select(db.peersTable)..where((t) => t.id.equals(peerId)))
       .getSingleOrNull();
-  return row == null ? null : decodeRow(row.data);
+  return row == null ? null : _secureDecode(row.data);
 }
 
 // ─── Messages ───────────────────────────────────────────────────────
@@ -568,6 +651,12 @@ Future<bool> saveMessage(Map<String, Object?> message) async {
   final direction = (message['direction'] as String?) ?? 'out';
   final status = _normalizeMessageStatus(message['status'], direction);
 
+  // Room/channel routing (schema v3). Null for ordinary 1:1 DMs; set for
+  // messages that belong to a Discord-style channel so `watchChannelMessages`
+  // can page them by `channel_id`.
+  final roomId = message['roomId'] as String?;
+  final channelId = message['channelId'] as String?;
+
   final row = <String, Object?>{
     'id': id,
     'peerId': peerId,
@@ -576,6 +665,8 @@ Future<bool> saveMessage(Map<String, Object?> message) async {
     'payload': message['payload'],
     'direction': direction,
     'status': status,
+    if (roomId != null) 'roomId': roomId,
+    if (channelId != null) 'channelId': channelId,
   };
 
   final db = orbitsDb();
@@ -586,7 +677,9 @@ Future<bool> saveMessage(Map<String, Object?> message) async {
           timestamp: ts,
           direction: direction,
           status: status,
-          data: encodeRow(row),
+          data: _secureEncode(row),
+          roomId: Value(roomId),
+          channelId: Value(channelId),
         ),
       );
   return true;
@@ -598,7 +691,7 @@ Future<Map<String, Object?>?> getMessageById(String id) async {
   final row = await (db.select(db.messagesTable)
         ..where((t) => t.id.equals(id)))
       .getSingleOrNull();
-  return row == null ? null : decodeRow(row.data);
+  return row == null ? null : _secureDecode(row.data);
 }
 
 Future<bool> updateMessage(String id, Map<String, Object?> patch) async {
@@ -609,7 +702,7 @@ Future<bool> updateMessage(String id, Map<String, Object?> patch) async {
           ..where((t) => t.id.equals(id)))
         .getSingleOrNull();
     if (row == null) return false;
-    final current = decodeRow(row.data);
+    final current = _secureDecode(row.data);
     final merged = <String, Object?>{...current, ...patch};
 
     final ts = (merged['timestamp'] as num?)?.toInt() ?? row.timestamp;
@@ -623,7 +716,7 @@ Future<bool> updateMessage(String id, Map<String, Object?> patch) async {
         timestamp: Value(ts),
         direction: Value(direction),
         status: Value(status),
-        data: Value(encodeRow(merged)),
+        data: Value(_secureEncode(merged)),
       ),
     );
     return true;
@@ -673,7 +766,7 @@ Future<List<Map<String, Object?>>> getPendingMessages({
     query.where((t) => t.peerId.equals(peerId));
   }
   final rows = await query.get();
-  return rows.map((r) => decodeRow(r.data)).toList();
+  return rows.map((r) => _secureDecode(r.data)).toList();
 }
 
 /// Chat paging — `peerId` required. Returns the newest [limit] messages
@@ -685,7 +778,10 @@ Future<List<Map<String, Object?>>> getMessages(
   int? beforeTimestamp,
 }) async {
   if (peerId.isEmpty) return const [];
-  final before = beforeTimestamp ?? (1 << 62);
+  // Max safe integer for a JS double — on web (dart2js) ints are doubles, so
+  // `1 << 62` (> 2^53) silently loses precision and the "before" filter
+  // misbehaves. 9007199254740991 == 2^53 - 1 round-trips exactly (audit L6).
+  final before = beforeTimestamp ?? 9007199254740991;
   final db = orbitsDb();
   final rows = await (db.select(db.messagesTable)
         ..where((t) =>
@@ -693,13 +789,15 @@ Future<List<Map<String, Object?>>> getMessages(
         ..orderBy([(t) => OrderingTerm.desc(t.timestamp)])
         ..limit(limit))
       .get();
-  return rows.map((r) => decodeRow(r.data)).toList();
+  return rows.map((r) => _secureDecode(r.data)).toList();
 }
 
 Future<bool> deleteMessageRow(String id) async {
   if (id.isEmpty) return true;
   final db = orbitsDb();
   await (db.delete(db.messagesTable)..where((t) => t.id.equals(id))).go();
+  // Revoking a message orphans its voice/file blob — sweep it now.
+  await sweepOrphanBlobs();
   return true;
 }
 
@@ -722,6 +820,12 @@ Future<int> clearPendingMessages({String? peerId}) async {
 
 Future<bool> saveAvatar(String peerId, String avatarDataUrl) async {
   if (peerId.isEmpty) return false;
+  // Storage-layer gate (audit M3): an avatar is otherwise unbounded (unlike
+  // name/bio, which are clamped) and a peer could push a multi-MB blob to
+  // exhaust storage, or a non-image / SVG payload. Reuse the same allowlist +
+  // size validator the protocol layer applies, so this is a defense-in-depth
+  // backstop for any caller that reaches the DB without pre-validating.
+  if (safeAvatarDataUrl(avatarDataUrl) == null) return false;
   final db = orbitsDb();
   final bytes = Uint8List.fromList(utf8.encode(avatarDataUrl));
   await db.into(db.avatarsTable).insertOnConflictUpdate(
@@ -770,7 +874,19 @@ Stream<List<Map<String, Object?>>> watchAllPeers() {
   return (db.select(db.peersTable)
         ..orderBy([(t) => OrderingTerm.desc(t.lastSeenAt)]))
       .watch()
-      .map((rows) => rows.map((r) => decodeRow(r.data)).toList());
+      .map((rows) => _decodeRowsSafe(rows.map((r) => r.data)));
+}
+
+/// Decode a batch of message/peer `data` blobs, decrypting (audit L3) and
+/// dropping any that fail to parse/decrypt rather than throwing out of a
+/// stream `.map` (audit L5).
+List<Map<String, Object?>> _decodeRowsSafe(Iterable<List<int>> blobs) {
+  final out = <Map<String, Object?>>[];
+  for (final b in blobs) {
+    final m = _secureDecodeOrNull(b);
+    if (m != null) out.add(m);
+  }
+  return out;
 }
 
 /// Stream of the newest [limit] messages for [peerId], oldest-first so the
@@ -790,7 +906,7 @@ Stream<List<Map<String, Object?>>> watchMessagesForPeer(
       .map((rows) {
     // Drift returns newest→oldest; flip so the chat view renders oldest→
     // newest without an extra `.reversed.toList()` in the UI.
-    final mapped = rows.map((r) => decodeRow(r.data)).toList();
+    final mapped = _decodeRowsSafe(rows.map((r) => r.data));
     mapped.sort((a, b) {
       final at = (a['timestamp'] as num?)?.toInt() ?? 0;
       final bt = (b['timestamp'] as num?)?.toInt() ?? 0;
@@ -798,6 +914,316 @@ Stream<List<Map<String, Object?>>> watchMessagesForPeer(
     });
     return mapped;
   });
+}
+
+// ─── Rooms (Discord-style networks, schema v3) ──────────────────────
+
+/// Upsert a room. When the local user is the host (`isHost == true`) and the
+/// room has no channels yet, this provisions the two default channels: text
+/// `general` (rendered `#general`) and voice `Голосовой 1` (rendered
+/// `🔊 Голосовой 1`). The `#` / `🔊` are UI prefixes derived from the channel
+/// `type`; stored names are bare. Idempotent — re-saving an existing room
+/// (e.g. a status flip) never duplicates channels.
+Future<void> saveRoom(Map<String, Object?> room) async {
+  final id = (room['id'] as String?) ?? '';
+  if (id.isEmpty) return;
+  final db = orbitsDb();
+  final isHost = room['isHost'] == true ||
+      (room['isHost'] is num && (room['isHost'] as num).toInt() != 0);
+
+  await db.into(db.roomsTable).insertOnConflictUpdate(
+        RoomsTableCompanion.insert(
+          id: id,
+          name: Value((room['name'] as String?) ?? ''),
+          hostPeerId: Value((room['hostPeerId'] as String?) ?? ''),
+          isHost: Value(isHost),
+          createdAt: Value((room['createdAt'] as num?)?.toInt() ?? _now()),
+          status: Value((room['status'] as String?) ?? 'active'),
+        ),
+      );
+
+  if (isHost) {
+    final existing = await (db.select(db.roomChannelsTable)
+          ..where((t) => t.roomId.equals(id))
+          ..limit(1))
+        .get();
+    if (existing.isEmpty) {
+      await createChannel(id, 'general', 'text');
+      await createChannel(id, 'Голосовой 1', 'voice');
+    }
+  }
+}
+
+/// Create a channel in [roomId]. [type] is 'text' | 'voice'. `position` is the
+/// next free slot (current channel count) so channels render in creation
+/// order; the id is a fresh UUID v4. Returns the created channel map (id +
+/// fields) so the host can broadcast a `room_channel_create` to guests.
+Future<Map<String, Object?>> createChannel(
+    String roomId, String name, String type) async {
+  if (roomId.isEmpty) return const <String, Object?>{};
+  final db = orbitsDb();
+  final existing = await (db.select(db.roomChannelsTable)
+        ..where((t) => t.roomId.equals(roomId)))
+      .get();
+  final id = _uuidV4();
+  final position = existing.length;
+  await db.into(db.roomChannelsTable).insert(
+        RoomChannelsTableCompanion.insert(
+          id: id,
+          roomId: roomId,
+          name: Value(name),
+          type: type,
+          position: Value(position),
+        ),
+      );
+  return <String, Object?>{
+    'id': id,
+    'roomId': roomId,
+    'name': name,
+    'type': type,
+    'position': position,
+  };
+}
+
+/// All rooms the user hosts or has joined, newest-first. Drives the Discord
+/// "server rail". Reactive.
+Stream<List<Map<String, Object?>>> watchRooms() {
+  final db = orbitsDb();
+  return (db.select(db.roomsTable)
+        ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+      .watch()
+      .map((rows) => rows
+          .map((r) => <String, Object?>{
+                'id': r.id,
+                'name': r.name,
+                'hostPeerId': r.hostPeerId,
+                'isHost': r.isHost,
+                'createdAt': r.createdAt,
+                'status': r.status,
+              })
+          .toList());
+}
+
+/// Upsert a room member (composite key {roomId, peerId}). `avatarDataUrl` is
+/// an optional inline base64 data-URL for instant roster rendering. Re-saving
+/// the same member updates their row (e.g. online/offline, renamed).
+Future<void> saveRoomMember(Map<String, Object?> member) async {
+  final roomId = (member['roomId'] as String?) ?? '';
+  final peerId = (member['peerId'] as String?) ?? '';
+  if (roomId.isEmpty || peerId.isEmpty) return;
+  final db = orbitsDb();
+  final isOnline = member['isOnline'] == true ||
+      (member['isOnline'] is num && (member['isOnline'] as num).toInt() != 0);
+  await db.into(db.roomMembersTable).insertOnConflictUpdate(
+        RoomMembersTableCompanion.insert(
+          roomId: roomId,
+          peerId: peerId,
+          displayName: Value((member['displayName'] as String?) ?? ''),
+          avatarDataUrl: Value(member['avatarDataUrl'] as String?),
+          isOnline: Value(isOnline),
+          joinedAt: Value((member['joinedAt'] as num?)?.toInt() ?? _now()),
+        ),
+      );
+}
+
+/// Delete a room. Foreign keys (`PRAGMA foreign_keys = ON`, set in
+/// `database.dart` `beforeOpen`) cascade the delete to the room's channels,
+/// members, and — transitively, via `messages.channel_id` — the channels'
+/// message history.
+Future<bool> deleteRoom(String roomId) async {
+  if (roomId.isEmpty) return false;
+  final db = orbitsDb();
+  await (db.delete(db.roomsTable)..where((t) => t.id.equals(roomId))).go();
+  return true;
+}
+
+/// Flip a room's `status` ('active' | 'offline'). Used when the host
+/// destroys the room (`room_destroy`) — the row is kept (history stays) but
+/// marked offline so the UI greys it out.
+Future<void> setRoomStatus(String roomId, String status) async {
+  if (roomId.isEmpty) return;
+  final db = orbitsDb();
+  await (db.update(db.roomsTable)..where((t) => t.id.equals(roomId)))
+      .write(RoomsTableCompanion(status: Value(status)));
+}
+
+/// One-shot channel list for [roomId] (ordered by position). Used by the host
+/// to sync the channel set to a joining guest, and to resolve the default
+/// channel id after room creation.
+Future<List<Map<String, Object?>>> getRoomChannels(String roomId) async {
+  if (roomId.isEmpty) return const [];
+  final db = orbitsDb();
+  final rows = await (db.select(db.roomChannelsTable)
+        ..where((t) => t.roomId.equals(roomId))
+        ..orderBy([(t) => OrderingTerm.asc(t.position)]))
+      .get();
+  return rows
+      .map((r) => <String, Object?>{
+            'id': r.id,
+            'roomId': r.roomId,
+            'name': r.name,
+            'type': r.type,
+            'position': r.position,
+          })
+      .toList();
+}
+
+/// Insert-or-update a channel with a CALLER-supplied id. Used by guests to
+/// replicate the host's channels (id must match so messages keyed by
+/// `channelId` line up across host + guests) — `createChannel` generates a
+/// fresh id and is host-only.
+Future<void> upsertRoomChannel(Map<String, Object?> channel) async {
+  final id = (channel['id'] as String?) ?? '';
+  final roomId = (channel['roomId'] as String?) ?? '';
+  if (id.isEmpty || roomId.isEmpty) return;
+  final db = orbitsDb();
+  await db.into(db.roomChannelsTable).insertOnConflictUpdate(
+        RoomChannelsTableCompanion.insert(
+          id: id,
+          roomId: roomId,
+          name: Value((channel['name'] as String?) ?? ''),
+          type: (channel['type'] as String?) ?? 'text',
+          position: Value((channel['position'] as num?)?.toInt() ?? 0),
+        ),
+      );
+}
+
+/// One-shot member roster for [roomId] (ordered by join time). Used by the
+/// host to assemble the `room_members_update` broadcast.
+Future<List<Map<String, Object?>>> getRoomMembers(String roomId) async {
+  if (roomId.isEmpty) return const [];
+  final db = orbitsDb();
+  final rows = await (db.select(db.roomMembersTable)
+        ..where((t) => t.roomId.equals(roomId))
+        ..orderBy([(t) => OrderingTerm.asc(t.joinedAt)]))
+      .get();
+  return rows
+      .map((r) => <String, Object?>{
+            'roomId': r.roomId,
+            'peerId': r.peerId,
+            'displayName': r.displayName,
+            'avatarDataUrl': r.avatarDataUrl,
+            'isOnline': r.isOnline,
+            'joinedAt': r.joinedAt,
+          })
+      .toList();
+}
+
+/// Overwrite a room's member roster with [members] in one transaction. Guests
+/// call this on `room_members_update` so avatars/names appear instantly and
+/// departed members vanish. Each entry accepts `displayName` or `name`.
+Future<void> replaceRoomMembers(
+  String roomId,
+  List<Map<String, Object?>> members,
+) async {
+  if (roomId.isEmpty) return;
+  final db = orbitsDb();
+  await db.transaction(() async {
+    await (db.delete(db.roomMembersTable)..where((t) => t.roomId.equals(roomId)))
+        .go();
+    for (final m in members) {
+      final peerId = (m['peerId'] as String?) ?? '';
+      if (peerId.isEmpty) continue;
+      final name =
+          (m['displayName'] as String?) ?? (m['name'] as String?) ?? '';
+      final isOnline = m['isOnline'] == true ||
+          (m['isOnline'] is num && (m['isOnline'] as num).toInt() != 0);
+      await db.into(db.roomMembersTable).insertOnConflictUpdate(
+            RoomMembersTableCompanion.insert(
+              roomId: roomId,
+              peerId: peerId,
+              displayName: Value(name),
+              avatarDataUrl: Value(m['avatarDataUrl'] as String?),
+              isOnline: Value(isOnline),
+              joinedAt: Value((m['joinedAt'] as num?)?.toInt() ?? _now()),
+            ),
+          );
+    }
+  });
+}
+
+/// Remove one member from a room (used by the host on `room_leave`).
+Future<void> removeRoomMember(String roomId, String peerId) async {
+  if (roomId.isEmpty || peerId.isEmpty) return;
+  final db = orbitsDb();
+  await (db.delete(db.roomMembersTable)
+        ..where((t) => t.roomId.equals(roomId) & t.peerId.equals(peerId)))
+      .go();
+}
+
+/// Channels of [roomId], ordered by `position` (creation order). Reactive.
+Stream<List<Map<String, Object?>>> watchChannels(String roomId) {
+  if (roomId.isEmpty) return Stream.value(const []);
+  final db = orbitsDb();
+  return (db.select(db.roomChannelsTable)
+        ..where((t) => t.roomId.equals(roomId))
+        ..orderBy([(t) => OrderingTerm.asc(t.position)]))
+      .watch()
+      .map((rows) => rows
+          .map((r) => <String, Object?>{
+                'id': r.id,
+                'roomId': r.roomId,
+                'name': r.name,
+                'type': r.type,
+                'position': r.position,
+              })
+          .toList());
+}
+
+/// Members of [roomId], ordered by join time. Reactive.
+Stream<List<Map<String, Object?>>> watchRoomMembers(String roomId) {
+  if (roomId.isEmpty) return Stream.value(const []);
+  final db = orbitsDb();
+  return (db.select(db.roomMembersTable)
+        ..where((t) => t.roomId.equals(roomId))
+        ..orderBy([(t) => OrderingTerm.asc(t.joinedAt)]))
+      .watch()
+      .map((rows) => rows
+          .map((r) => <String, Object?>{
+                'roomId': r.roomId,
+                'peerId': r.peerId,
+                'displayName': r.displayName,
+                'avatarDataUrl': r.avatarDataUrl,
+                'isOnline': r.isOnline,
+                'joinedAt': r.joinedAt,
+              })
+          .toList());
+}
+
+/// Newest [limit] messages of a channel, oldest-first. Same decode + sort as
+/// [watchMessagesForPeer] — the encrypted `data` blob carries the payload.
+Stream<List<Map<String, Object?>>> watchChannelMessages(
+  String channelId, {
+  int limit = 50,
+}) {
+  if (channelId.isEmpty) return Stream.value(const []);
+  final db = orbitsDb();
+  return (db.select(db.messagesTable)
+        ..where((t) => t.channelId.equals(channelId))
+        ..orderBy([(t) => OrderingTerm.desc(t.timestamp)])
+        ..limit(limit))
+      .watch()
+      .map((rows) {
+    final mapped = _decodeRowsSafe(rows.map((r) => r.data));
+    mapped.sort((a, b) {
+      final at = (a['timestamp'] as num?)?.toInt() ?? 0;
+      final bt = (b['timestamp'] as num?)?.toInt() ?? 0;
+      return at - bt;
+    });
+    return mapped;
+  });
+}
+
+/// RFC 4122 UUID v4 from a CSPRNG — used for channel ids.
+String _uuidV4() {
+  final rng = Random.secure();
+  final b = List<int>.generate(16, (_) => rng.nextInt(256));
+  b[6] = (b[6] & 0x0f) | 0x40; // version 4
+  b[8] = (b[8] & 0x3f) | 0x80; // variant 10xx
+  String hx(int n) => n.toRadixString(16).padLeft(2, '0');
+  final s = b.map(hx).join();
+  return '${s.substring(0, 8)}-${s.substring(8, 12)}-${s.substring(12, 16)}-'
+      '${s.substring(16, 20)}-${s.substring(20)}';
 }
 
 /// Pending outbox scoped to a single peer, oldest-first (flush order).
@@ -808,7 +1234,7 @@ Stream<List<Map<String, Object?>>> watchPendingForPeer(String peerId) {
         ..where((t) => t.peerId.equals(peerId) & t.status.equals('pending'))
         ..orderBy([(t) => OrderingTerm.asc(t.timestamp)]))
       .watch()
-      .map((rows) => rows.map((r) => decodeRow(r.data)).toList());
+      .map((rows) => _decodeRowsSafe(rows.map((r) => r.data)));
 }
 
 /// Global pending queue across all peers, oldest-first. Used by the
@@ -821,7 +1247,7 @@ Stream<List<Map<String, Object?>>> watchPendingGlobal({int limit = 500}) {
         ..orderBy([(t) => OrderingTerm.asc(t.timestamp)])
         ..limit(limit))
       .watch()
-      .map((rows) => rows.map((r) => decodeRow(r.data)).toList());
+      .map((rows) => _decodeRowsSafe(rows.map((r) => r.data)));
 }
 
 /// Per-peer chat metadata for the chat list: newest message blob, its
@@ -841,25 +1267,28 @@ Stream<List<Map<String, Object?>>> watchPendingGlobal({int limit = 500}) {
 /// on the primary FROM table.
 Stream<List<Map<String, Object?>>> watchChatMetas() {
   final db = orbitsDb();
+  // NB: raw SQL must use drift's snake_case SQL column names (peer_id,
+  // last_read_at), not the camelCase Dart getters — the output aliases
+  // (peerId/lastTs/…) are arbitrary and read back by those names below.
   final query = db.customSelect(
     '''
     SELECT
-      m.peerId AS peerId,
+      m.peer_id AS peerId,
       MAX(m.timestamp) AS lastTs,
       (
         SELECT data FROM messages
-        WHERE peerId = m.peerId
+        WHERE peer_id = m.peer_id
         ORDER BY timestamp DESC
         LIMIT 1
       ) AS lastData,
       SUM(CASE
         WHEN m.direction = 'in'
-             AND m.timestamp > IFNULL(p.lastReadAt, 0)
+             AND m.timestamp > IFNULL(p.last_read_at, 0)
         THEN 1 ELSE 0
       END) AS unreadCount
     FROM messages m
-    LEFT JOIN peers p ON p.id = m.peerId
-    GROUP BY m.peerId
+    LEFT JOIN peers p ON p.id = m.peer_id
+    GROUP BY m.peer_id
     ''',
     readsFrom: {db.messagesTable, db.peersTable},
   );
@@ -867,7 +1296,7 @@ Stream<List<Map<String, Object?>>> watchChatMetas() {
   return query.watch().map((rows) => rows.map((r) {
         final lastDataBlob = r.readNullable<Uint8List>('lastData');
         final lastData =
-            lastDataBlob == null ? null : decodeRow(lastDataBlob);
+            lastDataBlob == null ? null : _secureDecodeOrNull(lastDataBlob);
         return <String, Object?>{
           'peerId': r.read<String>('peerId'),
           'lastTs': r.readNullable<int>('lastTs') ?? 0,
@@ -879,15 +1308,24 @@ Stream<List<Map<String, Object?>>> watchChatMetas() {
 
 // ─── Nuke ────────────────────────────────────────────────────────────
 
-/// Clear every user-owned store. Identity / prekeys are intentionally
-/// left intact — matching JS, which wiped `peers`/`messages`/`keys` etc.
-/// as a single atomic "debug reset" without touching ratchet keys.
+/// Full local wipe — removes **every** persisted store in one transaction,
+/// including the long-term identity keys (`keys`), all signed/one-time
+/// prekeys (`prekeys`), TOFU pins (also in `keys`), ratchet snapshots, and the
+/// `kv` table that holds the auth token + its HMAC signing key.
+///
+/// This is the "reset profile" / forgot-password path. Earlier this method
+/// claimed to leave identity/prekeys intact but actually deleted `keys` while
+/// skipping `prekeys` and `kv` — leaving private prekeys and a reusable auth
+/// token behind after a supposed full reset (audit H4). It now wipes
+/// everything consistently. Use only when the caller really wants a clean
+/// slate; `logout()` keeps the identity for re-onboarding.
 Future<bool> clearAllData() async {
   final db = orbitsDb();
   await db.transaction(() async {
     await db.delete(db.peersTable).go();
     await db.delete(db.messagesTable).go();
     await db.delete(db.keysTable).go();
+    await db.delete(db.prekeysTable).go();
     await db.delete(db.sessionKeysTable).go();
     await db.delete(db.avatarsTable).go();
     await db.delete(db.stickerPacksTable).go();
@@ -895,6 +1333,7 @@ Future<bool> clearAllData() async {
     await db.delete(db.voiceBlobsTable).go();
     await db.delete(db.fileBlobsTable).go();
     await db.delete(db.ratchetsTable).go();
+    await db.delete(db.kvTable).go();
   });
   return true;
 }

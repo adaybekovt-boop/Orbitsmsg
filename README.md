@@ -1,62 +1,49 @@
-# orbits_flutter
+# Orbits
 
-Flutter port of the Orbits P2P messenger.
+A private, peer-to-peer messenger with end-to-end encryption. Messages, calls,
+and files travel directly between devices — there's no central server storing
+your conversations.
 
-## CI
+## Features
 
-GitHub Actions builds the project on every push to `main`:
+- 🔒 End-to-end encryption (X3DH + Double Ratchet, forward secrecy)
+- 📞 Voice & video calls, screen sharing
+- 🖼️ Images, files, voice messages, stickers
+- 🌗 Themes
+- 📱 Android, 🖥️ Windows, and 🌐 Web
 
-- Android APK artifacts
-- Windows single-file installer EXE
-- Flutter web static bundle
-- GitHub Pages deployment
+## Download
 
-The platform folders (`android/`, `windows/`, etc.) are intentionally not
-checked in. CI generates them with `flutter create` and then applies the
-patches from `tool/ci/patch_android.sh`.
+Get the latest version from the website:
 
-## Web Deploy
+**https://orbits-eeo.pages.dev/**
 
-The `Deploy Web` workflow publishes the Flutter web build to GitHub Pages
-with:
+Or download directly from GitHub:
 
-```bash
-flutter build web --release --base-href /tkmessenger/ --pwa-strategy offline-first
-```
+| Platform | Link |
+|----------|------|
+| Android (APK) | https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-android-universal.apk |
+| Windows (EXE) | https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-windows-x64.exe |
+| Web | https://orbits-eeo.pages.dev/ |
 
-After the workflow succeeds, the app should be available at:
+> On Android you may need to allow installs from unknown sources.
 
-```text
-https://adaybekovt-boop.github.io/tkmessenger/
-```
+## How to use
 
-## Direct Download Links
+1. Install the app and set a password — it encrypts your keys on the device.
+2. Share your ID (or QR code) with the person you want to chat with.
+3. Add them by their ID and start messaging.
 
-Use these URLs for website buttons:
+Your password is never stored or transmitted. If you forget it, local data
+cannot be recovered — that's part of the security model.
 
-```text
-Windows EXE:
-https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-windows-x64.exe
+## Support
 
-Android APK:
-https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-android-universal.apk
+Questions and bug reports: please use
+[Issues](https://github.com/adaybekovt-boop/tkmessenger/issues).
 
-Flutter Web:
-https://adaybekovt-boop.github.io/tkmessenger/
-```
+---
 
-## Local Development
-
-Install Flutter 3.32 or newer, then run:
-
-```bash
-flutter pub get
-flutter run -d chrome
-```
-
-For local web testing with the headers used by Drift's faster
-SharedArrayBuffer path:
-
-```bash
-dart tool/serve_web.dart
-```
+© Orbits. All rights reserved. This is proprietary software. Copying, modifying,
+or redistributing the source code, or creating derivative products based on it,
+without the author's written permission is prohibited.

@@ -18,7 +18,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../peer/helpers.dart';
+import '../../state/strict_verify_provider.dart';
 import '../../themes/orbits_tokens.dart';
+import '../qr_pairing_page.dart';
+import '../../ui/primitives/orbits_glass_list_tile.dart';
+import '../../ui/primitives/orbits_glass_surface.dart';
+import '../../ui/primitives/orbits_glass_switch.dart';
 import '../../ui/primitives/orbs_card.dart';
 
 class SecurityPage extends ConsumerStatefulWidget {
@@ -61,150 +66,187 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
   @override
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
+    final strictVerify = ref.watch(strictVerifyProvider);
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        flexibleSpace: const OrbitsGlassSurface(
+          role: OrbitsGlassRole.appBar,
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+          child: SizedBox.expand(),
+        ),
         title: Text(
-          'Безопасность',
+          'Защита профиля',
           style: TextStyle(
             fontFamily: tokens.fontHeading,
             fontWeight: FontWeight.w600,
+            color: tokens.text,
           ),
         ),
       ),
       body: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
-          // ── Crypto info ──────────────────────────────────────
-          const OrbsSectionTitle('Шифрование'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbsCard(
-              child: Column(
-                children: [
-                  _CryptoRow(
-                    title: 'AES-256-GCM',
-                    subtitle: 'Все сообщения зашифрованы, ключи неэкспортируемые',
-                    tokens: tokens,
-                  ),
-                  const OrbsDivider(),
-                  _CryptoRow(
-                    title: 'PBKDF2 + scrypt',
-                    subtitle: 'Мастер-ключ из пароля. Подбор перебором — годы',
-                    tokens: tokens,
-                  ),
-                  const OrbsDivider(),
-                  _CryptoRow(
-                    title: 'X3DH + Double Ratchet',
-                    subtitle: 'Сессионные ключи на каждое сообщение',
-                    tokens: tokens,
-                  ),
-                ],
-              ),
-            ),
-          ),
-
           // ── Lock & login ─────────────────────────────────────
           const OrbsSectionTitle('Доступ'),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbsCard(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 6,
-                vertical: 4,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: OrbitsGlassListTile(
+              leading: Icon(Icons.lock_clock_outlined, color: tokens.text),
+              title: const Text('Блокировка приложения'),
+              subtitle: Text(
+                _autoLock == true
+                    ? 'Приложение запросит пароль через 5 минут без действий'
+                    : 'Профиль остаётся открытым пока работает приложение',
               ),
-              child: Column(
-                children: [
-                  OrbsSettingRow(
-                    label: 'Авто-блокировка',
-                    subtitle: _autoLock == true
-                        ? 'Vault блокируется через 5 минут неактивности'
-                        : 'Профиль остаётся открытым пока работает приложение',
-                    trailing: OrbsToggle(
-                      value: _autoLock ?? false,
-                      onChanged: _autoLock == null
-                          ? null
-                          : (v) {
-                              setState(() => _autoLock = v);
-                              _save(_kAutoLockKey, v);
-                            },
-                    ),
-                  ),
-                  const OrbsDivider(),
-                  OrbsSettingRow(
-                    label: 'Авто-вход',
-                    subtitle: _autoLogin == true
-                        ? 'Без пароля при запуске. Удобно, но менее безопасно'
-                        : 'Вводить пароль при каждом запуске',
-                    trailing: OrbsToggle(
-                      value: _autoLogin ?? false,
-                      onChanged: _autoLogin == null
-                          ? null
-                          : (v) {
-                              setState(() => _autoLogin = v);
-                              _save(_kAutoLoginKey, v);
-                            },
-                    ),
-                  ),
-                ],
+              trailing: OrbitsGlassSwitch(
+                value: _autoLock ?? false,
+                semanticLabel: 'Блокировка приложения',
+                onChanged: _autoLock == null
+                    ? null
+                    : (v) {
+                        setState(() => _autoLock = v);
+                        _save(_kAutoLockKey, v);
+                      },
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: OrbitsGlassListTile(
+              leading: Icon(Icons.login_outlined, color: tokens.text),
+              title: const Text('Запоминать пароль'),
+              subtitle: Text(
+                _autoLogin == true
+                    ? 'Вход без пароля при запуске. Удобно, но менее безопасно'
+                    : 'Запрашивать пароль при каждом запуске',
+              ),
+              trailing: OrbitsGlassSwitch(
+                value: _autoLogin ?? false,
+                semanticLabel: 'Запоминать пароль',
+                onChanged: _autoLogin == null
+                    ? null
+                    : (v) {
+                        setState(() => _autoLogin = v);
+                        _save(_kAutoLoginKey, v);
+                      },
               ),
             ),
           ),
 
           // ── Network privacy ──────────────────────────────────
-          const OrbsSectionTitle('Сетевая приватность'),
+          const OrbsSectionTitle('Приватность'),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbsCard(
-              child: OrbsSettingRow(
-                label: 'TURN-only режим',
-                subtitle:
-                    'Звонки и файлы идут только через TURN-сервер. '
-                    'Собеседник никогда не видит твой IP. Может снижать '
-                    'качество звонков.',
-                trailing: OrbsToggle(
-                  value: _relayOnly ?? false,
-                  onChanged: _relayOnly == null
-                      ? null
-                      : (v) async {
-                          setState(() => _relayOnly = v);
-                          await setRelayOnlyEnabled(v);
-                        },
-                ),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: OrbitsGlassListTile(
+              leading: Icon(Icons.vpn_lock_outlined, color: tokens.text),
+              title: const Text('Скрывать мой IP-адрес'),
+              subtitle: const Text(
+                'Звонки и файлы идут через промежуточный сервер, '
+                'и собеседник не видит твой IP-адрес. Может немного '
+                'снижать качество звонков.',
+              ),
+              trailing: OrbitsGlassSwitch(
+                value: _relayOnly ?? false,
+                semanticLabel: 'Скрывать мой IP-адрес',
+                onChanged: _relayOnly == null
+                    ? null
+                    : (v) async {
+                        setState(() => _relayOnly = v);
+                        await setRelayOnlyEnabled(v);
+                      },
+              ),
+            ),
+          ),
+
+          // ── Contact verification ─────────────────────────────
+          const OrbsSectionTitle('Контакты'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: OrbitsGlassListTile(
+              leading: Icon(Icons.verified_user_outlined, color: tokens.text),
+              title: const Text('Строгая проверка контактов'),
+              subtitle: Text(
+                strictVerify
+                    ? 'Переписка с новым контактом откроется только после того, '
+                        'как вы сверите код безопасности и подтвердите личность'
+                    : 'Переписка открывается сразу. Статус проверки виден по '
+                        'значку рядом с именем',
+              ),
+              trailing: OrbitsGlassSwitch(
+                value: strictVerify,
+                semanticLabel: 'Строгая проверка контактов',
+                onChanged: (v) => ref.read(strictVerifyProvider.notifier).set(v),
+              ),
+            ),
+          ),
+
+          // ── Device linking (QR login) ────────────────────────
+          const OrbsSectionTitle('Связь устройств'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: OrbitsGlassListTile(
+              leading:
+                  Icon(Icons.qr_code_scanner_rounded, color: tokens.text),
+              title: const Text('Войти на ПК'),
+              subtitle: const Text(
+                'Отсканируйте QR-код на компьютере, чтобы войти в свой профиль '
+                'там. Вход подтверждается вашим личным ключом.',
+              ),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const QrScanPage()),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: OrbitsGlassListTile(
+              leading: Icon(Icons.qr_code_2_rounded, color: tokens.text),
+              title: const Text('Показать QR для входа'),
+              subtitle: const Text(
+                'Покажите этот код, чтобы войти с компьютера, отсканировав '
+                'его телефоном.',
+              ),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const QrPairingPage()),
               ),
             ),
           ),
 
           // ── Coming soon stubs ───────────────────────────────
           const OrbsSectionTitle('В разработке'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbsCard(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 6,
-                vertical: 4,
-              ),
-              child: Column(
-                children: [
-                  _ComingSoonRow(
-                    label: 'Wipe-on-Close',
-                    subtitle: 'Уничтожить базу при закрытии. Режим инкогнито.',
-                    tokens: tokens,
-                  ),
-                  const OrbsDivider(),
-                  _ComingSoonRow(
-                    label: 'Duress-пароль',
-                    subtitle: '«Тревожный» пароль — открывает пустой профиль',
-                    tokens: tokens,
-                  ),
-                  const OrbsDivider(),
-                  _ComingSoonRow(
-                    label: 'Биометрия',
-                    subtitle: 'Face ID / отпечаток вместо пароля',
-                    tokens: tokens,
-                  ),
-                ],
-              ),
-            ),
+          const _ComingSoonRow(
+            icon: Icons.no_encryption_gmailerrorred_outlined,
+            label: 'Очистка при выходе',
+            subtitle: 'Удалять все данные при закрытии. Режим инкогнито.',
+          ),
+          const _ComingSoonRow(
+            icon: Icons.password_outlined,
+            label: 'Тревожный пароль',
+            subtitle: 'Отдельный пароль — открывает пустой профиль',
+          ),
+          const _ComingSoonRow(
+            icon: Icons.fingerprint,
+            label: 'Биометрия',
+            subtitle: 'Face ID или отпечаток вместо пароля',
+          ),
+
+          // ── Technical details ────────────────────────────────
+          const OrbsSectionTitle('Технические детали'),
+          const _CryptoRow(
+            title: 'AES-256-GCM',
+            subtitle: 'Все сообщения зашифрованы, ключи неэкспортируемые',
+          ),
+          const _CryptoRow(
+            title: 'PBKDF2 + scrypt',
+            subtitle: 'Мастер-ключ из пароля. Подбор перебором — годы',
+          ),
+          const _CryptoRow(
+            title: 'X3DH + Double Ratchet',
+            subtitle: 'Сессионные ключи на каждое сообщение',
           ),
           const SizedBox(height: 24),
         ],
@@ -217,63 +259,43 @@ class _CryptoRow extends StatelessWidget {
   const _CryptoRow({
     required this.title,
     required this.subtitle,
-    required this.tokens,
   });
 
   final String title;
   final String subtitle;
-  final OrbitsTokens tokens;
 
   @override
   Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    fontFamily: tokens.fontMono,
-                    color: tokens.text,
-                  ),
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: tokens.muted,
-                    fontFamily: tokens.fontBody,
-                  ),
-                ),
-              ],
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: OrbitsGlassListTile(
+        leading: Icon(Icons.shield_outlined, color: tokens.text),
+        title: Text(
+          title,
+          style: TextStyle(
+            fontFamily: tokens.fontMono,
+            color: tokens.text,
+          ),
+        ),
+        subtitle: Text(subtitle),
+        trailing: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+          decoration: BoxDecoration(
+            color: tokens.success.withValues(alpha: 0.16),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Text(
+            'ВКЛ',
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              fontFamily: tokens.fontMono,
+              color: tokens.success,
+              letterSpacing: 1.0,
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: tokens.success.withValues(alpha: 0.16),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              'ВКЛ',
-              style: TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                fontFamily: tokens.fontMono,
-                color: tokens.success,
-                letterSpacing: 1.0,
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -281,35 +303,41 @@ class _CryptoRow extends StatelessWidget {
 
 class _ComingSoonRow extends StatelessWidget {
   const _ComingSoonRow({
+    required this.icon,
     required this.label,
     required this.subtitle,
-    required this.tokens,
   });
+
+  final IconData icon;
   final String label;
   final String subtitle;
-  final OrbitsTokens tokens;
 
   @override
   Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
     return Opacity(
       opacity: 0.6,
-      child: OrbsSettingRow(
-        label: label,
-        subtitle: subtitle,
-        trailing: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-          decoration: BoxDecoration(
-            color: tokens.muted.withValues(alpha: 0.18),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: Text(
-            'СКОРО',
-            style: TextStyle(
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              fontFamily: tokens.fontMono,
-              color: tokens.muted,
-              letterSpacing: 1.0,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: OrbitsGlassListTile(
+          leading: Icon(icon, color: tokens.muted),
+          title: Text(label),
+          subtitle: Text(subtitle),
+          trailing: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: tokens.muted.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              'СКОРО',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                fontFamily: tokens.fontMono,
+                color: tokens.muted,
+                letterSpacing: 1.0,
+              ),
             ),
           ),
         ),

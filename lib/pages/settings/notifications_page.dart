@@ -10,7 +10,9 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../themes/orbits_tokens.dart';
-import '../../ui/primitives/orbs_card.dart';
+import '../../ui/primitives/orbits_glass_list_tile.dart';
+import '../../ui/primitives/orbits_glass_surface.dart';
+import '../../ui/primitives/orbits_glass_switch.dart';
 
 const _kNotifPrefsKey = 'orbits_notif_prefs_v1';
 
@@ -69,11 +71,21 @@ class _NotificationsPageState extends State<NotificationsPage> {
     final tokens = OrbitsTokens.of(context);
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        flexibleSpace: const OrbitsGlassSurface(
+          role: OrbitsGlassRole.appBar,
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+          child: SizedBox.expand(),
+        ),
         title: Text(
           'Уведомления',
           style: TextStyle(
             fontFamily: tokens.fontHeading,
             fontWeight: FontWeight.w600,
+            color: tokens.text,
           ),
         ),
       ),
@@ -81,133 +93,149 @@ class _NotificationsPageState extends State<NotificationsPage> {
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
           // ── Permission ────────────────────────────────────────
-          const OrbsSectionTitle('Разрешение системы'),
+          const _SectionLabel('Разрешение системы'),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbsCard(
-              child: Row(
-                children: [
-                  Container(
-                    width: 36,
-                    height: 36,
-                    decoration: BoxDecoration(
-                      color: tokens.accentAlpha(0.18),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    alignment: Alignment.center,
-                    child: Icon(Icons.notifications_active,
-                        color: tokens.accent, size: 18),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          'Статус разрешения',
-                          style: TextStyle(
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: tokens.text,
-                            fontFamily: tokens.fontBody,
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Text(
-                          'Native push появится после релиза. Сейчас работают '
-                          'только in-app звуки и вибрация.',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: tokens.muted,
-                            fontFamily: tokens.fontBody,
-                            height: 1.4,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
+            child: OrbitsGlassListTile(
+              leading: Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: tokens.accentAlpha(0.16),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: tokens.accentAlpha(0.22)),
+                ),
+                alignment: Alignment.center,
+                child: Icon(Icons.notifications_active,
+                    color: tokens.text, size: 18),
+              ),
+              title: const Text('Статус разрешения'),
+              subtitle: const Text(
+                'Native push появится после релиза. Сейчас работают '
+                'только in-app звуки и вибрация.',
               ),
             ),
           ),
 
           // ── In-app preferences ───────────────────────────────
-          const OrbsSectionTitle('In-app'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbsCard(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 6,
-                vertical: 4,
-              ),
-              child: Column(
-                children: [
-                  OrbsSettingRow(
-                    label: 'Уведомления включены',
-                    subtitle: _enabled
-                        ? 'Звук + вибрация при новом сообщении в активном чате'
-                        : 'Все уведомления отключены',
-                    trailing: OrbsToggle(
-                      value: _enabled,
-                      onChanged: !_loaded
-                          ? null
-                          : (v) {
-                              setState(() => _enabled = v);
-                              _save();
-                            },
-                    ),
-                  ),
-                  const OrbsDivider(),
-                  OrbsSettingRow(
-                    label: 'Звук',
-                    subtitle: 'Тихий «динь» при получении',
-                    trailing: OrbsToggle(
-                      value: _sound,
-                      onChanged: (!_loaded || !_enabled)
-                          ? null
-                          : (v) {
-                              setState(() => _sound = v);
-                              _save();
-                            },
-                    ),
-                  ),
-                  const OrbsDivider(),
-                  OrbsSettingRow(
-                    label: 'Вибрация',
-                    subtitle: 'Только на телефонах',
-                    trailing: OrbsToggle(
-                      value: _vibration,
-                      onChanged: (!_loaded || !_enabled)
-                          ? null
-                          : (v) {
-                              setState(() => _vibration = v);
-                              _save();
-                            },
-                    ),
-                  ),
-                  const OrbsDivider(),
-                  OrbsSettingRow(
-                    label: 'Предпросмотр в шторке',
-                    subtitle: _enabled
-                        ? 'Показывать текст сообщения, а не «новое сообщение»'
-                        : 'Сначала включи уведомления',
-                    trailing: OrbsToggle(
-                      value: _showPreview,
-                      onChanged: (!_loaded || !_enabled)
-                          ? null
-                          : (v) {
-                              setState(() => _showPreview = v);
-                              _save();
-                            },
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          const _SectionLabel('In-app'),
+          _ToggleRow(
+            icon: Icons.notifications_outlined,
+            label: 'Уведомления включены',
+            subtitle: _enabled
+                ? 'Звук + вибрация при новом сообщении в активном чате'
+                : 'Все уведомления отключены',
+            value: _enabled,
+            onChanged: !_loaded
+                ? null
+                : (v) {
+                    setState(() => _enabled = v);
+                    _save();
+                  },
+          ),
+          _ToggleRow(
+            icon: Icons.volume_up_outlined,
+            label: 'Звук',
+            subtitle: 'Тихий «динь» при получении',
+            value: _sound,
+            onChanged: (!_loaded || !_enabled)
+                ? null
+                : (v) {
+                    setState(() => _sound = v);
+                    _save();
+                  },
+          ),
+          _ToggleRow(
+            icon: Icons.vibration,
+            label: 'Вибрация',
+            subtitle: 'Только на телефонах',
+            value: _vibration,
+            onChanged: (!_loaded || !_enabled)
+                ? null
+                : (v) {
+                    setState(() => _vibration = v);
+                    _save();
+                  },
+          ),
+          _ToggleRow(
+            icon: Icons.visibility_outlined,
+            label: 'Предпросмотр в шторке',
+            subtitle: _enabled
+                ? 'Показывать текст сообщения, а не «новое сообщение»'
+                : 'Сначала включи уведомления',
+            value: _showPreview,
+            onChanged: (!_loaded || !_enabled)
+                ? null
+                : (v) {
+                    setState(() => _showPreview = v);
+                    _save();
+                  },
           ),
           const SizedBox(height: 24),
         ],
+      ),
+    );
+  }
+}
+
+/// One toggle row inside a settings group — leading glyph, label + subtitle,
+/// and a glass switch on the trailing edge. Each row is its own glass card so
+/// the list reads as a stack of discrete Liquid-Glass plates.
+class _ToggleRow extends StatelessWidget {
+  const _ToggleRow({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
+  });
+
+  final IconData icon;
+  final String label;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool>? onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: OrbitsGlassListTile(
+        onTap: onChanged == null ? null : () => onChanged!(!value),
+        leading: Icon(icon, color: tokens.muted, size: 20),
+        title: Text(label),
+        subtitle: Text(subtitle),
+        trailing: OrbitsGlassSwitch(
+          value: value,
+          onChanged: onChanged,
+          semanticLabel: label,
+        ),
+      ),
+    );
+  }
+}
+
+/// Section label above each settings group — uppercase monospace caps, muted.
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+      child: Text(
+        label.toUpperCase(),
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          fontFamily: tokens.fontMono,
+          color: tokens.muted,
+          letterSpacing: 1.6,
+        ),
       ),
     );
   }

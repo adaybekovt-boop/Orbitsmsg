@@ -13,6 +13,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/haptics.dart';
 import '../../state/auth_notifier.dart';
 import '../../themes/orbits_tokens.dart';
+import '../primitives/orbits_glass_button.dart';
+import '../primitives/orbits_glass_dialog.dart';
+import '../primitives/orbits_glass_surface.dart';
+import 'crypto_busy_view.dart';
+import 'keygen_overlay_stub.dart'
+    if (dart.library.html) 'keygen_overlay_web.dart' as crypto_overlay;
 
 class UnlockPage extends ConsumerStatefulWidget {
   const UnlockPage({super.key});
@@ -39,6 +45,16 @@ class _UnlockPageState extends ConsumerState<UnlockPage> {
       _busy = true;
       _error = null;
     });
+    // Same scrypt-freeze story as onboarding: show the loading view and (on web)
+    // the compositor overlay before the verify KDF seizes the UI thread.
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    await WidgetsBinding.instance.endOfFrame;
+    crypto_overlay.showCryptoBusyOverlay(
+      isDark: isDark,
+      title: 'Открываем профиль…',
+      subtitle: 'Проверяем пароль. Это занимает пару секунд.',
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 120));
     try {
       await ref
           .read(authNotifierProvider.notifier)
@@ -48,35 +64,23 @@ class _UnlockPageState extends ConsumerState<UnlockPage> {
     } catch (e) {
       if (mounted) setState(() => _error = 'Ошибка: $e');
     } finally {
+      crypto_overlay.hideCryptoBusyOverlay();
       if (mounted) setState(() => _busy = false);
     }
   }
 
   Future<void> _confirmWipe() async {
     hapticTap();
-    final tokens = OrbitsTokens.of(context);
-    final ok = await showDialog<bool>(
+    final ok = await showOrbitsConfirm(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Сбросить профиль?'),
-        content: const Text(
-          'Это удалит имя, пароль и криптоключи на этом устройстве. '
+      title: 'Сбросить профиль?',
+      message: 'Профиль и все его данные на этом устройстве будут удалены. '
           'Отменить действие будет нельзя.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Отмена'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            style: FilledButton.styleFrom(backgroundColor: tokens.danger),
-            child: const Text('Сбросить'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Сбросить',
+      confirmIcon: Icons.restart_alt,
+      danger: true,
     );
-    if (ok == true) {
+    if (ok) {
       await ref.read(authNotifierProvider.notifier).wipeLocal();
     }
   }
@@ -86,6 +90,19 @@ class _UnlockPageState extends ConsumerState<UnlockPage> {
     final state = ref.watch(authNotifierProvider);
     final displayName = state is AuthLocked ? state.profile.displayName : '';
     final tokens = OrbitsTokens.of(context);
+
+    if (_busy) {
+      return const Scaffold(
+        body: SafeArea(
+          child: CryptoBusyView(
+            title: 'Открываем профиль…',
+            subtitle:
+                'Проверяем пароль. Это занимает пару секунд и происходит '
+                'только на этом устройстве.',
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       body: SafeArea(
@@ -118,7 +135,7 @@ class _UnlockPageState extends ConsumerState<UnlockPage> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              'ORBITS P2P',
+                              'ORBITS',
                               style: TextStyle(
                                 fontFamily: tokens.fontHeading,
                                 fontSize: 15,
@@ -129,7 +146,7 @@ class _UnlockPageState extends ConsumerState<UnlockPage> {
                             ),
                             Text(
                               displayName.isEmpty
-                                  ? 'Введите пароль'
+                                  ? 'Войдите в профиль'
                                   : 'Открыть профиль «$displayName»',
                               style: TextStyle(
                                 fontFamily: tokens.fontMono,
@@ -145,14 +162,11 @@ class _UnlockPageState extends ConsumerState<UnlockPage> {
                   ),
                   const SizedBox(height: 28),
                   // Glass card with password field
-                  Container(
+                  OrbitsGlassSurface(
+                    role: OrbitsGlassRole.card,
+                    realBlur: true,
+                    borderRadius: BorderRadius.circular(28),
                     padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: Color.lerp(tokens.bg, tokens.surface, 0.5),
-                      borderRadius: BorderRadius.circular(28),
-                      border: Border.all(color: tokens.border),
-                      boxShadow: tokens.shadowCard,
-                    ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
@@ -182,6 +196,17 @@ class _UnlockPageState extends ConsumerState<UnlockPage> {
                             ),
                           ),
                           onSubmitted: (_) => _unlock(),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'Профиль хранится на этом устройстве. '
+                          'Пароль защищает доступ к нему.',
+                          style: TextStyle(
+                            fontFamily: tokens.fontBody,
+                            fontSize: 13,
+                            height: 1.4,
+                            color: tokens.muted,
+                          ),
                         ),
                       ],
                     ),
@@ -219,33 +244,23 @@ class _UnlockPageState extends ConsumerState<UnlockPage> {
                     ),
                   ],
                   const SizedBox(height: 20),
-                  FilledButton.icon(
-                    onPressed: _busy ? null : _unlock,
-                    icon: _busy
-                        ? const SizedBox(
-                            width: 16,
-                            height: 16,
-                            child:
-                                CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.login, size: 18),
-                    label: Text(_busy ? 'Проверяем…' : 'Войти'),
-                    style: FilledButton.styleFrom(
-                      minimumSize: const Size.fromHeight(50),
-                      shape: RoundedRectangleBorder(
-                        borderRadius:
-                            BorderRadius.circular(tokens.radiusCard),
-                      ),
-                    ),
+                  OrbitsGlassButton(
+                    label: 'Войти',
+                    icon: Icons.login,
+                    onPressed: _unlock,
+                    variant: OrbitsGlassVariant.primary,
+                    size: OrbitsGlassSize.large,
+                    expand: true,
                   ),
-                  const SizedBox(height: 8),
-                  TextButton(
-                    onPressed: _busy ? null : _confirmWipe,
-                    style: TextButton.styleFrom(
-                      foregroundColor: tokens.danger,
-                      minimumSize: const Size.fromHeight(44),
+                  const SizedBox(height: 10),
+                  Center(
+                    child: OrbitsGlassButton(
+                      label: 'Сбросить профиль',
+                      icon: Icons.restart_alt,
+                      onPressed: _confirmWipe,
+                      variant: OrbitsGlassVariant.danger,
+                      size: OrbitsGlassSize.medium,
                     ),
-                    child: const Text('Сбросить профиль'),
                   ),
                 ],
               ),

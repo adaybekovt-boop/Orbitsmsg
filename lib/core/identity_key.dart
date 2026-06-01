@@ -25,6 +25,7 @@ import 'package:cryptography/cryptography.dart';
 import 'base64_helpers.dart';
 import 'key_store.dart';
 import 'spki_codec.dart';
+import 'vault_kek.dart';
 
 const String _signingKeyId = 'identity-signing-v1';
 const String _x3dhKeyId = 'identity-x3dh-v1';
@@ -48,11 +49,6 @@ Uint8List? _cachedX3dhBindingSig;
 
 Future<Uint8List> _exportPubSpki(EcKeyPair keyPair) async {
   final pub = await keyPair.extractPublicKey();
-  if (pub is! EcPublicKey) {
-    throw StateError(
-      'identity: expected EcPublicKey, got ${pub.runtimeType}',
-    );
-  }
   return buildP256Spki(x: pub.x, y: pub.y);
 }
 
@@ -64,8 +60,13 @@ Future<Map<String, Object?>> _serializeKeyPair(
   // EcKeyPair — `extract()` returns an EcKeyPairData whose `d` is the raw
   // scalar. Same bytes, extra await hop.
   final priv = (await keyPair.extract()).d;
+  // The long-term identity scalar is the crown jewel — it signs the TOFU pin
+  // and the X3DH binding. Wrap it under the vault KEK before it touches disk
+  // (audit C2). [wrapSecret] fails closed if the vault is locked rather than
+  // writing plaintext, so this never silently degrades.
   return {
-    'privBytes': Uint8List.fromList(priv),
+    'privBytes': await wrapSecret(priv),
+    'privEnc': 1,
     'pubSpki': pubSpki,
   };
 }
@@ -78,11 +79,15 @@ Future<EcKeyPair> _importKeyPair(
   Map<String, Object?> row, {
   required bool ecdsa,
 }) async {
-  final priv = row['privBytes'];
+  final privRaw = row['privBytes'];
   final pubSpkiRaw = row['pubSpki'];
-  if (priv is! List<int> || pubSpkiRaw is! List<int>) {
+  if (privRaw == null || pubSpkiRaw is! List<int>) {
     throw StateError('identity: stored row is missing key bytes');
   }
+  // Tolerates both the wrapped form (current) and a legacy plaintext byte
+  // field (rows written before C2 landed — migrated opportunistically by the
+  // get-or-create callers below).
+  final priv = await unwrapSecret(privRaw);
   final point = parseP256Spki(pubSpkiRaw);
   // EcKeyPairData needs the scalar (`d`) and both public affine coords
   // separately — unlike the old SimpleKeyPairData shape which bundled the
@@ -93,6 +98,27 @@ Future<EcKeyPair> _importKeyPair(
     y: point.y,
     type: KeyPairType.p256,
   );
+}
+
+/// Re-encrypt a row whose `privBytes` predates C2 (stored as raw bytes rather
+/// than a vault-wrapped string). Best-effort: a locked vault or a write error
+/// leaves the legacy row in place to retry next launch. No-op once wrapped.
+Future<void> _migrateLegacyPlaintext(
+  String id,
+  Map<String, Object?> existing,
+) async {
+  if (isWrapped(existing['privBytes']) || !hasVaultKek()) return;
+  final priv = existing['privBytes'];
+  if (priv is! List<int>) return;
+  try {
+    await keyStore().put(_keysTable, {
+      ...existing,
+      'privBytes': await wrapSecret(priv),
+      'privEnc': 1,
+    });
+  } catch (_) {
+    // Migration is opportunistic — never block identity load on it.
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -108,6 +134,7 @@ Future<EcKeyPair> getOrCreateSigningKey() async {
   if (existing != null) {
     _cachedSigningKeyPair = await _importKeyPair(existing, ecdsa: true);
     _cachedSigningPubSpki = Uint8List.fromList(existing['pubSpki'] as List<int>);
+    await _migrateLegacyPlaintext(_signingKeyId, existing);
     return _cachedSigningKeyPair!;
   }
 
@@ -277,6 +304,7 @@ Future<X3dhIdentity> getOrCreateX3DHIdentity() async {
     _cachedX3dhKeyPair = pair;
     _cachedX3dhPubSpki = pubSpki;
     _cachedX3dhBindingSig = bindingSig;
+    await _migrateLegacyPlaintext(_x3dhKeyId, existing);
     return X3dhIdentity(
       keyPair: pair,
       bindingSig: bindingSig,
@@ -323,8 +351,11 @@ Future<bool> verifyX3DHBinding(
       bindingSig,
     );
 
-/// Test helper — drop all in-memory caches so the next call re-reads storage.
-void resetIdentityCacheForTests() {
+/// Drop all in-memory identity caches so the next call re-reads (or
+/// regenerates) from storage. Call after wiping the `keys` table on a full
+/// local reset (audit H4) — otherwise the cached old key pair would shadow
+/// the wiped store and the regenerated identity would never be persisted.
+void resetIdentityCaches() {
   _cachedSigningKeyPair = null;
   _cachedSigningPubSpki = null;
   _cachedFingerprint = null;
@@ -332,3 +363,6 @@ void resetIdentityCacheForTests() {
   _cachedX3dhPubSpki = null;
   _cachedX3dhBindingSig = null;
 }
+
+/// Test alias for [resetIdentityCaches].
+void resetIdentityCacheForTests() => resetIdentityCaches();

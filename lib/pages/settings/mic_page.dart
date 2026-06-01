@@ -9,7 +9,8 @@
 import 'package:flutter/material.dart';
 
 import '../../themes/orbits_tokens.dart';
-import '../../ui/primitives/orbs_card.dart';
+import '../../ui/primitives/orbits_glass_button.dart';
+import '../../ui/primitives/orbits_glass_surface.dart';
 
 class MicPage extends StatelessWidget {
   const MicPage({super.key});
@@ -19,11 +20,32 @@ class MicPage extends StatelessWidget {
     final tokens = OrbitsTokens.of(context);
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        flexibleSpace: const OrbitsGlassSurface(
+          role: OrbitsGlassRole.appBar,
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+          child: SizedBox.expand(),
+        ),
+        leading: Navigator.of(context).canPop()
+            ? Center(
+                child: OrbitsGlassIconButton(
+                  icon: Icons.arrow_back,
+                  tooltip: 'Назад',
+                  variant: OrbitsGlassVariant.subtle,
+                  size: OrbitsGlassSize.small,
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              )
+            : null,
         title: Text(
           'Микрофон',
           style: TextStyle(
             fontFamily: tokens.fontHeading,
             fontWeight: FontWeight.w600,
+            color: tokens.text,
           ),
         ),
       ),
@@ -32,7 +54,8 @@ class MicPage extends StatelessWidget {
           padding: const EdgeInsets.all(24),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 440),
-            child: OrbsCard(
+            child: OrbitsGlassSurface(
+              role: OrbitsGlassRole.card,
               padding: const EdgeInsets.all(20),
               child: Column(
                 children: [

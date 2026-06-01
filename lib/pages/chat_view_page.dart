@@ -32,6 +32,7 @@ import '../state/connections_notifier.dart';
 import '../state/messages_provider.dart';
 import '../state/messaging_notifier.dart';
 import '../state/peers_provider.dart';
+import '../state/strict_verify_provider.dart';
 import '../storage/db.dart' as db;
 import '../themes/orbits_tokens.dart';
 import '../ui/chat/chat_composer.dart';
@@ -40,6 +41,8 @@ import '../ui/chat/message_bubble.dart';
 import '../ui/chat/sticker_picker_sheet.dart';
 import '../ui/chat/typing_indicator.dart';
 import '../ui/chat/voice_recorder_sheet.dart';
+import '../ui/primitives/orbits_glass_button.dart';
+import '../ui/primitives/orbits_glass_surface.dart';
 
 class ChatViewPage extends ConsumerStatefulWidget {
   const ChatViewPage({super.key, required this.peerId});
@@ -652,6 +655,17 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
     }
   }
 
+  /// Two messages cluster when they share an author (direction) and are less
+  /// than 3 minutes apart — drives the spacing + tail collapse in the list.
+  static bool _sameCluster(Map<String, Object?> a, Map<String, Object?> b) {
+    if ((a['direction'] as String?) != (b['direction'] as String?)) {
+      return false;
+    }
+    final ta = (a['timestamp'] as num?)?.toInt() ?? 0;
+    final tb = (b['timestamp'] as num?)?.toInt() ?? 0;
+    return (tb - ta).abs() < 180000;
+  }
+
   Future<void> _openChatSettings() async {
     await showModalBottomSheet<void>(
       context: context,
@@ -679,6 +693,7 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
     final peersAsync = ref.watch(peersProvider);
     String displayName = widget.peerId;
     bool isBlocked = false;
+    int trustLevel = 0;
     final peerRows = peersAsync.asData?.value ?? const [];
     for (final r in peerRows) {
       if ((r['id'] as String?) != widget.peerId) continue;
@@ -692,8 +707,18 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
       final blockedRaw = r['blocked'];
       isBlocked = blockedRaw == true ||
           (blockedRaw is num && blockedRaw.toInt() == 1);
+      final trustRaw = r['trustLevel'];
+      if (trustRaw is num) trustLevel = trustRaw.toInt();
       break;
     }
+
+    // Strict TOFU gate: a contact whose key is pinned but not yet user-verified
+    // (trustLevel == 1, "Защищён") has its conversation withheld until the
+    // safety code is confirmed. Level 0 = no pin yet (nothing to verify);
+    // level >= 2 = verified. Messages still decrypt + persist underneath — only
+    // their display is gated — so the ratchet stays in sync.
+    final strictVerify = ref.watch(strictVerifyProvider);
+    final isGated = strictVerify && trustLevel == 1;
 
     final list = messagesAsync.asData?.value ?? const [];
 
@@ -709,7 +734,29 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
 
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
         titleSpacing: 0,
+        // Frosted glass header strip — real blur on Impeller platforms, painted
+        // glass on web/Windows. Sits behind the title + actions.
+        flexibleSpace: const OrbitsGlassSurface(
+          role: OrbitsGlassRole.appBar,
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+          child: SizedBox.expand(),
+        ),
+        leading: Navigator.of(context).canPop()
+            ? Center(
+                child: OrbitsGlassIconButton(
+                  icon: Icons.arrow_back,
+                  tooltip: 'Назад',
+                  variant: OrbitsGlassVariant.subtle,
+                  size: OrbitsGlassSize.small,
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              )
+            : null,
         title: InkWell(
           // Tapping the header opens the same sheet as the ⋮ action — the
           // React build did that too, so users rediscover the settings
@@ -738,8 +785,8 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
                     ),
                     Text(
                       isBlocked
-                          ? 'заблокирован'
-                          : (isOnline ? 'в сети' : 'не в сети'),
+                          ? 'Заблокирован'
+                          : (isOnline ? 'В сети · защищённый чат' : 'Не в сети'),
                       style: TextStyle(
                         fontSize: 12,
                         color: Theme.of(context)
@@ -761,9 +808,11 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
           Consumer(
             builder: (ctx, ref, _) {
               final callActive = ref.watch(callIsActiveProvider);
-              return IconButton(
+              return OrbitsGlassIconButton(
+                icon: Icons.call,
                 tooltip: 'Аудио-звонок',
-                icon: const Icon(Icons.call),
+                variant: OrbitsGlassVariant.subtle,
+                size: OrbitsGlassSize.small,
                 onPressed: (isBlocked || callActive)
                     ? null
                     : () {
@@ -778,9 +827,11 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
           Consumer(
             builder: (ctx, ref, _) {
               final callActive = ref.watch(callIsActiveProvider);
-              return IconButton(
+              return OrbitsGlassIconButton(
+                icon: Icons.videocam,
                 tooltip: 'Видео-звонок',
-                icon: const Icon(Icons.videocam),
+                variant: OrbitsGlassVariant.subtle,
+                size: OrbitsGlassSize.small,
                 onPressed: (isBlocked || callActive)
                     ? null
                     : () {
@@ -791,14 +842,22 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
               );
             },
           ),
-          IconButton(
+          OrbitsGlassIconButton(
+            icon: Icons.more_vert,
             tooltip: 'Настройки чата',
-            icon: const Icon(Icons.more_vert),
+            variant: OrbitsGlassVariant.subtle,
+            size: OrbitsGlassSize.small,
             onPressed: _openChatSettings,
           ),
+          const SizedBox(width: 8),
         ],
       ),
-      body: Column(
+      body: isGated
+          ? _VerifyGate(
+              hiddenCount: list.length,
+              onVerify: _openChatSettings,
+            )
+          : Column(
         children: [
           Expanded(
             child: messagesAsync.when(
@@ -827,10 +886,20 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
                   // simple text bubbles next to them on every paint).
                   addRepaintBoundaries: false,
                   itemBuilder: (context, i) {
-                    final row = rows[rows.length - 1 - i];
+                    final k = rows.length - 1 - i;
+                    final row = rows[k];
+                    // Message clustering: collapse the gap + drop the tail for
+                    // consecutive messages from the same author < 3 min apart.
+                    final prev = k > 0 ? rows[k - 1] : null;
+                    final next = k < rows.length - 1 ? rows[k + 1] : null;
+                    final groupedWithPrevious =
+                        prev != null && _sameCluster(prev, row);
+                    final isTail = next == null || !_sameCluster(row, next);
                     return RepaintBoundary(
                       child: MessageBubble(
                         row: row,
+                        groupedWithPrevious: groupedWithPrevious,
+                        isTail: isTail,
                         onRetry: () {
                           // Touching a pending message re-kicks the
                           // flusher for this peer. If the reliable channel
@@ -892,6 +961,120 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
   }
 }
 
+/// Strict-TOFU gate shown in place of the conversation when a contact's key
+/// is pinned (TOFU) but not yet user-verified. Reading is withheld until the
+/// user compares the safety code in the chat settings sheet and marks the
+/// contact "Проверен" (trustLevel 2). Messages still decrypt + persist behind
+/// it. See `strict_verify_provider.dart`.
+class _VerifyGate extends StatelessWidget {
+  const _VerifyGate({required this.hiddenCount, required this.onVerify});
+
+  final int hiddenCount;
+  final VoidCallback onVerify;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
+    return SafeArea(
+      child: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 420),
+            child: OrbitsGlassSurface(
+              role: OrbitsGlassRole.card,
+              borderRadius: BorderRadius.circular(tokens.radiusCard),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(24, 28, 24, 24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 64,
+                      height: 64,
+                      decoration: BoxDecoration(
+                        color: tokens.accentAlpha(0.16),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: tokens.accentAlpha(0.24)),
+                      ),
+                      alignment: Alignment.center,
+                      child: Icon(Icons.shield_outlined,
+                          size: 30, color: tokens.text),
+                    ),
+                    const SizedBox(height: 18),
+                    Text(
+                      'Подтвердите личность',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontFamily: tokens.fontHeading,
+                        fontSize: 19,
+                        fontWeight: FontWeight.w700,
+                        color: tokens.text,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Связь с этим контактом уже зашифрована, но вы ещё не '
+                      'сверили код безопасности. Чтобы исключить подмену '
+                      'собеседника, сравните код с ним по другому каналу — '
+                      'и отметьте «Проверен».',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontFamily: tokens.fontBody,
+                        fontSize: 13.5,
+                        height: 1.4,
+                        color: tokens.muted,
+                      ),
+                    ),
+                    if (hiddenCount > 0) ...[
+                      const SizedBox(height: 14),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 7),
+                        decoration: BoxDecoration(
+                          color: tokens.muted.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          'Скрыто сообщений: $hiddenCount',
+                          style: TextStyle(
+                            fontFamily: tokens.fontBody,
+                            fontSize: 12.5,
+                            color: tokens.text,
+                          ),
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 22),
+                    OrbitsGlassButton(
+                      label: 'Сверить и подтвердить',
+                      icon: Icons.verified_user,
+                      variant: OrbitsGlassVariant.primary,
+                      expand: true,
+                      onPressed: onVerify,
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Отключить строгую проверку можно в «Настройки → '
+                      'Безопасность».',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontFamily: tokens.fontBody,
+                        fontSize: 11.5,
+                        color: tokens.muted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Stand-in for the composer when the peer is blocked. Outbound sends are
 /// suppressed up the stack (messagingNotifier refuses the write), but the
 /// composer itself is hidden so the affordance + typing heuristics don't
@@ -933,9 +1116,11 @@ class _BlockedComposerBanner extends StatelessWidget {
                 ),
               ),
             ),
-            TextButton(
+            OrbitsGlassButton(
+              label: 'Разблокировать',
+              variant: OrbitsGlassVariant.subtle,
+              size: OrbitsGlassSize.small,
               onPressed: onUnblock,
-              child: const Text('Разблокировать'),
             ),
           ],
         ),
@@ -1021,7 +1206,7 @@ class _EmptyChat extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             Text(
-              'Сквозное шифрование. История хранится только на ваших '
+              'Защищённый чат. История хранится только на ваших '
               'устройствах.',
               textAlign: TextAlign.center,
               style: TextStyle(

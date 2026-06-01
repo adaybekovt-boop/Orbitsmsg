@@ -152,6 +152,17 @@ class MessagesTable extends Table {
   TextColumn get status => text().withLength(min: 1, max: 16)();
   BlobColumn get data => blob()();
 
+  /// Room/channel routing (schema v3 — Discord-style rooms). Both nullable: a
+  /// 1:1 DM message leaves them null; a room message carries its owning room +
+  /// channel. `channelId` references [RoomChannelsTable] with CASCADE so
+  /// deleting a channel reaps its message history. A composite index on
+  /// (channel_id, timestamp) is created in `database.dart` for fast per-channel
+  /// paging.
+  TextColumn get roomId => text().nullable()();
+  TextColumn get channelId => text()
+      .nullable()
+      .references(RoomChannelsTable, #id, onDelete: KeyAction.cascade)();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -242,6 +253,72 @@ class FileBlobsTable extends Table {
 
   @override
   Set<Column> get primaryKey => {id};
+}
+
+// ─── Rooms (temporary private Discord-style networks, schema v3) ─────
+//
+// A "room" is a peer-to-peer network with multiple channels (text + voice)
+// and a member roster. The host owns the canonical room; joiners mirror it.
+// All three tables cascade off the room so tearing a room down (or a channel)
+// reaps its children + message history in one delete.
+
+/// A room ("network"). `id` is the shareable code (e.g. 'ORBIT-XXXX-YYYY').
+@DataClassName('RoomRow')
+class RoomsTable extends Table {
+  @override
+  String get tableName => 'rooms';
+
+  TextColumn get id => text()();
+  TextColumn get name => text().withDefault(const Constant(''))();
+  TextColumn get hostPeerId => text().withDefault(const Constant(''))();
+  BoolColumn get isHost => boolean().withDefault(const Constant(false))();
+  IntColumn get createdAt => integer().withDefault(const Constant(0))();
+
+  /// 'active' | 'offline'.
+  TextColumn get status => text().withDefault(const Constant('active'))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// A channel inside a room. `type` is 'text' | 'voice'. The displayed
+/// `#` (text) / `🔊` (voice) prefix is a UI decoration derived from `type` —
+/// the stored `name` is bare (e.g. 'general', 'Голосовой 1'). Cascades off
+/// the room.
+@DataClassName('RoomChannelRow')
+class RoomChannelsTable extends Table {
+  @override
+  String get tableName => 'room_channels';
+
+  TextColumn get id => text()(); // UUID v4
+  TextColumn get roomId =>
+      text().references(RoomsTable, #id, onDelete: KeyAction.cascade)();
+  TextColumn get name => text().withDefault(const Constant(''))();
+  TextColumn get type => text().withLength(min: 1, max: 8)();
+  IntColumn get position => integer().withDefault(const Constant(0))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// A room member. `avatarDataUrl` is an inline base64 data-URL so the roster
+/// renders instantly without a second fetch. Composite PK {roomId, peerId} —
+/// one row per member per room. Cascades off the room.
+@DataClassName('RoomMemberRow')
+class RoomMembersTable extends Table {
+  @override
+  String get tableName => 'room_members';
+
+  TextColumn get roomId =>
+      text().references(RoomsTable, #id, onDelete: KeyAction.cascade)();
+  TextColumn get peerId => text()();
+  TextColumn get displayName => text().withDefault(const Constant(''))();
+  TextColumn get avatarDataUrl => text().nullable()();
+  BoolColumn get isOnline => boolean().withDefault(const Constant(false))();
+  IntColumn get joinedAt => integer().withDefault(const Constant(0))();
+
+  @override
+  Set<Column> get primaryKey => {roomId, peerId};
 }
 
 // ─── Generic KV (idb_store.dart backing) ────────────────────────────

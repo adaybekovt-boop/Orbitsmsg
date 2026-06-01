@@ -23,17 +23,18 @@ import '../state/auth_notifier.dart';
 import '../state/local_profile_provider.dart';
 import '../themes/orbits_tokens.dart';
 import '../ui/peer/peer_status_pill.dart';
+import '../ui/primitives/adaptive_page_frame.dart';
+import '../ui/primitives/orbits_glass_button.dart';
+import '../ui/primitives/orbits_glass_dialog.dart';
+import '../ui/primitives/orbits_glass_list_tile.dart';
+import '../ui/primitives/orbits_glass_surface.dart';
 import '../ui/primitives/orbs_card.dart';
 import '../ui/profile/my_qr_page.dart';
 import '../ui/profile/profile_edit_page.dart';
+import 'settings/advanced_page.dart';
 import 'settings/chat_prefs_page.dart';
-import 'settings/diagnostics_page.dart';
-import 'settings/mic_page.dart';
-import 'settings/network_page.dart';
 import 'settings/notifications_page.dart';
-import 'settings/power_saver_page.dart';
 import 'settings/security_page.dart';
-import 'settings/terms_page.dart';
 import 'themes_page.dart';
 
 class SettingsPage extends ConsumerWidget {
@@ -46,40 +47,53 @@ class SettingsPage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        flexibleSpace: const OrbitsGlassSurface(
+          role: OrbitsGlassRole.appBar,
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+          child: SizedBox.expand(),
+        ),
         title: Text(
           'Настройки',
           style: TextStyle(
             fontFamily: tokens.fontHeading,
             fontWeight: FontWeight.w600,
+            color: tokens.text,
           ),
         ),
       ),
-      body: ListView(
-        padding: EdgeInsets.only(
-          top: kPillReserveHeight + 4,
-          bottom: 32,
-        ),
-        children: [
-          // Profile card on top
+      body: AdaptivePageFrame(
+        maxWidth: 760,
+        child: ListView(
+          padding: const EdgeInsets.only(
+            top: kPillReserveHeight + 4,
+            bottom: 32,
+          ),
+          children: [
+          // ── Аккаунт ──
           if (user != null) ...[
+            _SectionLabel(text: 'Аккаунт', tokens: tokens),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               child: _ProfileCard(user: user, tokens: tokens),
             ),
           ],
 
-          // Action rows
-          const SizedBox(height: 4),
+          // ── Основное ── (technical screens live deeper under "Дополнительно")
+          _SectionLabel(text: 'Основное', tokens: tokens),
           _ActionRow(
-            icon: Icons.lock,
-            title: 'Безопасность',
-            subtitle: 'Шифрование, авто-блокировка, приватность сети',
-            onTap: () => _push(context, const SecurityPage()),
+            icon: Icons.palette,
+            title: 'Внешний вид',
+            subtitle: 'Тема оформления',
+            onTap: () => _push(context, const ThemesPage()),
           ),
           _ActionRow(
             icon: Icons.chat_bubble,
             title: 'Чаты',
-            subtitle: 'Переключатели поведения, форма пузырей, шрифт',
+            subtitle: 'Поведение, форма сообщений, шрифт',
             onTap: () => _push(context, const ChatPrefsPage()),
           ),
           _ActionRow(
@@ -89,40 +103,17 @@ class SettingsPage extends ConsumerWidget {
             onTap: () => _push(context, const NotificationsPage()),
           ),
           _ActionRow(
-            icon: Icons.palette,
-            title: 'Внешний вид',
-            subtitle: 'Тема и фоновые анимации',
-            onTap: () => _push(context, const ThemesPage()),
+            icon: Icons.lock,
+            title: 'Безопасность',
+            subtitle: 'Блокировка, пароль, проверка контактов',
+            onTap: () => _push(context, const SecurityPage()),
           ),
+          const SizedBox(height: 8),
           _ActionRow(
-            icon: Icons.mic,
-            title: 'Микрофон',
-            subtitle: 'Устройство и эффекты',
-            onTap: () => _push(context, const MicPage()),
-          ),
-          _ActionRow(
-            icon: Icons.bolt,
-            title: 'Энергосбережение',
-            subtitle: 'Меньше анимаций, blur и нагрузки',
-            onTap: () => _push(context, const PowerSaverPage()),
-          ),
-          _ActionRow(
-            icon: Icons.cable,
-            title: 'Сеть',
-            subtitle: 'Твой ID и статус соединения',
-            onTap: () => _push(context, const NetworkPage()),
-          ),
-          _ActionRow(
-            icon: Icons.memory,
-            title: 'Диагностика',
-            subtitle: 'Версия, кэш, PWA',
-            onTap: () => _push(context, const DiagnosticsPage()),
-          ),
-          _ActionRow(
-            icon: Icons.gavel,
-            title: 'Соглашение',
-            subtitle: 'Политика конфиденциальности и условия',
-            onTap: () => _push(context, const TermsPage()),
+            icon: Icons.tune,
+            title: 'Дополнительно',
+            subtitle: 'Соединение, микрофон, диагностика',
+            onTap: () => _push(context, const AdvancedPage()),
           ),
 
           // Logout
@@ -130,17 +121,21 @@ class SettingsPage extends ConsumerWidget {
             const SizedBox(height: 18),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: TextButton.icon(
-                onPressed: () => _confirmLogout(context, ref),
-                icon: Icon(Icons.logout, color: tokens.danger, size: 18),
-                label: Text(
-                  'Выйти из профиля',
-                  style: TextStyle(color: tokens.danger),
+              child: Center(
+                child: OrbitsGlassButton(
+                  label: 'Выйти из профиля',
+                  icon: Icons.logout,
+                  onPressed: () => _confirmLogout(context, ref),
+                  // Neutral in the settings list — the alarming red lives only
+                  // inside the confirm dialog (showOrbitsConfirm danger: true).
+                  variant: OrbitsGlassVariant.subtle,
+                  size: OrbitsGlassSize.medium,
                 ),
               ),
             ),
           ],
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -150,31 +145,41 @@ class SettingsPage extends ConsumerWidget {
   }
 
   Future<void> _confirmLogout(BuildContext context, WidgetRef ref) async {
-    final tokens = OrbitsTokens.of(context);
-    final ok = await showDialog<bool>(
+    final ok = await showOrbitsConfirm(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Выйти из профиля?'),
-        content: const Text(
-          'Локальные ключи останутся на устройстве. Войти можно будет '
+      title: 'Выйти из профиля?',
+      message: 'Локальные ключи останутся на устройстве. Войти можно будет '
           'паролем — пароль не сбрасывается.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(false),
-            child: const Text('Отмена'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(true),
-            style: TextButton.styleFrom(foregroundColor: tokens.danger),
-            child: const Text('Выйти'),
-          ),
-        ],
-      ),
+      confirmLabel: 'Выйти',
+      confirmIcon: Icons.logout,
+      danger: true,
     );
-    if (ok != true) return;
+    if (!ok) return;
     await ref.read(authNotifierProvider.notifier).logout();
   }
+}
+
+// ─── Section label ─────────────────────────────────────────
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel({required this.text, required this.tokens});
+  final String text;
+  final OrbitsTokens tokens;
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 18, 24, 6),
+        child: Text(
+          text.toUpperCase(),
+          style: TextStyle(
+            fontFamily: tokens.fontHeading,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.8,
+            color: tokens.muted,
+          ),
+        ),
+      );
 }
 
 // ─── Profile card ──────────────────────────────────────────
@@ -188,14 +193,22 @@ class _ProfileCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final avatarBytes = _decodeAvatar(user.avatarDataUrl);
-    return OrbsCard(
-      onTap: () {
-        Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => const ProfileEditPage()),
-        );
-      },
-      padding: const EdgeInsets.all(14),
-      child: Row(
+    final radius = BorderRadius.circular(tokens.radiusCard);
+    return OrbitsGlassSurface(
+      role: OrbitsGlassRole.card,
+      borderRadius: radius,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () {
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const ProfileEditPage()),
+            );
+          },
+          borderRadius: radius,
+          child: Padding(
+            padding: const EdgeInsets.all(14),
+            child: Row(
         children: [
           OrbsAvatar(
             fallbackInitial: user.displayName.isNotEmpty
@@ -223,7 +236,9 @@ class _ProfileCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  user.peerId,
+                  'Код профиля: ${user.peerId}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 12,
                     fontFamily: tokens.fontMono,
@@ -246,9 +261,11 @@ class _ProfileCard extends StatelessWidget {
               ],
             ),
           ),
-          IconButton(
+          OrbitsGlassIconButton(
+            icon: Icons.qr_code_2,
             tooltip: 'QR-код',
-            icon: Icon(Icons.qr_code_2, color: tokens.text, size: 22),
+            variant: OrbitsGlassVariant.subtle,
+            size: OrbitsGlassSize.small,
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(
@@ -258,9 +275,12 @@ class _ProfileCard extends StatelessWidget {
             },
           ),
           Icon(Icons.chevron_right, color: tokens.muted),
-        ],
-      ),
-    );
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
   }
 
   Uint8List? _decodeAvatar(String? url) {
@@ -295,62 +315,22 @@ class _ActionRow extends StatelessWidget {
     final tokens = OrbitsTokens.of(context);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(tokens.radiusCard),
-          child: Container(
-            padding: const EdgeInsets.all(14),
-            decoration: BoxDecoration(
-              color: Color.lerp(tokens.bg, tokens.surface, 0.35),
-              borderRadius: BorderRadius.circular(tokens.radiusCard),
-              border: Border.all(color: tokens.border),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: tokens.accentAlpha(0.18),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  alignment: Alignment.center,
-                  child: Icon(icon, color: tokens.accent, size: 18),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        title,
-                        style: TextStyle(
-                          fontFamily: tokens.fontHeading,
-                          fontSize: 15,
-                          fontWeight: FontWeight.w600,
-                          color: tokens.text,
-                        ),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        subtitle,
-                        style: TextStyle(
-                          fontFamily: tokens.fontBody,
-                          fontSize: 12,
-                          color: tokens.muted,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Icon(Icons.chevron_right, color: tokens.muted),
-              ],
-            ),
+      child: OrbitsGlassListTile(
+        onTap: onTap,
+        leading: Container(
+          width: 36,
+          height: 36,
+          decoration: BoxDecoration(
+            color: tokens.accentAlpha(0.16),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: tokens.accentAlpha(0.22)),
           ),
+          alignment: Alignment.center,
+          child: Icon(icon, color: tokens.text, size: 18),
         ),
+        title: Text(title),
+        subtitle: Text(subtitle),
+        trailing: Icon(Icons.chevron_right, color: tokens.muted),
       ),
     );
   }

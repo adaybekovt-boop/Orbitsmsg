@@ -20,15 +20,30 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../peer/helpers.dart';
 import '../storage/db.dart' as db;
+import 'auth_notifier.dart';
 import 'connections_notifier.dart';
 import 'local_profile_provider.dart';
 import 'peers_provider.dart';
+
+/// Fire a best-effort DB write without awaiting, but surface failures in debug
+/// builds instead of swallowing them (audit M8). A dropped write on the
+/// inbound path means a received message vanishes with no trace; logging at
+/// least makes that diagnosable rather than silent.
+void _persistBestEffort(Future<Object?> write, String what) {
+  unawaited(write.catchError((Object e, StackTrace st) {
+    if (kDebugMode) {
+      // ignore: avoid_print
+      print('[messaging] persist failed ($what): $e');
+    }
+    return null;
+  }));
+}
 
 // Hard caps — match JS byte-for-byte so a round-trip between web and native
 // clients never truncates on one side and passes on the other.
@@ -124,6 +139,24 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
         if (changed) state = state.copyWith(typingByPeer: typing);
       },
       fireImmediately: true,
+    );
+
+    // Sign-out hygiene: drop volatile session state so it can't bleed into the
+    // next account (audit H4). The persisted blocked column is mirrored back
+    // off `peersProvider`, but typing bubbles + their idle timers live only in
+    // memory and would otherwise survive a logout→login.
+    _ref.listen<AuthState>(
+      authNotifierProvider,
+      (prev, next) {
+        if (prev is AuthAuthed && next is! AuthAuthed) {
+          for (final t in _typingIdleTimers.values) {
+            t.cancel();
+          }
+          _typingIdleTimers.clear();
+          _blockedIds.clear();
+          if (mounted) state = const MessagingState();
+        }
+      },
     );
   }
 
@@ -222,18 +255,24 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final ts = (safe['ts'] as num?)?.toInt() ?? now();
     final msgId = (safe['id'] as String?) ?? '$normalized:$ts:${_shortId()}';
 
-    unawaited(db.saveMessage({
-      'id': msgId,
-      'peerId': normalized,
-      'timestamp': ts,
-      'direction': 'in',
-      'status': 'delivered',
-      'payload': safe,
-    }));
+    _persistBestEffort(
+      db.saveMessage({
+        'id': msgId,
+        'peerId': normalized,
+        'timestamp': ts,
+        'direction': 'in',
+        'status': 'delivered',
+        'payload': safe,
+      }),
+      'inbound saveMessage $msgId',
+    );
 
     // Peer row refresh — keeps chat list sorted by recency without relying
     // on explicit profile packets.
-    unawaited(db.savePeer({'id': normalized, 'lastSeenAt': now()}));
+    _persistBestEffort(
+      db.savePeer({'id': normalized, 'lastSeenAt': now()}),
+      'inbound savePeer $normalized',
+    );
   }
 
   /// Synchronous block check off the in-memory `_blockedIds` mirror. The

@@ -162,6 +162,11 @@ class CallsNotifier extends StateNotifier<CallState> {
   /// sharing, so we can restore it without re-asking for permission.
   MediaStreamTrack? _cameraTrackBackup;
 
+  /// The active screen-share track. Held so its `onEnded` callback (which
+  /// captures `this`) can be detached on hangup / restore — otherwise it
+  /// leaks the notifier and can fire after dispose (audit M7).
+  MediaStreamTrack? _shareTrack;
+
   // ─── Public API ───────────────────────────────────────────────
 
   /// Dial [remotePeerId]. If [video] is true, requests camera too;
@@ -199,10 +204,27 @@ class CallsNotifier extends StateNotifier<CallState> {
       _resetIdleWithError('Нет доступа к микрофону${video ? '/камере' : ''}');
       return;
     }
+    // Disposed mid-acquire (e.g. logout while the permission prompt was up):
+    // drop the stream and bail before touching `state` (audit M7).
+    if (!mounted) {
+      try {
+        local.getTracks().forEach((t) => t.stop());
+      } catch (_) {}
+      return;
+    }
     state = state.copyWith(localStream: local);
 
     try {
       final conn = await peer.callPeer(remotePeerId, local);
+      if (!mounted) {
+        try {
+          await conn.close();
+        } catch (_) {}
+        try {
+          local.getTracks().forEach((t) => t.stop());
+        } catch (_) {}
+        return;
+      }
       _attachConnection(conn);
     } catch (e) {
       // Couldn't reach the peer (signaling failure, peer offline).
@@ -234,6 +256,15 @@ class CallsNotifier extends StateNotifier<CallState> {
         await conn.close();
       } catch (_) {}
       _resetIdleWithError('Нет доступа к микрофону${video ? '/камере' : ''}');
+      return;
+    }
+    if (!mounted) {
+      try {
+        local.getTracks().forEach((t) => t.stop());
+      } catch (_) {}
+      try {
+        await conn.close();
+      } catch (_) {}
       return;
     }
     state = state.copyWith(localStream: local);
@@ -303,9 +334,14 @@ class CallsNotifier extends StateNotifier<CallState> {
           return;
         }
       }
+      try {
+        _shareTrack?.onEnded = null;
+      } catch (_) {}
+      _shareTrack = null;
       if (cameraTrack != null) {
         await _replaceVideoTrack(cameraTrack, local);
       }
+      if (!mounted) return;
       _cameraTrackBackup = null;
       state = state.copyWith(
         screenSharing: false,
@@ -337,13 +373,22 @@ class CallsNotifier extends StateNotifier<CallState> {
     final cameraTrack = local.getVideoTracks().firstOrNull;
     _cameraTrackBackup = cameraTrack;
     await _replaceVideoTrack(shareTrack, local);
+    if (!mounted) {
+      // Disposed mid-swap — don't leave a dangling onEnded or set state.
+      try {
+        shareTrack.stop();
+      } catch (_) {}
+      return;
+    }
+    _shareTrack = shareTrack;
 
     // When the user clicks the browser's "Stop sharing" button we want
     // to seamlessly fall back to the camera. The track's `onEnded`
     // hook fires for both cases (user-initiated stop AND we ended it
     // ourselves), so we guard with `screenSharing` to avoid recursion.
+    // The `mounted` guard stops a post-dispose callback from touching state.
     shareTrack.onEnded = () {
-      if (state.screenSharing) toggleScreenShare();
+      if (mounted && state.screenSharing) toggleScreenShare();
     };
 
     state = state.copyWith(
@@ -360,6 +405,10 @@ class CallsNotifier extends StateNotifier<CallState> {
     final stream = state.localStream;
     _conn = null;
     _cameraTrackBackup = null;
+    try {
+      _shareTrack?.onEnded = null;
+    } catch (_) {}
+    _shareTrack = null;
     try {
       _remoteStreamSub?.cancel();
     } catch (_) {}
@@ -380,7 +429,10 @@ class CallsNotifier extends StateNotifier<CallState> {
         }
       } catch (_) {}
     }
-    state = const CallState.idle();
+    // hangUp is also called from dispose() (before super.dispose completes) and
+    // from the onClose listener — guard so the final state write can't land
+    // after the notifier is torn down (audit M7).
+    if (mounted) state = const CallState.idle();
   }
 
   // ─── Internal helpers ─────────────────────────────────────────
@@ -409,6 +461,7 @@ class CallsNotifier extends StateNotifier<CallState> {
   void _attachConnection(PeerMediaConnection conn) {
     _conn = conn;
     _remoteStreamSub = conn.onStream.listen((remote) {
+      if (!mounted) return;
       state = state.copyWith(
         status: CallStatus.inCall,
         remoteStream: remote,
@@ -417,7 +470,7 @@ class CallsNotifier extends StateNotifier<CallState> {
     _closeSub = conn.onClose.listen((_) {
       // Peer hung up — wipe local state too. Best-effort: hangUp is
       // idempotent enough to call regardless of who initiated.
-      hangUp();
+      if (mounted) hangUp();
     });
   }
 
@@ -440,6 +493,10 @@ class CallsNotifier extends StateNotifier<CallState> {
     if (current == null) return;
 
     _callSub = current.onCall.listen((conn) {
+      // Room voice calls carry a `room-voice` tag and are owned by RoomManager —
+      // never surface them as a 1:1 call (audit item 6). Normal 1:1 calls have
+      // no such tag and continue exactly as before.
+      if (conn.metadata['channel'] == 'room-voice') return;
       // Only one call at a time. If we're already busy, decline so
       // the caller's pill clears cleanly.
       if (state.isActive) {

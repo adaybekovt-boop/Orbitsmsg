@@ -8,11 +8,11 @@
 //     to one of the terminal states once `_bootstrap()` finishes. The React
 //     version could read localStorage synchronously in a `useEffect`, but we
 //     can't afford to block the UI thread.
-//   • Scrypt blocks for ~400–800 ms. A future optimization is wrapping
-//     `deriveScryptRecord` / `verifyScryptRecordEx` in `Isolate.run`, but the
-//     `cryptography_flutter` HMAC backend uses platform channels which don't
-//     work off the main isolate. We accept the brief hitch for now and show a
-//     spinner — callers see `busy=true` via the action Future.
+//   • Scrypt blocks for ~400–800 ms, but `scrypt_kdf.dart` now runs that
+//     pure-Dart derivation in a background isolate (`Isolate.run`), so the UI
+//     thread no longer hitches during onboarding/unlock (audit L10). The
+//     HMAC-SHA256 verifier still runs inline — it's microseconds, not the
+//     bottleneck. Callers still see `busy=true` via the action Future.
 //   • `reserveName` / registry.js is skipped: that was a browser-era concern
 //     about multiple profiles sharing the same origin. On mobile the device
 //     is the profile.
@@ -21,8 +21,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/auth_validation.dart';
 import '../core/identity.dart';
+import '../core/identity_key.dart' as identity_key;
 import '../core/scrypt_kdf.dart';
 import '../core/vault_kek.dart';
+import '../storage/db.dart' as db;
 import '../storage/secure_profile_store.dart';
 
 // ─────────────────────────────────────────────────────────────
@@ -239,24 +241,37 @@ class AuthNotifier extends StateNotifier<AuthState> {
   /// Sign out: clear the KEK and profile but keep the peerId / crypto keys.
   /// The user can onboard again to the same device without losing peer
   /// pins or TOFU history (that's what [wipeLocal] is for).
+  ///
+  /// Locking the vault (clearing the KEK) is what makes the at-rest secrets
+  /// unreadable again — message/peer rows stay on disk (intended: history
+  /// survives a re-login to the *same* identity) but the ratchet/identity
+  /// secrets are KEK-wrapped and inert until the next unlock. In-memory
+  /// session state (typing bubbles, blocked mirror) is reset by
+  /// `MessagingNotifier`'s auth listener on the authed→guest transition, so it
+  /// can't bleed across a logout (audit H4).
   Future<void> logout() async {
     clearVaultKek();
     await clearLocalProfile();
-    // TODO: stopPrekeyMaintenance() once ported.
-    // TODO: clear Drift messages/peer rows once those providers exist.
     state = const AuthGuest();
   }
 
-  /// Full reset: clears the profile AND the cryptographic identity, so the
-  /// next onboarding creates a brand-new peerId. Use for "Сбросить профиль"
-  /// on the unlock screen when the user has forgotten their password.
+  /// Full reset: clears the profile, every local store, AND the cryptographic
+  /// identity, so the next onboarding creates a brand-new peerId. Use for
+  /// "Сбросить профиль" on the unlock screen when the user has forgotten their
+  /// password. Order matters: wipe the DB (identity keys, prekeys, ratchets,
+  /// pins, messages, peers, kv/auth-token) first, then drop the in-memory
+  /// identity caches so a stale key pair can't shadow the wiped store, then
+  /// regenerate the peerId (audit H4).
   Future<void> wipeLocal() async {
     clearVaultKek();
     await clearLocalProfile();
+    try {
+      await db.clearAllData();
+    } catch (_) {
+      // Best-effort — a DB error shouldn't trap the user on the lock screen.
+    }
+    identity_key.resetIdentityCaches();
     await resetIdentity();
-    // TODO: wipe KeyStore tables (identity keys, prekeys, ratchets) and the
-    // Drift message/peer rows. Those helpers live in slices we haven't
-    // finished yet.
     state = const AuthGuest();
   }
 

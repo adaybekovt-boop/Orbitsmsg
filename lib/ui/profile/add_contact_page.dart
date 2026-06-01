@@ -26,6 +26,8 @@ import '../../peer/helpers.dart';
 import '../../state/local_profile_provider.dart';
 import '../../storage/db.dart' as db;
 import '../../themes/orbits_tokens.dart';
+import '../primitives/orbits_glass_button.dart';
+import '../primitives/orbits_glass_surface.dart';
 import 'my_qr_page.dart';
 
 class AddContactPage extends ConsumerStatefulWidget {
@@ -62,12 +64,12 @@ class _AddContactPageState extends ConsumerState<AddContactPage>
   Future<void> _accept(String raw) async {
     final normalized = normalizePeerId(raw);
     if (!isValidPeerId(normalized)) {
-      _toast('Неверный формат ID (должен быть ORBIT-XXXXXX)');
+      _toast('Код не похож на правильный');
       return;
     }
     final selfId = ref.read(currentPeerIdProvider) ?? '';
     if (normalized == selfId) {
-      _toast('Это твой собственный ID');
+      _toast('Это твой собственный код');
       return;
     }
     try {
@@ -76,8 +78,8 @@ class _AddContactPageState extends ConsumerState<AddContactPage>
         'trustLevel': 0,
         'lastSeenAt': DateTime.now().millisecondsSinceEpoch,
       });
-    } catch (e) {
-      _toast('Не удалось сохранить контакт: $e');
+    } catch (_) {
+      _toast('Не удалось добавить контакт');
       return;
     }
     if (!mounted) return;
@@ -102,13 +104,37 @@ class _AddContactPageState extends ConsumerState<AddContactPage>
 
   @override
   Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
     final peerId = ref.watch(currentPeerIdProvider);
     return Scaffold(
+      // Transparent so the app's animated glass backdrop shows through —
+      // matches every other pushed page (settings, games, chat…).
+      backgroundColor: Colors.transparent,
       appBar: AppBar(
-        title: const Text('Добавить контакт'),
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        flexibleSpace: const OrbitsGlassSurface(
+          role: OrbitsGlassRole.appBar,
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+          child: SizedBox.expand(),
+        ),
+        title: Text(
+          'Добавить контакт',
+          style: TextStyle(
+            fontFamily: tokens.fontHeading,
+            fontWeight: FontWeight.w600,
+            color: tokens.text,
+          ),
+        ),
         actions: [
           if (peerId != null && peerId.isNotEmpty)
-            TextButton.icon(
+            OrbitsGlassIconButton(
+              icon: Icons.qr_code_2,
+              tooltip: 'Мой QR',
+              variant: OrbitsGlassVariant.subtle,
+              size: OrbitsGlassSize.small,
               onPressed: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -116,15 +142,24 @@ class _AddContactPageState extends ConsumerState<AddContactPage>
                   ),
                 );
               },
-              icon: const Icon(Icons.qr_code_2, size: 20),
-              label: const Text('Мой QR'),
             ),
-          const SizedBox(width: 4),
+          const SizedBox(width: 8),
         ],
         bottom: TabBar(
           controller: _tabs,
+          labelColor: tokens.accent,
+          unselectedLabelColor: tokens.muted,
+          indicatorColor: tokens.accent,
+          labelStyle: TextStyle(
+            fontFamily: tokens.fontBody,
+            fontWeight: FontWeight.w700,
+          ),
+          unselectedLabelStyle: TextStyle(
+            fontFamily: tokens.fontBody,
+            fontWeight: FontWeight.w500,
+          ),
           tabs: const [
-            Tab(icon: Icon(Icons.qr_code_scanner), text: 'Сканировать'),
+            Tab(icon: Icon(Icons.qr_code_scanner), text: 'Сканировать QR'),
             Tab(icon: Icon(Icons.keyboard), text: 'Ввести вручную'),
           ],
         ),
@@ -308,66 +343,106 @@ class _ManualTabState extends State<_ManualTab> {
     final tokens = OrbitsTokens.of(context);
     return Center(
       child: ConstrainedBox(
+        // Clamp on desktop/web so the inputs don't stretch across the screen.
         constraints: const BoxConstraints(maxWidth: 440),
         child: Padding(
           padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                'Введи Peer ID',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                  fontFamily: tokens.fontHeading,
-                  color: tokens.text,
+          child: OrbitsGlassSurface(
+            role: OrbitsGlassRole.card,
+            borderRadius: BorderRadius.circular(tokens.radiusCard),
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'Введи код профиля',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: tokens.fontHeading,
+                    color: tokens.text,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                'Формат: ORBIT-XXXXXX (X — hex-символ).',
-                style: TextStyle(
-                  color: tokens.muted,
-                  fontFamily: tokens.fontBody,
+                const SizedBox(height: 6),
+                Text(
+                  'Попроси человека открыть свой QR или отправить код профиля.',
+                  style: TextStyle(
+                    color: tokens.muted,
+                    fontFamily: tokens.fontBody,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 20),
-              TextField(
-                controller: _ctl,
-                autofocus: true,
-                textCapitalization: TextCapitalization.characters,
-                style: TextStyle(fontFamily: tokens.fontMono),
-                inputFormatters: [
-                  // Strip whitespace + force upper-case as the user types,
-                  // matching the canonicalisation in `normalizePeerId`.
-                  FilteringTextInputFormatter.deny(RegExp(r'\s')),
-                  TextInputFormatter.withFunction((_, value) {
-                    return value.copyWith(text: value.text.toUpperCase());
-                  }),
+                const SizedBox(height: 20),
+                TextField(
+                  controller: _ctl,
+                  autofocus: true,
+                  textCapitalization: TextCapitalization.characters,
+                  style: TextStyle(
+                      fontFamily: tokens.fontMono, color: tokens.text),
+                  inputFormatters: [
+                    // Strip whitespace + force upper-case as the user types,
+                    // matching the canonicalisation in `normalizePeerId`.
+                    FilteringTextInputFormatter.deny(RegExp(r'\s')),
+                    TextInputFormatter.withFunction((_, value) {
+                      return value.copyWith(text: value.text.toUpperCase());
+                    }),
+                  ],
+                  decoration: InputDecoration(
+                    labelText: 'Код профиля',
+                    labelStyle: TextStyle(
+                        color: tokens.muted, fontFamily: tokens.fontBody),
+                    hintText: 'ORBIT-ABC123',
+                    hintStyle: TextStyle(
+                      color: tokens.muted.withValues(alpha: 0.7),
+                      fontFamily: tokens.fontMono,
+                    ),
+                    filled: true,
+                    fillColor: tokens.surface.withValues(alpha: 0.55),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(tokens.radiusButton),
+                      borderSide: BorderSide(color: tokens.border),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(tokens.radiusButton),
+                      borderSide: BorderSide(color: tokens.border),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(tokens.radiusButton),
+                      borderSide: BorderSide(color: tokens.accent, width: 1.4),
+                    ),
+                  ),
+                  onSubmitted: (_) => _submit(),
+                ),
+                const SizedBox(height: 20),
+                OrbitsGlassButton(
+                  label: 'Добавить',
+                  icon: Icons.person_add_alt,
+                  variant: OrbitsGlassVariant.primary,
+                  size: OrbitsGlassSize.large,
+                  expand: true,
+                  enabled: !_busy,
+                  onPressed: _busy ? null : _submit,
+                ),
+                // Inline progress feedback while the contact is being saved —
+                // the glass button takes an `IconData`, not a spinner widget, so
+                // we surface the busy state below it (logic unchanged: `_busy`
+                // also disables the button above).
+                if (_busy) ...[
+                  const SizedBox(height: 16),
+                  Center(
+                    child: SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor:
+                            AlwaysStoppedAnimation<Color>(tokens.accent),
+                      ),
+                    ),
+                  ),
                 ],
-                decoration: const InputDecoration(
-                  labelText: 'Peer ID',
-                  hintText: 'ORBIT-ABC123',
-                ),
-                onSubmitted: (_) => _submit(),
-              ),
-              const SizedBox(height: 20),
-              FilledButton.icon(
-                onPressed: _busy ? null : _submit,
-                style: FilledButton.styleFrom(
-                  minimumSize: const Size.fromHeight(48),
-                ),
-                icon: _busy
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.person_add_alt),
-                label: const Text('Добавить'),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),

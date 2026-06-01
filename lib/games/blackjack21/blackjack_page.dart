@@ -240,7 +240,7 @@ class _BlackjackPageState extends State<BlackjackPage> {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           _MetaCell(label: 'РАУНД', value: round),
-          _MetaCell(label: 'ЦЕЛЬ —', value: '21'),
+          const _MetaCell(label: 'ЦЕЛЬ —', value: '21'),
         ],
       ),
     );

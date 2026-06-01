@@ -14,10 +14,16 @@
 // Theme, auth, and the global error boundary will land in later slices —
 // they're intentionally out of scope for the skeleton.
 
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_acrylic/flutter_acrylic.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'storage/db.dart' as db;
 import 'storage/drift_key_store.dart';
+import 'storage/drift_sticker_store.dart';
 import 'themes/theme_data_factory.dart';
 import 'themes/theme_notifier.dart';
 import 'ui/auth/auth_gate.dart';
@@ -43,6 +49,32 @@ Future<void> main() async {
   // Point the crypto modules at the on-disk Drift store. Once this is
   // called, identity / prekeys / ratchets survive a cold restart.
   installDriftKeyStore();
+
+  // Persist sticker packs + recents to the same DB so they survive a restart
+  // (the manager otherwise falls back to an in-memory store).
+  installDriftStickerStore();
+
+  // Reap orphaned voice/file blobs left behind by past chat/message deletions
+  // so the SQLite file doesn't bloat over time. Fire-and-forget — never blocks
+  // first paint; the DB handle opens lazily on the first query.
+  unawaited(db.sweepOrphanBlobs());
+
+  // Windows: turn on real Mica so the OS composites a translucent backdrop
+  // behind the window. The desktop shell paints a transparent margin around
+  // the centered content panel (see app_shell), so Mica shows there — the
+  // in-app fake-glass panels then rest on a true acrylic surface. Guarded to
+  // Windows only; never runs on web/mobile (the import is desktop-safe).
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
+    try {
+      await Window.initialize();
+      final isDark = WidgetsBinding.instance.platformDispatcher
+              .platformBrightness ==
+          Brightness.dark;
+      await Window.setEffect(effect: WindowEffect.mica, dark: isDark);
+    } catch (_) {
+      // Older Windows (no Mica) / unsupported — fall back to plain fake-glass.
+    }
+  }
 
   runApp(const ProviderScope(child: OrbitsApp()));
 }

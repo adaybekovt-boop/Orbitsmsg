@@ -30,8 +30,8 @@ void _noop() {
 /// Block Blast SFX bank. Every method mirrors a callable on the JS `sfx`
 /// object in `sound.js`. All are no-ops for now — see file header for how
 /// to hook up real audio.
-class _BlockBlastSfx {
-  const _BlockBlastSfx();
+class BlockBlastSfx {
+  const BlockBlastSfx();
 
   void pickUp() => _noop();   // tone 520Hz, 40ms, triangle
   void place() => _noop();    // tone 200Hz, 50ms, sawtooth
@@ -48,4 +48,4 @@ class _BlockBlastSfx {
 /// Singleton instance the widget reaches for — mirrors `import { sfx }` in
 /// the JS source. Keeping it as a const instance rather than top-level
 /// functions matches the JS namespacing so porting is 1:1.
-const _BlockBlastSfx sfx = _BlockBlastSfx();
+const BlockBlastSfx sfx = BlockBlastSfx();

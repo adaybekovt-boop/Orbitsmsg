@@ -30,6 +30,7 @@
 //   drop-beacon traffic (same effect as an unregistered JS handler).
 
 import 'dart:async';
+import 'dart:typed_data';
 
 import '../core/wire_crypto.dart';
 import '../messaging/message_protocol.dart';
@@ -47,7 +48,16 @@ const Set<String> dropTypes = <String>{
   'file-start',
   'file-chunk',
   'file-end',
+  'file-abort',
   'drop-resume',
+};
+
+/// File-transfer control types handled by the Drop engine (the actual chunk
+/// payloads arrive as binary messages, not Maps). Routed to [dropInbound].
+const Set<String> _fileTransferTypes = <String>{
+  'file-start',
+  'file-end',
+  'file-abort',
 };
 
 /// True iff [data] is a JSON-shaped map whose `type` is one of [dropTypes].
@@ -57,6 +67,19 @@ bool isDropPacket(Object? data) {
   if (data is! Map) return false;
   final t = data['type'];
   return t is String && dropTypes.contains(t);
+}
+
+/// True iff [data] is a JSON map whose `type` is a room-protocol packet
+/// (`room_join`, `room_msg`, `room_members_update`, `room_channel_create`,
+/// `room_destroy`, `room_leave`). Routed to [PacketRouterCtx.roomInbound]
+/// ahead of the generic reliable dispatcher. Room packets ride the reliable
+/// channel as PLAINTEXT maps (DTLS-protected like Drop chunks) — they
+/// intentionally bypass the per-message ratchet so unverified guests aren't
+/// blocked by the TOFU/`verified` gate on `decryptInbound`.
+bool isRoomPacket(Object? data) {
+  if (data is! Map) return false;
+  final t = data['type'];
+  return t is String && t.startsWith('room_');
 }
 
 /// Signature for the handler returned by [createPacketHandler]. Matches
@@ -73,6 +96,8 @@ class PacketRouterCtx {
     required this.ephemeral,
     required this.flushOutbox,
     this.dropHandlePacket,
+    this.dropInbound,
+    this.roomInbound,
   });
 
   /// Plaintext send over the underlying DataConnection. The router uses
@@ -91,12 +116,21 @@ class PacketRouterCtx {
   /// any queued outbound messages here because an ack just landed.
   final void Function() flushOutbox;
 
-  /// Optional DropManager hook. Null is a legal "dropless build" state —
-  /// drop packets are silently discarded, which matches the JS behavior
-  /// when `ctx.dropHandlePacket` is missing. Wired up in Phase 10+ once
-  /// `drop_manager.dart` exists.
+  /// Optional DropManager hook for *discovery* beacons (drop-beacon etc) that
+  /// ride the ephemeral channel. Null is a legal "dropless build" state.
   final void Function(String remoteId, Map<String, Object?> data)?
       dropHandlePacket;
+
+  /// Optional Orbits-Drop file-transfer hook. Receives both the JSON control
+  /// maps (`file-start`/`file-end`/`file-abort`) and the raw binary chunk
+  /// frames ([Uint8List]) on the reliable channel, and feeds them into the
+  /// `DropEngine`. Null leaves file transfer disabled.
+  final void Function(String remoteId, Object packet)? dropInbound;
+
+  /// Optional room-protocol hook. Receives plaintext `room_*` control maps on
+  /// the reliable channel and feeds them into the `RoomManager`
+  /// (star-topology room signalling). Null leaves rooms disabled.
+  final void Function(String remoteId, Map<String, Object?> data)? roomInbound;
 }
 
 // ─── Middlewares ──────────────────────────────────────────────────
@@ -199,9 +233,29 @@ PacketHandler createPacketHandler(
     };
   }
 
-  // Reliable channel: drop packets first (synchronous fast-path), then
-  // everything else.
+  // Reliable channel: file-transfer traffic first (binary chunks + control),
+  // then the generic drop fast-path (beacons), then everything else.
   return (data) async {
+    // Binary chunk frame → Drop engine. Nothing else on the reliable channel
+    // sends raw binary (wire ciphertext is a String, control is a Map).
+    if (data is Uint8List) {
+      ctx.dropInbound?.call(remoteId, data);
+      return;
+    }
+    // file-start / file-end / file-abort control maps → Drop engine.
+    if (data is Map && _fileTransferTypes.contains(data['type'])) {
+      ctx.dropInbound?.call(remoteId, Map<String, Object?>.from(data));
+      return;
+    }
+    // Room-protocol control maps + QR-pairing auth responses (both plaintext,
+    // reliable) → RoomManager bridge. Checked before the generic dispatcher so
+    // they don't fall through to the chat/wire handler (which would drop them
+    // as unknown types).
+    if (data is Map &&
+        (isRoomPacket(data) || data['type'] == 'qr_auth_response')) {
+      ctx.roomInbound?.call(remoteId, Map<String, Object?>.from(data));
+      return;
+    }
     if (dropMiddleware(remoteId, data, ctx)) return;
     await reliableMiddleware(remoteId, data, ctx);
   };

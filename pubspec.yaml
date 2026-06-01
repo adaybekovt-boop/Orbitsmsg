@@ -65,14 +65,12 @@ dependencies:
   # VoiceRecorder.jsx, VoicePlayer.jsx, AttachmentBubble.jsx and the
   # paperclip picker in Chats.jsx).
   #
-  # NOTE: `record` (audio recording) was removed because its transitive
-  # chain (record_platform_interface ↔ record_linux ↔ record_web ↔ …)
-  # is in a perma-drift state on pub.dev — every consistent pin leaves
-  # one platform package incompatible with another, and Flutter compiles
-  # the full Dart graph for every target, so the drift broke Android,
-  # Windows AND the web dart2js pass simultaneously. `voice_recorder_sheet.dart`
-  # has been stubbed out (placeholder UI); re-add `record` and revert
-  # the stub once the upstream chain stabilises.
+  # `record` (audio recording) is back: the historical transitive-version
+  # drift (record_platform_interface ↔ record_linux ↔ record_web ↔ …) is
+  # resolved on the current 6.2.x line — `record: ^6.2.1` co-resolves a
+  # consistent platform set (android/ios/linux/macos/web/windows). The
+  # recorder records WAV (universal playback + honest PCM waveform) and the
+  # live recorder UI lives in `voice_recorder_sheet.dart`. See `record:` below.
   #
   # `just_audio` plays the inbound blob — it can swap sources on the fly
   # which we need for "load bytes from Drift, hand to a Uri-less source".
@@ -103,6 +101,45 @@ dependencies:
   # deps and breaks under Android 16 KB page alignment). v6 ships with
   # 16-KB-aligned native libs, which we need for Play Store submission.
   mobile_scanner: ^6.0.2
+
+  # Liquid Glass redesign (2026-05) — declarative micro-animations.
+  # `flutter_animate` (gskinner, Flutter Favorite) drives press feedback,
+  # message-bubble entrance, sheet/content fades without controllers.
+  # `animations` (flutter.dev) provides shared-axis / fade-through page
+  # transitions. No glass/shader package — all blur is built-in BackdropFilter.
+  flutter_animate: ^4.5.0
+  animations: ^2.0.11
+
+  # Apple-thin icon set (Light weight default, Fill for active/selected).
+  phosphor_flutter: ^2.1.0
+
+  # iOS-26-flavour modal sheets (drag-to-dismiss, snap points, spring physics)
+  # for the sticker picker / chat settings / profile actions.
+  smooth_sheets: ^1.0.0
+
+  # Windows-only: real Mica/acrylic at the OS window level so the in-app
+  # fake-glass panels rest on a true translucent backdrop. No-op / guarded
+  # off-Windows; the Dart call is gated by platform in main.dart.
+  flutter_acrylic: ^1.1.0
+
+  # Audio capture for voice messages (see the note in the voice block above).
+  record: ^6.2.1
+
+  # Per-read biometric gate (Face ID / Touch ID / fingerprint) in front of the
+  # hardware-backed vault KEK. flutter_secure_storage v10 dropped its built-in
+  # prompt, so we reintroduce it explicitly. Mobile-only at runtime — guarded
+  # by `SecureKekVault.isSupported` (web/desktop never invoke it).
+  local_auth: ^2.3.0
+
+  # HKDF-SHA256 (HMAC) for the SQLCipher DB-key derivation in
+  # storage/database.dart. Tiny, pure-Dart, web-safe.
+  crypto: ^3.0.0
+
+  # SQLCipher build of sqlite3 for full-file at-rest DB encryption on native.
+  # The encryption machinery is implemented (NativeDatabase + PRAGMA key) but
+  # OFF by default — see the SQLCipher note in storage/database.dart for the
+  # bootstrap-ordering + migration prerequisites before enabling it.
+  sqlcipher_flutter_libs: ^0.6.0
 
 dev_dependencies:
   flutter_test:

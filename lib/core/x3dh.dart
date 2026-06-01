@@ -151,8 +151,5 @@ Future<EcKeyPair> generateEphemeralECDHPair() => _ecdh.newKeyPair();
 /// `crypto.subtle.exportKey('spki', pub)`.
 Future<Uint8List> exportECDHPubSpki(EcKeyPair keyPair) async {
   final pub = await keyPair.extractPublicKey();
-  if (pub is! EcPublicKey) {
-    throw StateError('x3dh: expected an EcPublicKey, got ${pub.runtimeType}');
-  }
   return buildP256Spki(x: pub.x, y: pub.y);
 }

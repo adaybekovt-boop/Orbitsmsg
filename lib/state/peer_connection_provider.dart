@@ -16,8 +16,11 @@
 
 import 'dart:async';
 
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../peer/connectivity_watch_stub.dart'
+    if (dart.library.html) '../peer/connectivity_watch_web.dart';
 import '../peer/peer_connection_manager.dart';
 import '../peer/peerjs_client.dart';
 import '../peer/signaling.dart';
@@ -68,11 +71,44 @@ const Object _unset = Object();
 
 class PeerConnectionNotifier extends StateNotifier<PeerConnectionState> {
   PeerConnectionNotifier({required this.env})
-      : super(const PeerConnectionState.idle());
+      : super(const PeerConnectionState.idle()) {
+    _installWatchdog();
+  }
 
   final PeerEnv env;
   PeerConnectionManager? _manager;
   bool _disposed = false;
+
+  // ── Connectivity watchdog ──
+  // On web the browser owns WS keepalive (no pingInterval), so a half-open
+  // socket after a network drop lingers until the slow TCP timeout. We nudge
+  // an immediate reconnect on two real signals — the app returning to the
+  // foreground (lifecycle `resumed`, cross-platform) and the browser `online`
+  // event (web) — instead of a silence timer, which would false-positive on a
+  // healthy-but-idle link and spin a reconnect storm (audit M5). The nudge is
+  // gated to the `disconnected` state so it never disturbs a live connection
+  // or an in-flight `connecting` attempt.
+  _ResumeObserver? _resumeObserver;
+  Object? _onlineHandle;
+
+  void _installWatchdog() {
+    try {
+      final obs = _ResumeObserver(_nudgeReconnect);
+      WidgetsBinding.instance.addObserver(obs);
+      _resumeObserver = obs;
+    } catch (_) {
+      // No binding (e.g. headless test harness) — skip; not load-bearing.
+    }
+    _onlineHandle = watchOnline(_nudgeReconnect);
+  }
+
+  void _nudgeReconnect() {
+    if (_disposed) return;
+    // Only act when we KNOW we're offline. 'connected' must not be disturbed;
+    // 'connecting' is already retrying; 'idle'/'multitab' aren't our concern.
+    if (state.status != 'disconnected') return;
+    _manager?.reconnectNow();
+  }
 
   /// Serialize overlapping `start()` calls. Without this, two rapid calls
   /// with different ids would both see `_manager == null` during each
@@ -179,10 +215,32 @@ class PeerConnectionNotifier extends StateNotifier<PeerConnectionState> {
   @override
   void dispose() {
     _disposed = true;
+    final obs = _resumeObserver;
+    if (obs != null) {
+      try {
+        WidgetsBinding.instance.removeObserver(obs);
+      } catch (_) {}
+      _resumeObserver = null;
+    }
+    unwatchOnline(_onlineHandle);
+    _onlineHandle = null;
     // Fire-and-forget — we can't await in dispose(), but the manager's stop()
     // is resilient to being cancelled mid-flight.
     unawaited(_teardown());
     super.dispose();
+  }
+}
+
+/// Observes app-lifecycle transitions and fires [onResume] when the app/tab
+/// returns to the foreground — the cross-platform half of the connectivity
+/// watchdog (the web `online` event covers network-restored-while-foregrounded).
+class _ResumeObserver extends WidgetsBindingObserver {
+  _ResumeObserver(this.onResume);
+  final void Function() onResume;
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) onResume();
   }
 }
 

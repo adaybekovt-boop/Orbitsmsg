@@ -48,6 +48,18 @@ Map<String, Object?> decodeRow(List<int> bytes) {
   return hydrated;
 }
 
+/// Like [decodeRow] but returns null instead of throwing on a malformed blob
+/// (bad UTF-8 / JSON at the top level). Use in `.watch().map` callbacks so one
+/// corrupt row drops out of the result set rather than killing the whole
+/// stream subscription (audit L5).
+Map<String, Object?>? decodeRowOrNull(List<int> bytes) {
+  try {
+    return decodeRow(bytes);
+  } catch (_) {
+    return null;
+  }
+}
+
 Object? _sanitise(Object? value) {
   if (value == null) return null;
   if (value is Uint8List) {
@@ -75,7 +87,15 @@ Object? _hydrate(Object? value) {
     if (value.length == 1 && value.containsKey(_byteMarker)) {
       final raw = value[_byteMarker];
       if (raw is String) {
-        return base64Decode(raw);
+        // A hostile / corrupt row can carry a non-base64 `__b` payload. Don't
+        // let one bad leaf throw a FormatException up through a `.watch().map`
+        // callback and tear down the Riverpod subscription (audit L5) — fall
+        // back to empty bytes so the rest of the row still hydrates.
+        try {
+          return base64Decode(raw);
+        } catch (_) {
+          return Uint8List(0);
+        }
       }
     }
     final out = <String, Object?>{};

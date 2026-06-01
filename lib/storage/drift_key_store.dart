@@ -18,7 +18,6 @@ import 'package:drift/drift.dart';
 import '../core/key_store.dart';
 import 'database.dart';
 import 'row_codec.dart';
-import 'tables.dart';
 
 /// Install the Drift store as the process-wide [KeyStore]. Call once on
 /// app start (after any platform init) and before touching the crypto

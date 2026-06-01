@@ -11,7 +11,10 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../themes/orbits_tokens.dart';
-import '../../ui/primitives/orbs_card.dart';
+import '../../ui/primitives/orbits_glass_button.dart';
+import '../../ui/primitives/orbits_glass_list_tile.dart';
+import '../../ui/primitives/orbits_glass_surface.dart';
+import '../../ui/primitives/orbits_glass_switch.dart';
 
 const _kChatPrefsKey = 'orbits_chat_prefs_v1';
 
@@ -113,11 +116,21 @@ class _ChatPrefsPageState extends State<ChatPrefsPage> {
     final tokens = OrbitsTokens.of(context);
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        flexibleSpace: const OrbitsGlassSurface(
+          role: OrbitsGlassRole.appBar,
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+          child: SizedBox.expand(),
+        ),
         title: Text(
           'Чаты',
           style: TextStyle(
             fontFamily: tokens.fontHeading,
             fontWeight: FontWeight.w600,
+            color: tokens.text,
           ),
         ),
       ),
@@ -125,70 +138,52 @@ class _ChatPrefsPageState extends State<ChatPrefsPage> {
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
           // ── Behaviour ────────────────────────────────────────
-          const OrbsSectionTitle('Поведение'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbsCard(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 6,
-                vertical: 4,
-              ),
-              child: Column(
-                children: [
-                  OrbsSettingRow(
-                    label: 'Показывать секунды',
-                    subtitle: 'Время сообщений в формате ЧЧ:ММ:СС',
-                    trailing: OrbsToggle(
-                      value: _prefs.showSeconds,
-                      onChanged: !_loaded
-                          ? null
-                          : (v) => _save(_prefs.copyWith(showSeconds: v)),
-                    ),
-                  ),
-                  const OrbsDivider(),
-                  OrbsSettingRow(
-                    label: 'Авто-прочтение',
-                    subtitle:
-                        'Помечать сообщения прочитанными при открытии чата',
-                    trailing: OrbsToggle(
-                      value: _prefs.autoRead,
-                      onChanged: !_loaded
-                          ? null
-                          : (v) => _save(_prefs.copyWith(autoRead: v)),
-                    ),
-                  ),
-                  const OrbsDivider(),
-                  OrbsSettingRow(
-                    label: 'Звуки сообщений',
-                    subtitle: 'Тихий «динь» при получении',
-                    trailing: OrbsToggle(
-                      value: _prefs.messageSounds,
-                      onChanged: !_loaded
-                          ? null
-                          : (v) => _save(_prefs.copyWith(messageSounds: v)),
-                    ),
-                  ),
-                  const OrbsDivider(),
-                  OrbsSettingRow(
-                    label: 'Вибрация',
-                    subtitle: 'Короткое касание при новом сообщении',
-                    trailing: OrbsToggle(
-                      value: _prefs.vibration,
-                      onChanged: !_loaded
-                          ? null
-                          : (v) => _save(_prefs.copyWith(vibration: v)),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+          const _SectionLabel('Поведение'),
+          _ToggleRow(
+            icon: Icons.timer_outlined,
+            label: 'Показывать секунды',
+            subtitle: 'Время сообщений в формате ЧЧ:ММ:СС',
+            value: _prefs.showSeconds,
+            onChanged: !_loaded
+                ? null
+                : (v) => _save(_prefs.copyWith(showSeconds: v)),
+          ),
+          _ToggleRow(
+            icon: Icons.mark_chat_read_outlined,
+            label: 'Авто-прочтение',
+            subtitle: 'Помечать сообщения прочитанными при открытии чата',
+            value: _prefs.autoRead,
+            onChanged: !_loaded
+                ? null
+                : (v) => _save(_prefs.copyWith(autoRead: v)),
+          ),
+          _ToggleRow(
+            icon: Icons.volume_up_outlined,
+            label: 'Звуки сообщений',
+            subtitle: 'Тихий «динь» при получении',
+            value: _prefs.messageSounds,
+            onChanged: !_loaded
+                ? null
+                : (v) => _save(_prefs.copyWith(messageSounds: v)),
+          ),
+          _ToggleRow(
+            icon: Icons.vibration,
+            label: 'Вибрация',
+            subtitle: 'Короткое касание при новом сообщении',
+            value: _prefs.vibration,
+            onChanged: !_loaded
+                ? null
+                : (v) => _save(_prefs.copyWith(vibration: v)),
           ),
 
           // ── Bubble style ─────────────────────────────────────
-          const OrbsSectionTitle('Форма пузырей'),
+          const _SectionLabel('Форма пузырей'),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbsCard(
+            child: OrbitsGlassSurface(
+              role: OrbitsGlassRole.card,
+              borderRadius: BorderRadius.circular(tokens.radiusCard),
+              padding: const EdgeInsets.all(14),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -202,14 +197,14 @@ class _ChatPrefsPageState extends State<ChatPrefsPage> {
                         ('square', 'Квадрат'),
                         ('bubble', 'Пузырь'),
                       ])
-                        _PickerChip(
+                        OrbitsGlassPillButton(
                           label: style.$2,
                           selected: _prefs.bubbleStyle == style.$1,
-                          onTap: !_loaded
+                          size: OrbitsGlassSize.small,
+                          onPressed: !_loaded
                               ? null
                               : () => _save(
                                   _prefs.copyWith(bubbleStyle: style.$1)),
-                          tokens: tokens,
                         ),
                     ],
                   ),
@@ -230,10 +225,13 @@ class _ChatPrefsPageState extends State<ChatPrefsPage> {
           ),
 
           // ── Font size ────────────────────────────────────────
-          const OrbsSectionTitle('Размер шрифта'),
+          const _SectionLabel('Размер шрифта'),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbsCard(
+            child: OrbitsGlassSurface(
+              role: OrbitsGlassRole.card,
+              borderRadius: BorderRadius.circular(tokens.radiusCard),
+              padding: const EdgeInsets.all(14),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -257,49 +255,63 @@ class _ChatPrefsPageState extends State<ChatPrefsPage> {
   }
 }
 
-class _PickerChip extends StatelessWidget {
-  const _PickerChip({
+/// One toggle row inside a settings group — leading glyph, label + subtitle,
+/// and a glass switch on the trailing edge. Each row is its own glass card so
+/// the list reads as a stack of discrete Liquid-Glass plates.
+class _ToggleRow extends StatelessWidget {
+  const _ToggleRow({
+    required this.icon,
     required this.label,
-    required this.selected,
-    required this.onTap,
-    required this.tokens,
+    required this.subtitle,
+    required this.value,
+    required this.onChanged,
   });
 
+  final IconData icon;
   final String label;
-  final bool selected;
-  final VoidCallback? onTap;
-  final OrbitsTokens tokens;
+  final String subtitle;
+  final bool value;
+  final ValueChanged<bool>? onChanged;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(tokens.radiusButton),
-        child: AnimatedContainer(
-          duration: tokens.durationShort,
-          curve: tokens.easing,
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-          decoration: BoxDecoration(
-            color: selected
-                ? tokens.accentAlpha(0.18)
-                : tokens.surface.withValues(alpha: 0.4),
-            borderRadius: BorderRadius.circular(tokens.radiusButton),
-            border: Border.all(
-              color: selected ? tokens.accent : tokens.border,
-              width: selected ? 1.4 : 1,
-            ),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 13,
-              fontWeight: selected ? FontWeight.w600 : FontWeight.w500,
-              color: selected ? tokens.accent : tokens.text,
-              fontFamily: tokens.fontBody,
-            ),
-          ),
+    final tokens = OrbitsTokens.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      child: OrbitsGlassListTile(
+        onTap: onChanged == null ? null : () => onChanged!(!value),
+        leading: Icon(icon, color: tokens.muted, size: 20),
+        title: Text(label),
+        subtitle: Text(subtitle),
+        trailing: OrbitsGlassSwitch(
+          value: value,
+          onChanged: onChanged,
+          semanticLabel: label,
+        ),
+      ),
+    );
+  }
+}
+
+/// Section label above each settings group — uppercase monospace caps, muted.
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+      child: Text(
+        label.toUpperCase(),
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w600,
+          fontFamily: tokens.fontMono,
+          color: tokens.muted,
+          letterSpacing: 1.6,
         ),
       ),
     );
@@ -321,34 +333,29 @@ class _SizeButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(10),
-        child: AnimatedContainer(
-          duration: tokens.durationShort,
-          curve: tokens.easing,
-          width: 44,
-          height: 44,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: selected
-                ? tokens.accentAlpha(0.18)
-                : tokens.surface.withValues(alpha: 0.4),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: selected ? tokens.accent : tokens.border,
-              width: selected ? 1.4 : 1,
-            ),
-          ),
-          child: Text(
-            label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              color: selected ? tokens.accent : tokens.text,
-              fontFamily: tokens.fontMono,
+    final radius = BorderRadius.circular(tokens.radiusButton);
+    return OrbitsGlassSurface(
+      role: OrbitsGlassRole.button,
+      borderRadius: radius,
+      selected: selected,
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: radius,
+          child: SizedBox(
+            width: 44,
+            height: 44,
+            child: Center(
+              child: Text(
+                label,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: selected ? tokens.accent : tokens.text,
+                  fontFamily: tokens.fontMono,
+                ),
+              ),
             ),
           ),
         ),

@@ -39,11 +39,12 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io' show Platform;
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:local_auth/error_codes.dart' as auth_error;
+import 'package:local_auth/local_auth.dart';
 
 const String _kekStorageKey = 'orbits.vault.kek.v1';
 
@@ -137,6 +138,12 @@ class SecureKekVault {
     if (!isSupported) {
       return const KekRetrieveResult(status: KekRetrieveStatus.unsupported);
     }
+    // Biometric gate BEFORE touching the stored KEK. flutter_secure_storage
+    // v10 dropped its per-read prompt, so we enforce it here via local_auth.
+    final gate = await _gateBiometric();
+    if (gate != null) {
+      return KekRetrieveResult(status: gate);
+    }
     try {
       final encoded = await _storage.read(
         key: _kekStorageKey,
@@ -163,6 +170,49 @@ class SecureKekVault {
         status: KekRetrieveStatus.error,
         message: e.toString(),
       );
+    }
+  }
+
+  /// Prompt the system biometric (Face ID / Touch ID / fingerprint) before a
+  /// KEK read. Returns `null` to proceed (auth ok, or no usable biometric on
+  /// this device → degrade gracefully to no gate), or a terminal
+  /// [KekRetrieveStatus] the caller should return immediately.
+  Future<KekRetrieveStatus?> _gateBiometric() async {
+    final auth = LocalAuthentication();
+    bool available;
+    try {
+      available =
+          await auth.isDeviceSupported() && await auth.canCheckBiometrics;
+    } catch (_) {
+      available = false;
+    }
+    // No enrolled/usable biometric — don't lock the user out of their own KEK;
+    // the master-password path is still the authoritative fallback upstream.
+    if (!available) return null;
+
+    try {
+      final ok = await auth.authenticate(
+        localizedReason: 'Подтвердите личность для доступа к ключам профиля',
+        options: const AuthenticationOptions(
+          biometricOnly: true,
+          stickyAuth: true,
+        ),
+      );
+      return ok ? null : KekRetrieveStatus.cancelled;
+    } on PlatformException catch (e) {
+      if (e.code == auth_error.lockedOut ||
+          e.code == auth_error.permanentlyLockedOut) {
+        return KekRetrieveStatus.lockedOut;
+      }
+      if (e.code == auth_error.notAvailable ||
+          e.code == auth_error.notEnrolled ||
+          e.code == auth_error.passcodeNotSet) {
+        // Sensor disappeared between the probe and the prompt — degrade.
+        return null;
+      }
+      return KekRetrieveStatus.cancelled;
+    } catch (_) {
+      return KekRetrieveStatus.cancelled;
     }
   }
 

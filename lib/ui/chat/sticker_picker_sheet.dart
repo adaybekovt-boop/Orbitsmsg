@@ -24,6 +24,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import '../../core/sticker_manager.dart';
+import '../primitives/orbits_glass_button.dart';
 
 /// Shape the picker hands back to the caller. Intentionally field-for-
 /// field identical to the JS `onPick` payload so `MessagingNotifier.
@@ -135,9 +136,11 @@ class _StickerPickerSheetState extends State<StickerPickerSheet> {
                       ),
                     ),
                   ),
-                  IconButton(
+                  OrbitsGlassIconButton(
+                    icon: Icons.close,
                     tooltip: 'Закрыть',
-                    icon: const Icon(Icons.close),
+                    variant: OrbitsGlassVariant.subtle,
+                    size: OrbitsGlassSize.small,
                     onPressed: () => Navigator.of(context).pop(),
                   ),
                 ],
@@ -363,7 +366,7 @@ class _TabButton extends StatelessWidget {
     }
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 3),
-      child: Tooltip(message: tooltip!, child: btn),
+      child: Tooltip(message: tooltip, child: btn),
     );
   }
 }

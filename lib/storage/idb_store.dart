@@ -14,7 +14,6 @@ import 'dart:typed_data';
 import 'package:drift/drift.dart';
 
 import 'database.dart';
-import 'tables.dart';
 
 /// Returns the stored bytes for [key], or `null` if absent.
 Future<Uint8List?> idbGet(String key) async {
@@ -39,6 +38,14 @@ Future<void> idbSet(String key, List<int> value) async {
 Future<void> idbDel(String key) async {
   final db = orbitsDb();
   await (db.delete(db.kvTable)..where((t) => t.key.equals(key))).go();
+}
+
+/// Wipe every kv entry. Used by the full local wipe (audit H4) — the kv table
+/// holds the persisted auth token and its HMAC signing key, which must not
+/// survive a "reset profile".
+Future<void> idbClearAll() async {
+  final db = orbitsDb();
+  await db.delete(db.kvTable).go();
 }
 
 // ─── String convenience ─────────────────────────────────────────────

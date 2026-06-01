@@ -49,10 +49,49 @@ EcPoint parseP256Spki(List<int> spki) {
       );
     }
   }
-  return (
-    x: Uint8List.fromList(spki.sublist(27, 59)),
-    y: Uint8List.fromList(spki.sublist(59, 91)),
-  );
+  final x = Uint8List.fromList(spki.sublist(27, 59));
+  final y = Uint8List.fromList(spki.sublist(59, 91));
+  // Invalid-curve defence (audit M2): a strict prefix only guarantees the
+  // *encoding*, not that (X,Y) is a real point on P-256. The pure-Dart ECDH
+  // backend isn't guaranteed to reject off-curve points, so feeding a crafted
+  // point could leak the private scalar over a sequence of handshakes. Verify
+  // the point satisfies the curve equation before anyone does DH with it.
+  if (!_isOnCurveP256(x, y)) {
+    throw const FormatException(
+      'spki: point is not on the P-256 curve — possible invalid-curve attack',
+    );
+  }
+  return (x: x, y: y);
+}
+
+// ── P-256 curve parameters (FIPS 186-4 / SEC2 prime256v1) ──
+final BigInt _p256P = BigInt.parse(
+    'ffffffff00000001000000000000000000000000ffffffffffffffffffffffff',
+    radix: 16);
+final BigInt _p256B = BigInt.parse(
+    '5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b',
+    radix: 16);
+
+BigInt _bytesToBigInt(List<int> bytes) {
+  var v = BigInt.zero;
+  for (final b in bytes) {
+    v = (v << 8) | BigInt.from(b);
+  }
+  return v;
+}
+
+/// True iff (x,y) is an affine point on P-256: `y² ≡ x³ - 3x + b (mod p)`,
+/// with both coordinates in `[0, p)`. Rejects the point at infinity (0,0).
+bool _isOnCurveP256(List<int> xBytes, List<int> yBytes) {
+  final x = _bytesToBigInt(xBytes);
+  final y = _bytesToBigInt(yBytes);
+  if (x >= _p256P || y >= _p256P) return false;
+  if (x == BigInt.zero && y == BigInt.zero) return false;
+  final lhs = (y * y) % _p256P;
+  // a = p - 3, so a*x ≡ -3x (mod p). Keep everything non-negative.
+  final rhs = (x * x % _p256P * x + (_p256P - BigInt.from(3)) * x + _p256B) %
+      _p256P;
+  return lhs == rhs;
 }
 
 /// Build a 91-byte P-256 SPKI blob from raw X / Y coordinates. Both must be

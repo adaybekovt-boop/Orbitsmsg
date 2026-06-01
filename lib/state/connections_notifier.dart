@@ -33,8 +33,8 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/bundle_cache.dart';
-import '../core/wire_crypto.dart';
 import '../messaging/message_protocol.dart';
+import '../core/orbits_drop.dart' show dropMaxBufferSize;
 import '../peer/helpers.dart';
 import '../peer/packet_router.dart';
 import '../peer/peerjs_client.dart';
@@ -72,7 +72,6 @@ class _ConnBinding {
     required this.conn,
     required this.channel,
     required this.subscriptions,
-    this.connectTimer,
   });
 
   final PeerDataConnection conn;
@@ -130,6 +129,14 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// constructor — see `bindMessaging`. Stays as the no-op bridge otherwise.
   MessagingBridge _messaging = MessagingBridge.empty;
 
+  /// Orbits-Drop file-transfer callbacks, swapped in by [DropNotifier] via
+  /// [bindDrop]. No-op until then so an early file frame can't crash.
+  DropBridge _drop = DropBridge.empty;
+
+  /// Room-protocol callbacks, swapped in by [RoomManager] via [bindRoom].
+  /// No-op until then so an early `room_*` packet can't crash.
+  RoomBridge _room = RoomBridge.empty;
+
   /// Keyed by `connKey(peerId, channel)`.
   final Map<String, _ConnBinding> _bindings = {};
 
@@ -156,6 +163,16 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     _messaging = bridge;
   }
 
+  /// Register the Drop file-transfer callbacks. Called once by [DropNotifier].
+  void bindDrop(DropBridge bridge) {
+    _drop = bridge;
+  }
+
+  /// Register the room-protocol callbacks. Called once by [RoomManager].
+  void bindRoom(RoomBridge bridge) {
+    _room = bridge;
+  }
+
   // ─── Public API ────────────────────────────────────────────────
 
   /// Look up a live connection by peerId + channel. Null if never attached
@@ -178,6 +195,51 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     final conn = getConn(remoteId, 'ephemeral');
     if (conn == null) return false;
     return _wire.sendEphemeralOn(conn, remoteId, msg);
+  }
+
+  /// Whether a reliable channel to [remoteId] is open (used by Drop to gate
+  /// the peer picker / send button).
+  bool hasReliable(String remoteId) {
+    final conn = getConn(remoteId, 'reliable');
+    return conn != null && conn.open;
+  }
+
+  /// Send a raw Orbits-Drop packet on the reliable channel — a control [Map]
+  /// (JSON) or a binary chunk [Uint8List]. Bypasses the per-message ratchet by
+  /// design (chunks are framed binary, protected in transit by the DataChannel
+  /// DTLS layer). Returns false if no open reliable connection exists.
+  bool sendDrop(String remoteId, Object packet) {
+    final conn = getConn(remoteId, 'reliable');
+    if (conn == null || !conn.open) return false;
+    conn.send(packet);
+    return true;
+  }
+
+  /// Send a plaintext room-protocol control [packet] on the reliable channel.
+  /// Like [sendDrop] it bypasses the per-message ratchet by design: room
+  /// traffic is DTLS-protected in transit and must NOT go through the wire
+  /// ratchet, because the `verified`/TOFU gate on `decryptInbound` would
+  /// reject packets from guests who aren't verified contacts. Returns false if
+  /// no open reliable connection exists.
+  bool sendRoomPacket(String remoteId, Map<String, Object?> packet) {
+    final conn = getConn(remoteId, 'reliable');
+    if (conn == null || !conn.open) return false;
+    conn.send(packet);
+    return true;
+  }
+
+  /// Backpressure for Drop: resolve once the reliable channel's send buffer
+  /// drains below [dropMaxBufferSize]. No-ops when the platform doesn't report
+  /// `bufferedAmount`. Capped (~10s) so a wedged channel can't hang the loop —
+  /// the next `conn.send` will then surface the dead channel.
+  Future<void> waitForDropDrain(String remoteId) async {
+    final dc = getConn(remoteId, 'reliable')?.dataChannel;
+    if (dc == null) return;
+    for (var i = 0; i < 200; i++) {
+      final buffered = dc.bufferedAmount ?? 0;
+      if (buffered <= dropMaxBufferSize) return;
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
   }
 
   /// Proactively open the ephemeral side-channel to [targetId]. No-op if a
@@ -477,6 +539,11 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
           unawaited(db.savePeer({'id': remoteId, 'lastSeenAt': now()}));
         },
       ),
+      // Orbits-Drop file-transfer frames (binary chunks + file-* control) on
+      // the reliable channel go straight to the Drop engine.
+      dropInbound: (rid, packet) => _drop.handleInbound(rid, packet),
+      // Plaintext `room_*` control maps → RoomManager (star-topology rooms).
+      roomInbound: (rid, packet) => _room.handleInbound(rid, packet),
     );
   }
 
@@ -695,4 +762,38 @@ class MessagingBridge {
         loadPendingForPeer: (_) async {},
         applyTyping: (_, __) {},
       );
+}
+
+// ─── Drop bridge ────────────────────────────────────────────────
+
+/// Callback bag supplied by the Orbits-Drop layer ([DropNotifier]) so the
+/// connection registry can forward inbound file-transfer frames without a
+/// provider cycle. No-ops until [ConnectionsNotifier.bindDrop] is called.
+class DropBridge {
+  const DropBridge({required this.handleInbound});
+
+  /// Receives a control [Map] (`file-start`/`file-end`/`file-abort`) or a
+  /// binary chunk [Uint8List] for [remoteId].
+  final void Function(String remoteId, Object packet) handleInbound;
+
+  static DropBridge get empty => const DropBridge(handleInbound: _noop);
+  static void _noop(String _, Object __) {}
+}
+
+// ─── Room bridge ────────────────────────────────────────────────
+
+/// Callback bag supplied by [RoomManager] so the connection registry can
+/// forward inbound `room_*` control packets without a provider cycle. No-ops
+/// until [ConnectionsNotifier.bindRoom] is called.
+class RoomBridge {
+  const RoomBridge({required this.handleInbound});
+
+  /// Receives a plaintext `room_*` control map for [remoteId]. Returns a
+  /// Future so callers can await full settlement (production fires it
+  /// forget-style; the router's `roomInbound` is a `void` hook).
+  final Future<void> Function(String remoteId, Map<String, Object?> packet)
+      handleInbound;
+
+  static RoomBridge get empty => const RoomBridge(handleInbound: _noop);
+  static Future<void> _noop(String _, Map<String, Object?> __) async {}
 }

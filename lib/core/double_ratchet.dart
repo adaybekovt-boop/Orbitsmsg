@@ -93,9 +93,6 @@ Future<EcKeyPair> generateDhKeyPair() => _ecdh.newKeyPair();
 /// Export the public half of a DH key pair as 91-byte SPKI.
 Future<Uint8List> exportSpkiBytes(EcKeyPair keyPair) async {
   final pub = await keyPair.extractPublicKey();
-  if (pub is! EcPublicKey) {
-    throw StateError('ratchet: expected EcPublicKey, got ${pub.runtimeType}');
-  }
   return buildP256Spki(x: pub.x, y: pub.y);
 }
 

@@ -42,6 +42,8 @@ import 'dart:math';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'helpers.dart';
+import 'web_lock_stub.dart'
+    if (dart.library.js_interop) 'web_lock_web.dart';
 
 const int _refreshMs = 2000;
 const int _staleMs = 4500;
@@ -59,9 +61,8 @@ class _LockRecord {
 /// signaling server will reject the second one with `unavailable-id` and
 /// [onLost] will fire anyway once it loses the token race.
 class MultiTabLock {
-  MultiTabLock(String peerId, {this.onLost})
-      : peerId = peerId,
-        _lockKey = '${StorageKeys.peerLockPrefix}$peerId',
+  MultiTabLock(this.peerId, {this.onLost})
+      : _lockKey = '${StorageKeys.peerLockPrefix}$peerId',
         _token = _generateToken();
 
   /// The peerId whose slot we're guarding. Exposed for debug / logging.
@@ -76,6 +77,10 @@ class MultiTabLock {
   final String _lockKey;
   final String _token;
 
+  /// Web Locks API name (browser only). Distinct namespace from the
+  /// SharedPreferences [_lockKey] — the two mechanisms run in parallel.
+  String get _webLockName => 'orbits_peer_lock_$peerId';
+
   Timer? _refreshTimer;
   bool _lost = false;
 
@@ -86,6 +91,13 @@ class MultiTabLock {
   /// different fresh token is present — caller should surface the multitab
   /// UI state instead of connecting.
   Future<bool> acquire() async {
+    // Web Locks API first (browser): a true exclusive lock that's race-free at
+    // cold start, where two tabs launching together can both win the
+    // SharedPreferences check. On native this is a no-op that returns true.
+    // If another tab holds the exclusive lock, bail before connecting.
+    final webGranted = await acquireWebLock(_webLockName);
+    if (!webGranted) return false;
+
     final prefs = await SharedPreferences.getInstance();
     final existing = _readLock(prefs);
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -113,6 +125,9 @@ class MultiTabLock {
   Future<void> release() async {
     _refreshTimer?.cancel();
     _refreshTimer = null;
+    // Drop the browser Web Lock (no-op on native). Safe to call even if we
+    // never held it.
+    releaseWebLock(_webLockName);
     if (_lost) return;
     final prefs = await SharedPreferences.getInstance();
     final cur = _readLock(prefs);

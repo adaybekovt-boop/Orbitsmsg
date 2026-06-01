@@ -20,6 +20,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../state/chat_list_provider.dart';
 import '../themes/orbits_tokens.dart';
 import '../ui/peer/peer_status_pill.dart';
+import '../ui/primitives/adaptive_page_frame.dart';
+import '../ui/primitives/orbits_glass_button.dart';
+import '../ui/primitives/orbits_glass_list_tile.dart';
+import '../ui/primitives/orbits_glass_surface.dart';
 import '../ui/primitives/orbs_card.dart';
 import '../ui/profile/add_contact_page.dart';
 import 'chat_view_page.dart';
@@ -34,36 +38,57 @@ class ChatsPage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        flexibleSpace: const OrbitsGlassSurface(
+          role: OrbitsGlassRole.appBar,
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+          child: SizedBox.expand(),
+        ),
         title: Text(
           'Чаты',
           style: TextStyle(
             fontFamily: tokens.fontHeading,
             fontWeight: FontWeight.w600,
+            color: tokens.text,
           ),
         ),
         actions: [
-          IconButton(
+          // Servers/rooms are now a first-class nav section (ServersHomePage),
+          // no longer hidden behind a tiny icon here.
+          OrbitsGlassIconButton(
+            icon: Icons.person_add_alt_1_outlined,
             tooltip: 'Добавить контакт',
-            icon: const Icon(Icons.person_add_alt_1_outlined),
+            variant: OrbitsGlassVariant.subtle,
+            size: OrbitsGlassSize.small,
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const AddContactPage()),
               );
             },
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: 8),
         ],
       ),
-      body: chats.isEmpty
-          ? const _EmptyState()
-          : ListView.builder(
-              padding: EdgeInsets.only(
-                top: kPillReserveHeight + 4,
-                bottom: 16,
+      body: AdaptivePageFrame(
+        maxWidth: 620,
+        child: chats.isEmpty
+            ? const _EmptyState()
+            : ListView.builder(
+                padding: const EdgeInsets.only(
+                  top: kPillReserveHeight + 4,
+                  bottom: 16,
+                ),
+                itemCount: chats.length,
+                itemBuilder: (context, i) => Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  child: _ChatRow(chat: chats[i]),
+                ),
               ),
-              itemCount: chats.length,
-              itemBuilder: (context, i) => _ChatRow(chat: chats[i]),
-            ),
+      ),
     );
   }
 }
@@ -82,11 +107,11 @@ class _ChatRow extends StatelessWidget {
 
     final subtitleText = chat.isBlocked
         ? 'Вы заблокировали этого пользователя'
-        : (chat.preview.isNotEmpty ? chat.preview : chat.peerId);
-    final subtitleIsPeerId =
-        !chat.isBlocked && chat.preview.isEmpty;
+        : (chat.preview.isNotEmpty ? chat.preview : 'Нет сообщений');
+    // Never show the raw profile code as the chat subtitle — it's technical
+    // noise for a normal user (the code lives in the contact's info instead).
 
-    return OrbsTile(
+    return OrbitsGlassListTile(
       onTap: () {
         Navigator.of(context).push(
           MaterialPageRoute(
@@ -94,103 +119,69 @@ class _ChatRow extends StatelessWidget {
           ),
         );
       },
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
+      leading: OrbsAvatar(
+        fallbackInitial: initial,
+        online: chat.isOnline,
+        size: 44,
+      ),
+      title: Row(
         children: [
-          OrbsAvatar(
-            fallbackInitial: initial,
-            online: chat.isOnline,
-            size: 44,
-          ),
-          const SizedBox(width: 12),
           Expanded(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        chat.effectiveName,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: chat.unreadCount > 0
-                              ? FontWeight.w700
-                              : FontWeight.w600,
-                          color: chat.isBlocked
-                              ? tokens.text.withValues(alpha: 0.55)
-                              : tokens.text,
-                          fontFamily: tokens.fontHeading,
-                        ),
-                      ),
-                    ),
-                    if (chat.lastMessageAt > 0) ...[
-                      const SizedBox(width: 8),
-                      Text(
-                        _formatChatListTime(chat.lastMessageAt),
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontFamily: tokens.fontMono,
-                          color: chat.unreadCount > 0
-                              ? tokens.accent
-                              : tokens.muted,
-                          fontWeight: chat.unreadCount > 0
-                              ? FontWeight.w600
-                              : FontWeight.w500,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        subtitleText,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontFamily: subtitleIsPeerId
-                              ? tokens.fontMono
-                              : tokens.fontBody,
-                          color: chat.isBlocked
-                              ? tokens.danger.withValues(alpha: 0.85)
-                              : (chat.unreadCount > 0
-                                  ? tokens.text
-                                  : tokens.muted),
-                          fontWeight: chat.unreadCount > 0
-                              ? FontWeight.w500
-                              : FontWeight.w400,
-                          fontFeatures: subtitleIsPeerId
-                              ? const [FontFeature.tabularFigures()]
-                              : null,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    SizedBox(
-                      width: 28,
-                      child: Align(
-                        alignment: Alignment.centerRight,
-                        child: chat.isBlocked
-                            ? Icon(Icons.block,
-                                size: 16, color: tokens.danger)
-                            : (chat.unreadCount > 0
-                                ? _UnreadBadge(count: chat.unreadCount)
-                                : _TrustBadge(trust: chat.trust)),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
+            child: Text(
+              chat.effectiveName,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight:
+                    chat.unreadCount > 0 ? FontWeight.w700 : FontWeight.w600,
+                color: chat.isBlocked
+                    ? tokens.text.withValues(alpha: 0.55)
+                    : tokens.text,
+                fontFamily: tokens.fontHeading,
+              ),
             ),
           ),
+          if (chat.lastMessageAt > 0) ...[
+            const SizedBox(width: 8),
+            Text(
+              _formatChatListTime(chat.lastMessageAt),
+              style: TextStyle(
+                fontSize: 11,
+                // Warm body font for the timestamp — mono is reserved for
+                // profile codes + safety fingerprints, not everyday clocks.
+                fontFamily: tokens.fontBody,
+                color: chat.unreadCount > 0 ? tokens.accent : tokens.muted,
+                fontWeight:
+                    chat.unreadCount > 0 ? FontWeight.w600 : FontWeight.w500,
+              ),
+            ),
+          ],
         ],
+      ),
+      subtitle: Text(
+        subtitleText,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontSize: 13,
+          fontFamily: tokens.fontBody,
+          color: chat.isBlocked
+              ? tokens.danger.withValues(alpha: 0.85)
+              : (chat.unreadCount > 0 ? tokens.text : tokens.muted),
+          fontWeight: chat.unreadCount > 0 ? FontWeight.w500 : FontWeight.w400,
+        ),
+      ),
+      trailing: SizedBox(
+        width: 28,
+        child: Align(
+          alignment: Alignment.centerRight,
+          child: chat.isBlocked
+              ? Icon(Icons.block, size: 16, color: tokens.danger)
+              : (chat.unreadCount > 0
+                  ? _UnreadBadge(count: chat.unreadCount)
+                  : _TrustBadge(trust: chat.trust)),
+        ),
       ),
     );
   }
@@ -271,12 +262,18 @@ class _TrustBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
     return switch (trust) {
-      ChatTrust.verified =>
-        Icon(Icons.verified, size: 16, color: tokens.success),
-      ChatTrust.tofu =>
-        Icon(Icons.lock_outline, size: 16, color: tokens.muted),
-      ChatTrust.unknown =>
-        Icon(Icons.help_outline, size: 16, color: tokens.accent2),
+      ChatTrust.verified => Tooltip(
+          message: 'Проверен',
+          child: Icon(Icons.verified, size: 16, color: tokens.success),
+        ),
+      ChatTrust.tofu => Tooltip(
+          message: 'Защищён',
+          child: Icon(Icons.lock_outline, size: 16, color: tokens.muted),
+        ),
+      ChatTrust.unknown => Tooltip(
+          message: 'Нужно проверить',
+          child: Icon(Icons.help_outline, size: 16, color: tokens.accent2),
+        ),
     };
   }
 }
@@ -309,7 +306,7 @@ class _EmptyState extends StatelessWidget {
             ),
             const SizedBox(height: 20),
             Text(
-              'Пока никого',
+              'Пока нет чатов',
               style: TextStyle(
                 fontSize: 20,
                 fontWeight: FontWeight.w600,
@@ -321,8 +318,8 @@ class _EmptyState extends StatelessWidget {
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 320),
               child: Text(
-                'Добавь собеседника через его Peer ID или QR-код, '
-                'чтобы начать зашифрованную переписку.',
+                'Добавь человека по коду или QR, '
+                'чтобы начать защищённую переписку.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: tokens.muted,
@@ -333,7 +330,11 @@ class _EmptyState extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 24),
-            FilledButton.icon(
+            OrbitsGlassButton(
+              label: 'Добавить контакт',
+              icon: Icons.person_add_alt_1,
+              variant: OrbitsGlassVariant.primary,
+              size: OrbitsGlassSize.large,
               onPressed: () {
                 Navigator.of(context).push(
                   MaterialPageRoute(
@@ -341,8 +342,6 @@ class _EmptyState extends StatelessWidget {
                   ),
                 );
               },
-              icon: const Icon(Icons.person_add_alt_1, size: 18),
-              label: const Text('Добавить контакт'),
             ),
           ],
         ),

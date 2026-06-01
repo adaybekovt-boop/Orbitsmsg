@@ -13,9 +13,21 @@ import 'identity_key.dart' as identity_key;
 import 'key_store.dart';
 
 const String _pinPrefix = 'peer-pin-';
+const String _fpPrefix = 'peer-fp-';
 const String _keysTable = 'keys';
 
 String _rowKey(String peerId) => '$_pinPrefix$peerId';
+String _fpRowKey(String fingerprint) => '$_fpPrefix$fingerprint';
+
+/// Which peerId (if any) already has [fingerprint] pinned. Powers the
+/// src⇄fingerprint binding invariant (audit finding 9): one identity key must
+/// not be pinned under two different transport ids.
+Future<String?> peerIdForFingerprint(String fingerprint) async {
+  if (fingerprint.isEmpty) return null;
+  final row = await keyStore().get(_keysTable, _fpRowKey(fingerprint));
+  final pid = row?['peerId'];
+  return pid is String && pid.isNotEmpty ? pid : null;
+}
 
 /// Stored pin snapshot. [pinnedAt] is a unix epoch ms.
 class PeerPin {
@@ -60,18 +72,33 @@ Future<({String fingerprint})> setPin(
     'fingerprint': fingerprint,
     'pinnedAt': DateTime.now().millisecondsSinceEpoch,
   });
+  // Reverse index (fingerprint → peerId) for the src⇄fingerprint invariant.
+  await keyStore().put(_keysTable, {
+    'id': _fpRowKey(fingerprint),
+    'peerId': peerId,
+    'fingerprint': fingerprint,
+  });
   return (fingerprint: fingerprint);
 }
 
 Future<bool> deletePin(String peerId) async {
   if (peerId.isEmpty) return false;
+  final existing = await getPin(peerId);
   await keyStore().delete(_keysTable, _rowKey(peerId));
+  // Clean the reverse-index row too, but only if it still points at us (don't
+  // clobber a row another peerId owns).
+  if (existing != null && existing.fingerprint.isNotEmpty) {
+    final owner = await peerIdForFingerprint(existing.fingerprint);
+    if (owner == peerId) {
+      await keyStore().delete(_keysTable, _fpRowKey(existing.fingerprint));
+    }
+  }
   return true;
 }
 
 /// Pin-check outcome. The JS side uses string literals — we keep the same
 /// vocabulary so UI code can port one-to-one.
-enum PinStatus { pinned, newPin, mismatch }
+enum PinStatus { pinned, newPin, mismatch, crossBound }
 
 class PinCheck {
   const PinCheck({required this.status, required this.fingerprint, this.expected});
@@ -85,6 +112,19 @@ Future<PinCheck> checkPin(String peerId, List<int> remoteSpkiBytes) async {
   final incoming = await identity_key.computeFingerprint(remoteSpkiBytes);
   final pin = await getPin(peerId);
   if (pin == null || pin.fingerprint.isEmpty) {
+    // No pin for THIS peerId yet. But if this exact identity key is already
+    // pinned under a DIFFERENT peerId, that's a relay-impersonation / key-reuse
+    // signal (audit finding 9) — refuse instead of silently TOFU-pinning a
+    // second transport persona onto one identity. `expected` carries the other
+    // peerId so callers can explain the conflict.
+    final owner = await peerIdForFingerprint(incoming);
+    if (owner != null && owner != peerId) {
+      return PinCheck(
+        status: PinStatus.crossBound,
+        fingerprint: incoming,
+        expected: owner,
+      );
+    }
     return PinCheck(status: PinStatus.newPin, fingerprint: incoming);
   }
   if (pin.fingerprint == incoming) {

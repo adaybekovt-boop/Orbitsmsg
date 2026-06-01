@@ -112,6 +112,8 @@ String _pinStatusName(PinStatus s) {
       return 'new';
     case PinStatus.mismatch:
       return 'mismatch';
+    case PinStatus.crossBound:
+      return 'crossBound';
   }
 }
 
@@ -156,11 +158,13 @@ Future<AcceptBundleResult> acceptIncomingBundle({
   }
 
   final pin = await checkPin(senderPeerId, bundle.identitySpki);
-  if (pin.status == PinStatus.mismatch) {
+  if (pin.status == PinStatus.mismatch || pin.status == PinStatus.crossBound) {
     return AcceptBundleResult(
       ok: false,
-      status: 'mismatch',
-      reason: 'identity fingerprint mismatch',
+      status: _pinStatusName(pin.status),
+      reason: pin.status == PinStatus.crossBound
+          ? 'identity key already bound to a different peer'
+          : 'identity fingerprint mismatch',
       pinStatus: pin,
     );
   }

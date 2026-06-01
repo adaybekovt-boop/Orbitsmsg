@@ -18,12 +18,14 @@
 // change without bumping the record version, or every user gets locked out.
 //
 // IMPORTANT: scrypt is CPU-heavy (~400–800 ms on a mobile device at N=2^16).
-// Callers should run it via `Isolate.run` so the UI thread stays responsive.
-// This module stays synchronous-looking by returning a Future; the actual
-// heavy lifting happens inside `_scrypt` which is safe to dispatch to an
-// isolate by the caller.
+// To keep the UI thread responsive (audit L10) the heavy derivation is
+// dispatched to a one-shot background isolate via `Isolate.run` inside
+// `_scrypt` (see `_scryptCompute`). The pointycastle KDF is pure Dart, so it's
+// isolate-safe — no platform channels involved. On web (no isolates) it runs
+// inline. Callers just `await` `deriveScryptRecord` / `verifyScryptRecordEx`.
 
 import 'dart:convert';
+import 'dart:isolate';
 import 'dart:math';
 import 'dart:typed_data';
 
@@ -31,6 +33,11 @@ import 'package:cryptography/cryptography.dart';
 import 'package:pointycastle/export.dart' as pc;
 
 import 'base64_helpers.dart';
+
+/// Pure-Dart web check (no flutter dependency): on web `int` and `double` are
+/// the same runtime type, so `0` and `0.0` are identical. Used to skip
+/// `Isolate.run`, which is unsupported under dart2js/dart2wasm.
+const bool _kIsWeb = identical(0, 0.0);
 
 const String verifierTag = 'orbits-scrypt-verifier-v2';
 const String _keyMaterialSuffix = 'ORBITS_P2P';
@@ -41,6 +48,20 @@ const int scryptDefaultN = 65536; // 2^16
 const int scryptDefaultR = 8;
 const int scryptDefaultP = 1;
 const int scryptDefaultDkLen = 32;
+
+/// Web-only cost floor. The browser has no isolates, so scrypt runs on the
+/// single UI thread (see [_scrypt]); at N=2^16 that blocks the page for many
+/// seconds — the "frozen onboarding" symptom. Web therefore derives at a
+/// lighter but still meaningful work factor. This is safe to vary per device
+/// because the record stores its own N, so [verifyScryptRecordEx] always uses
+/// the value the account was created with — native builds keep the full 2^16
+/// (offloaded to a background isolate, UI stays responsive). Revisit once
+/// scrypt runs in a real Web Worker, at which point web can return to 2^16.
+const int scryptWebN = 16384; // 2^14
+
+/// Platform-appropriate default N: lighter on web (main-thread), full on native
+/// (background isolate).
+int platformDefaultScryptN() => _kIsWeb ? scryptWebN : scryptDefaultN;
 
 final _secureRandom = Random.secure();
 
@@ -57,6 +78,20 @@ Uint8List _keyMaterial(String username, String password) {
   return Uint8List.fromList(utf8.encode('$u:$password:$_keyMaterialSuffix'));
 }
 
+/// Arguments bundle for [_scryptCompute] — a record so the whole thing can be
+/// captured by the [Isolate.run] closure as a single sendable value.
+typedef _ScryptArgs = (Uint8List password, Uint8List salt, int n, int r, int p,
+    int dkLen);
+
+/// The heavy lifting — pure-Dart (pointycastle), no platform channels, so it's
+/// safe to run inside a background isolate. Synchronous by nature.
+Uint8List _scryptCompute(_ScryptArgs a) {
+  final (password, salt, n, r, p, dkLen) = a;
+  final derivator = pc.Scrypt()
+    ..init(pc.ScryptParameters(n, r, p, dkLen, salt));
+  return derivator.process(password);
+}
+
 Future<Uint8List> _scrypt({
   required Uint8List password,
   required Uint8List salt,
@@ -65,9 +100,13 @@ Future<Uint8List> _scrypt({
   required int p,
   required int dkLen,
 }) async {
-  final derivator = pc.Scrypt()
-    ..init(pc.ScryptParameters(n, r, p, dkLen, salt));
-  return derivator.process(password);
+  final args = (password, salt, n, r, p, dkLen);
+  // scrypt at N=2^16 blocks its thread for ~400–800 ms on mobile. Dispatch it
+  // to a one-shot background isolate so the UI thread stays responsive (audit
+  // L10). On web there are no isolates (`Isolate.run` is unsupported), so run
+  // inline — the browser build already offloads heavy work differently.
+  if (_kIsWeb) return _scryptCompute(args);
+  return Isolate.run(() => _scryptCompute(args));
 }
 
 Future<Uint8List> _computeVerifier(List<int> dk) async {
@@ -144,7 +183,7 @@ Future<ScryptRecord> deriveScryptRecord({
   ScryptParams? params,
 }) async {
   final salt = _randomBytes(16);
-  final n = max(8192, params?.n ?? scryptDefaultN);
+  final n = max(8192, params?.n ?? platformDefaultScryptN());
   final r = max(8, params?.r ?? scryptDefaultR);
   final p = max(1, params?.p ?? scryptDefaultP);
   final dkLen = max(32, params?.dkLen ?? scryptDefaultDkLen);
@@ -224,7 +263,7 @@ Future<ScryptVerifyResult> verifyScryptRecordEx({
   required String password,
   required ScryptStoredRecord record,
 }) async {
-  final miss = (ok: false, dkBytes: null);
+  const miss = (ok: false, dkBytes: null);
   final salt = base64ToBytes(record.saltB64);
   final dk = await _scrypt(
     password: _keyMaterial(username, password),

@@ -2,6 +2,12 @@
 // `file_tile.dart`. Builds a `Blob`, turns it into an object URL, spawns
 // a hidden `<a download>` link, clicks it, and revokes the URL on the
 // next microtask so the browser can release the underlying bytes.
+//
+// ignore_for_file: deprecated_member_use, avoid_web_libraries_in_flutter
+// Web-only DOM interop. `dart:html` is deprecated in favour of package:web +
+// dart:js_interop, but migrating this download path is a behaviour-critical
+// rewrite (Blob/object-URL/anchor-click) with no functional gain and can't be
+// runtime-verified in this environment — deferred to a dedicated follow-up.
 import 'dart:html' as html;
 import 'dart:typed_data';
 

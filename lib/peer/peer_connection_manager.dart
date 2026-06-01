@@ -66,6 +66,12 @@ class PeerConnectionManager {
   Timer? _reconnectTimer;
   int reconnectAttempt = 0;
   int networkErrStreak = 0;
+
+  /// How many times we've rotated the signaling host without a successful
+  /// connect since the last OPEN. Drives the explicit "all hosts unreachable"
+  /// signal (audit finding 5) so we don't loop the same 3 public relays
+  /// silently forever. Reset to 0 on a successful OPEN.
+  int _hostRotationCount = 0;
   int _lastNetworkErrAt = 0;
   bool _hasEverConnected = false;
   int _signalNoiseStreak = 0;
@@ -74,6 +80,14 @@ class PeerConnectionManager {
   bool _swapping = false;
   List<StreamSubscription<dynamic>>? _subs;
   final Random _jitter = Random.secure();
+
+  // ── Swap throttle (audit M5) ──
+  // `swapPeerId` tears down the whole client+socket and rebuilds it. An
+  // `unavailable-id` flap combined with host rotation could otherwise spin a
+  // tight destroy/recreate loop against the public relay. Cap swaps per window.
+  static const int _maxSwapsPerWindow = 6;
+  static const int _swapWindowMs = 30000;
+  final List<int> _swapTimes = <int>[];
 
   PeerConnectionManager({
     required String desiredPeerId,
@@ -161,6 +175,16 @@ class PeerConnectionManager {
   Future<void> swapPeerId(String nextId) async {
     if (_swapping) return;
     if (isDropInProgress) return;
+    // Rate-limit full client rebuilds. If we've swapped too often recently,
+    // skip this one and fall back to a backed-off plain reconnect so a flapping
+    // id/host can't drive a reconnect storm (audit M5).
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _swapTimes.removeWhere((t) => now - t > _swapWindowMs);
+    if (_swapTimes.length >= _maxSwapsPerWindow) {
+      _scheduleReconnect('error');
+      return;
+    }
+    _swapTimes.add(now);
     _swapping = true;
     try {
       final old = peer;
@@ -267,6 +291,7 @@ class PeerConnectionManager {
     reconnectAttempt = 0;
     networkErrStreak = 0;
     _lastNetworkErrAt = 0;
+    _hostRotationCount = 0;
     _hasEverConnected = true;
     _signalNoiseStreak = 0;
     _signalNoiseClearTimer?.cancel();
@@ -285,7 +310,12 @@ class PeerConnectionManager {
       _reconnectTimer?.cancel();
       final attempt = reconnectAttempt;
       reconnectAttempt = (attempt + 1).clamp(0, 15);
-      final delay = attempt < 8 ? 1500 + _jitter.nextInt(1000) : 5000;
+      // Keep the first few retries fast (F5 / zombie-id recovery: the server
+      // may still briefly hold the old id), then fall back to exponential
+      // backoff so we don't hammer the public relay (audit M5).
+      final delay = attempt < 3
+          ? 1500 + _jitter.nextInt(1000)
+          : computeBackoffMs(attempt - 3, base: 2000, maxMs: 30000);
       cb.setStatus?.call('connecting');
       if (attempt < 8) {
         cb.setError?.call(null);
@@ -340,6 +370,18 @@ class PeerConnectionManager {
           networkErrStreak >= 2) {
         networkErrStreak = 0;
         signalingIndex = (signalingIndex + 1) % hosts.length;
+        _hostRotationCount += 1;
+        if (_hostRotationCount >= hosts.length * 2) {
+          // Cycled through every signaling host ≥2× with no successful
+          // connect — surface an explicit "all servers unreachable" signal
+          // instead of looping the same hosts silently (audit finding 5).
+          // Reconnect/backoff still continues underneath.
+          cb.setError?.call(
+            'Не удаётся подключиться ни к одному серверу связи. '
+            'Проверьте интернет или настройте свой сервер.',
+          );
+          _hostRotationCount = 0; // re-warn once per full re-cycle, not per hop
+        }
         final nextHost = hosts[signalingIndex];
         cb.setSignalingHost?.call(nextHost);
         cb.setStatus?.call('connecting');

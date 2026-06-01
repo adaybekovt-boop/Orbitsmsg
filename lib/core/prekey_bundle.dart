@@ -145,7 +145,7 @@ PrekeyBundle parseBundle(Map<String, Object?> wire) {
   final v = wire['v'];
   final vNum = v is num ? v.toInt() : int.tryParse('$v');
   if (vNum != bundleVersion) {
-    throw FormatException('bundle: unsupported version');
+    throw const FormatException('bundle: unsupported version');
   }
   final peerId = wire['peerId'];
   if (peerId is! String || peerId.isEmpty) {

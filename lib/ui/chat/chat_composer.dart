@@ -27,6 +27,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../themes/orbits_tokens.dart';
+import '../primitives/orbits_glass_button.dart';
+import '../primitives/orbits_glass_surface.dart';
+
 /// Callback bag injected by the owning page. The composer doesn't read
 /// Riverpod directly so it stays trivially reusable (e.g. for a future
 /// split-view tablet layout where two composers live side-by-side).
@@ -173,137 +177,135 @@ class _ChatComposerState extends State<ChatComposer> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
+    final t = OrbitsTokens.of(context);
     final stickerEnabled = widget.actions.onOpenStickerPicker != null;
     final attachEnabled = widget.actions.onPickAttachment != null;
     final voiceEnabled = widget.actions.onRecordVoice != null;
     return SafeArea(
       top: false,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(8, 6, 8, 8),
-        decoration: BoxDecoration(
-          color: scheme.surface,
-          border: Border(
-            top: BorderSide(
-              color: scheme.outlineVariant.withValues(alpha: 0.4),
-            ),
-          ),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // ── Reply preview pill ────────────────────────────────
-            if (widget.replyPreview != null)
-              Padding(
-                padding: const EdgeInsets.fromLTRB(4, 0, 4, 6),
-                child: _ReplyPreviewRow(preview: widget.replyPreview!),
-              ),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
+        // The composer is the chat's primary glass element: one real-blur-
+        // capable chrome surface (role `appBar` → real blur on Impeller
+        // platforms, painted glass on web/Windows). The input field and the
+        // icon buttons inside are painted (no nested BackdropFilter).
+        child: OrbitsGlassSurface(
+          role: OrbitsGlassRole.appBar,
+          borderRadius: BorderRadius.circular(t.radiusModal),
+          padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // ── Reply preview pill ────────────────────────────────
+              if (widget.replyPreview != null)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(2, 0, 2, 6),
+                  child: _ReplyPreviewRow(preview: widget.replyPreview!),
+                ),
 
-            // ── Input row ────────────────────────────────────────
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                // Paperclip — pops the native file picker via the
-                // page-owned handler. Disabled → grey stub, same as
-                // sticker button below.
-                IconButton(
-                  icon: const Icon(Icons.attach_file),
-                  color: attachEnabled
-                      ? scheme.onSurface.withValues(alpha: 0.9)
-                      : scheme.onSurface.withValues(alpha: 0.4),
-                  tooltip: attachEnabled ? 'Файл' : 'Файл (скоро)',
-                  onPressed:
-                      attachEnabled ? widget.actions.onPickAttachment : null,
-                ),
-                IconButton(
-                  icon: const Icon(Icons.emoji_emotions_outlined),
-                  color: stickerEnabled
-                      ? scheme.onSurface.withValues(alpha: 0.9)
-                      : scheme.onSurface.withValues(alpha: 0.4),
-                  tooltip: stickerEnabled ? 'Стикеры' : 'Стикеры (скоро)',
-                  onPressed: stickerEnabled
-                      ? widget.actions.onOpenStickerPicker
-                      : null,
-                ),
-                Expanded(
-                  child: ConstrainedBox(
-                    // Composer grows up to ~6 lines, then internal scroll —
-                    // same ceiling the web build uses. Prevents a runaway
-                    // multiline message from pushing the send button off-
-                    // screen.
-                    constraints: const BoxConstraints(maxHeight: 140),
-                    child: TextField(
-                      controller: _ctl,
-                      focusNode: _focus,
-                      minLines: 1,
-                      maxLines: null,
-                      keyboardType: TextInputType.multiline,
-                      textInputAction: TextInputAction.newline,
-                      inputFormatters: [
-                        // Matches the JS 32 KiB cap (`_maxTextLen` in
-                        // messaging_notifier.dart). Cheap guard; the
-                        // notifier still validates server-side.
-                        LengthLimitingTextInputFormatter(32 * 1024),
-                      ],
-                      decoration: InputDecoration(
-                        hintText: 'Сообщение',
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 10,
+              // ── Input row ────────────────────────────────────────
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  OrbitsGlassIconButton(
+                    icon: Icons.attach_file,
+                    tooltip: attachEnabled ? 'Файл' : 'Файл (скоро)',
+                    variant: OrbitsGlassVariant.subtle,
+                    enabled: attachEnabled,
+                    onPressed: widget.actions.onPickAttachment,
+                  ),
+                  const SizedBox(width: 2),
+                  OrbitsGlassIconButton(
+                    icon: Icons.emoji_emotions_outlined,
+                    tooltip: stickerEnabled ? 'Стикеры' : 'Стикеры (скоро)',
+                    variant: OrbitsGlassVariant.subtle,
+                    enabled: stickerEnabled,
+                    onPressed: widget.actions.onOpenStickerPicker,
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: ConstrainedBox(
+                      // Grows up to ~6 lines, then internal scroll — keeps the
+                      // send button from being pushed off-screen.
+                      constraints: const BoxConstraints(maxHeight: 140),
+                      child: TextField(
+                        controller: _ctl,
+                        focusNode: _focus,
+                        minLines: 1,
+                        maxLines: null,
+                        keyboardType: TextInputType.multiline,
+                        textInputAction: TextInputAction.newline,
+                        style: TextStyle(
+                          fontFamily: t.fontBody,
+                          fontSize: 15,
+                          color: t.text,
                         ),
-                        filled: true,
-                        fillColor: scheme.surfaceContainerHighest,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(22),
-                          borderSide: BorderSide.none,
+                        inputFormatters: [
+                          // Matches the JS 32 KiB cap (`_maxTextLen`).
+                          LengthLimitingTextInputFormatter(32 * 1024),
+                        ],
+                        decoration: InputDecoration(
+                          hintText: 'Сообщение',
+                          hintStyle:
+                              TextStyle(color: t.muted, fontFamily: t.fontBody),
+                          isDense: true,
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 14,
+                            vertical: 11,
+                          ),
+                          filled: true,
+                          fillColor: t.surface.withValues(alpha: 0.55),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            borderSide: BorderSide(color: t.border),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            borderSide: BorderSide(color: t.border),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(20),
+                            borderSide: BorderSide(color: t.accent, width: 1.4),
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 4),
-                // Send (paper plane) on a draft with text; mic on an
-                // empty draft — matches the JS peer's composer and
-                // keeps the button count stable. If the host disabled
-                // voice (`onRecordVoice == null`) we still show send
-                // but faded, same as before.
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 120),
-                  transitionBuilder: (child, anim) => FadeTransition(
-                    opacity: anim,
-                    child: ScaleTransition(
-                      scale: Tween<double>(begin: 0.85, end: 1.0)
-                          .animate(anim),
-                      child: child,
+                  const SizedBox(width: 6),
+                  // Send on a draft with text; mic on an empty draft — keeps
+                  // the button count stable. Expressive (primary glass) but
+                  // restrained by the monochrome accent.
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 120),
+                    transitionBuilder: (child, anim) => FadeTransition(
+                      opacity: anim,
+                      child: ScaleTransition(
+                        scale: Tween<double>(begin: 0.85, end: 1.0)
+                            .animate(anim),
+                        child: child,
+                      ),
                     ),
+                    child: (_hasText || !voiceEnabled)
+                        ? OrbitsGlassIconButton(
+                            key: const ValueKey('send'),
+                            icon: Icons.send,
+                            tooltip: 'Отправить',
+                            variant: OrbitsGlassVariant.primary,
+                            enabled: _hasText,
+                            onPressed: _hasText ? _handleSend : null,
+                          )
+                        : OrbitsGlassIconButton(
+                            key: const ValueKey('mic'),
+                            icon: Icons.mic,
+                            tooltip: 'Голосовое сообщение',
+                            variant: OrbitsGlassVariant.primary,
+                            onPressed: widget.actions.onRecordVoice,
+                          ),
                   ),
-                  child: (_hasText || !voiceEnabled)
-                      ? IconButton.filled(
-                          key: const ValueKey('send'),
-                          onPressed: _hasText ? _handleSend : null,
-                          icon: const Icon(Icons.send),
-                          style: IconButton.styleFrom(
-                            backgroundColor: _hasText
-                                ? scheme.primary
-                                : scheme.primary.withValues(alpha: 0.45),
-                            foregroundColor: scheme.onPrimary,
-                          ),
-                        )
-                      : IconButton.filled(
-                          key: const ValueKey('mic'),
-                          onPressed: widget.actions.onRecordVoice,
-                          icon: const Icon(Icons.mic),
-                          tooltip: 'Голосовое сообщение',
-                          style: IconButton.styleFrom(
-                            backgroundColor: scheme.primary,
-                            foregroundColor: scheme.onPrimary,
-                          ),
-                        ),
-                ),
-              ],
-            ),
-          ],
+                ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -316,16 +318,11 @@ class _ReplyPreviewRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Container(
+    final t = OrbitsTokens.of(context);
+    return OrbitsGlassSurface(
+      role: OrbitsGlassRole.card,
+      borderRadius: BorderRadius.circular(12),
       padding: const EdgeInsets.fromLTRB(10, 6, 4, 6),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest.withValues(alpha: 0.6),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(
-          color: scheme.outlineVariant.withValues(alpha: 0.5),
-        ),
-      ),
       child: Row(
         children: [
           Container(
@@ -333,7 +330,7 @@ class _ReplyPreviewRow extends StatelessWidget {
             height: 32,
             margin: const EdgeInsets.only(right: 8),
             decoration: BoxDecoration(
-              color: scheme.primary,
+              color: t.accent,
               borderRadius: BorderRadius.circular(2),
             ),
           ),
@@ -353,7 +350,7 @@ class _ReplyPreviewRow extends StatelessWidget {
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w700,
-                    color: scheme.primary,
+                    color: t.text,
                   ),
                 ),
                 const SizedBox(height: 2),
@@ -363,15 +360,17 @@ class _ReplyPreviewRow extends StatelessWidget {
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 12,
-                    color: scheme.onSurface.withValues(alpha: 0.7),
+                    color: t.muted,
                   ),
                 ),
               ],
             ),
           ),
-          IconButton(
+          OrbitsGlassIconButton(
+            icon: Icons.close,
             tooltip: 'Отменить ответ',
-            icon: const Icon(Icons.close, size: 18),
+            variant: OrbitsGlassVariant.subtle,
+            size: OrbitsGlassSize.small,
             onPressed: preview.onCancel,
           ),
         ],

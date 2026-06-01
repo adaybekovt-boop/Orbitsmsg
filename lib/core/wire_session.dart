@@ -176,17 +176,32 @@ Future<Map<String, Uint8List>> _deserializeSkipped(Object? raw) async {
 Future<void> _saveRatchetSnapshot(_Session session) async {
   final state = session.state;
   if (state == null) return;
+
+  // Never write ratchet secrets in the clear (audit M1). If the vault is
+  // locked we have no KEK to wrap them, so defer the write entirely rather
+  // than persisting an `encVersion: 0` plaintext snapshot. The live session
+  // is unaffected; forward secrecy may only degrade across a restart that
+  // happened to race a lock — an acceptable trade vs. plaintext on disk.
+  if (!hasVaultKek()) {
+    assert(() {
+      // ignore: avoid_print
+      print('[wireSession] skipping ratchet persist for ${session.peerId} — '
+          'vault locked, would write plaintext');
+      return true;
+    }());
+    return;
+  }
+
   final dhPriv = Uint8List.fromList(
     // cryptography 2.9 EcKeyPair path — scalar lives on extracted data.
     (await state.dhKeyPair.extract()).d,
   );
 
-  final shouldWrap = hasVaultKek();
   final snapshot = <String, Object?>{
     'id': _ratchetRowKey(session.peerId),
     'peerId': session.peerId,
     'role': session.role,
-    'encVersion': shouldWrap ? 1 : 0,
+    'encVersion': 1,
     'rootKey': await _maybeWrap(state.rootKey),
     'sendCk': await _maybeWrap(state.sendCk),
     'recvCk': await _maybeWrap(state.recvCk),
@@ -421,6 +436,17 @@ Future<_HelloVerifyResult> _verifySignedHello({
   }
 
   final pin = await checkPin(senderPeerId, idSpki);
+  if (pin.status == PinStatus.crossBound) {
+    // The same identity key is already pinned under a different peer code —
+    // a relay can't forge a signed hello, so this means one identity is being
+    // presented under two transport personas (impersonation / key reuse).
+    // Fail closed (audit finding 9). `pin.expected` holds the other peer code.
+    throw StateError(
+      'Peer $senderPeerId presents an identity key already pinned under a '
+      'different code (${pin.expected ?? "?"}) — refusing (possible relay '
+      'impersonation).',
+    );
+  }
   if (pin.status == PinStatus.mismatch) {
     final expected = (pin.expected ?? '');
     final expectedShort = expected.length < 16 ? expected : expected.substring(0, 16);
@@ -505,10 +531,18 @@ class AcceptHelloResult {
     required this.verified,
     this.reply,
     this.fingerprint,
+    this.firstContact = false,
   });
   final bool verified;
   final Map<String, Object?>? reply;
   final String? fingerprint;
+
+  /// True when this hello pinned the peer's identity for the *first* time
+  /// (TOFU `newPin`). The pin is trusted-on-first-use, so a MITM present at
+  /// first contact would be pinned silently — callers should surface an
+  /// "unverified, compare safety numbers out-of-band" state and must NOT
+  /// auto-promote the peer past TOFU trust until the user confirms (audit H1).
+  final bool firstContact;
 }
 
 /// Process an incoming wireHello (or wireRekey). Verifies the signature
@@ -519,8 +553,10 @@ Future<AcceptHelloResult> acceptHello({
   required String myPeerId,
   required Map<String, Object?> hello,
 }) async {
-  final session = _getOrCreateSession(peerId);
-
+  // NB: don't allocate a session before the hello passes validation. A
+  // rejected hello (missing pub, downgrade, bad signature) must not leave a
+  // half-initialised _Session — its readyCompleter would dangle with no
+  // listener. Session creation is deferred to just before its first use.
   final pubB64 = hello['pub'];
   if (pubB64 is! String || pubB64.isEmpty) {
     throw StateError('Hello missing pub');
@@ -529,6 +565,31 @@ Future<AcceptHelloResult> acceptHello({
   final helloVer = helloVerRaw is num ? helloVerRaw.toInt() : 0;
   final protocolVersion = helloVer >= 4 ? 4 : (helloVer >= 3 ? 3 : 2);
   final remoteDhSpki = base64ToBytes(pubB64);
+
+  // ── Downgrade protection (C1) ──
+  // Refuse to complete a handshake below the configured floor. An unsigned
+  // v2 hello carries no identity key, so the signature check and TOFU pin
+  // below are skipped entirely — a MITM on the untrusted relay can send
+  // `v: 2` to strip authentication. The default floor (v3) rejects this.
+  final minVer = minProtocolVersion();
+  if (protocolVersion < minVer) {
+    throw StateError(
+      'Refusing wireHello protocol v$protocolVersion from $peerId '
+      '(minimum is v$minVer) — possible downgrade attack',
+    );
+  }
+  // Belt-and-suspenders for the legacy escape hatch: even when v2 is allowed,
+  // never let a peer we have already pinned (which required a verified v3+
+  // handshake) be silently downgraded to an unsigned hello.
+  if (protocolVersion < 3) {
+    final existingPin = await getPin(peerId);
+    if (existingPin != null && existingPin.fingerprint.isNotEmpty) {
+      throw StateError(
+        'Refusing v2 downgrade for already-pinned peer $peerId — '
+        'possible MITM',
+      );
+    }
+  }
 
   // Decode v4 fields up front — used both for signature verification and for
   // the responder X3DH replay below.
@@ -558,6 +619,7 @@ Future<AcceptHelloResult> acceptHello({
   }
 
   bool verified = false;
+  bool firstContact = false;
   Uint8List? remoteIdSpki;
   String? remoteFingerprint;
   if (protocolVersion >= 3) {
@@ -569,9 +631,13 @@ Future<AcceptHelloResult> acceptHello({
       x3dhExtras: v4Extras,
     );
     verified = true;
+    firstContact = v.pinStatus == PinStatus.newPin;
     remoteIdSpki = v.idSpki;
     remoteFingerprint = v.fingerprint;
   }
+
+  // Validation passed — now it's safe to allocate (or reuse) session state.
+  final session = _getOrCreateSession(peerId);
 
   // If we haven't generated our own DH yet (peer's hello arrived before our
   // own open fired), do it now and return a matching hello to send back.
@@ -636,6 +702,16 @@ Future<AcceptHelloResult> acceptHello({
         peerId: peerId,
       );
 
+  // Invariant guard (C1): a v3+ handshake must have set `verified` before we
+  // expose the session for traffic. v3+ verification throws on failure above,
+  // so this only trips if the control flow is ever refactored to leave a
+  // signed session unverified — fail closed rather than encrypt blindly.
+  if (protocolVersion >= 3 && !verified) {
+    throw StateError(
+      'wire session for $peerId reached ready unverified — refusing traffic',
+    );
+  }
+
   if (session.role == 'alice') {
     session.state = await ratchet.ratchetInitAlice(
       sharedSecret: shared,
@@ -659,6 +735,7 @@ Future<AcceptHelloResult> acceptHello({
     verified: verified,
     reply: reply,
     fingerprint: remoteFingerprint,
+    firstContact: firstContact,
   );
 }
 
@@ -710,6 +787,18 @@ Future<Object?> decryptInbound(String peerId, String wireStr) async {
   final envelope = ratchet.decodeWire(wireStr);
   if (envelope == null) {
     throw const FormatException('Bad wire envelope');
+  }
+  // Hard verified-precondition (audit finding 8). Never decrypt traffic from a
+  // session whose identity wasn't cryptographically verified. At the default
+  // protocol floor (v3) this is always satisfied — the acceptHello invariant
+  // (`protocolVersion >= 3 && !verified` → throw) guarantees it — so this is a
+  // no-op there. But it fail-closes the downgrade path: if setMinProtocolVersion(2)
+  // ever lets an unsigned v2 session reach `ready` with verified == false, its
+  // traffic is refused here instead of being decrypted as if trusted.
+  if (!session.verified) {
+    throw StateError(
+      'Refusing to decrypt from unverified session for $peerId',
+    );
   }
   final plaintext = await ratchet.ratchetDecrypt(session.state!, envelope);
   if (!session.ready) {

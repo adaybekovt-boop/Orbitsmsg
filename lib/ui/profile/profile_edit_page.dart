@@ -30,6 +30,8 @@ import '../../core/avatar_resize.dart';
 import '../../core/haptics.dart';
 import '../../state/auth_notifier.dart';
 import '../../themes/orbits_tokens.dart';
+import '../primitives/orbits_glass_button.dart';
+import '../primitives/orbits_glass_surface.dart';
 import 'my_qr_page.dart';
 
 class ProfileEditPage extends ConsumerStatefulWidget {
@@ -228,12 +230,32 @@ class _ProfileEditPageState extends ConsumerState<ProfileEditPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Профиль'),
-        actions: [
-          TextButton(
-            onPressed: (_busy || !_dirty) ? null : _save,
-            child: const Text('Сохранить'),
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        flexibleSpace: const OrbitsGlassSurface(
+          role: OrbitsGlassRole.appBar,
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+          child: SizedBox.expand(),
+        ),
+        title: Text(
+          'Профиль',
+          style: TextStyle(
+            fontFamily: tokens.fontHeading,
+            fontWeight: FontWeight.w600,
+            color: tokens.text,
           ),
+        ),
+        actions: [
+          OrbitsGlassButton(
+            label: 'Сохранить',
+            variant: OrbitsGlassVariant.subtle,
+            size: OrbitsGlassSize.small,
+            enabled: !_busy && _dirty,
+            onPressed: (_busy || !_dirty) ? null : _save,
+          ),
+          const SizedBox(width: 8),
         ],
       ),
       body: Center(
@@ -268,7 +290,13 @@ class _ProfileEditPageState extends ConsumerState<ProfileEditPage> {
               TextField(
                 controller: _nameCtl,
                 maxLength: 30,
-                decoration: const InputDecoration(
+                style: TextStyle(
+                  fontFamily: tokens.fontBody,
+                  fontSize: 15,
+                  color: tokens.text,
+                ),
+                decoration: _glassInput(
+                  tokens,
                   labelText: 'Ник',
                   hintText: 'Как тебя видят собеседники',
                 ),
@@ -280,7 +308,13 @@ class _ProfileEditPageState extends ConsumerState<ProfileEditPage> {
                 controller: _bioCtl,
                 maxLines: 3,
                 maxLength: 220,
-                decoration: InputDecoration(
+                style: TextStyle(
+                  fontFamily: tokens.fontBody,
+                  fontSize: 15,
+                  color: tokens.text,
+                ),
+                decoration: _glassInput(
+                  tokens,
                   labelText: 'О себе',
                   hintText: 'Опционально, 220 символов',
                   counterText: '$bioLen/220',
@@ -313,6 +347,40 @@ class _ProfileEditPageState extends ConsumerState<ProfileEditPage> {
       ),
     );
   }
+}
+
+/// Glass-styled [InputDecoration] for the editor's text fields — matches
+/// the chat composer (filled translucent surface, hairline border, accent
+/// focus ring). Label/hint/counter copy is passed through unchanged.
+InputDecoration _glassInput(
+  OrbitsTokens t, {
+  required String labelText,
+  required String hintText,
+  String? counterText,
+}) {
+  final radius = BorderRadius.circular(t.radiusButton);
+  return InputDecoration(
+    labelText: labelText,
+    labelStyle: TextStyle(color: t.muted, fontFamily: t.fontBody),
+    hintText: hintText,
+    hintStyle: TextStyle(color: t.muted, fontFamily: t.fontBody),
+    counterText: counterText,
+    counterStyle: TextStyle(color: t.muted, fontFamily: t.fontMono),
+    filled: true,
+    fillColor: t.surface.withValues(alpha: 0.55),
+    border: OutlineInputBorder(
+      borderRadius: radius,
+      borderSide: BorderSide(color: t.border),
+    ),
+    enabledBorder: OutlineInputBorder(
+      borderRadius: radius,
+      borderSide: BorderSide(color: t.border),
+    ),
+    focusedBorder: OutlineInputBorder(
+      borderRadius: radius,
+      borderSide: BorderSide(color: t.accent, width: 1.4),
+    ),
+  );
 }
 
 /// Round avatar with a small "camera/edit" badge in the corner. Tapping
@@ -421,24 +489,14 @@ class _AvatarPicker extends StatelessWidget {
           // Clear (X) badge — top-right, only when there's an avatar.
           if (onClear != null)
             Positioned(
-              right: -4,
-              top: -4,
-              child: Material(
-                color: tokens.danger,
-                shape: const CircleBorder(),
-                child: InkWell(
-                  customBorder: const CircleBorder(),
-                  onTap: onClear,
-                  child: const SizedBox(
-                    width: 28,
-                    height: 28,
-                    child: Icon(
-                      Icons.close,
-                      size: 16,
-                      color: Colors.white,
-                    ),
-                  ),
-                ),
+              right: -8,
+              top: -8,
+              child: OrbitsGlassIconButton(
+                icon: Icons.close,
+                tooltip: 'Удалить аватар',
+                variant: OrbitsGlassVariant.danger,
+                size: OrbitsGlassSize.small,
+                onPressed: onClear,
               ),
             ),
         ],
@@ -468,18 +526,15 @@ class _PeerIdCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return OrbitsGlassSurface(
+      role: OrbitsGlassRole.card,
+      borderRadius: BorderRadius.circular(tokens.radiusCard),
       padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: tokens.surface,
-        borderRadius: BorderRadius.circular(tokens.radiusCard),
-        border: Border.all(color: tokens.border),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            'PEER ID',
+            'МОЙ КОД',
             style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w600,
@@ -501,9 +556,11 @@ class _PeerIdCard extends StatelessWidget {
                   ),
                 ),
               ),
-              IconButton(
+              OrbitsGlassIconButton(
+                icon: Icons.copy_outlined,
                 tooltip: 'Скопировать',
-                icon: const Icon(Icons.copy_outlined, size: 20),
+                variant: OrbitsGlassVariant.subtle,
+                size: OrbitsGlassSize.small,
                 onPressed: () async {
                   hapticTap();
                   await Clipboard.setData(ClipboardData(text: peerId));
@@ -512,15 +569,18 @@ class _PeerIdCard extends StatelessWidget {
                     ..clearSnackBars()
                     ..showSnackBar(
                       const SnackBar(
-                        content: Text('Peer ID скопирован'),
+                        content: Text('Код скопирован'),
                         duration: Duration(seconds: 1),
                       ),
                     );
                 },
               ),
-              IconButton(
+              const SizedBox(width: 4),
+              OrbitsGlassIconButton(
+                icon: Icons.qr_code_2_outlined,
                 tooltip: 'QR-код',
-                icon: const Icon(Icons.qr_code_2_outlined, size: 22),
+                variant: OrbitsGlassVariant.subtle,
+                size: OrbitsGlassSize.small,
                 onPressed: () {
                   hapticTap();
                   Navigator.of(context).push(
@@ -534,7 +594,7 @@ class _PeerIdCard extends StatelessWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            'Покажи QR другу — это самый быстрый способ обменяться ID.',
+            'Покажи QR другу — это самый быстрый способ обменяться кодом.',
             style: TextStyle(
               fontSize: 12,
               color: tokens.muted,

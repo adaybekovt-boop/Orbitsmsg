@@ -14,6 +14,8 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../core/haptics.dart';
 import '../../themes/orbits_tokens.dart';
+import '../primitives/orbits_glass_button.dart';
+import '../primitives/orbits_glass_surface.dart';
 
 class MyQrPage extends StatelessWidget {
   const MyQrPage({super.key, required this.peerId});
@@ -24,7 +26,25 @@ class MyQrPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
     return Scaffold(
-      appBar: AppBar(title: const Text('Мой QR')),
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        flexibleSpace: const OrbitsGlassSurface(
+          role: OrbitsGlassRole.appBar,
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+          child: SizedBox.expand(),
+        ),
+        title: Text(
+          'Мой QR',
+          style: TextStyle(
+            fontFamily: tokens.fontHeading,
+            fontWeight: FontWeight.w600,
+            color: tokens.text,
+          ),
+        ),
+      ),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 420),
@@ -34,7 +54,7 @@ class MyQrPage extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  'Покажи этот код другу',
+                  'Мой QR',
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w600,
@@ -44,8 +64,7 @@ class MyQrPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'Он отсканирует его через "Добавить контакт" и сразу '
-                  'попадёт в чат с тобой.',
+                  'Покажи этот QR, чтобы тебя добавили в контакты.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     color: tokens.muted,
@@ -53,76 +72,95 @@ class MyQrPage extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 28),
-                // White card behind the QR — many scanners have trouble
-                // reading dark-on-dark codes. The QR is always black-on-
-                // white regardless of the active theme.
-                Container(
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(tokens.radiusCard),
-                    boxShadow: tokens.shadowCard,
-                  ),
-                  child: QrImageView(
-                    data: peerId,
-                    version: QrVersions.auto,
-                    size: 240,
-                    backgroundColor: Colors.white,
-                    eyeStyle: const QrEyeStyle(
-                      eyeShape: QrEyeShape.square,
-                      color: Colors.black,
+                // Glass panel framing the QR. The QR itself sits on its own
+                // white plate inside — many scanners have trouble reading
+                // dark-on-dark codes, so it stays black-on-white regardless
+                // of the active theme.
+                OrbitsGlassSurface(
+                  role: OrbitsGlassRole.card,
+                  borderRadius: BorderRadius.circular(tokens.radiusCard + 6),
+                  padding: const EdgeInsets.all(16),
+                  child: Container(
+                    padding: const EdgeInsets.all(20),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(tokens.radiusCard),
                     ),
-                    dataModuleStyle: const QrDataModuleStyle(
-                      dataModuleShape: QrDataModuleShape.square,
-                      color: Colors.black,
+                    child: QrImageView(
+                      data: peerId,
+                      version: QrVersions.auto,
+                      size: 240,
+                      backgroundColor: Colors.white,
+                      eyeStyle: const QrEyeStyle(
+                        eyeShape: QrEyeShape.square,
+                        color: Colors.black,
+                      ),
+                      dataModuleStyle: const QrDataModuleStyle(
+                        dataModuleShape: QrDataModuleShape.square,
+                        color: Colors.black,
+                      ),
                     ),
                   ),
                 ),
                 const SizedBox(height: 24),
-                // Plain-text peerId underneath — fallback for when
+                // Plain-text code underneath — fallback for when
                 // scanning isn't available (e.g. desktop without camera).
-                Container(
+                OrbitsGlassSurface(
+                  role: OrbitsGlassRole.card,
+                  borderRadius: BorderRadius.circular(tokens.radiusButton),
                   padding: const EdgeInsets.symmetric(
                     horizontal: 14,
                     vertical: 10,
                   ),
-                  decoration: BoxDecoration(
-                    color: tokens.surface,
-                    borderRadius: BorderRadius.circular(tokens.radiusButton),
-                    border: Border.all(color: tokens.border),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Flexible(
-                        child: SelectableText(
-                          peerId,
-                          style: TextStyle(
-                            fontFamily: tokens.fontMono,
-                            fontSize: 15,
-                            color: tokens.text,
-                          ),
+                      Text(
+                        'Мой код',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          fontFamily: tokens.fontBody,
+                          color: tokens.muted,
                         ),
                       ),
-                      const SizedBox(width: 8),
-                      IconButton(
-                        tooltip: 'Скопировать',
-                        icon: const Icon(Icons.copy_outlined, size: 20),
-                        onPressed: () async {
-                          hapticTap();
-                          await Clipboard.setData(
-                            ClipboardData(text: peerId),
-                          );
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context)
-                            ..clearSnackBars()
-                            ..showSnackBar(
-                              const SnackBar(
-                                content: Text('Peer ID скопирован'),
-                                duration: Duration(seconds: 1),
+                      const SizedBox(height: 4),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Flexible(
+                            child: SelectableText(
+                              peerId,
+                              style: TextStyle(
+                                fontFamily: tokens.fontMono,
+                                fontSize: 15,
+                                color: tokens.text,
                               ),
-                            );
-                        },
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          OrbitsGlassIconButton(
+                            icon: Icons.copy_outlined,
+                            tooltip: 'Скопировать код',
+                            variant: OrbitsGlassVariant.subtle,
+                            size: OrbitsGlassSize.small,
+                            onPressed: () async {
+                              hapticTap();
+                              await Clipboard.setData(
+                                ClipboardData(text: peerId),
+                              );
+                              if (!context.mounted) return;
+                              ScaffoldMessenger.of(context)
+                                ..clearSnackBars()
+                                ..showSnackBar(
+                                  const SnackBar(
+                                    content: Text('Код скопирован'),
+                                    duration: Duration(seconds: 1),
+                                  ),
+                                );
+                            },
+                          ),
+                        ],
                       ),
                     ],
                   ),

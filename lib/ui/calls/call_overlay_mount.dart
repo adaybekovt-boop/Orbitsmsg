@@ -19,6 +19,7 @@ import '../../core/haptics.dart';
 import '../../state/calls_provider.dart';
 import '../../state/peers_provider.dart';
 import '../../themes/orbits_tokens.dart';
+import '../primitives/orbits_glass_surface.dart';
 
 class CallOverlayMount extends ConsumerWidget {
   const CallOverlayMount({super.key});
@@ -174,7 +175,7 @@ class _CallOverlayState extends ConsumerState<_CallOverlay> {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.videocam_off,
+                        const Icon(Icons.videocam_off,
                             color: Colors.white54, size: 48),
                         const SizedBox(height: 12),
                         Text(
@@ -254,13 +255,11 @@ class _CallOverlayState extends ConsumerState<_CallOverlay> {
           right: 0,
           bottom: 24,
           child: Center(
-            child: Container(
+            child: OrbitsGlassSurface(
+              role: OrbitsGlassRole.navBar,
+              borderRadius: BorderRadius.circular(32),
               padding:
                   const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.55),
-                borderRadius: BorderRadius.circular(28),
-              ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [

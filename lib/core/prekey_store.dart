@@ -24,6 +24,7 @@ import 'package:cryptography/cryptography.dart';
 import 'identity_key.dart' as identity_key;
 import 'key_store.dart';
 import 'spki_codec.dart';
+import 'vault_kek.dart';
 
 const String _prekeysTable = 'prekeys';
 
@@ -45,9 +46,6 @@ Future<EcKeyPair> _generateEcdhPair() => _ecdh.newKeyPair();
 
 Future<Uint8List> _exportSpki(EcKeyPair pair) async {
   final pub = await pair.extractPublicKey();
-  if (pub is! EcPublicKey) {
-    throw StateError('prekey: expected EcPublicKey');
-  }
   return buildP256Spki(x: pub.x, y: pub.y);
 }
 
@@ -91,10 +89,17 @@ class SignedPrekeyRecord {
 
 Future<SignedPrekeyRecord?> _rowToSpk(Map<String, Object?> row) async {
   if (row['kind'] != 'spk') return null;
-  final privBytes = row['privBytes'];
+  final privRaw = row['privBytes'];
   final pubSpki = row['pubSpki'];
   final sig = row['sig'];
-  if (privBytes is! List<int> || pubSpki is! List<int> || sig is! List<int>) {
+  if (privRaw == null || pubSpki is! List<int> || sig is! List<int>) {
+    return null;
+  }
+  // Wrapped under the vault KEK at rest (audit C2); tolerates legacy plaintext.
+  final Uint8List privBytes;
+  try {
+    privBytes = await unwrapSecret(privRaw);
+  } catch (_) {
     return null;
   }
   final point = parseP256Spki(pubSpki);
@@ -143,7 +148,8 @@ Future<SignedPrekey> rotateSignedPrekey() async {
     'kind': 'spk',
     'status': 'active',
     'used': 0,
-    'privBytes': privBytes,
+    'privBytes': await wrapSecret(privBytes),
+    'privEnc': 1,
     'pubSpki': pubSpki,
     'sig': sig,
     'createdAt': DateTime.now().millisecondsSinceEpoch,
@@ -213,9 +219,16 @@ class OneTimePrekeyRecord {
 
 Future<OneTimePrekeyRecord?> _rowToOpk(Map<String, Object?> row) async {
   if (row['kind'] != 'opk') return null;
-  final privBytes = row['privBytes'];
+  final privRaw = row['privBytes'];
   final pubSpki = row['pubSpki'];
-  if (privBytes is! List<int> || pubSpki is! List<int>) return null;
+  if (privRaw == null || pubSpki is! List<int>) return null;
+  // Wrapped under the vault KEK at rest (audit C2); tolerates legacy plaintext.
+  final Uint8List privBytes;
+  try {
+    privBytes = await unwrapSecret(privRaw);
+  } catch (_) {
+    return null;
+  }
   final point = parseP256Spki(pubSpki);
   final keyPair = EcKeyPairData(
     d: privBytes,
@@ -249,7 +262,8 @@ Future<List<OneTimePrekey>> generateOneTimePrekeys(
       'kind': 'opk',
       'status': 'fresh',
       'used': 0,
-      'privBytes': privBytes,
+      'privBytes': await wrapSecret(privBytes),
+      'privEnc': 1,
       'pubSpki': pubSpki,
       'createdAt': now,
     });

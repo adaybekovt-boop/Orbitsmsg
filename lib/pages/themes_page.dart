@@ -12,7 +12,6 @@ import '../themes/manifest.dart';
 import '../themes/orbits_tokens.dart';
 import '../themes/registry.dart';
 import '../themes/theme_notifier.dart';
-import '../ui/primitives/orbs_card.dart';
 
 class ThemesPage extends ConsumerWidget {
   const ThemesPage({super.key});
@@ -22,10 +21,6 @@ class ThemesPage extends ConsumerWidget {
     final tokens = OrbitsTokens.of(context);
     final activeId = ref.watch(themeNotifierProvider).value ?? defaultThemeId;
     final manifests = listThemeIds().map((id) => themeCatalog[id]!).toList();
-    final classic =
-        manifests.where((m) => m.family == ThemeFamily.classic).toList();
-    final atmospheric =
-        manifests.where((m) => m.family == ThemeFamily.atmospheric).toList();
 
     return Scaffold(
       appBar: AppBar(
@@ -44,8 +39,8 @@ class ThemesPage extends ConsumerWidget {
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
             child: Text(
-              'Выбери оформление. Каждая тема меняет цвета, шрифты и фон '
-              'приложения целиком.',
+              'Светлая или тёмная — выбери оформление. Меняются цвета, '
+              'поверхности и контраст текста.',
               style: TextStyle(
                 fontFamily: tokens.fontBody,
                 fontSize: 13,
@@ -54,34 +49,16 @@ class ThemesPage extends ConsumerWidget {
               ),
             ),
           ),
-          if (classic.isNotEmpty) ...[
-            const OrbsSectionTitle('Классические'),
-            for (final m in classic)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: _ThemeRow(
-                  manifest: m,
-                  selected: m.id == activeId,
-                  onTap: () => ref
-                      .read(themeNotifierProvider.notifier)
-                      .setThemeId(m.id),
-                ),
+          for (final m in manifests)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: _ThemeRow(
+                manifest: m,
+                selected: m.id == activeId,
+                onTap: () =>
+                    ref.read(themeNotifierProvider.notifier).setThemeId(m.id),
               ),
-          ],
-          if (atmospheric.isNotEmpty) ...[
-            const OrbsSectionTitle('Атмосферные'),
-            for (final m in atmospheric)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: _ThemeRow(
-                  manifest: m,
-                  selected: m.id == activeId,
-                  onTap: () => ref
-                      .read(themeNotifierProvider.notifier)
-                      .setThemeId(m.id),
-                ),
-              ),
-          ],
+            ),
         ],
       ),
     );

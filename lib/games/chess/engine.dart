@@ -163,7 +163,9 @@ class ChessEngine {
   }
 
   void reset() {
-    for (var i = 0; i < 64; i++) _board[i] = null;
+    for (var i = 0; i < 64; i++) {
+      _board[i] = null;
+    }
     _turn = PieceColor.white;
     _whiteCanCastleK = true;
     _whiteCanCastleQ = true;

@@ -27,7 +27,6 @@
 import 'dart:async';
 import 'dart:io' show File, Platform;
 import 'dart:math' as math;
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -388,7 +387,7 @@ class _ProgressWaveformPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final bars = _resample(samples, _targetBars);
-    final gap = 2.0;
+    const gap = 2.0;
     final barWidth = math.max(
       1.5,
       (size.width - gap * (bars.length - 1)) / bars.length,

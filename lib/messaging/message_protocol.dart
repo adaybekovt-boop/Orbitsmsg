@@ -30,7 +30,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
-import 'dart:typed_data';
 
 import '../core/bundle_cache.dart';
 import '../core/prekey_bundle.dart';
@@ -209,6 +208,14 @@ Future<bool> dispatchReliableInbound(
           myPeerId: ctx.selfPeerId,
           helloMsg: Map<String, Object?>.from(data),
         );
+        // First verified (v3+) handshake pins the peer's identity (TOFU). Bump
+        // stored trust unknown→TOFU so the chat shows an "unverified" (not
+        // "unknown") badge and nudges the user to compare safety numbers; this
+        // never auto-promotes to user-verified, and only fires on first contact
+        // to keep the write off the steady-state path (audit H1).
+        if (result.verified && result.firstContact) {
+          unawaited(db.ensurePeerTofuTrust(remoteId));
+        }
         final reply = result.reply;
         if (reply != null) {
           try {
@@ -527,7 +534,15 @@ bool dispatchReliablePlaintext(
         transcriptRaw is String ? _clip(transcriptRaw, 2000) : '';
     if (voiceMeta != null && voiceMeta['b64'] is String) {
       try {
-        final bytes = base64Decode(voiceMeta['b64'] as String);
+        final b64 = voiceMeta['b64'] as String;
+        // Anti-OOM (audit finding 4): cap the attacker-controlled base64 length
+        // BEFORE decode. Mirrors the send-side gate `_maxVoiceB64Len` (8 MiB)
+        // in messaging_notifier.dart. Oversized → treated as bad base64 (falls
+        // through to the metadata-only "voice failed" bubble below).
+        if (b64.length > 8 * 1024 * 1024) {
+          throw const FormatException('voice b64 exceeds inbound cap');
+        }
+        final bytes = base64Decode(b64);
         final mime = (voiceMeta['mime'] as String?) ?? 'audio/webm';
         final duration = _asInt(voiceMeta['duration']);
         final waveform = _numListToDoubles(voiceMeta['waveform']);
@@ -584,7 +599,14 @@ bool dispatchReliablePlaintext(
 
       if (attachmentMeta['b64'] is String) {
         try {
-          final bytes = base64Decode(attachmentMeta['b64'] as String);
+          final b64 = attachmentMeta['b64'] as String;
+          // Anti-OOM (audit finding 4): cap base64 length BEFORE decode.
+          // Mirrors the send-side gate `_maxFileB64Len` (16 MiB) in
+          // messaging_notifier.dart. Oversized → marked missing (below).
+          if (b64.length > 16 * 1024 * 1024) {
+            throw const FormatException('attachment b64 exceeds inbound cap');
+          }
+          final bytes = base64Decode(b64);
           await db.saveFileBlob(
             msgId,
             bytes,

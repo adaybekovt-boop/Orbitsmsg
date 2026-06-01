@@ -8,6 +8,8 @@
 import 'package:flutter/material.dart';
 
 import '../../themes/orbits_tokens.dart';
+import '../../ui/primitives/orbits_glass_button.dart';
+import '../../ui/primitives/orbits_glass_surface.dart';
 import '../../ui/primitives/orbs_card.dart';
 
 class DiagnosticsPage extends StatelessWidget {
@@ -24,34 +26,69 @@ class DiagnosticsPage extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        flexibleSpace: const OrbitsGlassSurface(
+          role: OrbitsGlassRole.appBar,
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+          child: SizedBox.expand(),
+        ),
+        leading: Navigator.of(context).canPop()
+            ? Center(
+                child: OrbitsGlassIconButton(
+                  icon: Icons.arrow_back,
+                  tooltip: 'Назад',
+                  variant: OrbitsGlassVariant.subtle,
+                  size: OrbitsGlassSize.small,
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              )
+            : null,
         title: Text(
           'Диагностика',
           style: TextStyle(
             fontFamily: tokens.fontHeading,
             fontWeight: FontWeight.w600,
+            color: tokens.text,
           ),
         ),
       ),
       body: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
+          // ── Intro ────────────────────────────────────────────
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 8),
+            child: Text(
+              'Техническая информация для проверки работы приложения.',
+              style: TextStyle(
+                fontSize: 13,
+                color: tokens.muted,
+                fontFamily: tokens.fontBody,
+                height: 1.45,
+              ),
+            ),
+          ),
           // ── Build ────────────────────────────────────────────
           const OrbsSectionTitle('Сборка'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbsCard(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 6,
-                vertical: 4,
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: OrbitsGlassSurface(
+              role: OrbitsGlassRole.card,
+              padding: EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 8,
               ),
               child: Column(
                 children: [
-                  const OrbsSettingRow(
+                  OrbsSettingRow(
                     label: 'Версия',
                     subtitle: 'Orbits Flutter • 0.1.0',
                   ),
-                  const OrbsDivider(),
-                  const OrbsSettingRow(
+                  OrbsDivider(),
+                  OrbsSettingRow(
                     label: 'Платформа',
                     subtitle: 'Flutter 3.41 • Dart 3.11',
                   ),
@@ -64,10 +101,11 @@ class DiagnosticsPage extends StatelessWidget {
           const OrbsSectionTitle('Кэш изображений'),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbsCard(
+            child: OrbitsGlassSurface(
+              role: OrbitsGlassRole.card,
               padding: const EdgeInsets.symmetric(
-                horizontal: 6,
-                vertical: 4,
+                horizontal: 10,
+                vertical: 8,
               ),
               child: Column(
                 children: [
@@ -89,14 +127,15 @@ class DiagnosticsPage extends StatelessWidget {
 
           // ── Coming soon ──────────────────────────────────────
           const OrbsSectionTitle('В разработке'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbsCard(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 6,
-                vertical: 4,
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 12),
+            child: OrbitsGlassSurface(
+              role: OrbitsGlassRole.card,
+              padding: EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 8,
               ),
-              child: const Column(
+              child: Column(
                 children: [
                   OrbsSettingRow(
                     label: 'Service Worker',

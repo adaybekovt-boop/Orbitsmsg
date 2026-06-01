@@ -1652,6 +1652,661 @@ class SessionKeysTableCompanion extends UpdateCompanion<SessionKeyRow> {
   }
 }
 
+class $RoomsTableTable extends RoomsTable
+    with TableInfo<$RoomsTableTable, RoomRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $RoomsTableTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+      'id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+      'name', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _hostPeerIdMeta =
+      const VerificationMeta('hostPeerId');
+  @override
+  late final GeneratedColumn<String> hostPeerId = GeneratedColumn<String>(
+      'host_peer_id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _isHostMeta = const VerificationMeta('isHost');
+  @override
+  late final GeneratedColumn<bool> isHost = GeneratedColumn<bool>(
+      'is_host', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_host" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _createdAtMeta =
+      const VerificationMeta('createdAt');
+  @override
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+      'created_at', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  static const VerificationMeta _statusMeta = const VerificationMeta('status');
+  @override
+  late final GeneratedColumn<String> status = GeneratedColumn<String>(
+      'status', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant('active'));
+  @override
+  List<GeneratedColumn> get $columns =>
+      [id, name, hostPeerId, isHost, createdAt, status];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'rooms';
+  @override
+  VerificationContext validateIntegrity(Insertable<RoomRow> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('name')) {
+      context.handle(
+          _nameMeta, name.isAcceptableOrUnknown(data['name']!, _nameMeta));
+    }
+    if (data.containsKey('host_peer_id')) {
+      context.handle(
+          _hostPeerIdMeta,
+          hostPeerId.isAcceptableOrUnknown(
+              data['host_peer_id']!, _hostPeerIdMeta));
+    }
+    if (data.containsKey('is_host')) {
+      context.handle(_isHostMeta,
+          isHost.isAcceptableOrUnknown(data['is_host']!, _isHostMeta));
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(_createdAtMeta,
+          createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta));
+    }
+    if (data.containsKey('status')) {
+      context.handle(_statusMeta,
+          status.isAcceptableOrUnknown(data['status']!, _statusMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  RoomRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return RoomRow(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}id'])!,
+      name: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}name'])!,
+      hostPeerId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}host_peer_id'])!,
+      isHost: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_host'])!,
+      createdAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}created_at'])!,
+      status: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}status'])!,
+    );
+  }
+
+  @override
+  $RoomsTableTable createAlias(String alias) {
+    return $RoomsTableTable(attachedDatabase, alias);
+  }
+}
+
+class RoomRow extends DataClass implements Insertable<RoomRow> {
+  final String id;
+  final String name;
+  final String hostPeerId;
+  final bool isHost;
+  final int createdAt;
+
+  /// 'active' | 'offline'.
+  final String status;
+  const RoomRow(
+      {required this.id,
+      required this.name,
+      required this.hostPeerId,
+      required this.isHost,
+      required this.createdAt,
+      required this.status});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['name'] = Variable<String>(name);
+    map['host_peer_id'] = Variable<String>(hostPeerId);
+    map['is_host'] = Variable<bool>(isHost);
+    map['created_at'] = Variable<int>(createdAt);
+    map['status'] = Variable<String>(status);
+    return map;
+  }
+
+  RoomsTableCompanion toCompanion(bool nullToAbsent) {
+    return RoomsTableCompanion(
+      id: Value(id),
+      name: Value(name),
+      hostPeerId: Value(hostPeerId),
+      isHost: Value(isHost),
+      createdAt: Value(createdAt),
+      status: Value(status),
+    );
+  }
+
+  factory RoomRow.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return RoomRow(
+      id: serializer.fromJson<String>(json['id']),
+      name: serializer.fromJson<String>(json['name']),
+      hostPeerId: serializer.fromJson<String>(json['hostPeerId']),
+      isHost: serializer.fromJson<bool>(json['isHost']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+      status: serializer.fromJson<String>(json['status']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'name': serializer.toJson<String>(name),
+      'hostPeerId': serializer.toJson<String>(hostPeerId),
+      'isHost': serializer.toJson<bool>(isHost),
+      'createdAt': serializer.toJson<int>(createdAt),
+      'status': serializer.toJson<String>(status),
+    };
+  }
+
+  RoomRow copyWith(
+          {String? id,
+          String? name,
+          String? hostPeerId,
+          bool? isHost,
+          int? createdAt,
+          String? status}) =>
+      RoomRow(
+        id: id ?? this.id,
+        name: name ?? this.name,
+        hostPeerId: hostPeerId ?? this.hostPeerId,
+        isHost: isHost ?? this.isHost,
+        createdAt: createdAt ?? this.createdAt,
+        status: status ?? this.status,
+      );
+  RoomRow copyWithCompanion(RoomsTableCompanion data) {
+    return RoomRow(
+      id: data.id.present ? data.id.value : this.id,
+      name: data.name.present ? data.name.value : this.name,
+      hostPeerId:
+          data.hostPeerId.present ? data.hostPeerId.value : this.hostPeerId,
+      isHost: data.isHost.present ? data.isHost.value : this.isHost,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      status: data.status.present ? data.status.value : this.status,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('RoomRow(')
+          ..write('id: $id, ')
+          ..write('name: $name, ')
+          ..write('hostPeerId: $hostPeerId, ')
+          ..write('isHost: $isHost, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('status: $status')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(id, name, hostPeerId, isHost, createdAt, status);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is RoomRow &&
+          other.id == this.id &&
+          other.name == this.name &&
+          other.hostPeerId == this.hostPeerId &&
+          other.isHost == this.isHost &&
+          other.createdAt == this.createdAt &&
+          other.status == this.status);
+}
+
+class RoomsTableCompanion extends UpdateCompanion<RoomRow> {
+  final Value<String> id;
+  final Value<String> name;
+  final Value<String> hostPeerId;
+  final Value<bool> isHost;
+  final Value<int> createdAt;
+  final Value<String> status;
+  final Value<int> rowid;
+  const RoomsTableCompanion({
+    this.id = const Value.absent(),
+    this.name = const Value.absent(),
+    this.hostPeerId = const Value.absent(),
+    this.isHost = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.status = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  RoomsTableCompanion.insert({
+    required String id,
+    this.name = const Value.absent(),
+    this.hostPeerId = const Value.absent(),
+    this.isHost = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.status = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id);
+  static Insertable<RoomRow> custom({
+    Expression<String>? id,
+    Expression<String>? name,
+    Expression<String>? hostPeerId,
+    Expression<bool>? isHost,
+    Expression<int>? createdAt,
+    Expression<String>? status,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (name != null) 'name': name,
+      if (hostPeerId != null) 'host_peer_id': hostPeerId,
+      if (isHost != null) 'is_host': isHost,
+      if (createdAt != null) 'created_at': createdAt,
+      if (status != null) 'status': status,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  RoomsTableCompanion copyWith(
+      {Value<String>? id,
+      Value<String>? name,
+      Value<String>? hostPeerId,
+      Value<bool>? isHost,
+      Value<int>? createdAt,
+      Value<String>? status,
+      Value<int>? rowid}) {
+    return RoomsTableCompanion(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      hostPeerId: hostPeerId ?? this.hostPeerId,
+      isHost: isHost ?? this.isHost,
+      createdAt: createdAt ?? this.createdAt,
+      status: status ?? this.status,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (hostPeerId.present) {
+      map['host_peer_id'] = Variable<String>(hostPeerId.value);
+    }
+    if (isHost.present) {
+      map['is_host'] = Variable<bool>(isHost.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    if (status.present) {
+      map['status'] = Variable<String>(status.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('RoomsTableCompanion(')
+          ..write('id: $id, ')
+          ..write('name: $name, ')
+          ..write('hostPeerId: $hostPeerId, ')
+          ..write('isHost: $isHost, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('status: $status, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $RoomChannelsTableTable extends RoomChannelsTable
+    with TableInfo<$RoomChannelsTableTable, RoomChannelRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $RoomChannelsTableTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+      'id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _roomIdMeta = const VerificationMeta('roomId');
+  @override
+  late final GeneratedColumn<String> roomId = GeneratedColumn<String>(
+      'room_id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: true,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'REFERENCES rooms (id) ON DELETE CASCADE'));
+  static const VerificationMeta _nameMeta = const VerificationMeta('name');
+  @override
+  late final GeneratedColumn<String> name = GeneratedColumn<String>(
+      'name', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _typeMeta = const VerificationMeta('type');
+  @override
+  late final GeneratedColumn<String> type = GeneratedColumn<String>(
+      'type', aliasedName, false,
+      additionalChecks:
+          GeneratedColumn.checkTextLength(minTextLength: 1, maxTextLength: 8),
+      type: DriftSqlType.string,
+      requiredDuringInsert: true);
+  static const VerificationMeta _positionMeta =
+      const VerificationMeta('position');
+  @override
+  late final GeneratedColumn<int> position = GeneratedColumn<int>(
+      'position', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  @override
+  List<GeneratedColumn> get $columns => [id, roomId, name, type, position];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'room_channels';
+  @override
+  VerificationContext validateIntegrity(Insertable<RoomChannelRow> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('room_id')) {
+      context.handle(_roomIdMeta,
+          roomId.isAcceptableOrUnknown(data['room_id']!, _roomIdMeta));
+    } else if (isInserting) {
+      context.missing(_roomIdMeta);
+    }
+    if (data.containsKey('name')) {
+      context.handle(
+          _nameMeta, name.isAcceptableOrUnknown(data['name']!, _nameMeta));
+    }
+    if (data.containsKey('type')) {
+      context.handle(
+          _typeMeta, type.isAcceptableOrUnknown(data['type']!, _typeMeta));
+    } else if (isInserting) {
+      context.missing(_typeMeta);
+    }
+    if (data.containsKey('position')) {
+      context.handle(_positionMeta,
+          position.isAcceptableOrUnknown(data['position']!, _positionMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  RoomChannelRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return RoomChannelRow(
+      id: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}id'])!,
+      roomId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}room_id'])!,
+      name: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}name'])!,
+      type: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}type'])!,
+      position: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}position'])!,
+    );
+  }
+
+  @override
+  $RoomChannelsTableTable createAlias(String alias) {
+    return $RoomChannelsTableTable(attachedDatabase, alias);
+  }
+}
+
+class RoomChannelRow extends DataClass implements Insertable<RoomChannelRow> {
+  final String id;
+  final String roomId;
+  final String name;
+  final String type;
+  final int position;
+  const RoomChannelRow(
+      {required this.id,
+      required this.roomId,
+      required this.name,
+      required this.type,
+      required this.position});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['room_id'] = Variable<String>(roomId);
+    map['name'] = Variable<String>(name);
+    map['type'] = Variable<String>(type);
+    map['position'] = Variable<int>(position);
+    return map;
+  }
+
+  RoomChannelsTableCompanion toCompanion(bool nullToAbsent) {
+    return RoomChannelsTableCompanion(
+      id: Value(id),
+      roomId: Value(roomId),
+      name: Value(name),
+      type: Value(type),
+      position: Value(position),
+    );
+  }
+
+  factory RoomChannelRow.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return RoomChannelRow(
+      id: serializer.fromJson<String>(json['id']),
+      roomId: serializer.fromJson<String>(json['roomId']),
+      name: serializer.fromJson<String>(json['name']),
+      type: serializer.fromJson<String>(json['type']),
+      position: serializer.fromJson<int>(json['position']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'roomId': serializer.toJson<String>(roomId),
+      'name': serializer.toJson<String>(name),
+      'type': serializer.toJson<String>(type),
+      'position': serializer.toJson<int>(position),
+    };
+  }
+
+  RoomChannelRow copyWith(
+          {String? id,
+          String? roomId,
+          String? name,
+          String? type,
+          int? position}) =>
+      RoomChannelRow(
+        id: id ?? this.id,
+        roomId: roomId ?? this.roomId,
+        name: name ?? this.name,
+        type: type ?? this.type,
+        position: position ?? this.position,
+      );
+  RoomChannelRow copyWithCompanion(RoomChannelsTableCompanion data) {
+    return RoomChannelRow(
+      id: data.id.present ? data.id.value : this.id,
+      roomId: data.roomId.present ? data.roomId.value : this.roomId,
+      name: data.name.present ? data.name.value : this.name,
+      type: data.type.present ? data.type.value : this.type,
+      position: data.position.present ? data.position.value : this.position,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('RoomChannelRow(')
+          ..write('id: $id, ')
+          ..write('roomId: $roomId, ')
+          ..write('name: $name, ')
+          ..write('type: $type, ')
+          ..write('position: $position')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, roomId, name, type, position);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is RoomChannelRow &&
+          other.id == this.id &&
+          other.roomId == this.roomId &&
+          other.name == this.name &&
+          other.type == this.type &&
+          other.position == this.position);
+}
+
+class RoomChannelsTableCompanion extends UpdateCompanion<RoomChannelRow> {
+  final Value<String> id;
+  final Value<String> roomId;
+  final Value<String> name;
+  final Value<String> type;
+  final Value<int> position;
+  final Value<int> rowid;
+  const RoomChannelsTableCompanion({
+    this.id = const Value.absent(),
+    this.roomId = const Value.absent(),
+    this.name = const Value.absent(),
+    this.type = const Value.absent(),
+    this.position = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  RoomChannelsTableCompanion.insert({
+    required String id,
+    required String roomId,
+    this.name = const Value.absent(),
+    required String type,
+    this.position = const Value.absent(),
+    this.rowid = const Value.absent(),
+  })  : id = Value(id),
+        roomId = Value(roomId),
+        type = Value(type);
+  static Insertable<RoomChannelRow> custom({
+    Expression<String>? id,
+    Expression<String>? roomId,
+    Expression<String>? name,
+    Expression<String>? type,
+    Expression<int>? position,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (roomId != null) 'room_id': roomId,
+      if (name != null) 'name': name,
+      if (type != null) 'type': type,
+      if (position != null) 'position': position,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  RoomChannelsTableCompanion copyWith(
+      {Value<String>? id,
+      Value<String>? roomId,
+      Value<String>? name,
+      Value<String>? type,
+      Value<int>? position,
+      Value<int>? rowid}) {
+    return RoomChannelsTableCompanion(
+      id: id ?? this.id,
+      roomId: roomId ?? this.roomId,
+      name: name ?? this.name,
+      type: type ?? this.type,
+      position: position ?? this.position,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (roomId.present) {
+      map['room_id'] = Variable<String>(roomId.value);
+    }
+    if (name.present) {
+      map['name'] = Variable<String>(name.value);
+    }
+    if (type.present) {
+      map['type'] = Variable<String>(type.value);
+    }
+    if (position.present) {
+      map['position'] = Variable<int>(position.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('RoomChannelsTableCompanion(')
+          ..write('id: $id, ')
+          ..write('roomId: $roomId, ')
+          ..write('name: $name, ')
+          ..write('type: $type, ')
+          ..write('position: $position, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $MessagesTableTable extends MessagesTable
     with TableInfo<$MessagesTableTable, MessageRow> {
   @override
@@ -1696,9 +2351,23 @@ class $MessagesTableTable extends MessagesTable
   late final GeneratedColumn<Uint8List> data = GeneratedColumn<Uint8List>(
       'data', aliasedName, false,
       type: DriftSqlType.blob, requiredDuringInsert: true);
+  static const VerificationMeta _roomIdMeta = const VerificationMeta('roomId');
+  @override
+  late final GeneratedColumn<String> roomId = GeneratedColumn<String>(
+      'room_id', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _channelIdMeta =
+      const VerificationMeta('channelId');
+  @override
+  late final GeneratedColumn<String> channelId = GeneratedColumn<String>(
+      'channel_id', aliasedName, true,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'REFERENCES room_channels (id) ON DELETE CASCADE'));
   @override
   List<GeneratedColumn> get $columns =>
-      [id, peerId, timestamp, direction, status, data];
+      [id, peerId, timestamp, direction, status, data, roomId, channelId];
   @override
   String get aliasedName => _alias ?? actualTableName;
   @override
@@ -1744,6 +2413,14 @@ class $MessagesTableTable extends MessagesTable
     } else if (isInserting) {
       context.missing(_dataMeta);
     }
+    if (data.containsKey('room_id')) {
+      context.handle(_roomIdMeta,
+          roomId.isAcceptableOrUnknown(data['room_id']!, _roomIdMeta));
+    }
+    if (data.containsKey('channel_id')) {
+      context.handle(_channelIdMeta,
+          channelId.isAcceptableOrUnknown(data['channel_id']!, _channelIdMeta));
+    }
     return context;
   }
 
@@ -1765,6 +2442,10 @@ class $MessagesTableTable extends MessagesTable
           .read(DriftSqlType.string, data['${effectivePrefix}status'])!,
       data: attachedDatabase.typeMapping
           .read(DriftSqlType.blob, data['${effectivePrefix}data'])!,
+      roomId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}room_id']),
+      channelId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}channel_id']),
     );
   }
 
@@ -1781,13 +2462,24 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
   final String direction;
   final String status;
   final Uint8List data;
+
+  /// Room/channel routing (schema v3 — Discord-style rooms). Both nullable: a
+  /// 1:1 DM message leaves them null; a room message carries its owning room +
+  /// channel. `channelId` references [RoomChannelsTable] with CASCADE so
+  /// deleting a channel reaps its message history. A composite index on
+  /// (channel_id, timestamp) is created in `database.dart` for fast per-channel
+  /// paging.
+  final String? roomId;
+  final String? channelId;
   const MessageRow(
       {required this.id,
       required this.peerId,
       required this.timestamp,
       required this.direction,
       required this.status,
-      required this.data});
+      required this.data,
+      this.roomId,
+      this.channelId});
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
     final map = <String, Expression>{};
@@ -1797,6 +2489,12 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
     map['direction'] = Variable<String>(direction);
     map['status'] = Variable<String>(status);
     map['data'] = Variable<Uint8List>(data);
+    if (!nullToAbsent || roomId != null) {
+      map['room_id'] = Variable<String>(roomId);
+    }
+    if (!nullToAbsent || channelId != null) {
+      map['channel_id'] = Variable<String>(channelId);
+    }
     return map;
   }
 
@@ -1808,6 +2506,11 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       direction: Value(direction),
       status: Value(status),
       data: Value(data),
+      roomId:
+          roomId == null && nullToAbsent ? const Value.absent() : Value(roomId),
+      channelId: channelId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(channelId),
     );
   }
 
@@ -1821,6 +2524,8 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       direction: serializer.fromJson<String>(json['direction']),
       status: serializer.fromJson<String>(json['status']),
       data: serializer.fromJson<Uint8List>(json['data']),
+      roomId: serializer.fromJson<String?>(json['roomId']),
+      channelId: serializer.fromJson<String?>(json['channelId']),
     );
   }
   @override
@@ -1833,6 +2538,8 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       'direction': serializer.toJson<String>(direction),
       'status': serializer.toJson<String>(status),
       'data': serializer.toJson<Uint8List>(data),
+      'roomId': serializer.toJson<String?>(roomId),
+      'channelId': serializer.toJson<String?>(channelId),
     };
   }
 
@@ -1842,7 +2549,9 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           int? timestamp,
           String? direction,
           String? status,
-          Uint8List? data}) =>
+          Uint8List? data,
+          Value<String?> roomId = const Value.absent(),
+          Value<String?> channelId = const Value.absent()}) =>
       MessageRow(
         id: id ?? this.id,
         peerId: peerId ?? this.peerId,
@@ -1850,6 +2559,8 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
         direction: direction ?? this.direction,
         status: status ?? this.status,
         data: data ?? this.data,
+        roomId: roomId.present ? roomId.value : this.roomId,
+        channelId: channelId.present ? channelId.value : this.channelId,
       );
   MessageRow copyWithCompanion(MessagesTableCompanion data) {
     return MessageRow(
@@ -1859,6 +2570,8 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
       direction: data.direction.present ? data.direction.value : this.direction,
       status: data.status.present ? data.status.value : this.status,
       data: data.data.present ? data.data.value : this.data,
+      roomId: data.roomId.present ? data.roomId.value : this.roomId,
+      channelId: data.channelId.present ? data.channelId.value : this.channelId,
     );
   }
 
@@ -1870,14 +2583,16 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           ..write('timestamp: $timestamp, ')
           ..write('direction: $direction, ')
           ..write('status: $status, ')
-          ..write('data: $data')
+          ..write('data: $data, ')
+          ..write('roomId: $roomId, ')
+          ..write('channelId: $channelId')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(
-      id, peerId, timestamp, direction, status, $driftBlobEquality.hash(data));
+  int get hashCode => Object.hash(id, peerId, timestamp, direction, status,
+      $driftBlobEquality.hash(data), roomId, channelId);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -1887,7 +2602,9 @@ class MessageRow extends DataClass implements Insertable<MessageRow> {
           other.timestamp == this.timestamp &&
           other.direction == this.direction &&
           other.status == this.status &&
-          $driftBlobEquality.equals(other.data, this.data));
+          $driftBlobEquality.equals(other.data, this.data) &&
+          other.roomId == this.roomId &&
+          other.channelId == this.channelId);
 }
 
 class MessagesTableCompanion extends UpdateCompanion<MessageRow> {
@@ -1897,6 +2614,8 @@ class MessagesTableCompanion extends UpdateCompanion<MessageRow> {
   final Value<String> direction;
   final Value<String> status;
   final Value<Uint8List> data;
+  final Value<String?> roomId;
+  final Value<String?> channelId;
   final Value<int> rowid;
   const MessagesTableCompanion({
     this.id = const Value.absent(),
@@ -1905,6 +2624,8 @@ class MessagesTableCompanion extends UpdateCompanion<MessageRow> {
     this.direction = const Value.absent(),
     this.status = const Value.absent(),
     this.data = const Value.absent(),
+    this.roomId = const Value.absent(),
+    this.channelId = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   MessagesTableCompanion.insert({
@@ -1914,6 +2635,8 @@ class MessagesTableCompanion extends UpdateCompanion<MessageRow> {
     required String direction,
     required String status,
     required Uint8List data,
+    this.roomId = const Value.absent(),
+    this.channelId = const Value.absent(),
     this.rowid = const Value.absent(),
   })  : id = Value(id),
         peerId = Value(peerId),
@@ -1928,6 +2651,8 @@ class MessagesTableCompanion extends UpdateCompanion<MessageRow> {
     Expression<String>? direction,
     Expression<String>? status,
     Expression<Uint8List>? data,
+    Expression<String>? roomId,
+    Expression<String>? channelId,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1937,6 +2662,8 @@ class MessagesTableCompanion extends UpdateCompanion<MessageRow> {
       if (direction != null) 'direction': direction,
       if (status != null) 'status': status,
       if (data != null) 'data': data,
+      if (roomId != null) 'room_id': roomId,
+      if (channelId != null) 'channel_id': channelId,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1948,6 +2675,8 @@ class MessagesTableCompanion extends UpdateCompanion<MessageRow> {
       Value<String>? direction,
       Value<String>? status,
       Value<Uint8List>? data,
+      Value<String?>? roomId,
+      Value<String?>? channelId,
       Value<int>? rowid}) {
     return MessagesTableCompanion(
       id: id ?? this.id,
@@ -1956,6 +2685,8 @@ class MessagesTableCompanion extends UpdateCompanion<MessageRow> {
       direction: direction ?? this.direction,
       status: status ?? this.status,
       data: data ?? this.data,
+      roomId: roomId ?? this.roomId,
+      channelId: channelId ?? this.channelId,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1981,6 +2712,12 @@ class MessagesTableCompanion extends UpdateCompanion<MessageRow> {
     if (data.present) {
       map['data'] = Variable<Uint8List>(data.value);
     }
+    if (roomId.present) {
+      map['room_id'] = Variable<String>(roomId.value);
+    }
+    if (channelId.present) {
+      map['channel_id'] = Variable<String>(channelId.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1996,6 +2733,8 @@ class MessagesTableCompanion extends UpdateCompanion<MessageRow> {
           ..write('direction: $direction, ')
           ..write('status: $status, ')
           ..write('data: $data, ')
+          ..write('roomId: $roomId, ')
+          ..write('channelId: $channelId, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -3620,6 +4359,364 @@ class KvTableCompanion extends UpdateCompanion<KvRow> {
   }
 }
 
+class $RoomMembersTableTable extends RoomMembersTable
+    with TableInfo<$RoomMembersTableTable, RoomMemberRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $RoomMembersTableTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _roomIdMeta = const VerificationMeta('roomId');
+  @override
+  late final GeneratedColumn<String> roomId = GeneratedColumn<String>(
+      'room_id', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: true,
+      defaultConstraints: GeneratedColumn.constraintIsAlways(
+          'REFERENCES rooms (id) ON DELETE CASCADE'));
+  static const VerificationMeta _peerIdMeta = const VerificationMeta('peerId');
+  @override
+  late final GeneratedColumn<String> peerId = GeneratedColumn<String>(
+      'peer_id', aliasedName, false,
+      type: DriftSqlType.string, requiredDuringInsert: true);
+  static const VerificationMeta _displayNameMeta =
+      const VerificationMeta('displayName');
+  @override
+  late final GeneratedColumn<String> displayName = GeneratedColumn<String>(
+      'display_name', aliasedName, false,
+      type: DriftSqlType.string,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(''));
+  static const VerificationMeta _avatarDataUrlMeta =
+      const VerificationMeta('avatarDataUrl');
+  @override
+  late final GeneratedColumn<String> avatarDataUrl = GeneratedColumn<String>(
+      'avatar_data_url', aliasedName, true,
+      type: DriftSqlType.string, requiredDuringInsert: false);
+  static const VerificationMeta _isOnlineMeta =
+      const VerificationMeta('isOnline');
+  @override
+  late final GeneratedColumn<bool> isOnline = GeneratedColumn<bool>(
+      'is_online', aliasedName, false,
+      type: DriftSqlType.bool,
+      requiredDuringInsert: false,
+      defaultConstraints:
+          GeneratedColumn.constraintIsAlways('CHECK ("is_online" IN (0, 1))'),
+      defaultValue: const Constant(false));
+  static const VerificationMeta _joinedAtMeta =
+      const VerificationMeta('joinedAt');
+  @override
+  late final GeneratedColumn<int> joinedAt = GeneratedColumn<int>(
+      'joined_at', aliasedName, false,
+      type: DriftSqlType.int,
+      requiredDuringInsert: false,
+      defaultValue: const Constant(0));
+  @override
+  List<GeneratedColumn> get $columns =>
+      [roomId, peerId, displayName, avatarDataUrl, isOnline, joinedAt];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'room_members';
+  @override
+  VerificationContext validateIntegrity(Insertable<RoomMemberRow> instance,
+      {bool isInserting = false}) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('room_id')) {
+      context.handle(_roomIdMeta,
+          roomId.isAcceptableOrUnknown(data['room_id']!, _roomIdMeta));
+    } else if (isInserting) {
+      context.missing(_roomIdMeta);
+    }
+    if (data.containsKey('peer_id')) {
+      context.handle(_peerIdMeta,
+          peerId.isAcceptableOrUnknown(data['peer_id']!, _peerIdMeta));
+    } else if (isInserting) {
+      context.missing(_peerIdMeta);
+    }
+    if (data.containsKey('display_name')) {
+      context.handle(
+          _displayNameMeta,
+          displayName.isAcceptableOrUnknown(
+              data['display_name']!, _displayNameMeta));
+    }
+    if (data.containsKey('avatar_data_url')) {
+      context.handle(
+          _avatarDataUrlMeta,
+          avatarDataUrl.isAcceptableOrUnknown(
+              data['avatar_data_url']!, _avatarDataUrlMeta));
+    }
+    if (data.containsKey('is_online')) {
+      context.handle(_isOnlineMeta,
+          isOnline.isAcceptableOrUnknown(data['is_online']!, _isOnlineMeta));
+    }
+    if (data.containsKey('joined_at')) {
+      context.handle(_joinedAtMeta,
+          joinedAt.isAcceptableOrUnknown(data['joined_at']!, _joinedAtMeta));
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {roomId, peerId};
+  @override
+  RoomMemberRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return RoomMemberRow(
+      roomId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}room_id'])!,
+      peerId: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}peer_id'])!,
+      displayName: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}display_name'])!,
+      avatarDataUrl: attachedDatabase.typeMapping
+          .read(DriftSqlType.string, data['${effectivePrefix}avatar_data_url']),
+      isOnline: attachedDatabase.typeMapping
+          .read(DriftSqlType.bool, data['${effectivePrefix}is_online'])!,
+      joinedAt: attachedDatabase.typeMapping
+          .read(DriftSqlType.int, data['${effectivePrefix}joined_at'])!,
+    );
+  }
+
+  @override
+  $RoomMembersTableTable createAlias(String alias) {
+    return $RoomMembersTableTable(attachedDatabase, alias);
+  }
+}
+
+class RoomMemberRow extends DataClass implements Insertable<RoomMemberRow> {
+  final String roomId;
+  final String peerId;
+  final String displayName;
+  final String? avatarDataUrl;
+  final bool isOnline;
+  final int joinedAt;
+  const RoomMemberRow(
+      {required this.roomId,
+      required this.peerId,
+      required this.displayName,
+      this.avatarDataUrl,
+      required this.isOnline,
+      required this.joinedAt});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['room_id'] = Variable<String>(roomId);
+    map['peer_id'] = Variable<String>(peerId);
+    map['display_name'] = Variable<String>(displayName);
+    if (!nullToAbsent || avatarDataUrl != null) {
+      map['avatar_data_url'] = Variable<String>(avatarDataUrl);
+    }
+    map['is_online'] = Variable<bool>(isOnline);
+    map['joined_at'] = Variable<int>(joinedAt);
+    return map;
+  }
+
+  RoomMembersTableCompanion toCompanion(bool nullToAbsent) {
+    return RoomMembersTableCompanion(
+      roomId: Value(roomId),
+      peerId: Value(peerId),
+      displayName: Value(displayName),
+      avatarDataUrl: avatarDataUrl == null && nullToAbsent
+          ? const Value.absent()
+          : Value(avatarDataUrl),
+      isOnline: Value(isOnline),
+      joinedAt: Value(joinedAt),
+    );
+  }
+
+  factory RoomMemberRow.fromJson(Map<String, dynamic> json,
+      {ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return RoomMemberRow(
+      roomId: serializer.fromJson<String>(json['roomId']),
+      peerId: serializer.fromJson<String>(json['peerId']),
+      displayName: serializer.fromJson<String>(json['displayName']),
+      avatarDataUrl: serializer.fromJson<String?>(json['avatarDataUrl']),
+      isOnline: serializer.fromJson<bool>(json['isOnline']),
+      joinedAt: serializer.fromJson<int>(json['joinedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'roomId': serializer.toJson<String>(roomId),
+      'peerId': serializer.toJson<String>(peerId),
+      'displayName': serializer.toJson<String>(displayName),
+      'avatarDataUrl': serializer.toJson<String?>(avatarDataUrl),
+      'isOnline': serializer.toJson<bool>(isOnline),
+      'joinedAt': serializer.toJson<int>(joinedAt),
+    };
+  }
+
+  RoomMemberRow copyWith(
+          {String? roomId,
+          String? peerId,
+          String? displayName,
+          Value<String?> avatarDataUrl = const Value.absent(),
+          bool? isOnline,
+          int? joinedAt}) =>
+      RoomMemberRow(
+        roomId: roomId ?? this.roomId,
+        peerId: peerId ?? this.peerId,
+        displayName: displayName ?? this.displayName,
+        avatarDataUrl:
+            avatarDataUrl.present ? avatarDataUrl.value : this.avatarDataUrl,
+        isOnline: isOnline ?? this.isOnline,
+        joinedAt: joinedAt ?? this.joinedAt,
+      );
+  RoomMemberRow copyWithCompanion(RoomMembersTableCompanion data) {
+    return RoomMemberRow(
+      roomId: data.roomId.present ? data.roomId.value : this.roomId,
+      peerId: data.peerId.present ? data.peerId.value : this.peerId,
+      displayName:
+          data.displayName.present ? data.displayName.value : this.displayName,
+      avatarDataUrl: data.avatarDataUrl.present
+          ? data.avatarDataUrl.value
+          : this.avatarDataUrl,
+      isOnline: data.isOnline.present ? data.isOnline.value : this.isOnline,
+      joinedAt: data.joinedAt.present ? data.joinedAt.value : this.joinedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('RoomMemberRow(')
+          ..write('roomId: $roomId, ')
+          ..write('peerId: $peerId, ')
+          ..write('displayName: $displayName, ')
+          ..write('avatarDataUrl: $avatarDataUrl, ')
+          ..write('isOnline: $isOnline, ')
+          ..write('joinedAt: $joinedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+      roomId, peerId, displayName, avatarDataUrl, isOnline, joinedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is RoomMemberRow &&
+          other.roomId == this.roomId &&
+          other.peerId == this.peerId &&
+          other.displayName == this.displayName &&
+          other.avatarDataUrl == this.avatarDataUrl &&
+          other.isOnline == this.isOnline &&
+          other.joinedAt == this.joinedAt);
+}
+
+class RoomMembersTableCompanion extends UpdateCompanion<RoomMemberRow> {
+  final Value<String> roomId;
+  final Value<String> peerId;
+  final Value<String> displayName;
+  final Value<String?> avatarDataUrl;
+  final Value<bool> isOnline;
+  final Value<int> joinedAt;
+  final Value<int> rowid;
+  const RoomMembersTableCompanion({
+    this.roomId = const Value.absent(),
+    this.peerId = const Value.absent(),
+    this.displayName = const Value.absent(),
+    this.avatarDataUrl = const Value.absent(),
+    this.isOnline = const Value.absent(),
+    this.joinedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  RoomMembersTableCompanion.insert({
+    required String roomId,
+    required String peerId,
+    this.displayName = const Value.absent(),
+    this.avatarDataUrl = const Value.absent(),
+    this.isOnline = const Value.absent(),
+    this.joinedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  })  : roomId = Value(roomId),
+        peerId = Value(peerId);
+  static Insertable<RoomMemberRow> custom({
+    Expression<String>? roomId,
+    Expression<String>? peerId,
+    Expression<String>? displayName,
+    Expression<String>? avatarDataUrl,
+    Expression<bool>? isOnline,
+    Expression<int>? joinedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (roomId != null) 'room_id': roomId,
+      if (peerId != null) 'peer_id': peerId,
+      if (displayName != null) 'display_name': displayName,
+      if (avatarDataUrl != null) 'avatar_data_url': avatarDataUrl,
+      if (isOnline != null) 'is_online': isOnline,
+      if (joinedAt != null) 'joined_at': joinedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  RoomMembersTableCompanion copyWith(
+      {Value<String>? roomId,
+      Value<String>? peerId,
+      Value<String>? displayName,
+      Value<String?>? avatarDataUrl,
+      Value<bool>? isOnline,
+      Value<int>? joinedAt,
+      Value<int>? rowid}) {
+    return RoomMembersTableCompanion(
+      roomId: roomId ?? this.roomId,
+      peerId: peerId ?? this.peerId,
+      displayName: displayName ?? this.displayName,
+      avatarDataUrl: avatarDataUrl ?? this.avatarDataUrl,
+      isOnline: isOnline ?? this.isOnline,
+      joinedAt: joinedAt ?? this.joinedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (roomId.present) {
+      map['room_id'] = Variable<String>(roomId.value);
+    }
+    if (peerId.present) {
+      map['peer_id'] = Variable<String>(peerId.value);
+    }
+    if (displayName.present) {
+      map['display_name'] = Variable<String>(displayName.value);
+    }
+    if (avatarDataUrl.present) {
+      map['avatar_data_url'] = Variable<String>(avatarDataUrl.value);
+    }
+    if (isOnline.present) {
+      map['is_online'] = Variable<bool>(isOnline.value);
+    }
+    if (joinedAt.present) {
+      map['joined_at'] = Variable<int>(joinedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('RoomMembersTableCompanion(')
+          ..write('roomId: $roomId, ')
+          ..write('peerId: $peerId, ')
+          ..write('displayName: $displayName, ')
+          ..write('avatarDataUrl: $avatarDataUrl, ')
+          ..write('isOnline: $isOnline, ')
+          ..write('joinedAt: $joinedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$OrbitsDatabase extends GeneratedDatabase {
   _$OrbitsDatabase(QueryExecutor e) : super(e);
   $OrbitsDatabaseManager get managers => $OrbitsDatabaseManager(this);
@@ -3630,6 +4727,9 @@ abstract class _$OrbitsDatabase extends GeneratedDatabase {
   late final $AvatarsTableTable avatarsTable = $AvatarsTableTable(this);
   late final $SessionKeysTableTable sessionKeysTable =
       $SessionKeysTableTable(this);
+  late final $RoomsTableTable roomsTable = $RoomsTableTable(this);
+  late final $RoomChannelsTableTable roomChannelsTable =
+      $RoomChannelsTableTable(this);
   late final $MessagesTableTable messagesTable = $MessagesTableTable(this);
   late final $StickerPacksTableTable stickerPacksTable =
       $StickerPacksTableTable(this);
@@ -3639,6 +4739,8 @@ abstract class _$OrbitsDatabase extends GeneratedDatabase {
       $VoiceBlobsTableTable(this);
   late final $FileBlobsTableTable fileBlobsTable = $FileBlobsTableTable(this);
   late final $KvTableTable kvTable = $KvTableTable(this);
+  late final $RoomMembersTableTable roomMembersTable =
+      $RoomMembersTableTable(this);
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -3650,13 +4752,42 @@ abstract class _$OrbitsDatabase extends GeneratedDatabase {
         peersTable,
         avatarsTable,
         sessionKeysTable,
+        roomsTable,
+        roomChannelsTable,
         messagesTable,
         stickerPacksTable,
         recentStickersTable,
         voiceBlobsTable,
         fileBlobsTable,
-        kvTable
+        kvTable,
+        roomMembersTable
       ];
+  @override
+  StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules(
+        [
+          WritePropagation(
+            on: TableUpdateQuery.onTableName('rooms',
+                limitUpdateKind: UpdateKind.delete),
+            result: [
+              TableUpdate('room_channels', kind: UpdateKind.delete),
+            ],
+          ),
+          WritePropagation(
+            on: TableUpdateQuery.onTableName('room_channels',
+                limitUpdateKind: UpdateKind.delete),
+            result: [
+              TableUpdate('messages', kind: UpdateKind.delete),
+            ],
+          ),
+          WritePropagation(
+            on: TableUpdateQuery.onTableName('rooms',
+                limitUpdateKind: UpdateKind.delete),
+            result: [
+              TableUpdate('room_members', kind: UpdateKind.delete),
+            ],
+          ),
+        ],
+      );
 }
 
 typedef $$KeysTableTableCreateCompanionBuilder = KeysTableCompanion Function({
@@ -4608,6 +5739,706 @@ typedef $$SessionKeysTableTableProcessedTableManager = ProcessedTableManager<
     ),
     SessionKeyRow,
     PrefetchHooks Function()>;
+typedef $$RoomsTableTableCreateCompanionBuilder = RoomsTableCompanion Function({
+  required String id,
+  Value<String> name,
+  Value<String> hostPeerId,
+  Value<bool> isHost,
+  Value<int> createdAt,
+  Value<String> status,
+  Value<int> rowid,
+});
+typedef $$RoomsTableTableUpdateCompanionBuilder = RoomsTableCompanion Function({
+  Value<String> id,
+  Value<String> name,
+  Value<String> hostPeerId,
+  Value<bool> isHost,
+  Value<int> createdAt,
+  Value<String> status,
+  Value<int> rowid,
+});
+
+final class $$RoomsTableTableReferences
+    extends BaseReferences<_$OrbitsDatabase, $RoomsTableTable, RoomRow> {
+  $$RoomsTableTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static MultiTypedResultKey<$RoomChannelsTableTable, List<RoomChannelRow>>
+      _roomChannelsTableRefsTable(_$OrbitsDatabase db) =>
+          MultiTypedResultKey.fromTable(db.roomChannelsTable,
+              aliasName: $_aliasNameGenerator(
+                  db.roomsTable.id, db.roomChannelsTable.roomId));
+
+  $$RoomChannelsTableTableProcessedTableManager get roomChannelsTableRefs {
+    final manager =
+        $$RoomChannelsTableTableTableManager($_db, $_db.roomChannelsTable)
+            .filter((f) => f.roomId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache =
+        $_typedResult.readTableOrNull(_roomChannelsTableRefsTable($_db));
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: cache));
+  }
+
+  static MultiTypedResultKey<$RoomMembersTableTable, List<RoomMemberRow>>
+      _roomMembersTableRefsTable(_$OrbitsDatabase db) =>
+          MultiTypedResultKey.fromTable(db.roomMembersTable,
+              aliasName: $_aliasNameGenerator(
+                  db.roomsTable.id, db.roomMembersTable.roomId));
+
+  $$RoomMembersTableTableProcessedTableManager get roomMembersTableRefs {
+    final manager =
+        $$RoomMembersTableTableTableManager($_db, $_db.roomMembersTable)
+            .filter((f) => f.roomId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache =
+        $_typedResult.readTableOrNull(_roomMembersTableRefsTable($_db));
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: cache));
+  }
+}
+
+class $$RoomsTableTableFilterComposer
+    extends Composer<_$OrbitsDatabase, $RoomsTableTable> {
+  $$RoomsTableTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get name => $composableBuilder(
+      column: $table.name, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get hostPeerId => $composableBuilder(
+      column: $table.hostPeerId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isHost => $composableBuilder(
+      column: $table.isHost, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get status => $composableBuilder(
+      column: $table.status, builder: (column) => ColumnFilters(column));
+
+  Expression<bool> roomChannelsTableRefs(
+      Expression<bool> Function($$RoomChannelsTableTableFilterComposer f) f) {
+    final $$RoomChannelsTableTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.roomChannelsTable,
+        getReferencedColumn: (t) => t.roomId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$RoomChannelsTableTableFilterComposer(
+              $db: $db,
+              $table: $db.roomChannelsTable,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
+
+  Expression<bool> roomMembersTableRefs(
+      Expression<bool> Function($$RoomMembersTableTableFilterComposer f) f) {
+    final $$RoomMembersTableTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.roomMembersTable,
+        getReferencedColumn: (t) => t.roomId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$RoomMembersTableTableFilterComposer(
+              $db: $db,
+              $table: $db.roomMembersTable,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
+}
+
+class $$RoomsTableTableOrderingComposer
+    extends Composer<_$OrbitsDatabase, $RoomsTableTable> {
+  $$RoomsTableTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get name => $composableBuilder(
+      column: $table.name, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get hostPeerId => $composableBuilder(
+      column: $table.hostPeerId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isHost => $composableBuilder(
+      column: $table.isHost, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get createdAt => $composableBuilder(
+      column: $table.createdAt, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get status => $composableBuilder(
+      column: $table.status, builder: (column) => ColumnOrderings(column));
+}
+
+class $$RoomsTableTableAnnotationComposer
+    extends Composer<_$OrbitsDatabase, $RoomsTableTable> {
+  $$RoomsTableTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<String> get hostPeerId => $composableBuilder(
+      column: $table.hostPeerId, builder: (column) => column);
+
+  GeneratedColumn<bool> get isHost =>
+      $composableBuilder(column: $table.isHost, builder: (column) => column);
+
+  GeneratedColumn<int> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<String> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
+
+  Expression<T> roomChannelsTableRefs<T extends Object>(
+      Expression<T> Function($$RoomChannelsTableTableAnnotationComposer a) f) {
+    final $$RoomChannelsTableTableAnnotationComposer composer =
+        $composerBuilder(
+            composer: this,
+            getCurrentColumn: (t) => t.id,
+            referencedTable: $db.roomChannelsTable,
+            getReferencedColumn: (t) => t.roomId,
+            builder: (joinBuilder,
+                    {$addJoinBuilderToRootComposer,
+                    $removeJoinBuilderFromRootComposer}) =>
+                $$RoomChannelsTableTableAnnotationComposer(
+                  $db: $db,
+                  $table: $db.roomChannelsTable,
+                  $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                  joinBuilder: joinBuilder,
+                  $removeJoinBuilderFromRootComposer:
+                      $removeJoinBuilderFromRootComposer,
+                ));
+    return f(composer);
+  }
+
+  Expression<T> roomMembersTableRefs<T extends Object>(
+      Expression<T> Function($$RoomMembersTableTableAnnotationComposer a) f) {
+    final $$RoomMembersTableTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.roomMembersTable,
+        getReferencedColumn: (t) => t.roomId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$RoomMembersTableTableAnnotationComposer(
+              $db: $db,
+              $table: $db.roomMembersTable,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
+}
+
+class $$RoomsTableTableTableManager extends RootTableManager<
+    _$OrbitsDatabase,
+    $RoomsTableTable,
+    RoomRow,
+    $$RoomsTableTableFilterComposer,
+    $$RoomsTableTableOrderingComposer,
+    $$RoomsTableTableAnnotationComposer,
+    $$RoomsTableTableCreateCompanionBuilder,
+    $$RoomsTableTableUpdateCompanionBuilder,
+    (RoomRow, $$RoomsTableTableReferences),
+    RoomRow,
+    PrefetchHooks Function(
+        {bool roomChannelsTableRefs, bool roomMembersTableRefs})> {
+  $$RoomsTableTableTableManager(_$OrbitsDatabase db, $RoomsTableTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$RoomsTableTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$RoomsTableTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$RoomsTableTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            Value<String> name = const Value.absent(),
+            Value<String> hostPeerId = const Value.absent(),
+            Value<bool> isHost = const Value.absent(),
+            Value<int> createdAt = const Value.absent(),
+            Value<String> status = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              RoomsTableCompanion(
+            id: id,
+            name: name,
+            hostPeerId: hostPeerId,
+            isHost: isHost,
+            createdAt: createdAt,
+            status: status,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String id,
+            Value<String> name = const Value.absent(),
+            Value<String> hostPeerId = const Value.absent(),
+            Value<bool> isHost = const Value.absent(),
+            Value<int> createdAt = const Value.absent(),
+            Value<String> status = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              RoomsTableCompanion.insert(
+            id: id,
+            name: name,
+            hostPeerId: hostPeerId,
+            isHost: isHost,
+            createdAt: createdAt,
+            status: status,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (
+                    e.readTable(table),
+                    $$RoomsTableTableReferences(db, table, e)
+                  ))
+              .toList(),
+          prefetchHooksCallback: (
+              {roomChannelsTableRefs = false, roomMembersTableRefs = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [
+                if (roomChannelsTableRefs) db.roomChannelsTable,
+                if (roomMembersTableRefs) db.roomMembersTable
+              ],
+              addJoins: null,
+              getPrefetchedDataCallback: (items) async {
+                return [
+                  if (roomChannelsTableRefs)
+                    await $_getPrefetchedData<RoomRow, $RoomsTableTable,
+                            RoomChannelRow>(
+                        currentTable: table,
+                        referencedTable: $$RoomsTableTableReferences
+                            ._roomChannelsTableRefsTable(db),
+                        managerFromTypedResult: (p0) =>
+                            $$RoomsTableTableReferences(db, table, p0)
+                                .roomChannelsTableRefs,
+                        referencedItemsForCurrentItem: (item,
+                                referencedItems) =>
+                            referencedItems.where((e) => e.roomId == item.id),
+                        typedResults: items),
+                  if (roomMembersTableRefs)
+                    await $_getPrefetchedData<RoomRow, $RoomsTableTable,
+                            RoomMemberRow>(
+                        currentTable: table,
+                        referencedTable: $$RoomsTableTableReferences
+                            ._roomMembersTableRefsTable(db),
+                        managerFromTypedResult: (p0) =>
+                            $$RoomsTableTableReferences(db, table, p0)
+                                .roomMembersTableRefs,
+                        referencedItemsForCurrentItem: (item,
+                                referencedItems) =>
+                            referencedItems.where((e) => e.roomId == item.id),
+                        typedResults: items)
+                ];
+              },
+            );
+          },
+        ));
+}
+
+typedef $$RoomsTableTableProcessedTableManager = ProcessedTableManager<
+    _$OrbitsDatabase,
+    $RoomsTableTable,
+    RoomRow,
+    $$RoomsTableTableFilterComposer,
+    $$RoomsTableTableOrderingComposer,
+    $$RoomsTableTableAnnotationComposer,
+    $$RoomsTableTableCreateCompanionBuilder,
+    $$RoomsTableTableUpdateCompanionBuilder,
+    (RoomRow, $$RoomsTableTableReferences),
+    RoomRow,
+    PrefetchHooks Function(
+        {bool roomChannelsTableRefs, bool roomMembersTableRefs})>;
+typedef $$RoomChannelsTableTableCreateCompanionBuilder
+    = RoomChannelsTableCompanion Function({
+  required String id,
+  required String roomId,
+  Value<String> name,
+  required String type,
+  Value<int> position,
+  Value<int> rowid,
+});
+typedef $$RoomChannelsTableTableUpdateCompanionBuilder
+    = RoomChannelsTableCompanion Function({
+  Value<String> id,
+  Value<String> roomId,
+  Value<String> name,
+  Value<String> type,
+  Value<int> position,
+  Value<int> rowid,
+});
+
+final class $$RoomChannelsTableTableReferences extends BaseReferences<
+    _$OrbitsDatabase, $RoomChannelsTableTable, RoomChannelRow> {
+  $$RoomChannelsTableTableReferences(
+      super.$_db, super.$_table, super.$_typedResult);
+
+  static $RoomsTableTable _roomIdTable(_$OrbitsDatabase db) =>
+      db.roomsTable.createAlias(
+          $_aliasNameGenerator(db.roomChannelsTable.roomId, db.roomsTable.id));
+
+  $$RoomsTableTableProcessedTableManager get roomId {
+    final $_column = $_itemColumn<String>('room_id')!;
+
+    final manager = $$RoomsTableTableTableManager($_db, $_db.roomsTable)
+        .filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_roomIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: [item]));
+  }
+
+  static MultiTypedResultKey<$MessagesTableTable, List<MessageRow>>
+      _messagesTableRefsTable(_$OrbitsDatabase db) =>
+          MultiTypedResultKey.fromTable(db.messagesTable,
+              aliasName: $_aliasNameGenerator(
+                  db.roomChannelsTable.id, db.messagesTable.channelId));
+
+  $$MessagesTableTableProcessedTableManager get messagesTableRefs {
+    final manager = $$MessagesTableTableTableManager($_db, $_db.messagesTable)
+        .filter((f) => f.channelId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_messagesTableRefsTable($_db));
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: cache));
+  }
+}
+
+class $$RoomChannelsTableTableFilterComposer
+    extends Composer<_$OrbitsDatabase, $RoomChannelsTableTable> {
+  $$RoomChannelsTableTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get name => $composableBuilder(
+      column: $table.name, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get type => $composableBuilder(
+      column: $table.type, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get position => $composableBuilder(
+      column: $table.position, builder: (column) => ColumnFilters(column));
+
+  $$RoomsTableTableFilterComposer get roomId {
+    final $$RoomsTableTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.roomId,
+        referencedTable: $db.roomsTable,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$RoomsTableTableFilterComposer(
+              $db: $db,
+              $table: $db.roomsTable,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  Expression<bool> messagesTableRefs(
+      Expression<bool> Function($$MessagesTableTableFilterComposer f) f) {
+    final $$MessagesTableTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.messagesTable,
+        getReferencedColumn: (t) => t.channelId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$MessagesTableTableFilterComposer(
+              $db: $db,
+              $table: $db.messagesTable,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
+}
+
+class $$RoomChannelsTableTableOrderingComposer
+    extends Composer<_$OrbitsDatabase, $RoomChannelsTableTable> {
+  $$RoomChannelsTableTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+      column: $table.id, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get name => $composableBuilder(
+      column: $table.name, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get type => $composableBuilder(
+      column: $table.type, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get position => $composableBuilder(
+      column: $table.position, builder: (column) => ColumnOrderings(column));
+
+  $$RoomsTableTableOrderingComposer get roomId {
+    final $$RoomsTableTableOrderingComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.roomId,
+        referencedTable: $db.roomsTable,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$RoomsTableTableOrderingComposer(
+              $db: $db,
+              $table: $db.roomsTable,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$RoomChannelsTableTableAnnotationComposer
+    extends Composer<_$OrbitsDatabase, $RoomChannelsTableTable> {
+  $$RoomChannelsTableTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get name =>
+      $composableBuilder(column: $table.name, builder: (column) => column);
+
+  GeneratedColumn<String> get type =>
+      $composableBuilder(column: $table.type, builder: (column) => column);
+
+  GeneratedColumn<int> get position =>
+      $composableBuilder(column: $table.position, builder: (column) => column);
+
+  $$RoomsTableTableAnnotationComposer get roomId {
+    final $$RoomsTableTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.roomId,
+        referencedTable: $db.roomsTable,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$RoomsTableTableAnnotationComposer(
+              $db: $db,
+              $table: $db.roomsTable,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+
+  Expression<T> messagesTableRefs<T extends Object>(
+      Expression<T> Function($$MessagesTableTableAnnotationComposer a) f) {
+    final $$MessagesTableTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.id,
+        referencedTable: $db.messagesTable,
+        getReferencedColumn: (t) => t.channelId,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$MessagesTableTableAnnotationComposer(
+              $db: $db,
+              $table: $db.messagesTable,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return f(composer);
+  }
+}
+
+class $$RoomChannelsTableTableTableManager extends RootTableManager<
+    _$OrbitsDatabase,
+    $RoomChannelsTableTable,
+    RoomChannelRow,
+    $$RoomChannelsTableTableFilterComposer,
+    $$RoomChannelsTableTableOrderingComposer,
+    $$RoomChannelsTableTableAnnotationComposer,
+    $$RoomChannelsTableTableCreateCompanionBuilder,
+    $$RoomChannelsTableTableUpdateCompanionBuilder,
+    (RoomChannelRow, $$RoomChannelsTableTableReferences),
+    RoomChannelRow,
+    PrefetchHooks Function({bool roomId, bool messagesTableRefs})> {
+  $$RoomChannelsTableTableTableManager(
+      _$OrbitsDatabase db, $RoomChannelsTableTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$RoomChannelsTableTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$RoomChannelsTableTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$RoomChannelsTableTableAnnotationComposer(
+                  $db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> id = const Value.absent(),
+            Value<String> roomId = const Value.absent(),
+            Value<String> name = const Value.absent(),
+            Value<String> type = const Value.absent(),
+            Value<int> position = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              RoomChannelsTableCompanion(
+            id: id,
+            roomId: roomId,
+            name: name,
+            type: type,
+            position: position,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String id,
+            required String roomId,
+            Value<String> name = const Value.absent(),
+            required String type,
+            Value<int> position = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              RoomChannelsTableCompanion.insert(
+            id: id,
+            roomId: roomId,
+            name: name,
+            type: type,
+            position: position,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (
+                    e.readTable(table),
+                    $$RoomChannelsTableTableReferences(db, table, e)
+                  ))
+              .toList(),
+          prefetchHooksCallback: ({roomId = false, messagesTableRefs = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [
+                if (messagesTableRefs) db.messagesTable
+              ],
+              addJoins: <
+                  T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic>>(state) {
+                if (roomId) {
+                  state = state.withJoin(
+                    currentTable: table,
+                    currentColumn: table.roomId,
+                    referencedTable:
+                        $$RoomChannelsTableTableReferences._roomIdTable(db),
+                    referencedColumn:
+                        $$RoomChannelsTableTableReferences._roomIdTable(db).id,
+                  ) as T;
+                }
+
+                return state;
+              },
+              getPrefetchedDataCallback: (items) async {
+                return [
+                  if (messagesTableRefs)
+                    await $_getPrefetchedData<RoomChannelRow,
+                            $RoomChannelsTableTable, MessageRow>(
+                        currentTable: table,
+                        referencedTable: $$RoomChannelsTableTableReferences
+                            ._messagesTableRefsTable(db),
+                        managerFromTypedResult: (p0) =>
+                            $$RoomChannelsTableTableReferences(db, table, p0)
+                                .messagesTableRefs,
+                        referencedItemsForCurrentItem:
+                            (item, referencedItems) => referencedItems
+                                .where((e) => e.channelId == item.id),
+                        typedResults: items)
+                ];
+              },
+            );
+          },
+        ));
+}
+
+typedef $$RoomChannelsTableTableProcessedTableManager = ProcessedTableManager<
+    _$OrbitsDatabase,
+    $RoomChannelsTableTable,
+    RoomChannelRow,
+    $$RoomChannelsTableTableFilterComposer,
+    $$RoomChannelsTableTableOrderingComposer,
+    $$RoomChannelsTableTableAnnotationComposer,
+    $$RoomChannelsTableTableCreateCompanionBuilder,
+    $$RoomChannelsTableTableUpdateCompanionBuilder,
+    (RoomChannelRow, $$RoomChannelsTableTableReferences),
+    RoomChannelRow,
+    PrefetchHooks Function({bool roomId, bool messagesTableRefs})>;
 typedef $$MessagesTableTableCreateCompanionBuilder = MessagesTableCompanion
     Function({
   required String id,
@@ -4616,6 +6447,8 @@ typedef $$MessagesTableTableCreateCompanionBuilder = MessagesTableCompanion
   required String direction,
   required String status,
   required Uint8List data,
+  Value<String?> roomId,
+  Value<String?> channelId,
   Value<int> rowid,
 });
 typedef $$MessagesTableTableUpdateCompanionBuilder = MessagesTableCompanion
@@ -4626,8 +6459,32 @@ typedef $$MessagesTableTableUpdateCompanionBuilder = MessagesTableCompanion
   Value<String> direction,
   Value<String> status,
   Value<Uint8List> data,
+  Value<String?> roomId,
+  Value<String?> channelId,
   Value<int> rowid,
 });
+
+final class $$MessagesTableTableReferences
+    extends BaseReferences<_$OrbitsDatabase, $MessagesTableTable, MessageRow> {
+  $$MessagesTableTableReferences(
+      super.$_db, super.$_table, super.$_typedResult);
+
+  static $RoomChannelsTableTable _channelIdTable(_$OrbitsDatabase db) =>
+      db.roomChannelsTable.createAlias($_aliasNameGenerator(
+          db.messagesTable.channelId, db.roomChannelsTable.id));
+
+  $$RoomChannelsTableTableProcessedTableManager? get channelId {
+    final $_column = $_itemColumn<String>('channel_id');
+    if ($_column == null) return null;
+    final manager =
+        $$RoomChannelsTableTableTableManager($_db, $_db.roomChannelsTable)
+            .filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_channelIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: [item]));
+  }
+}
 
 class $$MessagesTableTableFilterComposer
     extends Composer<_$OrbitsDatabase, $MessagesTableTable> {
@@ -4655,6 +6512,29 @@ class $$MessagesTableTableFilterComposer
 
   ColumnFilters<Uint8List> get data => $composableBuilder(
       column: $table.data, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get roomId => $composableBuilder(
+      column: $table.roomId, builder: (column) => ColumnFilters(column));
+
+  $$RoomChannelsTableTableFilterComposer get channelId {
+    final $$RoomChannelsTableTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.channelId,
+        referencedTable: $db.roomChannelsTable,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$RoomChannelsTableTableFilterComposer(
+              $db: $db,
+              $table: $db.roomChannelsTable,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
 }
 
 class $$MessagesTableTableOrderingComposer
@@ -4683,6 +6563,29 @@ class $$MessagesTableTableOrderingComposer
 
   ColumnOrderings<Uint8List> get data => $composableBuilder(
       column: $table.data, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get roomId => $composableBuilder(
+      column: $table.roomId, builder: (column) => ColumnOrderings(column));
+
+  $$RoomChannelsTableTableOrderingComposer get channelId {
+    final $$RoomChannelsTableTableOrderingComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.channelId,
+        referencedTable: $db.roomChannelsTable,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$RoomChannelsTableTableOrderingComposer(
+              $db: $db,
+              $table: $db.roomChannelsTable,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
 }
 
 class $$MessagesTableTableAnnotationComposer
@@ -4711,6 +6614,30 @@ class $$MessagesTableTableAnnotationComposer
 
   GeneratedColumn<Uint8List> get data =>
       $composableBuilder(column: $table.data, builder: (column) => column);
+
+  GeneratedColumn<String> get roomId =>
+      $composableBuilder(column: $table.roomId, builder: (column) => column);
+
+  $$RoomChannelsTableTableAnnotationComposer get channelId {
+    final $$RoomChannelsTableTableAnnotationComposer composer =
+        $composerBuilder(
+            composer: this,
+            getCurrentColumn: (t) => t.channelId,
+            referencedTable: $db.roomChannelsTable,
+            getReferencedColumn: (t) => t.id,
+            builder: (joinBuilder,
+                    {$addJoinBuilderToRootComposer,
+                    $removeJoinBuilderFromRootComposer}) =>
+                $$RoomChannelsTableTableAnnotationComposer(
+                  $db: $db,
+                  $table: $db.roomChannelsTable,
+                  $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                  joinBuilder: joinBuilder,
+                  $removeJoinBuilderFromRootComposer:
+                      $removeJoinBuilderFromRootComposer,
+                ));
+    return composer;
+  }
 }
 
 class $$MessagesTableTableTableManager extends RootTableManager<
@@ -4722,12 +6649,9 @@ class $$MessagesTableTableTableManager extends RootTableManager<
     $$MessagesTableTableAnnotationComposer,
     $$MessagesTableTableCreateCompanionBuilder,
     $$MessagesTableTableUpdateCompanionBuilder,
-    (
-      MessageRow,
-      BaseReferences<_$OrbitsDatabase, $MessagesTableTable, MessageRow>
-    ),
+    (MessageRow, $$MessagesTableTableReferences),
     MessageRow,
-    PrefetchHooks Function()> {
+    PrefetchHooks Function({bool channelId})> {
   $$MessagesTableTableTableManager(
       _$OrbitsDatabase db, $MessagesTableTable table)
       : super(TableManagerState(
@@ -4746,6 +6670,8 @@ class $$MessagesTableTableTableManager extends RootTableManager<
             Value<String> direction = const Value.absent(),
             Value<String> status = const Value.absent(),
             Value<Uint8List> data = const Value.absent(),
+            Value<String?> roomId = const Value.absent(),
+            Value<String?> channelId = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MessagesTableCompanion(
@@ -4755,6 +6681,8 @@ class $$MessagesTableTableTableManager extends RootTableManager<
             direction: direction,
             status: status,
             data: data,
+            roomId: roomId,
+            channelId: channelId,
             rowid: rowid,
           ),
           createCompanionCallback: ({
@@ -4764,6 +6692,8 @@ class $$MessagesTableTableTableManager extends RootTableManager<
             required String direction,
             required String status,
             required Uint8List data,
+            Value<String?> roomId = const Value.absent(),
+            Value<String?> channelId = const Value.absent(),
             Value<int> rowid = const Value.absent(),
           }) =>
               MessagesTableCompanion.insert(
@@ -4773,12 +6703,51 @@ class $$MessagesTableTableTableManager extends RootTableManager<
             direction: direction,
             status: status,
             data: data,
+            roomId: roomId,
+            channelId: channelId,
             rowid: rowid,
           ),
           withReferenceMapper: (p0) => p0
-              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .map((e) => (
+                    e.readTable(table),
+                    $$MessagesTableTableReferences(db, table, e)
+                  ))
               .toList(),
-          prefetchHooksCallback: null,
+          prefetchHooksCallback: ({channelId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins: <
+                  T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic>>(state) {
+                if (channelId) {
+                  state = state.withJoin(
+                    currentTable: table,
+                    currentColumn: table.channelId,
+                    referencedTable:
+                        $$MessagesTableTableReferences._channelIdTable(db),
+                    referencedColumn:
+                        $$MessagesTableTableReferences._channelIdTable(db).id,
+                  ) as T;
+                }
+
+                return state;
+              },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
         ));
 }
 
@@ -4791,12 +6760,9 @@ typedef $$MessagesTableTableProcessedTableManager = ProcessedTableManager<
     $$MessagesTableTableAnnotationComposer,
     $$MessagesTableTableCreateCompanionBuilder,
     $$MessagesTableTableUpdateCompanionBuilder,
-    (
-      MessageRow,
-      BaseReferences<_$OrbitsDatabase, $MessagesTableTable, MessageRow>
-    ),
+    (MessageRow, $$MessagesTableTableReferences),
     MessageRow,
-    PrefetchHooks Function()>;
+    PrefetchHooks Function({bool channelId})>;
 typedef $$StickerPacksTableTableCreateCompanionBuilder
     = StickerPacksTableCompanion Function({
   required String id,
@@ -5693,6 +7659,299 @@ typedef $$KvTableTableProcessedTableManager = ProcessedTableManager<
     (KvRow, BaseReferences<_$OrbitsDatabase, $KvTableTable, KvRow>),
     KvRow,
     PrefetchHooks Function()>;
+typedef $$RoomMembersTableTableCreateCompanionBuilder
+    = RoomMembersTableCompanion Function({
+  required String roomId,
+  required String peerId,
+  Value<String> displayName,
+  Value<String?> avatarDataUrl,
+  Value<bool> isOnline,
+  Value<int> joinedAt,
+  Value<int> rowid,
+});
+typedef $$RoomMembersTableTableUpdateCompanionBuilder
+    = RoomMembersTableCompanion Function({
+  Value<String> roomId,
+  Value<String> peerId,
+  Value<String> displayName,
+  Value<String?> avatarDataUrl,
+  Value<bool> isOnline,
+  Value<int> joinedAt,
+  Value<int> rowid,
+});
+
+final class $$RoomMembersTableTableReferences extends BaseReferences<
+    _$OrbitsDatabase, $RoomMembersTableTable, RoomMemberRow> {
+  $$RoomMembersTableTableReferences(
+      super.$_db, super.$_table, super.$_typedResult);
+
+  static $RoomsTableTable _roomIdTable(_$OrbitsDatabase db) =>
+      db.roomsTable.createAlias(
+          $_aliasNameGenerator(db.roomMembersTable.roomId, db.roomsTable.id));
+
+  $$RoomsTableTableProcessedTableManager get roomId {
+    final $_column = $_itemColumn<String>('room_id')!;
+
+    final manager = $$RoomsTableTableTableManager($_db, $_db.roomsTable)
+        .filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_roomIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+        manager.$state.copyWith(prefetchedData: [item]));
+  }
+}
+
+class $$RoomMembersTableTableFilterComposer
+    extends Composer<_$OrbitsDatabase, $RoomMembersTableTable> {
+  $$RoomMembersTableTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get peerId => $composableBuilder(
+      column: $table.peerId, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get displayName => $composableBuilder(
+      column: $table.displayName, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<String> get avatarDataUrl => $composableBuilder(
+      column: $table.avatarDataUrl, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<bool> get isOnline => $composableBuilder(
+      column: $table.isOnline, builder: (column) => ColumnFilters(column));
+
+  ColumnFilters<int> get joinedAt => $composableBuilder(
+      column: $table.joinedAt, builder: (column) => ColumnFilters(column));
+
+  $$RoomsTableTableFilterComposer get roomId {
+    final $$RoomsTableTableFilterComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.roomId,
+        referencedTable: $db.roomsTable,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$RoomsTableTableFilterComposer(
+              $db: $db,
+              $table: $db.roomsTable,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$RoomMembersTableTableOrderingComposer
+    extends Composer<_$OrbitsDatabase, $RoomMembersTableTable> {
+  $$RoomMembersTableTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get peerId => $composableBuilder(
+      column: $table.peerId, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get displayName => $composableBuilder(
+      column: $table.displayName, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<String> get avatarDataUrl => $composableBuilder(
+      column: $table.avatarDataUrl,
+      builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<bool> get isOnline => $composableBuilder(
+      column: $table.isOnline, builder: (column) => ColumnOrderings(column));
+
+  ColumnOrderings<int> get joinedAt => $composableBuilder(
+      column: $table.joinedAt, builder: (column) => ColumnOrderings(column));
+
+  $$RoomsTableTableOrderingComposer get roomId {
+    final $$RoomsTableTableOrderingComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.roomId,
+        referencedTable: $db.roomsTable,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$RoomsTableTableOrderingComposer(
+              $db: $db,
+              $table: $db.roomsTable,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$RoomMembersTableTableAnnotationComposer
+    extends Composer<_$OrbitsDatabase, $RoomMembersTableTable> {
+  $$RoomMembersTableTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get peerId =>
+      $composableBuilder(column: $table.peerId, builder: (column) => column);
+
+  GeneratedColumn<String> get displayName => $composableBuilder(
+      column: $table.displayName, builder: (column) => column);
+
+  GeneratedColumn<String> get avatarDataUrl => $composableBuilder(
+      column: $table.avatarDataUrl, builder: (column) => column);
+
+  GeneratedColumn<bool> get isOnline =>
+      $composableBuilder(column: $table.isOnline, builder: (column) => column);
+
+  GeneratedColumn<int> get joinedAt =>
+      $composableBuilder(column: $table.joinedAt, builder: (column) => column);
+
+  $$RoomsTableTableAnnotationComposer get roomId {
+    final $$RoomsTableTableAnnotationComposer composer = $composerBuilder(
+        composer: this,
+        getCurrentColumn: (t) => t.roomId,
+        referencedTable: $db.roomsTable,
+        getReferencedColumn: (t) => t.id,
+        builder: (joinBuilder,
+                {$addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer}) =>
+            $$RoomsTableTableAnnotationComposer(
+              $db: $db,
+              $table: $db.roomsTable,
+              $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+              joinBuilder: joinBuilder,
+              $removeJoinBuilderFromRootComposer:
+                  $removeJoinBuilderFromRootComposer,
+            ));
+    return composer;
+  }
+}
+
+class $$RoomMembersTableTableTableManager extends RootTableManager<
+    _$OrbitsDatabase,
+    $RoomMembersTableTable,
+    RoomMemberRow,
+    $$RoomMembersTableTableFilterComposer,
+    $$RoomMembersTableTableOrderingComposer,
+    $$RoomMembersTableTableAnnotationComposer,
+    $$RoomMembersTableTableCreateCompanionBuilder,
+    $$RoomMembersTableTableUpdateCompanionBuilder,
+    (RoomMemberRow, $$RoomMembersTableTableReferences),
+    RoomMemberRow,
+    PrefetchHooks Function({bool roomId})> {
+  $$RoomMembersTableTableTableManager(
+      _$OrbitsDatabase db, $RoomMembersTableTable table)
+      : super(TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$RoomMembersTableTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$RoomMembersTableTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$RoomMembersTableTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback: ({
+            Value<String> roomId = const Value.absent(),
+            Value<String> peerId = const Value.absent(),
+            Value<String> displayName = const Value.absent(),
+            Value<String?> avatarDataUrl = const Value.absent(),
+            Value<bool> isOnline = const Value.absent(),
+            Value<int> joinedAt = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              RoomMembersTableCompanion(
+            roomId: roomId,
+            peerId: peerId,
+            displayName: displayName,
+            avatarDataUrl: avatarDataUrl,
+            isOnline: isOnline,
+            joinedAt: joinedAt,
+            rowid: rowid,
+          ),
+          createCompanionCallback: ({
+            required String roomId,
+            required String peerId,
+            Value<String> displayName = const Value.absent(),
+            Value<String?> avatarDataUrl = const Value.absent(),
+            Value<bool> isOnline = const Value.absent(),
+            Value<int> joinedAt = const Value.absent(),
+            Value<int> rowid = const Value.absent(),
+          }) =>
+              RoomMembersTableCompanion.insert(
+            roomId: roomId,
+            peerId: peerId,
+            displayName: displayName,
+            avatarDataUrl: avatarDataUrl,
+            isOnline: isOnline,
+            joinedAt: joinedAt,
+            rowid: rowid,
+          ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (
+                    e.readTable(table),
+                    $$RoomMembersTableTableReferences(db, table, e)
+                  ))
+              .toList(),
+          prefetchHooksCallback: ({roomId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins: <
+                  T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic>>(state) {
+                if (roomId) {
+                  state = state.withJoin(
+                    currentTable: table,
+                    currentColumn: table.roomId,
+                    referencedTable:
+                        $$RoomMembersTableTableReferences._roomIdTable(db),
+                    referencedColumn:
+                        $$RoomMembersTableTableReferences._roomIdTable(db).id,
+                  ) as T;
+                }
+
+                return state;
+              },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ));
+}
+
+typedef $$RoomMembersTableTableProcessedTableManager = ProcessedTableManager<
+    _$OrbitsDatabase,
+    $RoomMembersTableTable,
+    RoomMemberRow,
+    $$RoomMembersTableTableFilterComposer,
+    $$RoomMembersTableTableOrderingComposer,
+    $$RoomMembersTableTableAnnotationComposer,
+    $$RoomMembersTableTableCreateCompanionBuilder,
+    $$RoomMembersTableTableUpdateCompanionBuilder,
+    (RoomMemberRow, $$RoomMembersTableTableReferences),
+    RoomMemberRow,
+    PrefetchHooks Function({bool roomId})>;
 
 class $OrbitsDatabaseManager {
   final _$OrbitsDatabase _db;
@@ -5709,6 +7968,10 @@ class $OrbitsDatabaseManager {
       $$AvatarsTableTableTableManager(_db, _db.avatarsTable);
   $$SessionKeysTableTableTableManager get sessionKeysTable =>
       $$SessionKeysTableTableTableManager(_db, _db.sessionKeysTable);
+  $$RoomsTableTableTableManager get roomsTable =>
+      $$RoomsTableTableTableManager(_db, _db.roomsTable);
+  $$RoomChannelsTableTableTableManager get roomChannelsTable =>
+      $$RoomChannelsTableTableTableManager(_db, _db.roomChannelsTable);
   $$MessagesTableTableTableManager get messagesTable =>
       $$MessagesTableTableTableManager(_db, _db.messagesTable);
   $$StickerPacksTableTableTableManager get stickerPacksTable =>
@@ -5721,4 +7984,6 @@ class $OrbitsDatabaseManager {
       $$FileBlobsTableTableTableManager(_db, _db.fileBlobsTable);
   $$KvTableTableTableManager get kvTable =>
       $$KvTableTableTableManager(_db, _db.kvTable);
+  $$RoomMembersTableTableTableManager get roomMembersTable =>
+      $$RoomMembersTableTableTableManager(_db, _db.roomMembersTable);
 }

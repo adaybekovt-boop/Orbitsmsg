@@ -24,6 +24,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../peer/security_monitor.dart' show ContactVerification;
 import '../../themes/orbits_tokens.dart';
 import 'file_tile.dart';
 import 'voice_player.dart';
@@ -53,10 +54,35 @@ class MessageBubble extends StatelessWidget {
     required this.row,
     this.onRetry,
     this.onReplyRequested,
+    this.groupedWithPrevious = false,
+    this.isTail = true,
+    this.hostPeerId,
+    this.senderVerification,
   });
 
   /// Raw Drift row: id, peerId, timestamp, direction, status, payload (Map).
   final Map<String, Object?> row;
+
+  /// For room messages (`row['roomId'] != null`): the room host's peer code,
+  /// so an incoming message from the host gets an "Организатор" badge. Null in
+  /// 1:1 chats — no sender header is shown there.
+  final String? hostPeerId;
+
+  /// For room messages: the sender's verification tier (from their contact
+  /// `trustLevel`). A non-host sender renders a green "Проверен" check when
+  /// [ContactVerification.verified], or a grey tappable "Не проверен" warning
+  /// when [ContactVerification.unverified]. Null → no verification badge.
+  final ContactVerification? senderVerification;
+
+  /// Message clustering: true when the previous (older) message is from the
+  /// same author within the grouping window — collapses the vertical gap so a
+  /// run of messages reads as one block.
+  final bool groupedWithPrevious;
+
+  /// True when this is the last bubble of its cluster (or a standalone
+  /// message) — only the tail bubble keeps the asymmetric "tail" corner;
+  /// inner bubbles are symmetrically rounded.
+  final bool isTail;
 
   /// Tap-to-retry for failed outbound messages. Pending rows become
   /// tappable; other states swallow the tap.
@@ -100,8 +126,21 @@ class MessageBubble extends StatelessWidget {
         replyRaw is Map ? Map<String, Object?>.from(replyRaw) : null;
 
     final scheme = Theme.of(context).colorScheme;
+    final tokens = OrbitsTokens.of(context);
     final media = MediaQuery.of(context).size.width;
     final maxW = media * 0.75;
+
+    // Group-chat (room) sender attribution: show the name once at the top of a
+    // cluster, on incoming messages only. The "Организатор" badge marks the
+    // host. 1:1 chats pass no hostPeerId and don't set roomId, so this stays
+    // off there.
+    final isRoom = (row['roomId'] as String?) != null;
+    final showSender = isRoom && !mine && !groupedWithPrevious;
+    final senderName = showSender ? _roomSenderName(payloadMap, row) : '';
+    final senderIsHost = isRoom &&
+        hostPeerId != null &&
+        hostPeerId!.isNotEmpty &&
+        (row['peerId'] as String?) == hostPeerId;
 
     // Reply long-press is suppressed while a message is still sending —
     // the same tap-area carries "tap to retry" on pending rows, and two
@@ -121,7 +160,8 @@ class MessageBubble extends StatelessWidget {
         child: Align(
           alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            padding: EdgeInsets.only(
+                left: 8, right: 8, top: groupedWithPrevious ? 1.5 : 4, bottom: 2),
             child: Column(
               crossAxisAlignment:
                   mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
@@ -194,7 +234,8 @@ class MessageBubble extends StatelessWidget {
         child: Align(
           alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
           child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            padding: EdgeInsets.only(
+                left: 8, right: 8, top: groupedWithPrevious ? 1.5 : 4, bottom: 2),
             child: Column(
               crossAxisAlignment:
                   mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
@@ -243,8 +284,8 @@ class MessageBubble extends StatelessWidget {
 
     // Regular text bubble — same layout as before, with an optional
     // reply quote pinned to the top of the column.
-    final bg = mine ? scheme.primary : scheme.surfaceContainerHighest;
-    final fg = mine ? scheme.onPrimary : scheme.onSurface;
+    final bg = mine ? tokens.bubbleOut : scheme.surfaceContainerHighest;
+    final fg = mine ? _outgoingTextColor(tokens) : scheme.onSurface;
     final timeColor = fg.withValues(alpha: 0.72);
 
     return _BubbleGesture(
@@ -254,21 +295,25 @@ class MessageBubble extends StatelessWidget {
         alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
         child: Container(
           constraints: BoxConstraints(maxWidth: maxW),
-          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+          margin: _bubbleMargin(),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           decoration: BoxDecoration(
             color: bg,
-            borderRadius: BorderRadius.only(
-              topLeft: const Radius.circular(20),
-              topRight: const Radius.circular(20),
-              bottomLeft: Radius.circular(mine ? 20 : 6),
-              bottomRight: Radius.circular(mine ? 6 : 20),
-            ),
+            borderRadius: _bubbleRadius(mine),
+            border: mine
+                ? Border.all(color: tokens.accentAlpha(0.22), width: 1)
+                : null,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
+              if (showSender)
+                _RoomSenderHeader(
+                  name: senderName,
+                  isHost: senderIsHost,
+                  verification: senderIsHost ? null : senderVerification,
+                ),
               if (replyTo != null)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 6),
@@ -314,6 +359,24 @@ class MessageBubble extends StatelessWidget {
     );
   }
 
+  /// Cluster-aware outer margin: tight top gap when this bubble continues a
+  /// run from the same author, normal gap when it starts a new block.
+  EdgeInsets _bubbleMargin() => EdgeInsets.only(
+        left: 12,
+        right: 12,
+        top: groupedWithPrevious ? 1.5 : 6,
+        bottom: 1.5,
+      );
+
+  /// Cluster-aware corner radii: only the tail bubble keeps the asymmetric
+  /// "tail" corner; inner bubbles of a run are symmetrically rounded.
+  BorderRadius _bubbleRadius(bool mine) => BorderRadius.only(
+        topLeft: const Radius.circular(20),
+        topRight: const Radius.circular(20),
+        bottomLeft: Radius.circular(!mine && isTail ? 6 : 20),
+        bottomRight: Radius.circular(mine && isTail ? 6 : 20),
+      );
+
   /// Shared rendering for "media-in-bubble" bodies (voice). The message
   /// chrome mirrors the text bubble (same rounded tail, same fill) so
   /// rows line up visually, but we swap the core body for a player.
@@ -330,8 +393,9 @@ class MessageBubble extends StatelessWidget {
     required Widget body,
   }) {
     final scheme = Theme.of(context).colorScheme;
-    final bg = mine ? scheme.primary : scheme.surfaceContainerHighest;
-    final fg = mine ? scheme.onPrimary : scheme.onSurface;
+    final tokens = OrbitsTokens.of(context);
+    final bg = mine ? tokens.bubbleOut : scheme.surfaceContainerHighest;
+    final fg = mine ? _outgoingTextColor(tokens) : scheme.onSurface;
     final timeColor = fg.withValues(alpha: 0.72);
 
     return _BubbleGesture(
@@ -341,16 +405,14 @@ class MessageBubble extends StatelessWidget {
         alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
         child: Container(
           constraints: BoxConstraints(maxWidth: maxW),
-          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 3),
+          margin: _bubbleMargin(),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
           decoration: BoxDecoration(
             color: bg,
-            borderRadius: BorderRadius.only(
-              topLeft: const Radius.circular(20),
-              topRight: const Radius.circular(20),
-              bottomLeft: Radius.circular(mine ? 20 : 6),
-              bottomRight: Radius.circular(mine ? 6 : 20),
-            ),
+            borderRadius: _bubbleRadius(mine),
+            border: mine
+                ? Border.all(color: tokens.accentAlpha(0.22), width: 1)
+                : null,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -509,13 +571,17 @@ class _ReplyQuote extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final tokens = OrbitsTokens.of(context);
     final author = _authorName(replyTo);
     final preview = _quotePreview(replyTo);
 
     // Colour strategy: inside a filled bubble we can lean on the bubble's
     // own fg colour with alpha; in opaque mode (bare sticker) we need a
     // real surface. The vertical accent strip is always the primary.
-    final textOnFilled = mine ? scheme.onPrimary : scheme.onSurface;
+    // For "mine" we mirror the bubble's derived text colour so the quote stays
+    // legible on the dark graphite-blue fill (scheme.onPrimary would be dark).
+    final textOnFilled =
+        mine ? _outgoingTextColor(tokens) : scheme.onSurface;
     final textOnOpaque = scheme.onSurface;
     final authorColor = onOpaque
         ? scheme.primary
@@ -652,6 +718,10 @@ class _MetaRow extends StatelessWidget {
           style: TextStyle(
             color: color,
             fontSize: 11,
+            // Warm body font (Inter) for the clock — mono is reserved for
+            // profile codes + safety fingerprints. Tabular figures keep the
+            // HH:MM width steady so the row doesn't jitter.
+            fontFamily: OrbitsTokens.of(context).fontBody,
             fontFeatures: const [FontFeature.tabularFigures()],
           ),
         ),
@@ -689,6 +759,204 @@ class _DeliveryIcon extends StatelessWidget {
     };
   }
 }
+
+/// Display name for a room message's sender. Prefers the wire `fromName`,
+/// falls back to a "Контакт •XXXX" placeholder from the peer-id tail.
+String _roomSenderName(Map<String, Object?> payload, Map<String, Object?> row) {
+  final fn = (payload['fromName'] as String?)?.trim();
+  if (fn != null && fn.isNotEmpty) return fn;
+  final from = (row['peerId'] as String?) ?? '';
+  if (from.isEmpty) return 'Участник';
+  final tail = from.length <= 4 ? from : from.substring(from.length - 4);
+  return 'Контакт •$tail';
+}
+
+/// Sender attribution shown at the top of an incoming room-message bubble:
+/// the name plus an optional "Организатор" (host) badge.
+class _RoomSenderHeader extends StatelessWidget {
+  const _RoomSenderHeader({
+    required this.name,
+    required this.isHost,
+    this.verification,
+  });
+  final String name;
+  final bool isHost;
+  final ContactVerification? verification;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = OrbitsTokens.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 3),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Flexible(
+            child: Text(
+              name,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                color: t.text,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                fontFamily: t.fontBody,
+              ),
+            ),
+          ),
+          // Host badge takes precedence; otherwise show the verification tier.
+          if (isHost) ...[
+            const SizedBox(width: 6),
+            const _HostBadge(),
+          ] else if (verification == ContactVerification.verified) ...[
+            const SizedBox(width: 6),
+            const _VerifiedBadge(),
+          ] else if (verification == ContactVerification.unverified) ...[
+            const SizedBox(width: 6),
+            const _UnverifiedBadge(),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _HostBadge extends StatelessWidget {
+  const _HostBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final t = OrbitsTokens.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: t.accentAlpha(0.18),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: t.accentAlpha(0.32)),
+      ),
+      child: Text(
+        'Организатор',
+        style: TextStyle(
+          color: t.text,
+          fontSize: 9,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.3,
+          fontFamily: t.fontBody,
+        ),
+      ),
+    );
+  }
+}
+
+/// Green "verified" chip — sender's contact trustLevel ≥ 2 (safety number was
+/// personally confirmed).
+class _VerifiedBadge extends StatelessWidget {
+  const _VerifiedBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final t = OrbitsTokens.of(context);
+    return Tooltip(
+      message: 'Личность подтверждена',
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        decoration: BoxDecoration(
+          color: t.success.withValues(alpha: 0.16),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: t.success.withValues(alpha: 0.4)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.verified_rounded, size: 11, color: t.success),
+            const SizedBox(width: 3),
+            Text(
+              'Проверен',
+              style: TextStyle(
+                color: t.success,
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                fontFamily: t.fontBody,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Grey "unverified" chip — sender has no confirmed trustLevel. Tap opens a
+/// man-in-the-middle warning.
+class _UnverifiedBadge extends StatelessWidget {
+  const _UnverifiedBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    final t = OrbitsTokens.of(context);
+    return GestureDetector(
+      onTap: () => _showUnverifiedWarning(context, t),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+        decoration: BoxDecoration(
+          color: t.muted.withValues(alpha: 0.14),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: t.muted.withValues(alpha: 0.3)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.error_outline_rounded, size: 11, color: t.muted),
+            const SizedBox(width: 3),
+            Text(
+              'Не проверен',
+              style: TextStyle(
+                color: t.muted,
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+                fontFamily: t.fontBody,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+void _showUnverifiedWarning(BuildContext context, OrbitsTokens t) {
+  showDialog<void>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      backgroundColor: t.surface,
+      title: Text(
+        'Личность не подтверждена',
+        style: TextStyle(fontFamily: t.fontHeading, color: t.text),
+      ),
+      content: Text(
+        'Вы ещё не сверяли код безопасности этого участника. Переписка '
+        'зашифрована, но без проверки нельзя исключить подмену ключа '
+        '(«человек посередине»). Сверьте код безопасности лично, прежде '
+        'чем полностью доверять отправителю.',
+        style: TextStyle(fontFamily: t.fontBody, color: t.text, height: 1.4),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(),
+          child: const Text('Понятно'),
+        ),
+      ],
+    ),
+  );
+}
+
+/// Legible text colour for an outgoing bubble, derived from the (dark in both
+/// themes) [OrbitsTokens.bubbleOut] fill so we never paint dark glyphs on a
+/// dark glass tile.
+Color _outgoingTextColor(OrbitsTokens tokens) =>
+    ThemeData.estimateBrightnessForColor(tokens.bubbleOut) == Brightness.dark
+        ? Colors.white.withValues(alpha: 0.95)
+        : Colors.black.withValues(alpha: 0.9);
 
 String _formatTime(int epochMs) {
   if (epochMs <= 0) return '';

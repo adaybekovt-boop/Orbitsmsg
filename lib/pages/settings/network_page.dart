@@ -14,6 +14,9 @@ import '../../core/haptics.dart';
 import '../../state/local_profile_provider.dart';
 import '../../state/peer_connection_provider.dart';
 import '../../themes/orbits_tokens.dart';
+import '../../ui/primitives/orbits_glass_button.dart';
+import '../../ui/primitives/orbits_glass_list_tile.dart';
+import '../../ui/primitives/orbits_glass_surface.dart';
 import '../../ui/primitives/orbs_card.dart';
 import '../../ui/profile/my_qr_page.dart';
 
@@ -28,11 +31,21 @@ class NetworkPage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        surfaceTintColor: Colors.transparent,
+        elevation: 0,
+        scrolledUnderElevation: 0,
+        flexibleSpace: const OrbitsGlassSurface(
+          role: OrbitsGlassRole.appBar,
+          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
+          child: SizedBox.expand(),
+        ),
         title: Text(
-          'Сеть',
+          'Соединение',
           style: TextStyle(
             fontFamily: tokens.fontHeading,
             fontWeight: FontWeight.w600,
+            color: tokens.text,
           ),
         ),
       ),
@@ -40,22 +53,20 @@ class NetworkPage extends ConsumerWidget {
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
           // ── Peer ID ──────────────────────────────────────────
-          const OrbsSectionTitle('Твой ID'),
+          const OrbsSectionTitle('Мой код'),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbsCard(
+            child: OrbitsGlassSurface(
+              role: OrbitsGlassRole.card,
+              padding: const EdgeInsets.all(16),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
+                  OrbitsGlassSurface(
+                    role: OrbitsGlassRole.input,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
                       vertical: 10,
-                    ),
-                    decoration: BoxDecoration(
-                      color: tokens.bg.withValues(alpha: 0.45),
-                      borderRadius: BorderRadius.circular(tokens.radiusButton),
-                      border: Border.all(color: tokens.border),
                     ),
                     child: Row(
                       children: [
@@ -70,10 +81,11 @@ class NetworkPage extends ConsumerWidget {
                           ),
                         ),
                         if (user != null) ...[
-                          IconButton(
+                          OrbitsGlassIconButton(
+                            icon: Icons.qr_code_2,
                             tooltip: 'QR-код',
-                            icon: Icon(Icons.qr_code_2,
-                                color: tokens.text, size: 22),
+                            variant: OrbitsGlassVariant.subtle,
+                            size: OrbitsGlassSize.small,
                             onPressed: () {
                               hapticTap();
                               Navigator.of(context).push(
@@ -84,10 +96,12 @@ class NetworkPage extends ConsumerWidget {
                               );
                             },
                           ),
-                          IconButton(
+                          const SizedBox(width: 4),
+                          OrbitsGlassIconButton(
+                            icon: Icons.copy_outlined,
                             tooltip: 'Скопировать',
-                            icon: Icon(Icons.copy_outlined,
-                                color: tokens.muted, size: 20),
+                            variant: OrbitsGlassVariant.subtle,
+                            size: OrbitsGlassSize.small,
                             onPressed: () async {
                               hapticTap();
                               await Clipboard.setData(
@@ -98,7 +112,7 @@ class NetworkPage extends ConsumerWidget {
                                 ..clearSnackBars()
                                 ..showSnackBar(
                                   const SnackBar(
-                                    content: Text('Peer ID скопирован'),
+                                    content: Text('Код скопирован'),
                                     duration: Duration(seconds: 1),
                                   ),
                                 );
@@ -110,7 +124,7 @@ class NetworkPage extends ConsumerWidget {
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    'ID присвоен навсегда и не может быть сброшен. Поделись им '
+                    'Код присвоен навсегда и не может быть сброшен. Поделись им '
                     'с друзьями — они смогут добавить тебя в контакты.',
                     style: TextStyle(
                       fontSize: 12,
@@ -127,30 +141,21 @@ class NetworkPage extends ConsumerWidget {
           // ── Status ───────────────────────────────────────────
           const OrbsSectionTitle('Статус'),
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbsCard(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 6,
-                vertical: 4,
-              ),
-              child: Column(
-                children: [
-                  OrbsSettingRow(
-                    label: 'Соединение',
-                    subtitle: _statusLabel(conn.status),
-                    trailing: _StatusDot(status: conn.status, tokens: tokens),
-                  ),
-                  if (conn.error != null && conn.error!.isNotEmpty) ...[
-                    const OrbsDivider(),
-                    OrbsSettingRow(
-                      label: 'Последняя ошибка',
-                      subtitle: conn.error ?? '',
-                    ),
-                  ],
-                ],
-              ),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: OrbitsGlassListTile(
+              title: const Text('Соединение'),
+              subtitle: Text(_statusLabel(conn.status)),
+              trailing: _StatusDot(status: conn.status, tokens: tokens),
             ),
           ),
+          if (conn.error != null && conn.error!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                title: const Text('Последняя ошибка'),
+                subtitle: Text(conn.error ?? ''),
+              ),
+            ),
 
           // ── How it works ─────────────────────────────────────
           const SizedBox(height: 8),
@@ -187,9 +192,9 @@ class NetworkPage extends ConsumerWidget {
     return switch (status) {
       'connected' => 'В сети',
       'connecting' => 'Подключение…',
-      'multitab' => 'Открыта в другой вкладке',
-      'disconnected' => 'Не в сети',
-      _ => 'Готов',
+      'multitab' => 'Открыто в другой вкладке',
+      'disconnected' => 'Нет соединения',
+      _ => 'Нет соединения',
     };
   }
 }

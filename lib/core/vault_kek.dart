@@ -10,17 +10,27 @@
 // password. The wire format must stay byte-compatible with the JS build:
 //   "orb-wrap-v1:<b64 iv(12)>:<b64 ct+tag(n+16)>"
 
+import 'dart:convert';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:pointycastle/export.dart' as pc;
 
 import 'base64_helpers.dart';
 
 const String _wrapPrefix = 'orb-wrap-v1:';
 
 final _aes = AesGcm.with256bits();
+final _blobRng = Random.secure();
 
 SecretKey? _kek;
+
+/// Raw 32-byte KEK kept alongside [_kek] so the synchronous blob cipher
+/// ([wrapBlobSync] / [unwrapBlobSync]) can run without an async extract — the
+/// `cryptography` AES-GCM is async, which doesn't fit Drift's synchronous
+/// `.watch().map` row decoders (audit L3).
+Uint8List? _kekRaw;
 
 /// Install the KEK from raw bytes (typically scrypt dk). Must be ≥32 bytes;
 /// only the first 32 are kept.
@@ -28,17 +38,94 @@ Future<void> setVaultKek(List<int> rawBytes) async {
   if (rawBytes.length < 32) {
     throw ArgumentError('vault: KEK must be at least 32 bytes');
   }
-  _kek = SecretKey(rawBytes.sublist(0, 32));
+  final raw = Uint8List.fromList(rawBytes.sublist(0, 32));
+  _kek = SecretKey(raw);
+  _kekRaw = raw;
 }
 
 void clearVaultKek() {
   _kek = null;
+  _kekRaw = null;
 }
 
 bool hasVaultKek() => _kek != null;
 
 bool isWrapped(Object? value) =>
     value is String && value.startsWith(_wrapPrefix);
+
+// ─────────────────────────────────────────────────────────────
+// Synchronous blob cipher (audit L3 — at-rest message/peer content)
+// ─────────────────────────────────────────────────────────────
+//
+// AES-256-GCM via pointycastle (pure Dart, synchronous) so it can run inside
+// Drift's synchronous row decoders. Frame: magic 'OB1' (3) | nonce (12) |
+// ciphertext+tag. The magic lets reads distinguish an encrypted blob from a
+// legacy plaintext JSON row (which always starts with '{' / '['), so existing
+// data keeps decoding and migrates lazily on the next write.
+
+const List<int> _blobMagic = [0x4F, 0x42, 0x31]; // 'OB1'
+const int _blobNonceLen = 12;
+const int _blobHeaderLen = 3 + _blobNonceLen; // magic + nonce
+
+/// True if [data] carries the encrypted-blob frame (vs. legacy plaintext).
+bool isBlobWrapped(List<int> data) =>
+    data.length >= _blobHeaderLen &&
+    data[0] == _blobMagic[0] &&
+    data[1] == _blobMagic[1] &&
+    data[2] == _blobMagic[2];
+
+Uint8List _gcm({
+  required bool encrypt,
+  required Uint8List key,
+  required Uint8List nonce,
+  required Uint8List input,
+}) {
+  final cipher = pc.GCMBlockCipher(pc.AESEngine())
+    ..init(
+      encrypt,
+      pc.AEADParameters(pc.KeyParameter(key), 128, nonce, Uint8List(0)),
+    );
+  return cipher.process(input);
+}
+
+/// Encrypt a storage blob under the KEK. Returns null when the vault is locked
+/// so callers can fall back to plaintext (content is lower-sensitivity than the
+/// long-term keys, which use the fail-closed [wrapSecret]).
+Uint8List? wrapBlobSync(List<int> plaintext) {
+  final key = _kekRaw;
+  if (key == null) return null;
+  final nonce = Uint8List(_blobNonceLen);
+  for (var i = 0; i < _blobNonceLen; i++) {
+    nonce[i] = _blobRng.nextInt(256);
+  }
+  final ct = _gcm(
+    encrypt: true,
+    key: key,
+    nonce: nonce,
+    input: Uint8List.fromList(plaintext),
+  );
+  final out = Uint8List(_blobHeaderLen + ct.length);
+  out.setRange(0, 3, _blobMagic);
+  out.setRange(3, _blobHeaderLen, nonce);
+  out.setRange(_blobHeaderLen, out.length, ct);
+  return out;
+}
+
+/// Inverse of [wrapBlobSync]. A non-framed (legacy plaintext) blob is returned
+/// unchanged so old rows keep decoding. Throws [StateError] if the blob is
+/// encrypted but the vault is locked.
+Uint8List unwrapBlobSync(List<int> stored) {
+  if (!isBlobWrapped(stored)) {
+    return stored is Uint8List ? stored : Uint8List.fromList(stored);
+  }
+  final key = _kekRaw;
+  if (key == null) {
+    throw StateError('vault: locked — cannot decrypt blob');
+  }
+  final nonce = Uint8List.fromList(stored.sublist(3, _blobHeaderLen));
+  final ct = Uint8List.fromList(stored.sublist(_blobHeaderLen));
+  return _gcm(encrypt: false, key: key, nonce: nonce, input: ct);
+}
 
 /// Wrap plaintext bytes under the in-memory KEK. Returns the original input
 /// unchanged when the KEK is not set (matches JS fallback so unlocked callers
@@ -48,8 +135,10 @@ Future<Object?> wrapBytes(Object? plaintext) async {
   if (key == null || plaintext == null) return plaintext;
   final List<int> bytes = plaintext is List<int>
       ? plaintext
+      // utf8 (not codeUnits/UTF-16) so a wrapped String round-trips through
+      // utf8.decode on the unwrap side and stays ASCII/Unicode-safe (audit L8).
       : plaintext is String
-          ? plaintext.codeUnits
+          ? utf8.encode(plaintext)
           : (throw ArgumentError('vault: wrapBytes expects bytes'));
   final iv = _aes.newNonce();
   final box = await _aes.encrypt(bytes, secretKey: key, nonce: iv);
@@ -61,6 +150,34 @@ Future<Object?> wrapBytes(Object? plaintext) async {
       box.mac.bytes,
     );
   return '$_wrapPrefix${bytesToBase64(Uint8List.fromList(iv))}:${bytesToBase64(ctPlusTag)}';
+}
+
+/// Wrap long-term private-key material for at-rest storage. Unlike
+/// [wrapBytes], this **refuses** to fall back to plaintext: identity / prekey
+/// scalars must never touch disk unencrypted (audit C2), so a missing KEK is a
+/// hard error rather than a silent passthrough. Always returns the
+/// `orb-wrap-v1:` string form.
+Future<String> wrapSecret(List<int> plaintext) async {
+  if (_kek == null) {
+    throw StateError(
+      'vault: refusing to persist a long-term secret while locked (no KEK)',
+    );
+  }
+  final wrapped = await wrapBytes(plaintext);
+  // wrapBytes only returns the input unchanged when the KEK is null, which we
+  // ruled out above — so this is always the wrapped String.
+  return wrapped as String;
+}
+
+/// Unwrap a value produced by [wrapSecret], tolerating a legacy plaintext
+/// byte field (rows written before secret-at-rest wrapping landed — see
+/// migration note in identity_key / prekey_store). Returns raw bytes either
+/// way; throws on anything that is neither wrapped nor a byte buffer.
+Future<Uint8List> unwrapSecret(Object? value) async {
+  final out = await unwrapBytes(value);
+  if (out is Uint8List) return out;
+  if (out is List<int>) return Uint8List.fromList(out);
+  throw StateError('vault: unwrapSecret expected bytes, got ${out.runtimeType}');
 }
 
 /// Unwrap a wrapped blob back to bytes. Passes non-wrapped values through
