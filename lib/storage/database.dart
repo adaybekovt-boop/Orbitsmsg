@@ -171,28 +171,11 @@ class OrbitsDatabase extends _$OrbitsDatabase {
 
 /// Open the on-disk database.
 ///
-/// ── SQLCipher full-file encryption (task 5) ──
-/// On native platforms the DB is opened through [openCipherExecutor]
-/// (`db_cipher_opener_io.dart`), which runs `NativeDatabase.createInBackground`
-/// with `PRAGMA key = '<hkdf-derived hex>'` so the whole SQLite file is
-/// encrypted at rest by SQLCipher. The key is derived via HKDF-SHA256 (salt
-/// `'orbits-sqlite-key'`, see [deriveSqlcipherKeyHex]) from a 32-byte device
-/// key held in `flutter_secure_storage`.
-///
-/// Why a device key and not the vault KEK: the peerId/identity is shown during
-/// onboarding BEFORE the password is set, so the identity row must be readable
-/// before any password-derived KEK exists — there is simply no KEK available
-/// when this DB is first opened at bootstrap, and keying off it would deadlock
-/// startup. The device key is always available, so encryption is transparent.
-///
-/// To stay non-destructive, encryption only applies to a freshly-created DB
-/// (tracked by a secure-storage marker); a pre-existing plaintext file is
-/// opened as-is (its rows are still vault-encrypted). On web, [openCipherExecutor]
-/// returns null and we fall back to the wasm executor (unencrypted container).
-///
-/// NOTE: enabling SQLCipher on native requires `sqlcipher_flutter_libs` to
-/// override `sqlite3_flutter_libs` so the loaded sqlite3 understands
-/// `PRAGMA key` — verify the override per platform when wiring native builds.
+/// Native full-file SQLCipher is currently disabled because
+/// `sqlcipher_flutter_libs` conflicts with `sqlite3_flutter_libs` in Windows
+/// CMake builds. The app still encrypts sensitive row payloads before writing
+/// them to SQLite; this opener uses Drift's normal native/web database until a
+/// per-platform SQLCipher integration is wired safely.
 QueryExecutor _open() {
   final cipher = openCipherExecutor();
   if (cipher != null) return cipher;

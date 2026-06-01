@@ -131,12 +131,6 @@ dependencies:
   # storage/database.dart. Tiny, pure-Dart, web-safe.
   crypto: ^3.0.0
 
-  # SQLCipher build of sqlite3 for full-file at-rest DB encryption on native.
-  # The encryption machinery is implemented (NativeDatabase + PRAGMA key) but
-  # OFF by default — see the SQLCipher note in storage/database.dart for the
-  # bootstrap-ordering + migration prerequisites before enabling it.
-  sqlcipher_flutter_libs: ^0.6.0
-
 dev_dependencies:
   flutter_test:
     sdk: flutter
