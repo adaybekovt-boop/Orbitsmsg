@@ -113,10 +113,6 @@ dependencies:
   # Apple-thin icon set (Light weight default, Fill for active/selected).
   phosphor_flutter: ^2.1.0
 
-  # iOS-26-flavour modal sheets (drag-to-dismiss, snap points, spring physics)
-  # for the sticker picker / chat settings / profile actions.
-  smooth_sheets: ^1.0.0
-
   # Windows-only: real Mica/acrylic at the OS window level so the in-app
   # fake-glass panels rest on a true translucent backdrop. No-op / guarded
   # off-Windows; the Dart call is gated by platform in main.dart.
