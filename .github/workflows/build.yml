@@ -405,12 +405,24 @@ jobs:
             artifacts/orbits-android/*.apk
             artifacts/orbits-windows/*.exe
           body: |
-            ## Direct Links
+            ## What's new
+
+            - Refreshed the Flutter app with the new Apple-inspired Liquid Glass direction, including the simplified light/dark theme system and cleaner adaptive layouts.
+            - Added the foundation for temporary P2P rooms/servers: room storage, channels, members, host lifecycle, message routing, and the voice-session shell.
+            - Improved room networking safety with host-authoritative joins/messages, member/avatar sync, spoofing checks, and flood protection.
+            - Cleaned up release-blocking dependencies so GitHub Actions can resolve packages and continue building web, Android, and Windows artifacts.
+
+            ## Что нового
+
+            - Обновлён Flutter-интерфейс в сторону Apple Liquid Glass: упрощены светлая/тёмная темы и аккуратнее настроены адаптивные экраны.
+            - Добавлена основа временных P2P-комнат/серверов: локальные таблицы, каналы, участники, жизненный цикл хоста, маршрутизация сообщений и базовый слой голосовой сессии.
+            - Усилена безопасность комнат: хост подтверждает входы и сообщения, синхронизируются участники/аватары, добавлены проверки spoofing и защита от flood.
+            - Почищены зависимости, которые блокировали GitHub Actions, чтобы сборки web, Android и Windows могли доходить до артефактов.
+
+            ## Download links / Ссылки
 
             - Windows EXE: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/orbits-windows-x64.exe
             - Android APK: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/orbits-android-universal.apk
             - Flutter Web: https://adaybekovt-boop.github.io/tkmessenger/
-
-            Use the links above for website download buttons. The web app is served by GitHub Pages, so it opens directly in the browser instead of downloading a zip.
           draft: false
           prerelease: false
