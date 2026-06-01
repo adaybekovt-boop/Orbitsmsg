@@ -60,6 +60,10 @@ PeerJsClient buildRoomScopedClient({
     iceServers: rtc.iceServers,
     iceTransportPolicy: rtc.iceTransportPolicy,
     key: key,
+    // The embedded Orbits signaling server echoes HEARTBEAT, so the
+    // inbound-silence watchdog can safely detect half-open LAN links here.
+    // (Public peerjs.com clients leave this false — see _startWatchdog.)
+    serverEchoesHeartbeat: true,
   );
 }
 

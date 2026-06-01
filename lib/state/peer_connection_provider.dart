@@ -279,6 +279,16 @@ final _env = PeerEnv(
   relayOnly: const bool.fromEnvironment('RELAY_ONLY', defaultValue: false),
 );
 
+/// Whether a TURN relay is configured in THIS build (via `--dart-define`).
+/// Without TURN, WebRTC across different NATs/networks (e.g. phone mobile-data
+/// ↔ PC behind a router) can fail to establish — surfaced in diagnostics so
+/// the user understands why a contact may stay "не в сети" cross-network.
+final turnConfiguredProvider = Provider<bool>(
+    (ref) => _env.turnUrl != null && _env.turnUrl!.isNotEmpty);
+
+/// Whether this build forces relay-only ICE (requires TURN to connect at all).
+final relayOnlyProvider = Provider<bool>((ref) => _env.relayOnly);
+
 final peerConnectionProvider =
     StateNotifierProvider<PeerConnectionNotifier, PeerConnectionState>((ref) {
   final notifier = PeerConnectionNotifier(env: _env);

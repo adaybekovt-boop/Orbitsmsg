@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/haptics.dart';
+import '../../state/connections_notifier.dart';
 import '../../state/local_profile_provider.dart';
 import '../../state/peer_connection_provider.dart';
 import '../../themes/orbits_tokens.dart';
@@ -29,6 +30,10 @@ class NetworkPage extends ConsumerWidget {
     final tokens = OrbitsTokens.of(context);
     final user = ref.watch(localProfileProvider);
     final conn = ref.watch(peerConnectionProvider);
+    final turnConfigured = ref.watch(turnConfiguredProvider);
+    final relayOnly = ref.watch(relayOnlyProvider);
+    final lastConnErr =
+        ref.watch(connectionsNotifierProvider.select((s) => s.lastConnectError));
 
     return Scaffold(
       appBar: AppBar(
@@ -157,6 +162,34 @@ class NetworkPage extends ConsumerWidget {
               child: OrbitsGlassListTile(
                 title: const Text('Последняя ошибка'),
                 subtitle: Text(conn.error ?? ''),
+              ),
+            ),
+
+          // ── Cross-network reachability (TURN) ────────────────
+          const OrbsSectionTitle('Связь между сетями'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: OrbitsGlassListTile(
+              title: const Text('TURN-ретранслятор'),
+              subtitle: Text(turnConfigured
+                  ? (relayOnly
+                      ? 'Настроен — связь идёт только через ретранслятор'
+                      : 'Настроен — связь работает и между разными сетями')
+                  : 'Не настроен. Между разными сетями (моб. интернет ↔ домашний '
+                      'роутер) связь может не установиться — для надёжности '
+                      'нужен TURN-сервер.'),
+              trailing: Icon(
+                turnConfigured ? Icons.check_circle : Icons.info_outline,
+                color: turnConfigured ? tokens.success : tokens.muted,
+              ),
+            ),
+          ),
+          if (lastConnErr != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                title: const Text('Последняя ошибка соединения'),
+                subtitle: Text('${lastConnErr.peerId}: ${lastConnErr.message}'),
               ),
             ),
 

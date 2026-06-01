@@ -151,11 +151,28 @@ jobs:
       - name: Generate code (drift / build_runner)
         run: dart run build_runner build --delete-conflicting-outputs
 
+      # TURN/PeerJS config from repo secrets + variables. All empty-safe:
+      # an unset secret/var becomes "" → the app reads it as null (see
+      # peer_connection_provider.dart) and falls back to public PeerJS + STUN.
+      - name: Compose --dart-define flags (TURN / PeerJS)
+        env:
+          TURN_URL: ${{ secrets.TURN_URL }}
+          TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
+          TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
+          RELAY_ONLY: ${{ vars.RELAY_ONLY }}
+          PEER_SERVER: ${{ vars.PEER_SERVER }}
+          PEER_HOST: ${{ vars.PEER_HOST }}
+          PEER_PATH: ${{ vars.PEER_PATH }}
+          PEER_PORT: ${{ vars.PEER_PORT }}
+          PEER_SECURE: ${{ vars.PEER_SECURE }}
+        run: |
+          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=TURN_USERNAME=${TURN_USERNAME} --dart-define=TURN_CREDENTIAL=${TURN_CREDENTIAL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
+
       - name: flutter build apk (split per ABI)
-        run: flutter build apk --release --split-per-abi
+        run: flutter build apk --release --split-per-abi $DART_DEFINES
 
       - name: flutter build apk (universal fallback)
-        run: flutter build apk --release
+        run: flutter build apk --release $DART_DEFINES
 
       - name: Stage APKs for upload
         run: |
@@ -223,9 +240,23 @@ jobs:
       #     Flutter team's own `flutter_tools/build/web` example uses.
       #
       #   • Pages (/tkmessenger/) — built directly, no rewriting needed.
+      - name: Compose --dart-define flags (TURN / PeerJS)
+        env:
+          TURN_URL: ${{ secrets.TURN_URL }}
+          TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
+          TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
+          RELAY_ONLY: ${{ vars.RELAY_ONLY }}
+          PEER_SERVER: ${{ vars.PEER_SERVER }}
+          PEER_HOST: ${{ vars.PEER_HOST }}
+          PEER_PATH: ${{ vars.PEER_PATH }}
+          PEER_PORT: ${{ vars.PEER_PORT }}
+          PEER_SECURE: ${{ vars.PEER_SECURE }}
+        run: |
+          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=TURN_USERNAME=${TURN_USERNAME} --dart-define=TURN_CREDENTIAL=${TURN_CREDENTIAL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
+
       - name: flutter build web (relative base-href)
         run: |
-          flutter build web --release --base-href "/" --pwa-strategy none
+          flutter build web --release --base-href "/" --pwa-strategy none $DART_DEFINES
           # rewrite to relative ./ for static-host / file:// previews
           sed -i 's|<base href="/">|<base href="./">|' build/web/index.html
 
@@ -236,7 +267,7 @@ jobs:
           (cd dist && zip -qr orbits-web-relative.zip orbits-web-relative)
 
       - name: flutter build web (Pages base-href)
-        run: flutter build web --release --base-href "/tkmessenger/" --pwa-strategy none
+        run: flutter build web --release --base-href "/tkmessenger/" --pwa-strategy none $DART_DEFINES
 
       - name: Stage Pages bundle
         run: |
@@ -294,7 +325,32 @@ jobs:
         continue-on-error: true
 
       - name: flutter build windows (release)
-        run: flutter build windows --release
+        env:
+          TURN_URL: ${{ secrets.TURN_URL }}
+          TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
+          TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
+          RELAY_ONLY: ${{ vars.RELAY_ONLY }}
+          PEER_SERVER: ${{ vars.PEER_SERVER }}
+          PEER_HOST: ${{ vars.PEER_HOST }}
+          PEER_PATH: ${{ vars.PEER_PATH }}
+          PEER_PORT: ${{ vars.PEER_PORT }}
+          PEER_SECURE: ${{ vars.PEER_SECURE }}
+        shell: pwsh
+        run: |
+          # Empty env → empty --dart-define value → app reads null (public PeerJS).
+          $defines = @(
+            "--dart-define=TURN_URL=$env:TURN_URL",
+            "--dart-define=TURN_USERNAME=$env:TURN_USERNAME",
+            "--dart-define=TURN_CREDENTIAL=$env:TURN_CREDENTIAL",
+            "--dart-define=RELAY_ONLY=$(if ($env:RELAY_ONLY) { $env:RELAY_ONLY } else { 'false' })",
+            "--dart-define=PEER_SERVER=$env:PEER_SERVER",
+            "--dart-define=PEER_HOST=$env:PEER_HOST",
+            "--dart-define=PEER_PATH=$(if ($env:PEER_PATH) { $env:PEER_PATH } else { '/' })",
+            "--dart-define=PEER_PORT=$(if ($env:PEER_PORT) { $env:PEER_PORT } else { '-1' })",
+            "--dart-define=PEER_SECURE=$env:PEER_SECURE",
+            "--dart-define=PEER_SECURE_SET=$(if ($env:PEER_SECURE) { 'true' } else { 'false' })"
+          )
+          flutter build windows --release @defines
 
       - name: Install Inno Setup
         shell: pwsh

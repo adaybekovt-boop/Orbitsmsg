@@ -138,4 +138,19 @@ void main() {
     expect((await db.getAllPeers()).where((p) => p['id'] == 'ORBIT-DEF456'),
         hasLength(1));
   });
+
+  testWidgets('keyboard Done submits the manual entry (not just hide keyboard)',
+      (tester) async {
+    await pump(tester);
+
+    await tester.enterText(find.byType(TextField), 'ORBIT-DEF456');
+    // Simulate the on-screen keyboard's Done/Enter action (no button tap).
+    await tester.testTextInput.receiveAction(TextInputAction.done);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    tester.takeException(); // tolerate the ChatViewPage push (out of scope)
+
+    final saved = await db.getPeer('ORBIT-DEF456');
+    expect(saved, isNotNull, reason: 'Done must submit + save, offline-first');
+  });
 }

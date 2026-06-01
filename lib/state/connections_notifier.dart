@@ -30,6 +30,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/bundle_cache.dart';
@@ -50,18 +51,50 @@ import 'peer_connection_provider.dart';
 /// of currently-connected peerIds (reliable channel open) so widgets can
 /// light up the green dot without reading the raw `Map<String, …>`.
 class ConnectionsState {
-  const ConnectionsState({required this.connectedPeerIds});
+  const ConnectionsState({
+    required this.connectedPeerIds,
+    this.lastConnectError,
+  });
 
   const ConnectionsState.empty()
-      : connectedPeerIds = const <String>{};
+      : connectedPeerIds = const <String>{},
+        lastConnectError = null;
 
   final Set<String> connectedPeerIds;
 
-  ConnectionsState copyWith({Set<String>? connectedPeerIds}) =>
+  /// Most recent failed dial — surfaced for diagnostics so a swallowed P2P
+  /// error is observable (peerId + reason + timestamp). Null until something
+  /// fails. This is an HONEST diagnostic, not a user-facing "contact not
+  /// found": the chat header still derives в сети / не в сети purely from
+  /// [connectedPeerIds].
+  final ConnectError? lastConnectError;
+
+  ConnectionsState copyWith({
+    Set<String>? connectedPeerIds,
+    Object? lastConnectError = _unset,
+  }) =>
       ConnectionsState(
-        connectedPeerIds:
-            connectedPeerIds ?? this.connectedPeerIds,
+        connectedPeerIds: connectedPeerIds ?? this.connectedPeerIds,
+        lastConnectError: identical(lastConnectError, _unset)
+            ? this.lastConnectError
+            : lastConnectError as ConnectError?,
       );
+}
+
+const Object _unset = Object();
+
+/// A diagnostic record for a failed P2P dial.
+class ConnectError {
+  const ConnectError({
+    required this.peerId,
+    required this.channel,
+    required this.message,
+    required this.atMs,
+  });
+  final String peerId;
+  final String channel; // 'reliable' | 'ephemeral'
+  final String message;
+  final int atMs;
 }
 
 // ─── Internal bookkeeping ────────────────────────────────────────
@@ -298,10 +331,23 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
           metadata: {'channel': channel, 'initiator': true},
         );
         await attachConn(conn, channel);
-      } catch (_) {
-        // Swallow — if opening fails we simply don't have the channel.
-        // The peer-status pill and chat header will stay "не в сети" so
-        // the user has visual feedback; messages go to the outbox.
+      } catch (e) {
+        // Don't fail silently (audit P0 item 7). Opening can fail for many
+        // reasons (peer offline, ICE/TURN can't traverse NAT, signaling
+        // dropped). The chat header still shows "не в сети" via
+        // connectedPeerIds; here we ALSO log + record the reason so
+        // diagnostics can answer "why didn't it connect?".
+        debugPrint('[conn] openChannel($normalized, $channel) failed: $e');
+        if (mounted) {
+          state = state.copyWith(
+            lastConnectError: ConnectError(
+              peerId: normalized,
+              channel: channel,
+              message: e.toString(),
+              atMs: now(),
+            ),
+          );
+        }
       }
     }());
   }
