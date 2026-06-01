@@ -77,7 +77,9 @@ class EmbeddedSignalingServer {
   /// in use, permission) — callers should surface that to the user.
   Future<void> start({String host = '0.0.0.0', int port = 0}) async {
     if (_http != null) return;
-    final server = await HttpServer.bind(host, port, shared: false);
+    // Bounded so a wedged OS socket layer can't hang room creation forever.
+    final server = await HttpServer.bind(host, port, shared: false)
+        .timeout(const Duration(seconds: 8));
     _http = server;
     _reqSub = server.listen(_onRequest, cancelOnError: false);
   }

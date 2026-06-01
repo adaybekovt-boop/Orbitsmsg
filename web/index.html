@@ -59,6 +59,54 @@
     For more details:
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
-  <script src="flutter_bootstrap.js" async></script>
+  <script>
+    (function () {
+      const cleanupKey = 'orbits-flutter-web-cleanup-v1';
+
+      function loadFlutter() {
+        const script = document.createElement('script');
+        script.src = 'flutter_bootstrap.js';
+        script.async = true;
+        document.body.appendChild(script);
+      }
+
+      async function clearLegacyPwa() {
+        let removedSomething = false;
+
+        if ('serviceWorker' in navigator) {
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          const results = await Promise.all(registrations.map((registration) => {
+            const scopePath = new URL(registration.scope).pathname;
+            return scopePath.startsWith('/tkmessenger/')
+              ? registration.unregister()
+              : Promise.resolve(false);
+          }));
+          if (results.some(Boolean)) removedSomething = true;
+        }
+
+        if ('caches' in window) {
+          const keys = await caches.keys();
+          if (keys.length) removedSomething = true;
+          await Promise.all(keys.map((key) => caches.delete(key)));
+        }
+
+        // Reload exactly once per session if we actually removed a stale SW or
+        // cache, OR an old service worker is still controlling this document —
+        // either means the bytes on screen may be the legacy React PWA. The
+        // unregister + cache clear above are idempotent; only the reload is
+        // guarded so we never loop.
+        const controlled =
+          !!(navigator.serviceWorker && navigator.serviceWorker.controller);
+        if ((removedSomething || controlled) &&
+            !sessionStorage.getItem(cleanupKey)) {
+          sessionStorage.setItem(cleanupKey, '1');
+          window.location.reload();
+          return new Promise(() => {});
+        }
+      }
+
+      clearLegacyPwa().catch(console.warn).finally(loadFlutter);
+    })();
+  </script>
 </body>
 </html>

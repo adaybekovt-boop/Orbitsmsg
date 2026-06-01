@@ -225,7 +225,7 @@ jobs:
       #   • Pages (/tkmessenger/) — built directly, no rewriting needed.
       - name: flutter build web (relative base-href)
         run: |
-          flutter build web --release --base-href "/"
+          flutter build web --release --base-href "/" --pwa-strategy none
           # rewrite to relative ./ for static-host / file:// previews
           sed -i 's|<base href="/">|<base href="./">|' build/web/index.html
 
@@ -236,10 +236,14 @@ jobs:
           (cd dist && zip -qr orbits-web-relative.zip orbits-web-relative)
 
       - name: flutter build web (Pages base-href)
-        run: flutter build web --release --base-href "/tkmessenger/"
+        run: flutter build web --release --base-href "/tkmessenger/" --pwa-strategy none
 
       - name: Stage Pages bundle
         run: |
+          # `--pwa-strategy none` emits an empty flutter_service_worker.js;
+          # restore the self-unregistering tombstone so old Flutter-PWA clients
+          # self-clean (web/sw.js — the legacy React SW name — is left intact).
+          cp web/flutter_service_worker.js build/web/flutter_service_worker.js
           cp -r build/web dist/orbits-web-pages
           (cd dist && zip -qr orbits-web-pages.zip orbits-web-pages)
           ls -lah dist/

@@ -31,6 +31,12 @@ class ServersHomePage extends ConsumerStatefulWidget {
 class _ServersHomePageState extends ConsumerState<ServersHomePage> {
   RoomManager get _rooms => ref.read(roomManagerProvider.notifier);
 
+  /// True while a create/join is in flight. Drives the loading overlay and
+  /// disables the CTAs so the buttons never look dead (and can't be double-
+  /// tapped into two concurrent sessions).
+  bool _busy = false;
+  String _busyLabel = '';
+
   void _toast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -47,6 +53,7 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
   }
 
   Future<void> _createServer() async {
+    if (_busy) return; // reentrancy / double-tap guard
     final myName = ref.read(localProfileProvider)?.displayName ?? '';
     // On a desktop platform we host our OWN signaling server (no peerjs.com);
     // elsewhere we fall back to a cloud-signaled room.
@@ -58,15 +65,33 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
       confirm: 'Создать',
     );
     if (name == null || name.trim().isEmpty) return;
-    await _rooms.createRoom(name.trim(), selfHosted: selfHost);
+
+    setState(() {
+      _busy = true;
+      _busyLabel = 'Создаём сервер…';
+    });
+    try {
+      await _rooms.createRoom(name.trim(), selfHosted: selfHost);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
     if (!mounted) return;
+
     final st = ref.read(roomManagerProvider);
-    if (st.joinError != null) {
-      _toast(st.joinError!);
+    // Hard failure — no room was created (bad platform / no profile). Say why
+    // and stay put; never navigate into an empty room.
+    if (st.role == RoomRole.none) {
+      _toast(st.joinError ?? 'Не удалось создать сервер.');
       _rooms.clearJoinError();
       return;
     }
-    // Self-hosted: show the shareable invite (with its reachability) right away.
+    // Soft notice — the room exists (e.g. created offline because the network
+    // couldn't start). Surface it but still open the room.
+    if (st.joinError != null) {
+      _toast(st.joinError!);
+      _rooms.clearJoinError();
+    }
+    // Self-hosted + online: show the shareable invite (with reachability) now.
     final invite = st.selfHostInvite;
     if (invite != null) {
       await showDialog<void>(
@@ -75,10 +100,11 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
       );
       if (!mounted) return;
     }
-    _openRoom(st.roomId);
+    if (st.roomId != null) _openRoom(st.roomId);
   }
 
   Future<void> _joinServer() async {
+    if (_busy) return; // reentrancy / double-tap guard
     final myName = ref.read(localProfileProvider)?.displayName ?? '';
     final code = await _promptText(
       title: 'Подключиться к серверу',
@@ -87,15 +113,29 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
       mono: true,
     );
     if (code == null || code.trim().isEmpty) return;
-    await _rooms.joinRoom(code.trim(), myName);
+
+    setState(() {
+      _busy = true;
+      _busyLabel = 'Подключаемся…';
+    });
+    try {
+      await _rooms.joinRoom(code.trim(), myName);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
     if (!mounted) return;
+
     final st = ref.read(roomManagerProvider);
-    if (st.joinError != null) {
-      _toast(st.joinError!);
+    if (st.role == RoomRole.none) {
+      _toast(st.joinError ?? 'Не удалось подключиться.');
       _rooms.clearJoinError();
       return;
     }
-    _openRoom(st.roomId);
+    if (st.joinError != null) {
+      _toast(st.joinError!);
+      _rooms.clearJoinError();
+    }
+    if (st.roomId != null) _openRoom(st.roomId);
   }
 
   Future<String?> _promptText({
@@ -142,11 +182,13 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
           ),
         ),
       ),
-      body: AdaptivePageFrame(
-        maxWidth: 620,
-        child: StreamBuilder<List<Map<String, Object?>>>(
-          stream: db.watchRooms(),
-          builder: (context, snap) {
+      body: Stack(
+        children: [
+          AdaptivePageFrame(
+            maxWidth: 620,
+            child: StreamBuilder<List<Map<String, Object?>>>(
+              stream: db.watchRooms(),
+              builder: (context, snap) {
             final rooms = snap.data ?? const <Map<String, Object?>>[];
             final activeId =
                 roomState.role != RoomRole.none ? roomState.roomId : null;
@@ -171,6 +213,7 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
                   variant: OrbitsGlassVariant.primary,
                   size: OrbitsGlassSize.large,
                   expand: true,
+                  enabled: !_busy,
                   onPressed: _createServer,
                 ),
                 const SizedBox(height: 10),
@@ -180,6 +223,7 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
                   variant: OrbitsGlassVariant.secondary,
                   size: OrbitsGlassSize.large,
                   expand: true,
+                  enabled: !_busy,
                   onPressed: _joinServer,
                 ),
                 const SizedBox(height: 22),
@@ -208,8 +252,11 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
                     ),
               ],
             );
-          },
-        ),
+              },
+            ),
+          ),
+          if (_busy) _CreatingOverlay(label: _busyLabel),
+        ],
       ),
     );
   }
@@ -606,6 +653,44 @@ class _Dot extends StatelessWidget {
         color: c,
         shape: BoxShape.circle,
         border: Border.all(color: tokens.surface, width: 2),
+      ),
+    );
+  }
+}
+
+/// Full-bleed translucent barrier with a spinner shown while a create/join is
+/// in flight, so the CTA never looks dead during the (up to ~15s) self-host
+/// startup and the screen can't be interacted with mid-operation.
+class _CreatingOverlay extends StatelessWidget {
+  const _CreatingOverlay({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
+    return Positioned.fill(
+      child: AbsorbPointer(
+        child: ColoredBox(
+          color: tokens.bg.withValues(alpha: 0.55),
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(color: tokens.accent),
+                const SizedBox(height: 14),
+                Text(
+                  label,
+                  style: TextStyle(
+                    color: tokens.text,
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    fontFamily: tokens.fontBody,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

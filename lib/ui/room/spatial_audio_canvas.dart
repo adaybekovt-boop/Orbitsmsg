@@ -20,6 +20,7 @@ import '../../peer/room_manager.dart';
 import '../../state/local_profile_provider.dart';
 import '../../storage/db.dart' as db;
 import '../../themes/orbits_tokens.dart';
+import '../primitives/orbits_glass_button.dart';
 import '../primitives/orbits_glass_surface.dart';
 
 class SpatialAudioCanvas extends ConsumerWidget {
@@ -61,6 +62,12 @@ class SpatialAudioCanvas extends ConsumerWidget {
                   channelName: channelName,
                   inVoice: roomState.voicePeerIds.length,
                   total: others.length,
+                  // Reset + auto-arrange share one operation (ring layout) —
+                  // only meaningful once there's someone to arrange.
+                  showActions: others.isNotEmpty,
+                  onArrange: () => ref
+                      .read(roomManagerProvider.notifier)
+                      .resetSpatialPositions(),
                 ),
                 Expanded(
                   child: ClipRRect(
@@ -75,6 +82,7 @@ class SpatialAudioCanvas extends ConsumerWidget {
                             voicePeerIds: const {},
                             selfName: selfName,
                             onMove: (_, __) {},
+                            onMoveEnd: (_, __) {},
                             emptyHint:
                                 'Пока вы один в голосовом канале.\nКогда подключатся другие — '
                                 'перетаскивайте их шарики, чтобы расставить звук в пространстве.',
@@ -89,6 +97,9 @@ class SpatialAudioCanvas extends ConsumerWidget {
                           onMove: (peerId, pos) => ref
                               .read(roomManagerProvider.notifier)
                               .setSpatialPosition(peerId, pos),
+                          onMoveEnd: (peerId, pos) => ref
+                              .read(roomManagerProvider.notifier)
+                              .setSpatialPosition(peerId, pos, isFinal: true),
                         );
                       },
                     ),
@@ -108,17 +119,24 @@ class _Header extends StatelessWidget {
     required this.channelName,
     required this.inVoice,
     required this.total,
+    this.showActions = false,
+    this.onArrange,
   });
 
   final String channelName;
   final int inVoice;
   final int total;
 
+  /// Show the reset / auto-arrange controls (only when there's someone to
+  /// arrange).
+  final bool showActions;
+  final VoidCallback? onArrange;
+
   @override
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(18, 14, 18, 10),
+      padding: const EdgeInsets.fromLTRB(18, 14, 10, 10),
       child: Row(
         children: [
           Icon(Icons.graphic_eq_rounded, size: 18, color: tokens.accent),
@@ -145,6 +163,26 @@ class _Header extends StatelessWidget {
               fontFamily: tokens.fontBody,
             ),
           ),
+          if (showActions) ...[
+            const SizedBox(width: 6),
+            // Auto-arrange: spread everyone evenly on a ring.
+            OrbitsGlassIconButton(
+              icon: Icons.scatter_plot_rounded,
+              tooltip: 'Расставить по кругу',
+              variant: OrbitsGlassVariant.subtle,
+              size: OrbitsGlassSize.small,
+              onPressed: onArrange,
+            ),
+            const SizedBox(width: 4),
+            // Reset: same ring layout, framed as "put positions back".
+            OrbitsGlassIconButton(
+              icon: Icons.refresh_rounded,
+              tooltip: 'Сбросить позиции',
+              variant: OrbitsGlassVariant.subtle,
+              size: OrbitsGlassSize.small,
+              onPressed: onArrange,
+            ),
+          ],
         ],
       ),
     );
@@ -160,6 +198,7 @@ class _RadarStage extends StatelessWidget {
     required this.voicePeerIds,
     required this.selfName,
     required this.onMove,
+    required this.onMoveEnd,
     this.emptyHint,
   });
 
@@ -169,6 +208,10 @@ class _RadarStage extends StatelessWidget {
   final Set<String> voicePeerIds;
   final String selfName;
   final void Function(String peerId, Offset pos) onMove;
+
+  /// Called once when a drag ends, with the resting position — drives the
+  /// guaranteed (un-throttled) final network send.
+  final void Function(String peerId, Offset pos) onMoveEnd;
   final String? emptyHint;
 
   static const double _balloon = 70; // balloon box (avatar + label)
@@ -229,6 +272,8 @@ class _RadarStage extends StatelessWidget {
             final next = toPixel(positions[id] ?? norm) + d.delta;
             onMove(id, toNorm(next));
           },
+          // Pan-end always flushes the resting position past the throttle.
+          onPanEnd: (_) => onMoveEnd(id, positions[id] ?? norm),
           child: _Marker(
             name: name.isNotEmpty ? name : _shortId(id),
             label: name.isNotEmpty

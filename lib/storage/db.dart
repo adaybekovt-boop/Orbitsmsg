@@ -1334,6 +1334,11 @@ Future<bool> clearAllData() async {
     await db.delete(db.fileBlobsTable).go();
     await db.delete(db.ratchetsTable).go();
     await db.delete(db.kvTable).go();
+    // Rooms (schema v3). Children first; FK CASCADE would also reap them, but
+    // explicit deletes keep the wipe correct even if FK enforcement is off.
+    await db.delete(db.roomMembersTable).go();
+    await db.delete(db.roomChannelsTable).go();
+    await db.delete(db.roomsTable).go();
   });
   return true;
 }

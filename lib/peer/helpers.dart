@@ -3,6 +3,8 @@
 // Keep behavior identical to the JS module; the UI relies on these exact
 // strings and on the set of accepted id shapes.
 
+import 'dart:convert' show jsonDecode;
+
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Mirror of the `STORAGE` object literal in `src/peer/helpers.js`. Keys used
@@ -40,6 +42,73 @@ bool isValidPeerId(String? raw) {
   return _validPeerIdPattern.hasMatch(normalizePeerId(raw));
 }
 
+/// The stable QR/deep-link payload for sharing a contact. The reader
+/// ([parseContactQrPayload]) also accepts a bare peerId and the legacy
+/// shapes, so changing the *writer* to this form is backward-compatible.
+String contactQrPayload(String peerId) =>
+    'orbits://contact/${normalizePeerId(peerId)}';
+
+/// Extract a canonical peerId from whatever a contact QR / pasted code holds,
+/// or null if it doesn't look like a TK Messenger contact. Tolerant of:
+///   • bare `ORBIT-ABC123` (any case, surrounding whitespace)
+///   • `orbits://contact/ORBIT-ABC123`
+///   • `orbits:contact:ORBIT-ABC123`
+///   • JSON `{"type":"contact","peerId":"ORBIT-ABC123"}` (`id` accepted too)
+/// Returns the normalized (trimmed, upper-cased) peerId, validated against
+/// [isValidPeerId]. Shared by BOTH the scanner and the manual-entry field so
+/// the two paths can never disagree about what's acceptable.
+String? parseContactQrPayload(String? raw) {
+  if (raw == null) return null;
+  final s = raw.trim();
+  if (s.isEmpty) return null;
+
+  // JSON contact payload.
+  if (s.startsWith('{')) {
+    try {
+      final obj = jsonDecode(s);
+      if (obj is Map) {
+        final type = obj['type'];
+        if (type == null || type == 'contact') {
+          final pid = obj['peerId'] ?? obj['id'];
+          if (pid is String) {
+            final n = normalizePeerId(pid);
+            if (isValidPeerId(n)) return n;
+          }
+        }
+      }
+    } catch (_) {
+      // Not valid JSON — fall through (it won't match anything else either).
+    }
+    return null;
+  }
+
+  // `orbits:` deep link. Accept ONLY an explicit CONTACT link
+  // (`orbits://contact/<id>` or `orbits:contact:<id>`) — never a room/server
+  // invite such as `orbits://room/<id>`. Drop any trailing query/fragment,
+  // split on the separators, and require the `contact` marker before the id.
+  // A trailing slash is tolerated.
+  if (s.toLowerCase().startsWith('orbits:')) {
+    var body = s;
+    final cut = body.indexOf(RegExp(r'[?#]'));
+    if (cut >= 0) body = body.substring(0, cut);
+    final tokens =
+        body.split(RegExp(r'[:/]')).where((p) => p.isNotEmpty).toList();
+    // tokens[0] == 'orbits'; tokens[1] must be the explicit 'contact' segment.
+    final isContactLink = tokens.length >= 3 &&
+        tokens[0].toLowerCase() == 'orbits' &&
+        tokens[1].toLowerCase() == 'contact';
+    if (isContactLink) {
+      final n = normalizePeerId(tokens.last);
+      if (isValidPeerId(n)) return n;
+    }
+    return null;
+  }
+
+  // Bare peerId.
+  final n = normalizePeerId(s);
+  return isValidPeerId(n) ? n : null;
+}
+
 /// Canonical connection-map key. The JS source uses the same shape so a
 /// cross-build shared storage layer (SharedPreferences / IndexedDB) hashes
 /// to the same bucket.
@@ -60,7 +129,9 @@ String mapPeerError(Object err) {
     case 'unavailable-id':
       return 'Этот ID уже занят';
     case 'peer-unavailable':
-      return 'Собеседник недоступен';
+      // The contact is saved locally regardless — this only means they aren't
+      // reachable right now, NOT that the contact is missing/invalid.
+      return 'Контакт сейчас не в сети';
     case 'invalid-id':
       return 'Недопустимый ID';
     case 'network':

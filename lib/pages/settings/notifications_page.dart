@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../themes/orbits_tokens.dart';
 import '../../ui/primitives/orbits_glass_list_tile.dart';
+import '../../ui/primitives/adaptive_page_frame.dart';
 import '../../ui/primitives/orbits_glass_surface.dart';
 import '../../ui/primitives/orbits_glass_switch.dart';
 
@@ -89,7 +90,9 @@ class _NotificationsPageState extends State<NotificationsPage> {
           ),
         ),
       ),
-      body: ListView(
+      body: AdaptivePageFrame(
+        maxWidth: 760,
+        child: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
           // ── Permission ────────────────────────────────────────
@@ -173,6 +176,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
           ),
           const SizedBox(height: 24),
         ],
+      ),
       ),
     );
   }

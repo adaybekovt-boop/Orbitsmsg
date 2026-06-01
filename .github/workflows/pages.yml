@@ -37,13 +37,23 @@ jobs:
         run: dart run build_runner build --delete-conflicting-outputs
 
       - name: Build web for GitHub Pages
-        run: flutter build web --release --base-href /tkmessenger/ --pwa-strategy offline-first
+        run: flutter build web --release --base-href /tkmessenger/ --pwa-strategy none
+
+      - name: Restore self-unregistering SW tombstones
+        # `--pwa-strategy none` makes Flutter emit an EMPTY flutter_service_worker.js,
+        # which clobbers our committed tombstone. Restore it so any browser that
+        # still has the old Flutter PWA SW registered fetches the self-unregister
+        # + cache-clear tombstone instead of a no-op empty file. (web/sw.js — the
+        # legacy React/Vite PWA SW name — is preserved by the build untouched.)
+        run: cp web/flutter_service_worker.js build/web/flutter_service_worker.js
 
       - name: Verify static assets
         run: |
           test -f build/web/index.html
           test -f build/web/sqlite3.wasm
           test -f build/web/drift_worker.js
+          test -s build/web/sw.js
+          test -s build/web/flutter_service_worker.js
 
       - uses: actions/configure-pages@v5
 

@@ -119,4 +119,46 @@ void main() {
             'channel messages must cascade-delete (messages.channel_id → '
             'room_channels → rooms)');
   });
+
+  test('watchRooms emits a newly-created room (drives the Servers list)',
+      () async {
+    const roomId = 'ORBIT-WATCH-01';
+    await db.saveRoom({
+      'id': roomId,
+      'name': 'Watched',
+      'hostPeerId': 'ORBIT-HOST01',
+      'isHost': true,
+      'createdAt': 2000,
+      'status': 'active',
+    });
+    final rooms = await db.watchRooms().first;
+    expect(rooms.any((r) => r['id'] == roomId), isTrue,
+        reason: 'ServersHomePage binds db.watchRooms() to show the new room');
+  });
+
+  test('clearAllData wipes room tables (rooms/channels/members)', () async {
+    const roomId = 'ORBIT-WIPE-01';
+    await db.saveRoom({
+      'id': roomId,
+      'name': 'Doomed',
+      'hostPeerId': 'ORBIT-HOST01',
+      'isHost': true,
+      'createdAt': 3000,
+      'status': 'active',
+    });
+    await db.saveRoomMember({
+      'roomId': roomId,
+      'peerId': 'ORBIT-HOST01',
+      'displayName': 'Host',
+      'isOnline': true,
+      'joinedAt': 3000,
+    });
+    expect(await database.select(database.roomsTable).get(), isNotEmpty);
+
+    await db.clearAllData();
+
+    expect(await database.select(database.roomsTable).get(), isEmpty);
+    expect(await database.select(database.roomChannelsTable).get(), isEmpty);
+    expect(await database.select(database.roomMembersTable).get(), isEmpty);
+  });
 }

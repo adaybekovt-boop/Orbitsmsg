@@ -16,6 +16,7 @@ import '../../state/peer_connection_provider.dart';
 import '../../themes/orbits_tokens.dart';
 import '../../ui/primitives/orbits_glass_button.dart';
 import '../../ui/primitives/orbits_glass_list_tile.dart';
+import '../../ui/primitives/adaptive_page_frame.dart';
 import '../../ui/primitives/orbits_glass_surface.dart';
 import '../../ui/primitives/orbs_card.dart';
 import '../../ui/profile/my_qr_page.dart';
@@ -49,7 +50,9 @@ class NetworkPage extends ConsumerWidget {
           ),
         ),
       ),
-      body: ListView(
+      body: AdaptivePageFrame(
+        maxWidth: 760,
+        child: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
           // ── Peer ID ──────────────────────────────────────────
@@ -184,6 +187,7 @@ class NetworkPage extends ConsumerWidget {
           ),
           const SizedBox(height: 24),
         ],
+      ),
       ),
     );
   }

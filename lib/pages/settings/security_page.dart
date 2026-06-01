@@ -22,6 +22,7 @@ import '../../state/strict_verify_provider.dart';
 import '../../themes/orbits_tokens.dart';
 import '../qr_pairing_page.dart';
 import '../../ui/primitives/orbits_glass_list_tile.dart';
+import '../../ui/primitives/adaptive_page_frame.dart';
 import '../../ui/primitives/orbits_glass_surface.dart';
 import '../../ui/primitives/orbits_glass_switch.dart';
 import '../../ui/primitives/orbs_card.dart';
@@ -87,7 +88,9 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
           ),
         ),
       ),
-      body: ListView(
+      body: AdaptivePageFrame(
+        maxWidth: 760,
+        child: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
           // ── Lock & login ─────────────────────────────────────
@@ -250,6 +253,7 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
           ),
           const SizedBox(height: 24),
         ],
+      ),
       ),
     );
   }

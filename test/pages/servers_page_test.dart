@@ -134,4 +134,37 @@ void main() {
     await tester.pump();
     await drain(tester);
   });
+
+  testWidgets('Создать сервер surfaces a clear error instead of doing nothing',
+      (tester) async {
+    // A profile whose peerId isn't ready yet → createRoom must NOT silently
+    // no-op; the UI shows why and stays put (regression test for the silent
+    // "button does nothing" failure).
+    const noIdUser =
+        AuthedUser(peerId: '', displayName: 'X', bio: '', avatarDataUrl: null);
+    final c = ProviderContainer(overrides: [
+      localProfileProvider.overrideWithValue(noIdUser),
+      roomTransportProvider.overrideWithValue(_FakeTransport()),
+    ]);
+    containers.add(c);
+    await pump(tester, c);
+
+    await tester.tap(find.text('Создать сервер'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // Name prompt is open — enter a name and confirm.
+    expect(find.byType(TextField), findsOneWidget);
+    await tester.enterText(find.byType(TextField), 'Room');
+    await tester.tap(find.text('Создать')); // dialog confirm (not the CTA)
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // Visible result: a SnackBar with the hint — and no navigation away.
+    expect(find.byType(SnackBar), findsOneWidget);
+    expect(find.textContaining('Профиль ещё не готов'), findsOneWidget);
+    expect(find.text('Создать сервер'), findsOneWidget); // still on this page
+
+    await drain(tester);
+  });
 }

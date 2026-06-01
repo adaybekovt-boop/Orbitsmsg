@@ -67,6 +67,15 @@ const int kMaxRoomMembers = 15;
 const int kMaxRoomTextLen = 4000;
 const int kMaxRoomNameLen = 80;
 
+/// Min interval between broadcast `room_spatial_update` packets during a drag
+/// (~10/sec). Local audio + UI update on every move; only the network send is
+/// throttled. The final position on pan-end bypasses this (isFinal).
+const int kSpatialSendIntervalMs = 100;
+
+/// Ring radius used when auto-arranging / resetting spatial positions. Matches
+/// the canvas default layout so reset lands balloons where the radar would.
+const double kSpatialRingRadius = 0.62;
+
 /// Caps for room stickers + file attachments. Files are relayed by the host to
 /// every guest, so the per-file size is bounded to keep host bandwidth + the
 /// reliable DataChannel frame (24 MiB hard cap in peerjs_client) sane. Matches
@@ -313,6 +322,11 @@ class RoomManager extends StateNotifier<RoomState> {
 
   final Random _rng = Random.secure();
 
+  /// Wall-clock ms of the last `room_spatial_update` we put on the wire. Drag
+  /// moves throttle against this (see [kSpatialSendIntervalMs]); the final
+  /// position always goes out regardless.
+  int _lastSpatialSendMs = 0;
+
   /// Active voice-mesh calls, keyed by remote peerId.
   final Map<String, PeerMediaConnection> _voiceConns = {};
   MediaStream? _voiceStream;
@@ -365,6 +379,11 @@ class RoomManager extends StateNotifier<RoomState> {
     final selfId = self?.peerId ?? _selfPeerId();
     if (selfId.isEmpty) {
       debugPrint('[room] createRoom: no local peerId yet');
+      // Never fail silently — surface it so the UI shows a hint instead of
+      // navigating into an empty room.
+      state = const RoomState(
+        joinError: 'Профиль ещё не готов. Подождите секунду и попробуйте снова.',
+      );
       return;
     }
 
@@ -404,16 +423,26 @@ class RoomManager extends StateNotifier<RoomState> {
     _security.reset(); // fresh fraud/flood state per session
 
     String? invite;
+    var serverActive = true;
+    String? notice;
     if (selfHosted) {
       try {
-        invite = await _startSelfHost(roomId);
+        // Bounded so a stuck embedded server / loopback client can never hang
+        // the create flow forever. host.start + _waitClientOpen are each
+        // bounded internally; this is the outer backstop.
+        invite =
+            await _startSelfHost(roomId).timeout(const Duration(seconds: 15));
       } catch (e) {
         debugPrint('[room] self-host start failed: $e');
         await _teardownSelfHost();
-        state = const RoomState(
-          joinError: 'Не удалось запустить локальный сервер.',
-        );
-        return;
+        // Don't strand the user: the room row + channels already persist, so
+        // keep it as a LOCAL, offline server they can still open and use (text
+        // history works locally) and retry hosting later — instead of leaving a
+        // zombie 'active' row with no server behind it (audit: zombie room).
+        await db.setRoomStatus(roomId, 'offline');
+        serverActive = false;
+        notice = 'Сервер создан, но запустить сеть не удалось — он работает '
+            'офлайн. Откройте его позже или пересоздайте.';
       }
     }
 
@@ -422,13 +451,14 @@ class RoomManager extends StateNotifier<RoomState> {
       roomId: roomId,
       hostPeerId: selfId,
       activeChannelId: general['id'] as String?,
-      serverActive: true,
+      serverActive: serverActive,
       selfHostInvite: invite,
+      joinError: notice,
     );
 
     // Best-effort internet exposure runs in the background so room creation is
     // instant and LAN-usable immediately; if UPnP succeeds the invite upgrades.
-    if (selfHosted) unawaited(_upgradeToInternet(roomId));
+    if (selfHosted && serverActive) unawaited(_upgradeToInternet(roomId));
   }
 
   /// Start the embedded server + the host's loopback room-scoped client. Swaps
@@ -915,19 +945,32 @@ class RoomManager extends StateNotifier<RoomState> {
   }
 
   /// Move [peerId]'s balloon on the spatial canvas to [pos] (x,y ∈ [-1,1]).
-  /// Updates the local positional audio immediately and broadcasts the new
-  /// coordinate to the room (host → all guests, guest → host who relays).
-  void setSpatialPosition(String peerId, Offset pos) {
+  /// Updates the local positional audio + UI immediately (every call) and
+  /// broadcasts the new coordinate to the room (host → all guests, guest →
+  /// host who relays).
+  ///
+  /// The network broadcast is THROTTLED during a drag ([kSpatialSendIntervalMs])
+  /// so a fast drag can't flood the room. The UI must call this with
+  /// [isFinal] = true on pan-end so the resting position is always delivered
+  /// even if it landed inside a throttle window.
+  void setSpatialPosition(String peerId, Offset pos, {bool isFinal = false}) {
     final roomId = state.roomId;
     if (roomId == null || peerId.isEmpty || state.role == RoomRole.none) return;
     final clamped = Offset(
       pos.dx.clamp(-1.0, 1.0).toDouble(),
       pos.dy.clamp(-1.0, 1.0).toDouble(),
     );
+    // Local UI + audio are always immediate — only the wire send is throttled.
     state = state.copyWith(
       spatialPositions: {...state.spatialPositions, peerId: clamped},
     );
     _applySpatialAudio(peerId);
+
+    final nowMs = now();
+    if (!isFinal && nowMs - _lastSpatialSendMs < kSpatialSendIntervalMs) {
+      return; // mid-drag tick inside the throttle window — skip the send
+    }
+    _lastSpatialSendMs = nowMs;
 
     final packet = <String, Object?>{
       'type': 'room_spatial_update',
@@ -944,6 +987,41 @@ class RoomManager extends StateNotifier<RoomState> {
       // balloon stays a local-only audio adjustment (host owns the shared scene).
       final host = state.hostPeerId;
       if (host != null) _connections.sendRoomPacket(host, packet);
+    }
+  }
+
+  /// Default ring position for the [i]-th of [n] peers — the auto-arrange /
+  /// reset layout. Mirrors the canvas's own default so a reset lands balloons
+  /// exactly where the radar would have placed an un-positioned peer.
+  static Offset spatialRingPosition(int i, int n) {
+    if (n <= 0) return Offset.zero;
+    final angle = (2 * pi * i / n) - (pi / 2);
+    return Offset(
+      kSpatialRingRadius * cos(angle),
+      kSpatialRingRadius * sin(angle),
+    );
+  }
+
+  /// Reset / auto-arrange: place every OTHER voice participant evenly on a ring
+  /// around the listener and broadcast each new position (a host pushes to all
+  /// guests; a guest only re-arranges its own local audio scene since it can't
+  /// move others on the wire). The local self marker stays at the centre.
+  Future<void> resetSpatialPositions() async {
+    final roomId = state.roomId;
+    if (roomId == null || state.role == RoomRole.none) return;
+    final selfId = _selfPeerId();
+    final members = await db.getRoomMembers(roomId);
+    final others = <String>[
+      for (final m in members)
+        if ((m['peerId'] as String?) != null &&
+            (m['peerId'] as String).isNotEmpty &&
+            m['peerId'] != selfId)
+          m['peerId'] as String,
+    ];
+    for (var i = 0; i < others.length; i++) {
+      // isFinal so each reset position is delivered immediately (not throttled).
+      setSpatialPosition(others[i], spatialRingPosition(i, others.length),
+          isFinal: true);
     }
   }
 

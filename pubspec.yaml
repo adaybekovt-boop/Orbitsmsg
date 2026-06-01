@@ -1,7 +1,7 @@
 name: orbits_flutter
 description: Orbits P2P Messenger — Flutter port. Mirrors the React/Vite project in git_push/.
 publish_to: 'none'
-version: 0.1.0
+version: 9.0.0+900
 
 environment:
   # Dart 3.6+ / Flutter 3.27+ for `Color.withValues(alpha:)` and related
@@ -130,6 +130,9 @@ dependencies:
   # HKDF-SHA256 (HMAC) for the SQLCipher DB-key derivation in
   # storage/database.dart. Tiny, pure-Dart, web-safe.
   crypto: ^3.0.0
+  http: ^1.6.0
+  url_launcher: ^6.3.2
+  package_info_plus: ^9.0.1
 
 dev_dependencies:
   flutter_test:

@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 
 import '../../themes/orbits_tokens.dart';
 import '../../ui/auth/terms_text.dart';
+import '../../ui/primitives/adaptive_page_frame.dart';
 
 class TermsPage extends StatelessWidget {
   const TermsPage({super.key});
@@ -26,7 +27,7 @@ class TermsPage extends StatelessWidget {
           ),
         ),
       ),
-      body: const TermsView(),
+      body: const AdaptivePageFrame(child: TermsView()),
     );
   }
 }

@@ -1,22 +1,23 @@
 // Add-contact screen — two ways to onboard a new peer:
 //   1. Scan QR (`mobile_scanner` live camera feed)
-//   2. Type the peerId by hand
+//   2. Type / paste the code by hand
 //
-// We default to the scan tab because that's the path optimised for the
-// in-person meet-up case (same room, "show me your QR"); the manual tab
-// is the fallback for desktop/web without a camera or for anyone sharing
-// peerIds over an out-of-band channel.
+// Both paths funnel through `parseContactQrPayload` (peer/helpers.dart), so a
+// bare `ORBIT-ABC123`, an `orbits://contact/<id>` deep link, an
+// `orbits:contact:<id>` string, or a JSON contact blob all add the same peer.
 //
-// On a successful scan / valid manual entry we:
-//   • Refuse self-adds (would create an empty chat with yourself).
-//   • Persist a fresh `peers` row via `db.savePeer(...)` — the chat list
-//     watcher picks it up automatically.
-//   • Push the chat detail page so the user lands directly in the new
-//     conversation. This matches the JS UX flow.
+// IMPORTANT — adding a contact is OFFLINE-FIRST: scanning a friend's QR saves
+// the `peers` row locally even if they're not reachable right now. The live
+// connection (and its "в сети / не в сети" status) is the chat page's job, not
+// a precondition for adding.
+//
+// `mobile_scanner` only ships a camera implementation on Android / iOS / macOS
+// / web. On Windows & Linux (and when the camera permission is denied) the scan
+// tab degrades to a clear "use manual entry" panel instead of crashing.
 
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
@@ -30,6 +31,21 @@ import '../primitives/orbits_glass_button.dart';
 import '../primitives/orbits_glass_surface.dart';
 import 'my_qr_page.dart';
 
+/// Whether `mobile_scanner` has a live-camera implementation on this platform.
+/// (Windows / Linux have none — there a QR scan tab would throw, so we hide
+/// the live feed and steer the user to manual entry.)
+bool get scannerSupported {
+  if (kIsWeb) return true;
+  switch (defaultTargetPlatform) {
+    case TargetPlatform.android:
+    case TargetPlatform.iOS:
+    case TargetPlatform.macOS:
+      return true;
+    default:
+      return false;
+  }
+}
+
 class AddContactPage extends ConsumerStatefulWidget {
   const AddContactPage({super.key});
 
@@ -41,17 +57,20 @@ class _AddContactPageState extends ConsumerState<AddContactPage>
     with SingleTickerProviderStateMixin {
   late final TabController _tabs;
 
+  /// Scan-first only on phones (the in-person meetup path). On web (flaky
+  /// webcam QR) and on desktops without a camera impl, open on manual.
+  bool get _preferScan =>
+      !kIsWeb &&
+      (defaultTargetPlatform == TargetPlatform.android ||
+          defaultTargetPlatform == TargetPlatform.iOS);
+
   @override
   void initState() {
     super.initState();
-    // Web users almost never have webcam-QR access (browsers gate it behind
-    // a permission prompt and many never grant it). Default to the manual
-    // tab there. On native we open on scan because that's the in-person
-    // meetup path.
     _tabs = TabController(
       length: 2,
       vsync: this,
-      initialIndex: kIsWeb ? 1 : 0,
+      initialIndex: _preferScan ? 0 : 1,
     );
   }
 
@@ -61,35 +80,48 @@ class _AddContactPageState extends ConsumerState<AddContactPage>
     super.dispose();
   }
 
-  Future<void> _accept(String raw) async {
-    final normalized = normalizePeerId(raw);
-    if (!isValidPeerId(normalized)) {
-      _toast('Код не похож на правильный');
-      return;
+  /// Try to add the contact encoded in [raw]. Returns true when a peer was
+  /// saved (new OR already-present) so the scanner knows to stop; false on any
+  /// recoverable failure (unrecognised code, self, save error) so it can re-arm
+  /// and let the user try again. Never throws.
+  Future<bool> _accept(String raw) async {
+    final pid = parseContactQrPayload(raw);
+    if (pid == null) {
+      _toast('QR не похож на контакт TK Messenger');
+      return false;
     }
-    final selfId = ref.read(currentPeerIdProvider) ?? '';
-    if (normalized == selfId) {
+    final selfId = normalizePeerId(ref.read(currentPeerIdProvider) ?? '');
+    if (pid == selfId) {
       _toast('Это твой собственный код');
-      return;
+      return false;
     }
+
+    final existed = (await db.getPeer(pid)) != null;
+    bool saved;
     try {
-      await db.savePeer({
-        'id': normalized,
+      saved = await db.savePeer({
+        'id': pid,
         'trustLevel': 0,
         'lastSeenAt': DateTime.now().millisecondsSinceEpoch,
       });
     } catch (_) {
-      _toast('Не удалось добавить контакт');
-      return;
+      _toast('Не удалось сохранить контакт');
+      return false;
     }
-    if (!mounted) return;
-    // Close the add-contact page, then push the chat view on top.
-    Navigator.of(context).pop();
+    if (!saved) {
+      _toast('Не удалось сохранить контакт');
+      return false;
+    }
+
+    if (!mounted) return true;
+    // Visible result + distinct message; the contact is saved regardless of
+    // whether the peer is online. Keep this page in the back stack (don't pop)
+    // so the SnackBar stays visible and "add another" is one back-tap away.
+    _toast(existed ? 'Контакт уже добавлен' : 'Контакт добавлен');
     Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => ChatViewPage(peerId: normalized),
-      ),
+      MaterialPageRoute(builder: (_) => ChatViewPage(peerId: pid)),
     );
+    return true;
   }
 
   void _toast(String msg) {
@@ -167,7 +199,10 @@ class _AddContactPageState extends ConsumerState<AddContactPage>
       body: TabBarView(
         controller: _tabs,
         children: [
-          _ScanTab(onResult: _accept),
+          _ScanTab(
+            onResult: _accept,
+            onManual: () => _tabs.animateTo(1),
+          ),
           _ManualTab(onSubmit: _accept),
         ],
       ),
@@ -178,51 +213,92 @@ class _AddContactPageState extends ConsumerState<AddContactPage>
 // ─── Tab 1: live camera QR scan ────────────────────────────────────
 
 class _ScanTab extends StatefulWidget {
-  const _ScanTab({required this.onResult});
-  final Future<void> Function(String) onResult;
+  const _ScanTab({required this.onResult, required this.onManual});
+
+  /// Returns true if a contact was added (stop scanning), false to re-arm.
+  final Future<bool> Function(String) onResult;
+  final VoidCallback onManual;
 
   @override
   State<_ScanTab> createState() => _ScanTabState();
 }
 
 class _ScanTabState extends State<_ScanTab> {
-  final MobileScannerController _controller = MobileScannerController();
+  MobileScannerController? _controller;
+
+  /// True while a scan result is being processed — blocks the per-frame
+  /// onDetect storm from firing `onResult` dozens of times. Reset (and the
+  /// camera restarted) if the result turned out to be unusable, so a single
+  /// bad/duplicate scan never permanently wedges the scanner.
   bool _handled = false;
 
   @override
+  void initState() {
+    super.initState();
+    if (scannerSupported) _controller = MobileScannerController();
+  }
+
+  @override
   void dispose() {
-    _controller.dispose();
+    _controller?.dispose();
     super.dispose();
+  }
+
+  Future<void> _onDetect(BarcodeCapture capture) async {
+    if (_handled) return;
+    // Pick the FIRST barcode that actually parses to a contact — ignore any
+    // other junk QR that happens to be in frame (a poster, a URL, …).
+    String? hit;
+    for (final code in capture.barcodes) {
+      final raw = code.rawValue;
+      if (raw == null || raw.isEmpty) continue;
+      if (parseContactQrPayload(raw) != null) {
+        hit = raw;
+        break;
+      }
+    }
+    if (hit == null) return; // nothing contact-shaped yet — keep scanning
+
+    _handled = true;
+    hapticTap();
+    await _controller?.stop();
+    final ok = await widget.onResult(hit);
+    if (!mounted) return;
+    if (!ok) {
+      // Self / save failure — let the user point at another code.
+      _handled = false;
+      await _controller?.start();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final controller = _controller;
+    if (controller == null) {
+      // No camera implementation on this platform (Windows / Linux).
+      return _ScanUnavailable(
+        title: 'Сканирование недоступно',
+        message:
+            'На этом устройстве нет камеры для QR. Введите код контакта вручную.',
+        onManual: widget.onManual,
+      );
+    }
+
     final tokens = OrbitsTokens.of(context);
     return Stack(
       children: [
-        // Camera preview fills the whole tab.
         MobileScanner(
-          controller: _controller,
-          onDetect: (capture) {
-            if (_handled) return;
-            for (final code in capture.barcodes) {
-              final raw = code.rawValue;
-              if (raw == null || raw.isEmpty) continue;
-              _handled = true;
-              hapticTap();
-              // Stop the camera before navigating so we don't keep the
-              // sensor warm during the chat-view push animation.
-              _controller.stop();
-              widget.onResult(raw).then((_) {
-                if (mounted) _handled = false;
-              });
-              return;
-            }
-          },
+          controller: controller,
+          onDetect: _onDetect,
+          errorBuilder: (context, error, child) => _ScanUnavailable(
+            title: 'Камера недоступна',
+            message:
+                'Не удалось открыть камеру (нет доступа?). Введите код вручную '
+                'или разрешите доступ к камере в настройках.',
+            onManual: widget.onManual,
+          ),
         ),
-        // Cut-out viewfinder hint — a square in the middle so users know
-        // where to point. Pure visual; the scanner itself reads the whole
-        // frame.
+        // Cut-out viewfinder hint.
         Center(
           child: Container(
             width: 240,
@@ -233,23 +309,35 @@ class _ScanTabState extends State<_ScanTab> {
             ),
           ),
         ),
-        // Caption below the viewfinder.
+        // Caption + manual-entry escape hatch.
         Positioned(
           left: 0,
           right: 0,
-          bottom: 32,
-          child: Container(
-            margin: const EdgeInsets.symmetric(horizontal: 24),
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.55),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Text(
-              'Наведи камеру на QR-код друга',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.white, fontSize: 14),
-            ),
+          bottom: 28,
+          child: Column(
+            children: [
+              Container(
+                margin: const EdgeInsets.symmetric(horizontal: 24),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Text(
+                  'Наведи камеру на QR-код друга',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.white, fontSize: 14),
+                ),
+              ),
+              const SizedBox(height: 12),
+              OrbitsGlassButton(
+                label: 'Ввести вручную',
+                icon: Icons.keyboard,
+                variant: OrbitsGlassVariant.secondary,
+                onPressed: widget.onManual,
+              ),
+            ],
           ),
         ),
         // Torch + camera-flip controls in the top-right.
@@ -261,18 +349,80 @@ class _ScanTabState extends State<_ScanTab> {
               _ScanIconButton(
                 icon: Icons.flash_on,
                 tooltip: 'Фонарик',
-                onTap: () => _controller.toggleTorch(),
+                onTap: () => controller.toggleTorch(),
               ),
               const SizedBox(height: 8),
               _ScanIconButton(
                 icon: Icons.cameraswitch_outlined,
                 tooltip: 'Сменить камеру',
-                onTap: () => _controller.switchCamera(),
+                onTap: () => controller.switchCamera(),
               ),
             ],
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Shown when the live scanner can't run (unsupported platform or denied
+/// camera permission). Always offers the manual-entry path.
+class _ScanUnavailable extends StatelessWidget {
+  const _ScanUnavailable({
+    required this.title,
+    required this.message,
+    required this.onManual,
+  });
+  final String title;
+  final String message;
+  final VoidCallback onManual;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.no_photography_outlined,
+                  size: 48, color: tokens.muted),
+              const SizedBox(height: 14),
+              Text(
+                title,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  fontFamily: tokens.fontHeading,
+                  color: tokens.text,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: tokens.muted,
+                  fontFamily: tokens.fontBody,
+                ),
+              ),
+              const SizedBox(height: 20),
+              OrbitsGlassButton(
+                label: 'Ввести вручную',
+                icon: Icons.keyboard,
+                variant: OrbitsGlassVariant.primary,
+                size: OrbitsGlassSize.large,
+                expand: true,
+                onPressed: onManual,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -308,11 +458,14 @@ class _ScanIconButton extends StatelessWidget {
   }
 }
 
-// ─── Tab 2: manual peerId entry ────────────────────────────────────
+// ─── Tab 2: manual code entry ──────────────────────────────────────
 
 class _ManualTab extends StatefulWidget {
   const _ManualTab({required this.onSubmit});
-  final Future<void> Function(String) onSubmit;
+
+  /// Returns true if a contact was added; false otherwise (error already
+  /// surfaced to the user).
+  final Future<bool> Function(String) onSubmit;
 
   @override
   State<_ManualTab> createState() => _ManualTabState();
@@ -366,7 +519,8 @@ class _ManualTabState extends State<_ManualTab> {
                 ),
                 const SizedBox(height: 6),
                 Text(
-                  'Попроси человека открыть свой QR или отправить код профиля.',
+                  'Вставь код друга или ссылку из его QR '
+                  '(ORBIT-… или orbits://contact/…).',
                   style: TextStyle(
                     color: tokens.muted,
                     fontFamily: tokens.fontBody,
@@ -376,17 +530,12 @@ class _ManualTabState extends State<_ManualTab> {
                 TextField(
                   controller: _ctl,
                   autofocus: true,
+                  // No hard input formatters: a pasted `orbits://contact/…`
+                  // link or JSON blob must survive intact — normalisation +
+                  // validation happen in `parseContactQrPayload` on submit.
                   textCapitalization: TextCapitalization.characters,
                   style: TextStyle(
                       fontFamily: tokens.fontMono, color: tokens.text),
-                  inputFormatters: [
-                    // Strip whitespace + force upper-case as the user types,
-                    // matching the canonicalisation in `normalizePeerId`.
-                    FilteringTextInputFormatter.deny(RegExp(r'\s')),
-                    TextInputFormatter.withFunction((_, value) {
-                      return value.copyWith(text: value.text.toUpperCase());
-                    }),
-                  ],
                   decoration: InputDecoration(
                     labelText: 'Код профиля',
                     labelStyle: TextStyle(
@@ -423,10 +572,6 @@ class _ManualTabState extends State<_ManualTab> {
                   enabled: !_busy,
                   onPressed: _busy ? null : _submit,
                 ),
-                // Inline progress feedback while the contact is being saved —
-                // the glass button takes an `IconData`, not a spinner widget, so
-                // we surface the busy state below it (logic unchanged: `_busy`
-                // also disables the button above).
                 if (_busy) ...[
                   const SizedBox(height: 16),
                   Center(

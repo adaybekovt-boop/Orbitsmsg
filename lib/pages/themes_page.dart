@@ -12,6 +12,7 @@ import '../themes/manifest.dart';
 import '../themes/orbits_tokens.dart';
 import '../themes/registry.dart';
 import '../themes/theme_notifier.dart';
+import '../ui/primitives/adaptive_page_frame.dart';
 
 class ThemesPage extends ConsumerWidget {
   const ThemesPage({super.key});
@@ -32,7 +33,9 @@ class ThemesPage extends ConsumerWidget {
           ),
         ),
       ),
-      body: ListView(
+      body: AdaptivePageFrame(
+        maxWidth: 760,
+        child: ListView(
         padding: const EdgeInsets.only(bottom: 24, top: 8),
         children: [
           // Hero blurb
@@ -60,6 +63,7 @@ class ThemesPage extends ConsumerWidget {
               ),
             ),
         ],
+      ),
       ),
     );
   }

@@ -4,15 +4,17 @@
 // canvas. The receiving side scans it via `AddContactPage` (which uses
 // `mobile_scanner`), parses the URI, and lands directly on the new chat.
 //
-// Wire format: we emit the bare peerId text inside the QR. Could move to
-// `orbits://contact/<id>` later for deep-link routing, but the current
-// reader handles both via canonicalisation in `peer/helpers.dart`.
+// Wire format: the QR carries a stable `orbits://contact/<peerId>` deep link
+// (built by `contactQrPayload`). The reader (`parseContactQrPayload`) still
+// accepts a bare peerId too, so older QRs keep scanning. The plain-text code
+// shown below the QR stays the bare id — that's what a human copies/types.
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../core/haptics.dart';
+import '../../peer/helpers.dart' show contactQrPayload;
 import '../../themes/orbits_tokens.dart';
 import '../primitives/orbits_glass_button.dart';
 import '../primitives/orbits_glass_surface.dart';
@@ -87,7 +89,7 @@ class MyQrPage extends StatelessWidget {
                       borderRadius: BorderRadius.circular(tokens.radiusCard),
                     ),
                     child: QrImageView(
-                      data: peerId,
+                      data: contactQrPayload(peerId),
                       version: QrVersions.auto,
                       size: 240,
                       backgroundColor: Colors.white,
