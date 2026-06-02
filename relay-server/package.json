@@ -1,0 +1,20 @@
+{
+  "name": "orbits-relay-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Minimal WebSocket relay server for the TK Messenger / Orbits encrypted text fallback (RELAY_URL). Dumb router — never inspects, logs, or mutates frame content.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test",
+    "test:hub": "node --test test/hub.test.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

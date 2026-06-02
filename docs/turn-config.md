@@ -100,14 +100,17 @@ flutter build apk --release \
 
 ### You must deploy the relay server yourself
 
-> **This repository ships the relay CLIENT only — there is NO relay server
-> implementation included.** `RELAY_URL` must point at a **separately deployed,
-> compatible WebSocket relay server** that you run. Without a reachable server
-> at that URL, the relay fallback simply **does nothing** (the socket never
-> connects and `send()` returns `false`, so messages stay `pending` and the app
-> behaves exactly as WebRTC-only). The app never silently "works everywhere" on
-> the strength of this feature alone — text fallback is real only when both a
-> server is deployed **and** a wire session can be established with the peer.
+> A compatible reference relay server now lives in **[`relay-server/`](../relay-server)**
+> — see **[docs/relay-server.md](relay-server.md)** to run and deploy it. It is a
+> small, content-blind WebSocket router (not bundled into the app build).
+>
+> `RELAY_URL` must point at a **deployed, running** instance of that server (or
+> any compatible one). Without a reachable server at that URL, the relay
+> fallback simply **does nothing** (the socket never connects and `send()`
+> returns `false`, so messages stay `pending` and the app behaves exactly as
+> WebRTC-only). The app never silently "works everywhere" on the strength of
+> this feature alone — text fallback is real only when both a server is deployed
+> **and** a wire session can be established with the peer.
 
 ### Relay protocol (server contract)
 
