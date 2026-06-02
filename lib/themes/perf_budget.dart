@@ -30,6 +30,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../state/power_saver_provider.dart';
 import 'manifest.dart';
 
 /// Tiered performance modes, mirroring the JS string union
@@ -102,24 +103,47 @@ class PerfBudget {
 /// last `ref.watch` going away.
 final perfBudgetProvider = StateNotifierProvider.autoDispose
     .family<_PerfBudgetController, PerfBudget, ThemeManifest>(
-  (ref, manifest) => _PerfBudgetController(manifest),
+  (ref, manifest) => _PerfBudgetController(manifest, ref),
 );
+
+/// Force the frozen tier when power-saver (lite mode) is on — the user has
+/// explicitly asked for minimum load, so no animated background / motion
+/// regardless of device class. Pure + [visibleForTesting].
+@visibleForTesting
+PerfBudget applyPowerSaver(PerfBudget base, bool powerSaver) {
+  if (!powerSaver) return base;
+  return const PerfBudget(
+    tier: PerfTier.frozen,
+    particles: 0,
+    fpsCap: 0,
+    motion: false,
+    reason: 'power-saver',
+  );
+}
 
 class _PerfBudgetController extends StateNotifier<PerfBudget>
     with WidgetsBindingObserver {
-  _PerfBudgetController(this._manifest)
+  _PerfBudgetController(this._manifest, this._ref)
       : super(_initialBudget(_manifest, _classifyDevice())) {
     _deviceClass = _classifyDevice();
+    _liteMode = _ref.read(powerSaverProvider);
+    _ref.listen<bool>(powerSaverProvider, (_, next) {
+      if (_liteMode == next) return;
+      _liteMode = next;
+      _emit();
+    });
     WidgetsBinding.instance.addObserver(this);
     _startFpsMonitor();
     _emit();
   }
 
   final ThemeManifest _manifest;
+  final Ref _ref;
   late final _DeviceClass _deviceClass;
   bool _appVisible = true;
   bool _reducedMotion = false;
   bool _fpsDegraded = false;
+  bool _liteMode = false;
 
   // FPS monitor state — two-second rolling window.
   TimingsCallback? _timingsCb;
@@ -173,12 +197,15 @@ class _PerfBudgetController extends StateNotifier<PerfBudget>
   DateTime _lastTickWall = DateTime.now();
 
   void _emit() {
-    state = _resolveBudget(
-      manifest: _manifest,
-      device: _deviceClass,
-      reducedMotion: _reducedMotion,
-      visible: _appVisible,
-      fpsDegraded: _fpsDegraded,
+    state = applyPowerSaver(
+      _resolveBudget(
+        manifest: _manifest,
+        device: _deviceClass,
+        reducedMotion: _reducedMotion,
+        visible: _appVisible,
+        fpsDegraded: _fpsDegraded,
+      ),
+      _liteMode,
     );
   }
 
