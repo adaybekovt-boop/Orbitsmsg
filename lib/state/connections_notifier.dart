@@ -53,14 +53,22 @@ import 'peer_connection_provider.dart';
 class ConnectionsState {
   const ConnectionsState({
     required this.connectedPeerIds,
+    this.connectingPeerIds = const <String>{},
     this.lastConnectError,
   });
 
   const ConnectionsState.empty()
       : connectedPeerIds = const <String>{},
+        connectingPeerIds = const <String>{},
         lastConnectError = null;
 
   final Set<String> connectedPeerIds;
+
+  /// Peers we have a reliable channel IN PROGRESS for (dialed/queued but the
+  /// DataChannel hasn't opened yet). Drives a "Подключение…" status so the UI
+  /// shows connecting rather than a misleading "Не в сети" during the dial.
+  /// Disjoint from [connectedPeerIds].
+  final Set<String> connectingPeerIds;
 
   /// Most recent failed dial — surfaced for diagnostics so a swallowed P2P
   /// error is observable (peerId + reason + timestamp). Null until something
@@ -71,10 +79,12 @@ class ConnectionsState {
 
   ConnectionsState copyWith({
     Set<String>? connectedPeerIds,
+    Set<String>? connectingPeerIds,
     Object? lastConnectError = _unset,
   }) =>
       ConnectionsState(
         connectedPeerIds: connectedPeerIds ?? this.connectedPeerIds,
+        connectingPeerIds: connectingPeerIds ?? this.connectingPeerIds,
         lastConnectError: identical(lastConnectError, _unset)
             ? this.lastConnectError
             : lastConnectError as ConnectError?,
@@ -316,7 +326,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       // PeerJS not ready yet (cold-boot race: user taps chat row faster
       // than the server ACKs). Stash reliable requests so the onOpen hook
       // in `_bindToCurrentPeer` can flush them the moment we're live.
-      if (reliable) _pendingReliableTargets.add(normalized);
+      if (reliable) {
+        _pendingReliableTargets.add(normalized);
+        _refreshConnectedIds(); // show "connecting" while the dial is queued
+      }
       return;
     }
 
@@ -347,6 +360,8 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
               atMs: now(),
             ),
           );
+          // The dial never produced a binding — clear any stale "connecting".
+          _refreshConnectedIds();
         }
       }
     }());
@@ -394,6 +409,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       subscriptions: <StreamSubscription<dynamic>>[],
     );
     _bindings[key] = binding;
+    // Surface "connecting" the instant a reliable dial is registered (the
+    // channel isn't open yet) so the chat shows Подключение…, not Не в сети.
+    if (ch == 'reliable') _refreshConnectedIds();
 
     // Connection timeout — reliable only. Matches the JS 15s budget.
     if (ch == 'reliable') {
@@ -638,17 +656,33 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   }
 
   void _refreshConnectedIds() {
-    final next = <String>{};
+    final connected = <String>{};
+    final connecting = <String>{};
     for (final b in _bindings.values) {
-      if (b.channel == 'reliable' && b.conn.open) {
-        next.add(normalizePeerId(b.conn.peer));
+      if (b.channel != 'reliable') continue;
+      final id = normalizePeerId(b.conn.peer);
+      if (b.conn.open) {
+        connected.add(id);
+      } else {
+        connecting.add(id); // reliable channel dialed but not open yet
       }
     }
-    if (next.length == state.connectedPeerIds.length &&
-        next.every(state.connectedPeerIds.contains)) {
-      return; // no change
+    // Reliable dials queued before the PeerJS client opened are also "in
+    // progress" — surface them as connecting so the chat doesn't read offline.
+    for (final t in _pendingReliableTargets) {
+      connecting.add(normalizePeerId(t));
     }
-    state = state.copyWith(connectedPeerIds: next);
+    connecting.removeAll(connected); // connected wins; the two stay disjoint
+
+    final sameConnected = connected.length == state.connectedPeerIds.length &&
+        connected.every(state.connectedPeerIds.contains);
+    final sameConnecting = connecting.length == state.connectingPeerIds.length &&
+        connecting.every(state.connectingPeerIds.contains);
+    if (sameConnected && sameConnecting) return; // no change
+    state = state.copyWith(
+      connectedPeerIds: connected,
+      connectingPeerIds: connecting,
+    );
   }
 
   // ─── Peer-manager binding ─────────────────────────────────────
@@ -771,6 +805,14 @@ final connectionsNotifierProvider =
 final connectedPeerIdsProvider = Provider<Set<String>>((ref) {
   return ref.watch(
     connectionsNotifierProvider.select((s) => s.connectedPeerIds),
+  );
+});
+
+/// Peers with a reliable channel in progress (dialed/queued, not open yet).
+/// Lets the UI show "Подключение…" instead of a misleading "Не в сети".
+final connectingPeerIdsProvider = Provider<Set<String>>((ref) {
+  return ref.watch(
+    connectionsNotifierProvider.select((s) => s.connectingPeerIds),
   );
 });
 

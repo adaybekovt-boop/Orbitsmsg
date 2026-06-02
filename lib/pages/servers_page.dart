@@ -226,6 +226,33 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
                   enabled: !_busy,
                   onPressed: _joinServer,
                 ),
+                // Honest capability note: only desktop runs a persistent
+                // embedded server. On web/mobile a "server" rides the public
+                // relay and is live only while the app is open.
+                if (!canHostSignalingServer) ...[
+                  const SizedBox(height: 10),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.info_outline_rounded,
+                          size: 15, color: tokens.muted),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'Здесь сервер работает через облачную связь и активен, '
+                          'пока открыто приложение. Постоянный собственный сервер '
+                          'можно поднять в приложении для ПК (Windows/macOS/Linux).',
+                          style: TextStyle(
+                            color: tokens.muted,
+                            fontSize: 12,
+                            height: 1.4,
+                            fontFamily: tokens.fontBody,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 22),
                 Text(
                   'ВАШИ СЕРВЕРЫ',

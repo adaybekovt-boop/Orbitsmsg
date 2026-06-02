@@ -52,7 +52,7 @@ void main() {
     await closeOrbitsDatabase();
   });
 
-  Future<void> pump(WidgetTester tester) async {
+  Future<void> pump(WidgetTester tester, {NavigatorObserver? observer}) async {
     final c = ProviderContainer(overrides: [
       localProfileProvider.overrideWithValue(_selfUser),
     ]);
@@ -62,6 +62,7 @@ void main() {
         container: c,
         child: MaterialApp(
           theme: testOrbitsTheme(),
+          navigatorObservers: observer == null ? const [] : [observer],
           home: const AddContactPage(),
         ),
       ),
@@ -91,7 +92,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
 
-    expect(find.text('QR не похож на контакт TK Messenger'), findsOneWidget);
+    expect(find.text('Код не похож на контакт TK Messenger'), findsOneWidget);
     expect(await db.getAllPeers(), isEmpty);
   });
 
@@ -153,4 +154,36 @@ void main() {
     final saved = await db.getPeer('ORBIT-DEF456');
     expect(saved, isNotNull, reason: 'Done must submit + save, offline-first');
   });
+
+  testWidgets('valid add deterministically OPENS the chat (pushes a route)',
+      (tester) async {
+    // Regression for "contact added but chat does not open": after a valid add
+    // the page must push the chat route, even though ChatViewPage itself isn't
+    // exercised here. We assert via a NavigatorObserver so we don't depend on
+    // the (heavy) chat page rendering.
+    final observer = _PushObserver();
+    await pump(tester, observer: observer);
+    final pushesBefore = observer.pushCount;
+
+    await tester.enterText(find.byType(TextField), 'ORBIT-DEF456');
+    await tester.tap(find.text('Добавить'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 50));
+    tester.takeException(); // tolerate the pushed ChatViewPage build
+
+    expect(await db.getPeer('ORBIT-DEF456'), isNotNull);
+    expect(observer.pushCount, greaterThan(pushesBefore),
+        reason: 'a successful add must push the chat route');
+  });
+}
+
+/// Counts route pushes so a test can assert navigation happened without
+/// rendering the destination page.
+class _PushObserver extends NavigatorObserver {
+  int pushCount = 0;
+  @override
+  void didPush(Route<dynamic> route, Route<dynamic>? previousRoute) {
+    pushCount++;
+    super.didPush(route, previousRoute);
+  }
 }

@@ -388,6 +388,15 @@ class PeerDataConnection {
     };
     dc.onMessage = (msg) {
       if (_closed) return;
+      // Presence fix: a RECEIVED data channel (answerer side) can miss the
+      // initial `RTCDataChannelOpen` state callback, leaving `_open` false even
+      // though data is flowing — which made the peer show "offline" on the side
+      // that accepted the connection. Inbound data is definitive proof the
+      // channel is open, so mark it open and fire onOpen exactly once.
+      if (!_open) {
+        _open = true;
+        _openCtl.add(null);
+      }
       // Anti-OOM cap (audit finding 3): drop any frame larger than the biggest
       // legitimate payload before we allocate/decode it. The largest real frame
       // is an inline file message (≤16 MiB base64 + JSON envelope — see

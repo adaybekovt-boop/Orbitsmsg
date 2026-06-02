@@ -6,10 +6,25 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/state/connections_notifier.dart';
 
 void main() {
-  test('empty state has no connections and no error', () {
+  test('empty state has no connections, no connecting, no error', () {
     const s = ConnectionsState.empty();
     expect(s.connectedPeerIds, isEmpty);
+    expect(s.connectingPeerIds, isEmpty);
     expect(s.lastConnectError, isNull);
+  });
+
+  test('copyWith tracks connecting peers independently of connected', () {
+    const s = ConnectionsState(connectedPeerIds: {'ORBIT-AAAAAA'});
+    final connecting = s.copyWith(connectingPeerIds: {'ORBIT-BBBBBB'});
+    expect(connecting.connectedPeerIds, {'ORBIT-AAAAAA'});
+    expect(connecting.connectingPeerIds, {'ORBIT-BBBBBB'});
+    // Promoting B to connected + clearing connecting is one update.
+    final promoted = connecting.copyWith(
+      connectedPeerIds: {'ORBIT-AAAAAA', 'ORBIT-BBBBBB'},
+      connectingPeerIds: {},
+    );
+    expect(promoted.connectingPeerIds, isEmpty);
+    expect(promoted.connectedPeerIds, contains('ORBIT-BBBBBB'));
   });
 
   test('copyWith records a connect error without dropping connected peers', () {
