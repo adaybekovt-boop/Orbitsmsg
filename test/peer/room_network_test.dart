@@ -47,6 +47,11 @@ class _FakeTransport implements RoomTransport {
   bool hasReliable(String peerId) => wire.byId.containsKey(peerId);
 
   @override
+  void Function() watchReliable(
+          String peerId, void Function(bool up) onChange) =>
+      () {};
+
+  @override
   void openReliable(String peerId) {/* already "connected" in the harness */}
 
   @override

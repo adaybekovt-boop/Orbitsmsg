@@ -455,22 +455,34 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
     required RoomState roomState,
     required bool showHeader,
   }) {
-    final alert =
-        roomState.roomId == viewRoomId ? roomState.securityAlert : null;
-    if (alert == null) {
+    final forThisRoom = roomState.roomId == viewRoomId;
+    final alert = forThisRoom ? roomState.securityAlert : null;
+    // Honest host/connection state for a guest (Phase 3): reconnecting / ended.
+    final connNote = forThisRoom && roomState.role == RoomRole.guest
+        ? _roomConnectionNote(roomState.roomConnection)
+        : null;
+
+    if (alert == null && connNote == null) {
       return _chatBody(
         viewRoomId: viewRoomId,
         roomState: roomState,
         showHeader: showHeader,
       );
     }
-    // Fraud detector raised a warning → red glass banner above the chat.
     return Column(
       children: [
-        _SecurityBanner(
-          message: alert,
-          onDismiss: () => _rooms.clearSecurityAlert(),
-        ),
+        // Fraud detector raised a warning → red glass banner above the chat.
+        if (alert != null)
+          _SecurityBanner(
+            message: alert,
+            onDismiss: () => _rooms.clearSecurityAlert(),
+          ),
+        // Host unreachable / room ended → honest connection banner.
+        if (connNote != null)
+          _RoomConnectionBanner(
+            message: connNote.$1,
+            danger: connNote.$2,
+          ),
         Expanded(
           child: _chatBody(
             viewRoomId: viewRoomId,
@@ -480,6 +492,23 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
         ),
       ],
     );
+  }
+
+  /// Maps the guest's [RoomConnection] to an honest banner (text, isDanger).
+  /// Returns null when online/none — no banner needed.
+  (String, bool)? _roomConnectionNote(RoomConnection c) {
+    switch (c) {
+      case RoomConnection.reconnecting:
+        return ('Связь с хостом потеряна — переподключаемся…', false);
+      case RoomConnection.ended:
+        return (
+          'Хост офлайн — комната завершена. История доступна для просмотра.',
+          true
+        );
+      case RoomConnection.online:
+      case RoomConnection.none:
+        return null;
+    }
   }
 
   Widget _chatBody({
@@ -1271,6 +1300,59 @@ class _SecurityBanner extends StatelessWidget {
                 onPressed: onDismiss,
                 tooltip: 'Скрыть',
                 visualDensity: VisualDensity.compact,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Honest host/connection banner for a GUEST (Phase 3). Amber while
+/// reconnecting, red once the room has ended. Non-dismissable — it reflects
+/// live transport state, not a one-off alert.
+class _RoomConnectionBanner extends StatelessWidget {
+  const _RoomConnectionBanner({required this.message, required this.danger});
+
+  final String message;
+  final bool danger;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
+    final color = danger ? tokens.danger : tokens.accent2;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+      child: OrbitsGlassSurface(
+        role: OrbitsGlassRole.card,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            color: color.withValues(alpha: 0.16),
+            border: Border.all(color: color.withValues(alpha: 0.5)),
+          ),
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+          child: Row(
+            children: [
+              Icon(
+                danger ? Icons.cloud_off_rounded : Icons.sync_rounded,
+                color: color,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  message,
+                  style: TextStyle(
+                    color: tokens.text,
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    height: 1.3,
+                    fontFamily: tokens.fontBody,
+                  ),
+                ),
               ),
             ],
           ),

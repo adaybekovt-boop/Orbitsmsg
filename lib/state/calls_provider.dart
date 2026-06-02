@@ -167,6 +167,12 @@ class CallsNotifier extends StateNotifier<CallState> {
   /// leaks the notifier and can fire after dispose (audit M7).
   MediaStreamTrack? _shareTrack;
 
+  /// Ring/answer timeout for an OUTGOING call. Without it a dial to an offline
+  /// or unreachable peer hangs in `calling` forever (Phase 3 honesty). Armed
+  /// when we start dialing, cancelled the moment the remote track lands.
+  Timer? _ringTimeout;
+  static const Duration _ringTimeoutDuration = Duration(seconds: 40);
+
   // ─── Public API ───────────────────────────────────────────────
 
   /// Dial [remotePeerId]. If [video] is true, requests camera too;
@@ -226,6 +232,18 @@ class CallsNotifier extends StateNotifier<CallState> {
         return;
       }
       _attachConnection(conn);
+      // Arm the ring timeout: if the peer never answers (offline / unreachable
+      // / no TURN path) we stop dialing instead of hanging forever.
+      _ringTimeout?.cancel();
+      _ringTimeout = Timer(_ringTimeoutDuration, () {
+        if (!mounted || state.status != CallStatus.calling) return;
+        unawaited(hangUp());
+        if (mounted) {
+          state = state.copyWith(
+            lastError: 'Не удалось дозвониться — нет ответа',
+          );
+        }
+      });
     } catch (e) {
       // Couldn't reach the peer (signaling failure, peer offline).
       try {
@@ -405,6 +423,8 @@ class CallsNotifier extends StateNotifier<CallState> {
     final stream = state.localStream;
     _conn = null;
     _cameraTrackBackup = null;
+    _ringTimeout?.cancel();
+    _ringTimeout = null;
     try {
       _shareTrack?.onEnded = null;
     } catch (_) {}
@@ -462,6 +482,9 @@ class CallsNotifier extends StateNotifier<CallState> {
     _conn = conn;
     _remoteStreamSub = conn.onStream.listen((remote) {
       if (!mounted) return;
+      // Media is flowing — the call connected. Cancel the ring timeout.
+      _ringTimeout?.cancel();
+      _ringTimeout = null;
       state = state.copyWith(
         status: CallStatus.inCall,
         remoteStream: remote,

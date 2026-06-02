@@ -954,7 +954,12 @@ Stream<List<Map<String, Object?>>> watchMessagesForPeer(
   if (peerId.isEmpty) return Stream.value(const []);
   final db = orbitsDb();
   return (db.select(db.messagesTable)
-        ..where((t) => t.peerId.equals(peerId))
+        // 1:1 chat ONLY. A message tagged with a `roomId` belongs to a
+        // Discord-style room channel (read via [watchChannelMessages]); without
+        // this `roomId IS NULL` filter a room message authored by a peer who is
+        // also a 1:1 contact would leak into their private DM thread and corrupt
+        // normal chat state (Phase 3 state-isolation fix).
+        ..where((t) => t.peerId.equals(peerId) & t.roomId.isNull())
         ..orderBy([(t) => OrderingTerm.desc(t.timestamp)])
         ..limit(limit))
       .watch()
@@ -1332,7 +1337,7 @@ Stream<List<Map<String, Object?>>> watchChatMetas() {
       MAX(m.timestamp) AS lastTs,
       (
         SELECT data FROM messages
-        WHERE peer_id = m.peer_id
+        WHERE peer_id = m.peer_id AND room_id IS NULL
         ORDER BY timestamp DESC
         LIMIT 1
       ) AS lastData,
@@ -1343,6 +1348,11 @@ Stream<List<Map<String, Object?>>> watchChatMetas() {
       END) AS unreadCount
     FROM messages m
     LEFT JOIN peers p ON p.id = m.peer_id
+    -- 1:1 conversations ONLY. Room-channel messages (room_id set) must never
+    -- surface as a DM preview or inflate a contact's unread count, and a room
+    -- author who isn't a 1:1 contact must not appear as a phantom chat
+    -- (Phase 3 state-isolation fix).
+    WHERE m.room_id IS NULL
     GROUP BY m.peer_id
     ''',
     readsFrom: {db.messagesTable, db.peersTable},
