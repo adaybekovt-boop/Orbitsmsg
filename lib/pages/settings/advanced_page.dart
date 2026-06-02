@@ -68,7 +68,7 @@ class AdvancedPage extends StatelessWidget {
             const _AdvancedRow(
               icon: Icons.mic,
               title: 'Микрофон',
-              subtitle: 'Устройство и эффекты',
+              subtitle: 'Появится вместе со звонками (в разработке)',
               page: MicPage(),
             ),
             const _AdvancedRow(
