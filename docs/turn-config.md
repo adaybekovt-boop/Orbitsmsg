@@ -98,14 +98,61 @@ flutter build apk --release \
   --dart-define=RELAY_URL=wss://relay.example.com/ws
 ```
 
-The relay protocol is intentionally tiny (so any minimal WebSocket router can
-implement it):
+### You must deploy the relay server yourself
+
+> **This repository ships the relay CLIENT only — there is NO relay server
+> implementation included.** `RELAY_URL` must point at a **separately deployed,
+> compatible WebSocket relay server** that you run. Without a reachable server
+> at that URL, the relay fallback simply **does nothing** (the socket never
+> connects and `send()` returns `false`, so messages stay `pending` and the app
+> behaves exactly as WebRTC-only). The app never silently "works everywhere" on
+> the strength of this feature alone — text fallback is real only when both a
+> server is deployed **and** a wire session can be established with the peer.
+
+### Relay protocol (server contract)
+
+The protocol is intentionally tiny, so any minimal WebSocket router can
+implement it:
 
 ```text
 client → server  {"type":"register","peer":"<selfPeerId>"}
-client → server  {"type":"relay","from":...,"to":...,"id":...,"frame":...}
-server → client  {"type":"relay", ...}   # forwarded to the addressed peer
+client → server  {"type":"relay","from":<id>,"to":<id>,"id":<msgId>,"ts":<ms>,"frame":<opaque>}
+server → client  {"type":"relay","from":<id>,"to":<id>,"id":<msgId>,"ts":<ms>,"frame":<opaque>}
 ```
+
+A compatible server **must**:
+
+- track the `peer` from each `register` and route a `relay` message to the
+  socket(s) registered as its `to`;
+- **preserve `from`, `to`, `id`, `ts`, and `frame` byte-for-byte** — clients
+  de-duplicate on `id` and verify end-to-end, so mutated fields break delivery;
+- treat `frame` as **opaque** and **never inspect, log, or modify it** — it is a
+  Double-Ratchet ciphertext or a public-key handshake map; the server is a dumb
+  router and is not trusted with content;
+- **reject oversized frames** (the client caps inbound at 512 KiB in
+  `ws_relay_transport.dart`; the server should enforce a similar bound to resist
+  memory-exhaustion abuse);
+- **not** be relied on for delivery confirmation — relaying a frame is not an
+  ack; the receiver's end-to-end `ack` is the only delivery proof.
+
+A compatible server **should** (future work, not required for the MVP):
+
+- add **peer-id hijack protection / authentication** so a client can't register
+  as someone else's `peer` and intercept their relayed frames. The current
+  protocol has no such auth — until it does, treat a deployed relay as
+  semi-trusted infrastructure (it can drop/replay/misroute, though it can never
+  read plaintext because frames are E2E-encrypted).
+
+### Client-side relay boundary (defence in depth)
+
+Even with an untrusted/buggy server, the client **drops every relay-delivered
+frame that isn't a Double-Ratchet ciphertext or a `wireHello`/`wireRekey`
+control map** (`isRelaySafeFrame` / `createRelayPacketHandler` in
+`lib/peer/packet_router.dart`). A relay can therefore never inject `room_*`,
+file-transfer (`file-start`/`file-end`/`file-abort`), drop beacons, raw binary
+chunks, or a plaintext `{type:"msg"}` into the app — those are silently
+discarded and never acked. Room/file/drop/binary traffic stays exclusively on
+the direct WebRTC DataChannel.
 
 The diagnostics screen (**Settings → Дополнительно → Соединение → «Резервная
 доставка текста»**) shows whether the relay is configured, the last relay

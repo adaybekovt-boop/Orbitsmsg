@@ -424,12 +424,16 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     return ReliableSendResult.failed;
   }
 
-  /// Route a relay-delivered envelope through the SAME packet router as a
-  /// DataChannel frame — so handshake / decrypt / verify / ack-on-save are
-  /// identical (no second, weaker crypto path). Replies (handshake accept,
-  /// acks) go back over whatever transport is available: the encrypted reply
-  /// path uses [sendEncryptedWithFallback] (WebRTC→relay), and the plaintext
-  /// handshake reply uses the relay directly.
+  /// Route a relay-delivered envelope through a RELAY-SAFE handler. The relay
+  /// is a dumb router and the only frames it may deliver are encrypted wire
+  /// ciphertext + `wireHello`/`wireRekey` handshake control — those go through
+  /// the SAME decrypt/verify/ack-on-save path as a DataChannel frame (no
+  /// second, weaker crypto path). Anything else a relay might carry or inject —
+  /// `room_*`, drop/file-transfer, binary chunks, plaintext `msg`/`text`,
+  /// malformed data — is DROPPED here and never reaches the drop/room/file
+  /// subsystems and never acked. Replies (handshake accept, acks) go back over
+  /// whatever transport is available via [_relaySendControl] /
+  /// [sendEncryptedWithFallback].
   Future<void> _onRelayInbound(RelayEnvelope env) async {
     if (!mounted) return;
     final remoteId = normalizePeerId(env.from);
@@ -439,7 +443,14 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       (data) => _relaySendControl(remoteId, data),
       remoteId,
     );
-    final handler = createPacketHandler('reliable', remoteId, ctx);
+    final handler = createRelayPacketHandler(
+      remoteId,
+      ctx,
+      onDropped: (frame) {
+        final what = frame is Map ? frame['type'] : frame.runtimeType;
+        debugPrint('[relay] dropped non-text frame from $remoteId: $what');
+      },
+    );
     try {
       await handler(env.frame);
     } catch (_) {

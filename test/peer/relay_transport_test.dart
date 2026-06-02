@@ -9,6 +9,7 @@
 //   • a real inbound `ack` is the ONLY thing that marks a message delivered.
 
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/messaging/message_protocol.dart';
@@ -262,6 +263,155 @@ void main() {
         ctxOf(rec),
       );
       expect(rec.acks, isEmpty);
+    });
+  });
+
+  // ─── Relay inbound boundary (Phase 4 hardening) ─────────────────────
+  // The relay is a dumb router for encrypted TEXT + handshake ONLY. It must
+  // never carry room/drop/file/binary traffic, and a relay-injected plaintext
+  // message must never be acked. isRelaySafeFrame is the boundary contract;
+  // createRelayPacketHandler enforces it before any sub-handler runs.
+  group('isRelaySafeFrame — relay accepts ONLY ciphertext + handshake', () {
+    test('admits a wire-ciphertext String (v2: envelope)', () {
+      expect(isRelaySafeFrame('v2:hdr:iv:ciphertext'), isTrue);
+    });
+    test('admits wireHello / wireRekey control maps', () {
+      expect(isRelaySafeFrame(<String, Object?>{'type': 'wireHello'}), isTrue);
+      expect(isRelaySafeFrame(<String, Object?>{'type': 'wireRekey'}), isTrue);
+    });
+    test('rejects room_* control', () {
+      expect(isRelaySafeFrame(<String, Object?>{'type': 'room_msg'}), isFalse);
+      expect(
+          isRelaySafeFrame(<String, Object?>{'type': 'room_join'}), isFalse);
+    });
+    test('rejects file-transfer control', () {
+      for (final t in const ['file-start', 'file-end', 'file-abort']) {
+        expect(isRelaySafeFrame(<String, Object?>{'type': t}), isFalse,
+            reason: t);
+      }
+    });
+    test('rejects drop beacons + plaintext msg/text', () {
+      expect(
+          isRelaySafeFrame(<String, Object?>{'type': 'drop-beacon'}), isFalse);
+      expect(isRelaySafeFrame(<String, Object?>{'type': 'msg', 'text': 'x'}),
+          isFalse);
+      expect(isRelaySafeFrame(<String, Object?>{'type': 'text', 'text': 'x'}),
+          isFalse);
+    });
+    test('rejects binary, plain strings, and malformed data', () {
+      expect(isRelaySafeFrame(Uint8List.fromList([1, 2, 3])), isFalse);
+      expect(isRelaySafeFrame('not a wire frame'), isFalse);
+      expect(isRelaySafeFrame(null), isFalse);
+      expect(isRelaySafeFrame(42), isFalse);
+      expect(isRelaySafeFrame(<String, Object?>{'no': 'type'}), isFalse);
+    });
+  });
+
+  group('createRelayPacketHandler — drops non-text, never acks', () {
+    // Build a full PacketRouterCtx that records drop/room routing so we can
+    // PROVE a relay-delivered frame never reaches those subsystems.
+    ({
+      PacketHandler handler,
+      _RecordingReliableCtx rec,
+      List<Object?> dropped,
+      List<Object> dropRouted,
+      List<Object> roomRouted,
+    }) build() {
+      final rec = _RecordingReliableCtx();
+      final dropped = <Object?>[];
+      final dropRouted = <Object>[];
+      final roomRouted = <Object>[];
+      final ctx = PacketRouterCtx(
+        conn: (_) {},
+        reliable: rec.build(),
+        ephemeral: EphemeralInboundCtx(applyTyping: (_) {}, onHeartbeat: () {}),
+        flushOutbox: () {},
+        dropInbound: (_, p) => dropRouted.add(p),
+        dropHandlePacket: (_, p) => dropRouted.add(p),
+        roomInbound: (_, p) => roomRouted.add(p),
+      );
+      final handler = createRelayPacketHandler(
+        'ORBIT-PEER00',
+        ctx,
+        onDropped: dropped.add,
+      );
+      return (
+        handler: handler,
+        rec: rec,
+        dropped: dropped,
+        dropRouted: dropRouted,
+        roomRouted: roomRouted
+      );
+    }
+
+    test('relay-delivered room_msg is dropped (never routed to room/ack)',
+        () async {
+      final h = build();
+      await h.handler(<String, Object?>{
+        'type': 'room_msg',
+        'roomId': 'R',
+        'channelId': 'C',
+        'text': 'hi',
+      });
+      expect(h.dropped, hasLength(1));
+      expect(h.roomRouted, isEmpty);
+      expect(h.rec.acks, isEmpty);
+    });
+
+    test('relay-delivered file-start is dropped (never routed to drop)',
+        () async {
+      final h = build();
+      await h.handler(<String, Object?>{'type': 'file-start', 'name': 'x'});
+      expect(h.dropped, hasLength(1));
+      expect(h.dropRouted, isEmpty);
+      expect(h.rec.acks, isEmpty);
+    });
+
+    test('relay-delivered binary / Uint8List is dropped', () async {
+      final h = build();
+      await h.handler(Uint8List.fromList([1, 2, 3, 4]));
+      expect(h.dropped, hasLength(1));
+      expect(h.dropRouted, isEmpty);
+      expect(h.rec.acks, isEmpty);
+    });
+
+    test('relay-delivered drop-beacon is dropped', () async {
+      final h = build();
+      await h.handler(<String, Object?>{'type': 'drop-beacon'});
+      expect(h.dropped, hasLength(1));
+      expect(h.dropRouted, isEmpty);
+    });
+
+    test('relay-delivered plaintext msg is dropped and NEVER acked', () async {
+      final h = build();
+      await h.handler(
+          <String, Object?>{'type': 'msg', 'id': 'm1', 'text': 'spoof'});
+      expect(h.dropped, hasLength(1));
+      expect(h.rec.acks, isEmpty, reason: 'no false ack for relay plaintext');
+      expect(h.rec.replies, isEmpty);
+    });
+
+    test('relay-delivered malformed data is dropped without crashing',
+        () async {
+      final h = build();
+      await h.handler(null);
+      await h.handler(42);
+      await h.handler(<String, Object?>{'no': 'type'});
+      expect(h.dropped, hasLength(3));
+      expect(h.rec.acks, isEmpty);
+    });
+
+    test('a wireHello is ADMITTED (routed to the handshake path, not dropped)',
+        () async {
+      final h = build();
+      // wireHello is relay-safe: it must NOT be dropped at the boundary. It
+      // goes through dispatchReliableInbound → acceptWireHello (the same path a
+      // DataChannel wireHello takes; in the VM, keygen is unavailable so it
+      // surfaces via onHandshakeError — the point is it was NOT dropped).
+      await h.handler(<String, Object?>{'type': 'wireHello', 'pub': 'KEY'});
+      expect(h.dropped, isEmpty, reason: 'wireHello must be admitted, not dropped');
+      expect(h.roomRouted, isEmpty);
+      expect(h.dropRouted, isEmpty);
     });
   });
 }
