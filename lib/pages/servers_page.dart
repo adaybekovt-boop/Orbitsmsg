@@ -10,8 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../peer/room_invite.dart';
 import '../peer/room_manager.dart';
-import '../peer/room_signaling_host.dart'
-    show canHostSignalingServer, hostingLimitationSummary;
+import '../peer/room_signaling_host.dart' show canHostSignalingServer;
 import '../state/local_profile_provider.dart';
 import '../storage/db.dart' as db;
 import '../themes/orbits_tokens.dart';
@@ -19,6 +18,7 @@ import '../ui/peer/peer_status_pill.dart' show kPillReserveHeight;
 import '../ui/primitives/adaptive_page_frame.dart';
 import '../ui/primitives/orbits_glass_button.dart';
 import '../ui/primitives/orbits_glass_list_tile.dart';
+import '../ui/primitives/orbits_glass_app_bar.dart';
 import '../ui/primitives/orbits_glass_surface.dart';
 import 'room_chat_page.dart';
 
@@ -64,11 +64,6 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
       hint: 'Название сервера',
       initial: myName.isNotEmpty ? '$myName: сервер' : '',
       confirm: 'Создать',
-      // Honest, up-front: what hosting actually means on this platform + the
-      // group-voice capacity limit (mesh, not an SFU).
-      note: '${hostingLimitationSummary()}\n\n'
-          'До $kMaxRoomMembers участников. Групповой голос — до '
-          '$kMaxVoiceParticipants (прямое соединение каждый-с-каждым).',
     );
     if (name == null || name.trim().isEmpty) return;
 
@@ -150,7 +145,6 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
     String initial = '',
     String confirm = 'OK',
     bool mono = false,
-    String? note,
   }) {
     return showDialog<String>(
       context: context,
@@ -160,7 +154,6 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
         initial: initial,
         confirm: confirm,
         mono: mono,
-        note: note,
       ),
     );
   }
@@ -171,16 +164,7 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
     final roomState = ref.watch(roomManagerProvider);
 
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        flexibleSpace: const OrbitsGlassSurface(
-          role: OrbitsGlassRole.appBar,
-          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
-          child: SizedBox.expand(),
-        ),
+      appBar: OrbitsGlassAppBar(
         title: Text(
           'Серверы',
           style: TextStyle(
@@ -233,58 +217,6 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
                   expand: true,
                   enabled: !_busy,
                   onPressed: _joinServer,
-                ),
-                // Honest capability note: only desktop runs a persistent
-                // embedded server. On web/mobile a "server" rides the public
-                // relay and is live only while the app is open.
-                if (!canHostSignalingServer) ...[
-                  const SizedBox(height: 10),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.info_outline_rounded,
-                          size: 15, color: tokens.muted),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          'Здесь сервер работает через облачную связь и активен, '
-                          'пока открыто приложение. Постоянный собственный сервер '
-                          'можно поднять в приложении для ПК (Windows/macOS/Linux).',
-                          style: TextStyle(
-                            color: tokens.muted,
-                            fontSize: 12,
-                            height: 1.4,
-                            fontFamily: tokens.fontBody,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-                // Security honesty (audit P1 item 7): room/server messages are
-                // NOT end-to-end encrypted like 1:1 chats. They're protected in
-                // transit (DTLS) but the room host can read them. Stated so the
-                // UI never implies room E2EE.
-                const SizedBox(height: 10),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(Icons.lock_open_rounded, size: 15, color: tokens.muted),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        'Сообщения в комнатах защищены при передаче, но, в отличие '
-                        'от личных чатов, без сквозного шифрования — их может видеть '
-                        'хост комнаты.',
-                        style: TextStyle(
-                          color: tokens.muted,
-                          fontSize: 12,
-                          height: 1.4,
-                          fontFamily: tokens.fontBody,
-                        ),
-                      ),
-                    ),
-                  ],
                 ),
                 const SizedBox(height: 22),
                 Text(
@@ -766,7 +698,6 @@ class _PromptDialog extends StatefulWidget {
     required this.initial,
     required this.confirm,
     required this.mono,
-    this.note,
   });
 
   final String title;
@@ -774,10 +705,6 @@ class _PromptDialog extends StatefulWidget {
   final String initial;
   final String confirm;
   final bool mono;
-
-  /// Optional honest limitation note shown under the input (e.g. that a hosted
-  /// room isn't persistent on this platform). Plain text, no promises.
-  final String? note;
 
   @override
   State<_PromptDialog> createState() => _PromptDialogState();
@@ -800,45 +727,18 @@ class _PromptDialogState extends State<_PromptDialog> {
       backgroundColor: tokens.surface,
       title: Text(widget.title,
           style: TextStyle(fontFamily: tokens.fontHeading, color: tokens.text)),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          TextField(
-            controller: _controller,
-            autofocus: true,
-            textCapitalization: widget.mono
-                ? TextCapitalization.characters
-                : TextCapitalization.none,
-            style: widget.mono
-                ? TextStyle(fontFamily: tokens.fontMono, color: tokens.text)
-                : TextStyle(color: tokens.text),
-            decoration: InputDecoration(
-                hintText: widget.hint, border: const OutlineInputBorder()),
-            onSubmitted: (v) => Navigator.of(context).pop(v),
-          ),
-          if (widget.note != null && widget.note!.isNotEmpty) ...[
-            const SizedBox(height: 12),
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(Icons.info_outline_rounded, size: 16, color: tokens.muted),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    widget.note!,
-                    style: TextStyle(
-                      fontSize: 12,
-                      height: 1.4,
-                      color: tokens.muted,
-                      fontFamily: tokens.fontBody,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ],
+      content: TextField(
+        controller: _controller,
+        autofocus: true,
+        textCapitalization: widget.mono
+            ? TextCapitalization.characters
+            : TextCapitalization.none,
+        style: widget.mono
+            ? TextStyle(fontFamily: tokens.fontMono, color: tokens.text)
+            : TextStyle(color: tokens.text),
+        decoration:
+            InputDecoration(hintText: widget.hint, border: const OutlineInputBorder()),
+        onSubmitted: (v) => Navigator.of(context).pop(v),
       ),
       actions: [
         TextButton(

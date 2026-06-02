@@ -30,10 +30,6 @@ class RoomScopedTransport implements RoomTransport {
   /// One reliable data channel per remote peer id.
   final Map<String, PeerDataConnection> _reliable = {};
 
-  /// Per-peer reliability listeners (Phase 3 host-liveness watch). Notified
-  /// with `true` when a channel attaches and `false` when it closes.
-  final Map<String, List<void Function(bool)>> _reliableWatchers = {};
-
   /// Subscriptions on the client (inbound connections) and per-connection.
   final List<StreamSubscription<dynamic>> _clientSubs = [];
   final Map<String, List<StreamSubscription<dynamic>>> _connSubs = {};
@@ -63,7 +59,6 @@ class RoomScopedTransport implements RoomTransport {
       unawaited(prior.close());
     }
     _reliable[remoteId] = conn;
-    _notifyReliable(remoteId, true);
 
     // Tear down stale per-conn subscriptions for this peer.
     final old = _connSubs.remove(remoteId);
@@ -82,22 +77,9 @@ class RoomScopedTransport implements RoomTransport {
       }
     }));
     subs.add(conn.onClose.listen((_) {
-      if (identical(_reliable[remoteId], conn)) {
-        _reliable.remove(remoteId);
-        _notifyReliable(remoteId, false);
-      }
+      if (identical(_reliable[remoteId], conn)) _reliable.remove(remoteId);
     }));
     _connSubs[remoteId] = subs;
-  }
-
-  void _notifyReliable(String remoteId, bool up) {
-    final list = _reliableWatchers[remoteId];
-    if (list == null) return;
-    for (final cb in List<void Function(bool)>.from(list)) {
-      try {
-        cb(up);
-      } catch (_) {}
-    }
   }
 
   // ── RoomTransport ──
@@ -109,19 +91,6 @@ class RoomScopedTransport implements RoomTransport {
   bool hasReliable(String peerId) {
     final c = _reliable[normalizePeerId(peerId)];
     return c != null && c.open;
-  }
-
-  @override
-  void Function() watchReliable(
-      String peerId, void Function(bool up) onChange) {
-    final id = normalizePeerId(peerId);
-    (_reliableWatchers[id] ??= <void Function(bool)>[]).add(onChange);
-    // Fire the current state immediately so the caller starts from truth.
-    onChange(hasReliable(id));
-    return () {
-      _reliableWatchers[id]?.remove(onChange);
-      if (_reliableWatchers[id]?.isEmpty ?? false) _reliableWatchers.remove(id);
-    };
   }
 
   @override
@@ -177,7 +146,6 @@ class RoomScopedTransport implements RoomTransport {
     }
     _connSubs.clear();
     _reliable.clear();
-    _reliableWatchers.clear();
     try {
       await _client.destroy();
     } catch (_) {}

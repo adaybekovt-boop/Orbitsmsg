@@ -20,6 +20,7 @@ import '../state/local_profile_provider.dart';
 import '../themes/orbits_tokens.dart';
 import '../ui/primitives/adaptive_page_frame.dart';
 import '../ui/primitives/orbits_glass_button.dart';
+import '../ui/primitives/orbits_glass_app_bar.dart';
 import '../ui/primitives/orbits_glass_surface.dart';
 
 // ─── PC side: show the QR, wait for the phone ─────────────────────────
@@ -78,16 +79,7 @@ class _QrPairingPageState extends ConsumerState<QrPairingPage> {
 
     return Scaffold(
       backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        flexibleSpace: const OrbitsGlassSurface(
-          role: OrbitsGlassRole.appBar,
-          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
-          child: SizedBox.expand(),
-        ),
+      appBar: OrbitsGlassAppBar(
         iconTheme: IconThemeData(color: tokens.text),
         title: Text(
           'Вход по QR-коду',

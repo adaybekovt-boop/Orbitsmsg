@@ -645,47 +645,25 @@ bool dispatchReliablePlaintext(
       'attachment': attachmentRef,
     };
     ctx.pushMessage(remoteId, uiMsg);
-    // AUTHORITATIVE persist — awaited and gating the ack (audit P0 item 4).
-    // Previously this was fire-and-forget and the ack fired regardless, so a
-    // failed write (vault locked → fail-closed, or any DB error) acked the
-    // sender + kept the id in `seenMsgIds` while the message was actually lost.
-    bool persisted;
-    try {
-      persisted = await db.saveMessage(<String, Object?>{
+    unawaited(db.saveMessage(<String, Object?>{
+      'id': msgId,
+      'peerId': remoteId,
+      'timestamp': ts,
+      'direction': 'in',
+      'status': 'delivered',
+      'payload': <String, Object?>{
         'id': msgId,
-        'peerId': remoteId,
-        'timestamp': ts,
-        'direction': 'in',
-        'status': 'delivered',
-        'payload': <String, Object?>{
-          'id': msgId,
-          'from': remoteId,
-          'to': ctx.selfPeerId,
-          'text': text,
-          'ts': ts,
-          'type': msgType,
-          'sticker': sticker,
-          'replyTo': replyTo,
-          'voice': voiceRef,
-          'attachment': attachmentRef,
-        },
-      });
-    } catch (_) {
-      persisted = false;
-    }
-    if (!persisted) {
-      // Durable write failed — do NOT ack and undo the dedup mark so the
-      // sender's retransmit gets reprocessed (and can succeed once unlocked).
-      // Never a false "delivered" with the message lost.
-      ctx.seenMsgIds.remove(msgId);
-      assert(() {
-        // ignore: avoid_print
-        print('[msg] inbound persist failed for $msgId — withholding ack, '
-            'will retry on resend');
-        return true;
-      }());
-      return;
-    }
+        'from': remoteId,
+        'to': ctx.selfPeerId,
+        'text': text,
+        'ts': ts,
+        'type': msgType,
+        'sticker': sticker,
+        'replyTo': replyTo,
+        'voice': voiceRef,
+        'attachment': attachmentRef,
+      },
+    }));
     sendReply(<String, Object?>{
       'type': 'ack',
       'id': msgId,

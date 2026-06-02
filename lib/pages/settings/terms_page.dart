@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import '../../themes/orbits_tokens.dart';
 import '../../ui/auth/terms_text.dart';
 import '../../ui/primitives/adaptive_page_frame.dart';
+import '../../ui/primitives/orbits_glass_app_bar.dart';
 
 class TermsPage extends StatelessWidget {
   const TermsPage({super.key});
@@ -18,7 +19,7 @@ class TermsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
     return Scaffold(
-      appBar: AppBar(
+      appBar: OrbitsGlassAppBar(
         title: Text(
           'Соглашение',
           style: TextStyle(

@@ -6,7 +6,6 @@
 // opened via the "3D звук" button (the page owns its open/closed state). The
 // voice connection lifecycle is independent of whether the radar is open.
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -41,20 +40,11 @@ class VoiceChannelPanel extends ConsumerWidget {
     final selfName = ref.watch(localProfileProvider)?.displayName ?? 'Вы';
 
     final connected = roomState.voiceChannelId == channelId;
-    // Honest status, host-state first (Phase 3): a guest whose host died sees
-    // the truth instead of a frozen "В голосе".
-    final ended = roomState.roomConnection == RoomConnection.ended;
-    final reconnecting =
-        roomState.roomConnection == RoomConnection.reconnecting;
-    final (statusText, statusColor) = ended
-        ? ('Комната завершена', tokens.danger)
-        : reconnecting
-            ? ('Переподключение…', tokens.accent2)
-            : !connected
-                ? ('Подключение…', tokens.accent2)
-                : (!roomState.micAvailable
-                    ? ('Нет микрофона', tokens.danger)
-                    : ('В голосе', tokens.success));
+    final (statusText, statusColor) = !connected
+        ? ('Подключение…', tokens.accent2)
+        : (!roomState.micAvailable
+            ? ('Нет микрофона', tokens.danger)
+            : ('В голосе', tokens.success));
 
     return StreamBuilder<List<Map<String, Object?>>>(
       stream: db.watchRoomMembers(roomId),
@@ -110,35 +100,7 @@ class VoiceChannelPanel extends ConsumerWidget {
                           _StatusChip(text: statusText, color: statusColor),
                         ],
                       ),
-                      const SizedBox(height: 6),
-                      // ── Honest capacity + transport caption (Phase 3) ──
-                      // Group voice is a direct peer-to-peer MESH (no media
-                      // relay/SFU yet), so it's capped — say so plainly.
-                      Text(
-                        'Групповой голос • ${others.length + 1} из '
-                        '$kMaxVoiceParticipants (прямое соединение, P2P-меш)',
-                        style: TextStyle(
-                          color: tokens.muted,
-                          fontSize: 11.5,
-                          fontFamily: tokens.fontBody,
-                        ),
-                      ),
-                      if (!kIsWeb)
-                        Padding(
-                          padding: const EdgeInsets.only(top: 2),
-                          child: Text(
-                            'Пространственный «3D-звук» обрабатывается только '
-                            'в веб-версии; здесь радар показывает позиции, но '
-                            'звук обычный.',
-                            style: TextStyle(
-                              color: tokens.muted,
-                              fontSize: 11,
-                              height: 1.3,
-                              fontFamily: tokens.fontBody,
-                            ),
-                          ),
-                        ),
-                      const SizedBox(height: 12),
+                      const SizedBox(height: 14),
                       // ── Participants ──
                       Flexible(
                         child: ListView(
@@ -199,9 +161,7 @@ class VoiceChannelPanel extends ConsumerWidget {
                           const SizedBox(width: 8),
                           OrbitsGlassIconButton(
                             icon: Icons.blur_on_rounded,
-                            tooltip: kIsWeb
-                                ? '3D-звук (Spatial)'
-                                : '3D-звук: панорама звука только в веб-версии',
+                            tooltip: '3D-звук (Spatial)',
                             variant: OrbitsGlassVariant.subtle,
                             size: OrbitsGlassSize.medium,
                             onPressed: onOpenSpatial,

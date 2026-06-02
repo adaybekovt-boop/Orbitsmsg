@@ -55,25 +55,6 @@ import 'spatial_audio_engine.dart';
 /// no room at all.
 enum RoomRole { none, host, guest }
 
-/// Honest connection state of the room session from THIS device's point of
-/// view. Lets the UI tell the truth instead of silently stranding a guest when
-/// the host dies (Phase 3).
-enum RoomConnection {
-  /// Not in a room, or we are the host. The host IS the room — its own liveness
-  /// is reflected by [RoomState.serverActive], not here.
-  none,
-
-  /// Guest: a live reliable channel to the host exists. The room is reachable.
-  online,
-
-  /// Guest: the host channel dropped; we're attempting to reconnect. Transient.
-  reconnecting,
-
-  /// Guest: the host stayed unreachable past the reconnect grace window — the
-  /// room has ENDED for us. History stays viewable offline; sending is off.
-  ended,
-}
-
 /// Max participants in a single voice channel (host + guests). Beyond this the
 /// mesh gets too heavy, so we warn and cap the calls we initiate.
 const int kMaxVoiceParticipants = 6;
@@ -159,7 +140,6 @@ class RoomState {
     this.micEnabled = true,
     this.micAvailable = false,
     this.selfHostInvite,
-    this.roomConnection = RoomConnection.none,
   });
 
   /// Current role.
@@ -215,11 +195,6 @@ class RoomState {
   /// [RoomInvite.tryParse] to render LAN/public reach in the UI.
   final String? selfHostInvite;
 
-  /// Guest: honest reachability of the host/room. [RoomConnection.none] for a
-  /// host or when not in a room. Drives the room header's status pill so a
-  /// guest sees "reconnecting" / "room ended" instead of a frozen chat.
-  final RoomConnection roomConnection;
-
   /// True when this session runs its own embedded signaling server.
   bool get isSelfHosted => selfHostInvite != null;
 
@@ -241,7 +216,6 @@ class RoomState {
     bool? micEnabled,
     bool? micAvailable,
     Object? selfHostInvite = _unset,
-    RoomConnection? roomConnection,
   }) =>
       RoomState(
         role: role ?? this.role,
@@ -269,7 +243,6 @@ class RoomState {
         selfHostInvite: identical(selfHostInvite, _unset)
             ? this.selfHostInvite
             : selfHostInvite as String?,
-        roomConnection: roomConnection ?? this.roomConnection,
       );
 }
 
@@ -320,11 +293,7 @@ class _RoomContent {
 }
 
 class RoomManager extends StateNotifier<RoomState> {
-  RoomManager(
-    this._ref, {
-    Duration hostReconnectGrace = const Duration(seconds: 15),
-  })  : _hostReconnectGrace = hostReconnectGrace,
-        super(const RoomState()) {
+  RoomManager(this._ref) : super(const RoomState()) {
     // Transport is behind [RoomTransport] (overridable in tests). Receive
     // inbound `room_*` packets without a provider cycle — same bridge pattern
     // as MessagingNotifier/DropNotifier.
@@ -333,14 +302,6 @@ class RoomManager extends StateNotifier<RoomState> {
   }
 
   final Ref _ref;
-
-  /// How long a guest tolerates a dropped host channel before declaring the
-  /// room ENDED. Short in tests; ~15s in production so a brief blip recovers.
-  final Duration _hostReconnectGrace;
-
-  /// Active host-liveness watch (guest only). Disposer + grace timer.
-  void Function()? _hostWatchDisposer;
-  Timer? _hostGraceTimer;
 
   /// The peerjs.com-backed transport (production) or a test fake. Always present.
   late final RoomTransport _defaultTransport;
@@ -606,7 +567,6 @@ class RoomManager extends StateNotifier<RoomState> {
       if (safeAvatarDataUrl(self?.avatarDataUrl) != null)
         'avatarDataUrl': safeAvatarDataUrl(self?.avatarDataUrl),
     });
-    _onGuestJoined(hostPeerId);
   }
 
   /// Clear the last join error (e.g. after the UI showed its SnackBar).
@@ -702,7 +662,6 @@ class RoomManager extends StateNotifier<RoomState> {
       if (safeAvatarDataUrl(self?.avatarDataUrl) != null)
         'avatarDataUrl': safeAvatarDataUrl(self?.avatarDataUrl),
     });
-    _onGuestJoined(hostPeerId);
   }
 
   /// Drop a failed join candidate without tearing down a server (guests don't
@@ -1077,7 +1036,6 @@ class RoomManager extends StateNotifier<RoomState> {
 
   /// Leave (guest) or destroy (host) the current room, closing every channel.
   Future<void> leaveOrDestroyRoom() async {
-    _stopHostWatch();
     final roomId = state.roomId;
     final role = state.role;
     if (roomId != null) {
@@ -1298,7 +1256,6 @@ class RoomManager extends StateNotifier<RoomState> {
   Future<void> _onJoinReject(
       String remoteId, Map<String, Object?> packet) async {
     if (state.role != RoomRole.guest || remoteId != state.hostPeerId) return;
-    _stopHostWatch();
     final roomId = state.roomId;
     if (roomId != null) await db.setRoomStatus(roomId, 'offline');
     await _stopVoice();
@@ -1467,7 +1424,6 @@ class RoomManager extends StateNotifier<RoomState> {
   Future<void> _onRoomDestroy(
       String remoteId, Map<String, Object?> packet) async {
     if (state.role != RoomRole.guest || remoteId != state.hostPeerId) return;
-    _stopHostWatch();
     final roomId = state.roomId;
     if (roomId != null) await db.setRoomStatus(roomId, 'offline');
     await _stopVoice();
@@ -1850,102 +1806,6 @@ class RoomManager extends StateNotifier<RoomState> {
     state = state.copyWith(micEnabled: on);
   }
 
-  // ─── Guest host-liveness watch (Phase 3) ───────────────────────────
-
-  /// Called right after a guest's `room_join` goes out. Marks the room online
-  /// and starts watching the host's reliable channel so a host that dies is
-  /// reflected honestly (reconnecting → ended) instead of a frozen chat.
-  void _onGuestJoined(String hostPeerId) {
-    if (!mounted || state.role != RoomRole.guest) return;
-    state = state.copyWith(roomConnection: RoomConnection.online);
-    _startHostWatch(hostPeerId);
-  }
-
-  void _startHostWatch(String hostPeerId) {
-    _stopHostWatch();
-    _hostWatchDisposer =
-        _transport.watchReliable(hostPeerId, _onHostReliableChanged);
-  }
-
-  void _stopHostWatch() {
-    _hostGraceTimer?.cancel();
-    _hostGraceTimer = null;
-    final d = _hostWatchDisposer;
-    _hostWatchDisposer = null;
-    if (d != null) {
-      try {
-        d();
-      } catch (_) {}
-    }
-  }
-
-  /// The host's reliable channel went up or down. Up → online (and re-announce,
-  /// since the host may have restarted and forgotten us). Down → reconnecting +
-  /// nudge a redial; if it stays down past the grace window, the room has ENDED.
-  void _onHostReliableChanged(bool up) {
-    if (!mounted || state.role != RoomRole.guest) return;
-    if (state.roomConnection == RoomConnection.ended) return; // terminal
-    final host = state.hostPeerId;
-    if (host == null) return;
-
-    if (up) {
-      _hostGraceTimer?.cancel();
-      _hostGraceTimer = null;
-      if (state.roomConnection != RoomConnection.online) {
-        state = state.copyWith(roomConnection: RoomConnection.online);
-        _reannounceToHost(host); // host may have restarted — re-join
-      }
-      return;
-    }
-
-    // Host channel down. Enter reconnecting, nudge a redial, and arm the grace
-    // timer exactly once.
-    if (state.roomConnection != RoomConnection.reconnecting) {
-      state = state.copyWith(roomConnection: RoomConnection.reconnecting);
-    }
-    _connections.openReliable(host);
-    _hostGraceTimer ??= Timer(_hostReconnectGrace, () {
-      _hostGraceTimer = null;
-      if (!mounted || state.role != RoomRole.guest) return;
-      // Still not back? The room has ended for us. Keep the room loaded so the
-      // user can still read history offline; just stop pretending it's live.
-      if (state.roomConnection == RoomConnection.reconnecting) {
-        _markRoomEnded();
-      }
-    });
-  }
-
-  /// Re-send our `room_join` after a reconnect so a restarted host re-adds us
-  /// to the roster and replays the channel list.
-  void _reannounceToHost(String hostPeerId) {
-    final self = _ref.read(localProfileProvider);
-    final selfId = self?.peerId ?? _selfPeerId();
-    if (selfId.isEmpty) return;
-    final roomId = state.roomId;
-    if (roomId == null) return;
-    _connections.sendRoomPacket(hostPeerId, {
-      'type': 'room_join',
-      'roomId': roomId,
-      'guestName': _clampName(self?.displayName ?? ''),
-      'guestPeerId': selfId,
-      if (safeAvatarDataUrl(self?.avatarDataUrl) != null)
-        'avatarDataUrl': safeAvatarDataUrl(self?.avatarDataUrl),
-    });
-  }
-
-  /// Guest: the host stayed unreachable. Mark the room ended (honest, terminal)
-  /// without wiping it — history stays viewable, sending is disabled by the UI.
-  void _markRoomEnded() {
-    _stopHostWatch();
-    unawaited(_stopVoice());
-    final roomId = state.roomId;
-    if (roomId != null) unawaited(db.setRoomStatus(roomId, 'offline'));
-    state = state.copyWith(
-      roomConnection: RoomConnection.ended,
-      serverActive: false,
-    );
-  }
-
   /// Poll for the reliable channel to [peerId] to open (~15s budget).
   Future<bool> _waitReliable(String peerId) async {
     final conns = _connections;
@@ -1963,7 +1823,6 @@ class RoomManager extends StateNotifier<RoomState> {
 
   @override
   void dispose() {
-    _stopHostWatch();
     unawaited(_stopVoice());
     // Release the embedded server + room-scoped client; skip rebinding the
     // bridge since this manager is going away.
@@ -1989,12 +1848,6 @@ abstract class RoomTransport {
   /// Whether a live reliable channel to [peerId] exists.
   bool hasReliable(String peerId);
 
-  /// Observe up/down changes of the reliable channel to [peerId]. [onChange] is
-  /// called with the current state once immediately, then on every transition.
-  /// Returns a disposer the caller invokes to stop listening. Lets a guest
-  /// notice the host going offline (→ honest reconnecting / room-ended state).
-  void Function() watchReliable(String peerId, void Function(bool up) onChange);
-
   /// Proactively dial [peerId]'s reliable channel.
   void openReliable(String peerId);
 
@@ -2018,18 +1871,6 @@ class _ConnRoomTransport implements RoomTransport {
 
   @override
   bool hasReliable(String peerId) => _c.hasReliable(peerId);
-
-  @override
-  void Function() watchReliable(
-      String peerId, void Function(bool up) onChange) {
-    final id = normalizePeerId(peerId);
-    final sub = _ref.listen<ConnectionsState>(
-      connectionsNotifierProvider,
-      (_, next) => onChange(next.connectedPeerIds.contains(id)),
-      fireImmediately: true,
-    );
-    return sub.close;
-  }
 
   @override
   void openReliable(String peerId) => _c.openReliable(peerId);

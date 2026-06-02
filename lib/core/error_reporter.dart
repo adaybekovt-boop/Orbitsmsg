@@ -9,6 +9,7 @@
 // written to via `developer.log` so the payload shows up in the debug console.
 
 import 'dart:developer' as developer;
+import 'dart:io' show Platform;
 
 import 'package:flutter/foundation.dart';
 
@@ -61,11 +62,11 @@ Map<String, Object?> reportError(Object? error, [Map<String, Object?>? extra]) {
 }
 
 String _userAgent() {
-  // Web-safe: avoid `dart:io` Platform (this file is reachable from main() on
-  // web). `defaultTargetPlatform` + `kIsWeb` come from foundation and compile
-  // everywhere; we trade the exact OS version for cross-platform safety.
-  if (kIsWeb) return 'web';
-  return defaultTargetPlatform.name;
+  try {
+    return '${Platform.operatingSystem}/${Platform.operatingSystemVersion}';
+  } catch (_) {
+    return 'unknown';
+  }
 }
 
 /// Wire `FlutterError.onError` and `PlatformDispatcher.onError`. Idempotent —

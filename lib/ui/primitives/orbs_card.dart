@@ -17,6 +17,8 @@
 import 'package:flutter/material.dart';
 
 import '../../themes/orbits_tokens.dart';
+import 'orbits_glass_surface.dart';
+import 'orbits_glass_switch.dart';
 
 /// `rounded-3xl bg-bg/35 p-4 ring-1 ring-border` — the section-card
 /// shape that appears on Settings rows, ChatSettings panels, Drop
@@ -48,31 +50,32 @@ class OrbsCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
-    final bg = tinted
-        ? Color.lerp(tokens.bg, tokens.surface, 0.35) ?? tokens.surface
-        : tokens.surface;
-    final card = Container(
-      margin: margin,
-      decoration: BoxDecoration(
-        color: bg,
-        borderRadius: BorderRadius.circular(tokens.radiusCard + 4),
-        border: Border.all(color: tokens.border),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(tokens.radiusCard + 4),
-        child: Padding(padding: padding, child: child),
-      ),
+    final radius = BorderRadius.circular(tokens.radiusCard + 4);
+    // Painted fake-glass section card (no per-card BackdropFilter — these stack
+    // in scrolling Settings / Drop lists). `tinted` cards sit on the darker
+    // page and carry a touch more film; flat cards lean lighter so nested rows
+    // stay legible against the surface below. Built on [OrbitsGlassSurface] so
+    // every card shares the one Liquid-Glass material (sheen + rim + shadow).
+    Widget card = OrbitsGlassSurface(
+      role: OrbitsGlassRole.card,
+      borderRadius: radius,
+      intensity: tinted ? 1.0 : 0.7,
+      padding: onTap == null ? padding : null,
+      child: onTap == null
+          ? child
+          : Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: onTap,
+                borderRadius: radius,
+                child: Padding(padding: padding, child: child),
+              ),
+            ),
     );
-
-    if (onTap == null) return card;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(tokens.radiusCard + 4),
-        child: card,
-      ),
-    );
+    if (margin != null) {
+      card = Padding(padding: margin!, child: card);
+    }
+    return card;
   }
 }
 
@@ -98,28 +101,22 @@ class OrbsTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
     final radius = BorderRadius.circular(tokens.radiusCard);
-    final bg = active
-        ? tokens.accentAlpha(0.10)
-        : Color.lerp(tokens.surface, tokens.bg, 0.30) ?? tokens.surface;
+    // Painted fake-glass list row (chat / contact / Drop peer lists). `active`
+    // leans on the surface's selected state (stronger tint + accent-leaning
+    // rim) rather than a hand-painted accent border, so it reads identically to
+    // every other glass row in the app.
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-      child: Material(
-        color: bg,
+      child: OrbitsGlassSurface(
+        role: OrbitsGlassRole.card,
+        selected: active,
         borderRadius: radius,
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: radius,
-          child: Container(
-            decoration: BoxDecoration(
-              borderRadius: radius,
-              border: Border.all(
-                color: active ? tokens.accent : tokens.border,
-                width: active ? 1.4 : 1,
-              ),
-            ),
-            padding: padding,
-            child: child,
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: onTap,
+            borderRadius: radius,
+            child: Padding(padding: padding, child: child),
           ),
         ),
       ),
@@ -222,40 +219,13 @@ class OrbsToggle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tokens = OrbitsTokens.of(context);
-    return GestureDetector(
-      onTap: onChanged == null ? null : () => onChanged!(!value),
-      child: AnimatedContainer(
-        duration: tokens.durationShort,
-        curve: tokens.easing,
-        width: 38,
-        height: 22,
-        padding: const EdgeInsets.all(2),
-        decoration: BoxDecoration(
-          color: value ? tokens.accent : tokens.muted.withValues(alpha: 0.40),
-          borderRadius: BorderRadius.circular(11),
-        ),
-        child: AnimatedAlign(
-          duration: tokens.durationShort,
-          curve: tokens.easing,
-          alignment: value ? Alignment.centerRight : Alignment.centerLeft,
-          child: Container(
-            width: 18,
-            height: 18,
-            decoration: BoxDecoration(
-              color: tokens.bg,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.15),
-                  blurRadius: 3,
-                  offset: const Offset(0, 1),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+    // Delegates to the shared Liquid-Glass toggle so every switch in the app
+    // is the one glass capsule + prismatic-rim thumb instead of a flat
+    // Material-style pill.
+    return OrbitsGlassSwitch(
+      value: value,
+      onChanged: onChanged,
+      size: OrbitsGlassSwitchSize.compact,
     );
   }
 }
