@@ -199,24 +199,55 @@ void main() {
   });
 
   group('UpdateChecker (injected MockClient, offline)', () {
-    UpdateChecker checker(MockClient client) => UpdateChecker(
-          latestReleaseUri: Uri.parse('https://example.com/latest'),
+    // The checker now fetches the /releases LIST endpoint (a JSON array).
+    UpdateChecker checker(MockClient client,
+            {ReleaseLinePolicy linePolicy = ReleaseLinePolicy.sameMinor}) =>
+        UpdateChecker(
+          releasesUri: Uri.parse('https://example.com/releases'),
           client: client,
+          linePolicy: linePolicy,
           now: () => DateTime.utc(2026, 1, 2, 3, 4, 5),
         );
 
-    test('200 with newer release → update available + checkedAt set', () async {
+    test('200 with newer in-line release → update available + checkedAt set',
+        () async {
       final c = checker(MockClient((req) async => http.Response(
-            jsonEncode(_release(tag: 'v9.0.2', assets: [
-              _asset('orbits-windows-x64.exe', 'https://x/win.exe'),
-            ])),
+            jsonEncode([
+              _release(tag: 'v9.0.2', assets: [
+                _asset('orbits-windows-x64.exe', 'https://x/win.exe'),
+              ]),
+            ]),
             200,
           )));
       final r = await c.check(currentVersion: '9.0.1');
       expect(r.hasError, isFalse);
       expect(r.isUpdateAvailable, isTrue);
+      expect(r.latestTag, 'v9.0.2');
       expect(r.windowsAssetUrl, 'https://x/win.exe');
       expect(r.checkedAt, DateTime.utc(2026, 1, 2, 3, 4, 5));
+    });
+
+    test('same-line mode skips a higher minor; cross-line mode takes it',
+        () async {
+      List<Map<String, Object?>> body() => [
+            _release(tag: 'v9.1.0'),
+            _release(tag: 'v9.0.3'),
+            _release(tag: 'v9.0.2'),
+          ];
+      // Default (sameMinor): 9.0.2 user is offered 9.0.3, NOT 9.1.0.
+      final same = checker(
+          MockClient((req) async => http.Response(jsonEncode(body()), 200)));
+      final r1 = await same.check(currentVersion: '9.0.2');
+      expect(r1.isUpdateAvailable, isTrue);
+      expect(r1.latestTag, 'v9.0.3');
+
+      // anyStable: the same user can be offered 9.1.0.
+      final cross = checker(
+          MockClient((req) async => http.Response(jsonEncode(body()), 200)),
+          linePolicy: ReleaseLinePolicy.anyStable);
+      final r2 = await cross.check(currentVersion: '9.0.2');
+      expect(r2.isUpdateAvailable, isTrue);
+      expect(r2.latestTag, 'v9.1.0');
     });
 
     test('HTTP 500 → error (no throw)', () async {
@@ -242,12 +273,140 @@ void main() {
       expect(r.error, UpdateCheckError.network);
     });
 
-    test('draft latest from HTTP → latestUnusable, not offered', () async {
-      final c = checker(MockClient((req) async =>
-          http.Response(jsonEncode(_release(tag: 'v9.9.9', draft: true)), 200)));
+    test('draft-only list from HTTP → up to date (draft ignored)', () async {
+      final c = checker(MockClient((req) async => http.Response(
+          jsonEncode([_release(tag: 'v9.0.5', draft: true)]), 200)));
       final r = await c.check(currentVersion: '9.0.1');
-      expect(r.status, UpdateStatus.latestUnusable);
+      expect(r.status, UpdateStatus.upToDate);
       expect(r.isUpdateAvailable, isFalse);
+    });
+
+    test('empty releases array → up to date (no error)', () async {
+      final c = checker(
+          MockClient((req) async => http.Response(jsonEncode([]), 200)));
+      final r = await c.check(currentVersion: '9.0.1');
+      expect(r.hasError, isFalse);
+      expect(r.status, UpdateStatus.upToDate);
+      expect(r.isUpdateAvailable, isFalse);
+    });
+
+    test('non-array body → malformed error', () async {
+      final c = checker(MockClient(
+          (req) async => http.Response(jsonEncode({'tag_name': 'v9.0.2'}), 200)));
+      final r = await c.check(currentVersion: '9.0.1');
+      expect(r.hasError, isTrue);
+      expect(r.error, UpdateCheckError.malformedResponse);
+    });
+  });
+
+  group('parseGitHubReleases — release-line filtering', () {
+    List<Map<String, Object?>> releases(List<String> tags,
+        {Map<String, bool> draft = const {}, Map<String, bool> pre = const {}}) {
+      return [
+        for (final t in tags)
+          _release(tag: t, draft: draft[t] ?? false, prerelease: pre[t] ?? false),
+      ];
+    }
+
+    test('current 9.0.2 sees v9.0.3 (same line)', () {
+      final r = parseGitHubReleases(
+        releases(['v9.0.1', 'v9.0.2', 'v9.0.3']),
+        currentVersion: '9.0.2',
+      );
+      expect(r.isUpdateAvailable, isTrue);
+      expect(r.status, UpdateStatus.updateAvailable);
+      expect(r.latestTag, 'v9.0.3');
+    });
+
+    test('current 9.0.2 does NOT see v9.1.0 in same-line mode', () {
+      final r = parseGitHubReleases(
+        releases(['v9.0.2', 'v9.0.3', 'v9.1.0']),
+        currentVersion: '9.0.2',
+      );
+      expect(r.isUpdateAvailable, isTrue);
+      expect(r.latestTag, 'v9.0.3'); // capped at the 9.0 line
+      expect(r.latestVersion, '9.0.3');
+    });
+
+    test('current 9.0.2 with only a higher minor available → up to date', () {
+      final r = parseGitHubReleases(
+        releases(['v9.0.2', 'v9.1.0', 'v9.2.5']),
+        currentVersion: '9.0.2',
+      );
+      expect(r.isUpdateAvailable, isFalse);
+      expect(r.status, UpdateStatus.upToDate);
+    });
+
+    test('current 9.0.2 ignores draft/prerelease in its own line', () {
+      final r = parseGitHubReleases(
+        releases(
+          ['v9.0.2', 'v9.0.3', 'v9.0.4'],
+          draft: {'v9.0.3': true},
+          pre: {'v9.0.4': true},
+        ),
+        currentVersion: '9.0.2',
+      );
+      // The only stable in-line release is 9.0.2 (== current) → no update.
+      expect(r.isUpdateAvailable, isFalse);
+      expect(r.status, UpdateStatus.upToDate);
+    });
+
+    test('current 9.0.9 sees v9.0.10 (numeric, same line)', () {
+      final r = parseGitHubReleases(
+        releases(['v9.0.8', 'v9.0.9', 'v9.0.10']),
+        currentVersion: '9.0.9',
+      );
+      expect(r.isUpdateAvailable, isTrue);
+      expect(r.latestTag, 'v9.0.10');
+    });
+
+    test('cross-line (anyStable) mode CAN see v9.1.0', () {
+      final r = parseGitHubReleases(
+        releases(['v9.0.2', 'v9.0.3', 'v9.1.0']),
+        currentVersion: '9.0.2',
+        linePolicy: ReleaseLinePolicy.anyStable,
+      );
+      expect(r.isUpdateAvailable, isTrue);
+      expect(r.latestTag, 'v9.1.0');
+    });
+
+    test('selected release carries its assets (download targets in-line build)',
+        () {
+      final r = parseGitHubReleases(
+        [
+          _release(tag: 'v9.1.0', assets: [
+            _asset('orbits-windows-x64.exe', 'https://x/win-910.exe'),
+          ]),
+          _release(tag: 'v9.0.3', assets: [
+            _asset('orbits-windows-x64.exe', 'https://x/win-903.exe'),
+          ]),
+        ],
+        currentVersion: '9.0.2',
+      );
+      expect(r.latestTag, 'v9.0.3');
+      expect(r.windowsAssetUrl, 'https://x/win-903.exe'); // NOT the 9.1.0 asset
+    });
+
+    test('unparseable installed version → no false update, no crash', () {
+      final r = parseGitHubReleases(
+        releases(['v9.0.3']),
+        currentVersion: 'nightly',
+      );
+      expect(r.isUpdateAvailable, isFalse);
+    });
+
+    test('malformed entries in the array are skipped', () {
+      final r = parseGitHubReleases(
+        [
+          'garbage',
+          42,
+          {'no_tag': true},
+          _release(tag: 'v9.0.3'),
+        ],
+        currentVersion: '9.0.2',
+      );
+      expect(r.isUpdateAvailable, isTrue);
+      expect(r.latestTag, 'v9.0.3');
     });
   });
 }

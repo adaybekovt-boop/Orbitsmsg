@@ -68,7 +68,7 @@ void main() {
         updateCheckerProvider.overrideWithValue(
           UpdateChecker(
             client: client,
-            latestReleaseUri: Uri.parse('https://example.com/latest'),
+            releasesUri: Uri.parse('https://example.com/releases'),
             now: () => DateTime.utc(2026, 1, 2, 3, 4, 5),
           ),
         ),
@@ -91,10 +91,11 @@ void main() {
 
   MockClient releaseClient(String tag,
       {List<Map<String, Object?>> assets = const []}) {
-    final body = '{"tag_name":"$tag","html_url":'
+    // /releases LIST endpoint → a JSON array with one release.
+    final body = '[{"tag_name":"$tag","html_url":'
         '"https://github.com/example/release/$tag","draft":false,'
         '"prerelease":false,"body":"Patch notes for $tag",'
-        '"assets":${_jsonAssets(assets)}}';
+        '"assets":${_jsonAssets(assets)}}]';
     return MockClient((req) async => http.Response(body, 200));
   }
 

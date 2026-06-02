@@ -18,8 +18,25 @@ import 'package:package_info_plus/package_info_plus.dart';
 const String tkMessengerLatestReleaseApi =
     'https://api.github.com/repos/adaybekovt-boop/tkmessenger/releases/latest';
 
+/// Full releases list (newest first). Preferred over `/releases/latest` so we
+/// can apply release-line filtering: GitHub's "latest" ignores semver lines and
+/// could point at a higher minor (e.g. 9.1.0) we don't want to offer 9.0.x users.
+const String tkMessengerReleasesApi =
+    'https://api.github.com/repos/adaybekovt-boop/tkmessenger/releases?per_page=100';
+
 const String tkMessengerLatestReleasePage =
     'https://github.com/adaybekovt-boop/tkmessenger/releases/latest';
+
+/// Which releases an update check is allowed to offer.
+enum ReleaseLinePolicy {
+  /// DEFAULT. Only releases on the same `major.minor` line as the installed
+  /// version (e.g. a 9.0.2 user is offered 9.0.3 / 9.0.10 but NOT 9.1.0).
+  sameMinor,
+
+  /// Any stable release, regardless of line (allows cross-minor upgrades such
+  /// as 9.0.x → 9.1.0). Opt-in; wire this when a cross-line bump is intended.
+  anyStable,
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // Semantic version
@@ -335,19 +352,23 @@ Future<String> readInstalledVersion() async {
 class UpdateChecker {
   UpdateChecker({
     http.Client? client,
-    Uri? latestReleaseUri,
+    Uri? releasesUri,
+    ReleaseLinePolicy linePolicy = ReleaseLinePolicy.sameMinor,
     Duration timeout = const Duration(seconds: 10),
     DateTime Function() now = DateTime.now,
   })  : _client = client ?? http.Client(),
-        _latestReleaseUri =
-            latestReleaseUri ?? Uri.parse(tkMessengerLatestReleaseApi),
+        _releasesUri = releasesUri ?? Uri.parse(tkMessengerReleasesApi),
+        _linePolicy = linePolicy,
         _timeout = timeout,
         _now = now;
 
   final http.Client _client;
-  final Uri _latestReleaseUri;
+  final Uri _releasesUri;
+  final ReleaseLinePolicy _linePolicy;
   final Duration _timeout;
   final DateTime Function() _now;
+
+  ReleaseLinePolicy get linePolicy => _linePolicy;
 
   /// Provider-ready convenience: read the installed version, then check. Does
   /// NOT auto-run at startup and does NOT touch the UI — callers decide when.
@@ -360,7 +381,7 @@ class UpdateChecker {
     final checkedAt = _now();
     try {
       final response = await _client.get(
-        _latestReleaseUri,
+        _releasesUri,
         headers: const {
           'Accept': 'application/vnd.github+json',
           'User-Agent': 'TK-Messenger-update-checker',
@@ -387,7 +408,8 @@ class UpdateChecker {
           checkedAt: checkedAt,
         );
       }
-      if (decoded is! Map<String, Object?>) {
+      // The /releases endpoint returns a JSON array (newest first).
+      if (decoded is! List) {
         return UpdateCheckResult.error(
           currentVersion: currentVersion,
           message: 'Некорректный ответ GitHub',
@@ -396,10 +418,11 @@ class UpdateChecker {
         );
       }
 
-      return parseGitHubRelease(
+      return parseGitHubReleases(
         decoded,
         currentVersion: currentVersion,
         checkedAt: checkedAt,
+        linePolicy: _linePolicy,
       );
     } on TimeoutException {
       return UpdateCheckResult.error(
@@ -479,6 +502,81 @@ UpdateCheckResult parseGitHubRelease(
     androidUniversalAssetUrl: androidUniversalUrl,
     androidArm64AssetUrl: androidArm64Url,
     release: release,
+    checkedAt: checkedAt,
+  );
+}
+
+/// Pure selection over a GitHub `/releases` array (the list endpoint). Picks the
+/// highest STABLE release (drafts, pre-releases, and unparseable tags are
+/// ignored) that the [linePolicy] permits, then compares it to [currentVersion]:
+///
+///  • [ReleaseLinePolicy.sameMinor] (default) keeps only releases on the same
+///    `major.minor` line as the installed version, so a 9.0.2 user is offered
+///    9.0.3 / 9.0.10 but never 9.1.0.
+///  • [ReleaseLinePolicy.anyStable] considers every stable release.
+///
+/// If no permitted release exists (empty list, only drafts/pre-releases, or
+/// nothing on this line), the user is reported as up to date — never an error.
+/// Deterministic + offline (no I/O, no clock unless [checkedAt] is supplied).
+UpdateCheckResult parseGitHubReleases(
+  List<Object?> releasesJson, {
+  required String currentVersion,
+  DateTime? checkedAt,
+  ReleaseLinePolicy linePolicy = ReleaseLinePolicy.sameMinor,
+}) {
+  final current = parseReleaseVersion(currentVersion);
+  final normalizedCurrent = normalizeReleaseVersion(currentVersion);
+
+  // Keep only usable releases: stable (not draft / not pre-release) with a
+  // valid X.Y.Z tag. Everything else is silently skipped.
+  final usable = <GitHubReleaseInfo>[];
+  for (final entry in releasesJson) {
+    if (entry is! Map<String, Object?>) continue;
+    final release = GitHubReleaseInfo.tryParse(entry);
+    if (release != null && release.isUsable) usable.add(release);
+  }
+
+  bool permitted(GitHubReleaseInfo r) {
+    if (linePolicy == ReleaseLinePolicy.anyStable) return true;
+    // sameMinor: restrict to the installed version's major.minor line. If the
+    // installed version is unparseable we can't define a line — don't filter.
+    if (current == null) return true;
+    final v = r.version!; // non-null: isUsable guarantees it
+    return v.major == current.major && v.minor == current.minor;
+  }
+
+  // Highest permitted version wins.
+  GitHubReleaseInfo? best;
+  for (final r in usable) {
+    if (!permitted(r)) continue;
+    if (best == null || r.version!.compareTo(best.version!) > 0) best = r;
+  }
+
+  if (best == null) {
+    // Nothing to offer on this line → up to date (within the current line).
+    return UpdateCheckResult(
+      currentVersion: normalizedCurrent,
+      latestVersion: current?.toString() ?? '',
+      latestTag: '',
+      releaseUrl: tkMessengerLatestReleasePage,
+      isUpdateAvailable: false,
+      checkedAt: checkedAt,
+    );
+  }
+
+  final latest = best.version!;
+  final isUpdateAvailable = current != null && latest.compareTo(current) > 0;
+
+  return UpdateCheckResult(
+    currentVersion: normalizedCurrent,
+    latestVersion: normalizeReleaseVersion(best.tag),
+    latestTag: best.tag,
+    releaseUrl: best.htmlUrl,
+    isUpdateAvailable: isUpdateAvailable,
+    windowsAssetUrl: best.windowsExeAsset?.downloadUrl,
+    androidUniversalAssetUrl: best.androidUniversalApkAsset?.downloadUrl,
+    androidArm64AssetUrl: best.androidArm64ApkAsset?.downloadUrl,
+    release: best,
     checkedAt: checkedAt,
   );
 }

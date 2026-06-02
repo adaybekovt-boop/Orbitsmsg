@@ -42,6 +42,19 @@
 - Update checks are manual or run once when the Diagnostics screen opens; there
   is no network call on app startup, so launch is never slowed.
 
+## Update line / Линия обновлений
+
+- The updater fetches the full `/releases` list (not just `/releases/latest`),
+  ignores drafts and pre-releases, and by default only offers releases on the
+  **same `major.minor` line** as the installed build. So a 9.0.x user is offered
+  9.0.3 / 9.0.10 but **not** 9.1.0. A `ReleaseLinePolicy.anyStable` option exists
+  to allow cross-minor upgrades when a future bump is intended.
+- Обновлятор читает весь список `/releases` (а не только `/releases/latest`),
+  игнорирует черновики и пред-релизы и по умолчанию предлагает только релизы из
+  той же линии `major.minor`, что и установленная сборка. Пользователю 9.0.x
+  предлагаются 9.0.3 / 9.0.10, но **не** 9.1.0. Для переходов между минорными
+  версиями есть опция `ReleaseLinePolicy.anyStable`.
+
 ## Scope / Объём
 
 - Auto-update Phases 1–5 (check → status UI → Windows download → Windows install

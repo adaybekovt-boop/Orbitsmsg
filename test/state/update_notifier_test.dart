@@ -72,7 +72,7 @@ void main() {
       updateCheckerProvider.overrideWithValue(
         UpdateChecker(
           client: client,
-          latestReleaseUri: uri,
+          releasesUri: uri,
           now: () => DateTime.utc(2026, 1, 2, 3, 4, 5),
         ),
       ),
@@ -95,8 +95,10 @@ void main() {
     return container;
   }
 
+  // The checker fetches the /releases LIST endpoint, so wrap the single release
+  // in a JSON array (newest-first, as GitHub returns it).
   MockClient json(Map<String, Object?> body, [int code = 200]) =>
-      MockClient((req) async => http.Response(jsonEncode(body), code));
+      MockClient((req) async => http.Response(jsonEncode([body]), code));
 
   test('initial state is unknown / not checking / no update', () {
     final c = makeContainer(client: json(_release(tag: 'v9.0.1')));
@@ -155,18 +157,28 @@ void main() {
     expect(s.errorMessage, isNotNull);
   });
 
-  test('draft latest → latestUnusable (not offered)', () async {
-    final c = makeContainer(client: json(_release(tag: 'v9.9.9', draft: true)));
+  test('draft in-line release is ignored → upToDate (not offered)', () async {
+    final c = makeContainer(client: json(_release(tag: 'v9.0.5', draft: true)));
     await c.read(updateNotifierProvider.notifier).check();
     final s = c.read(updateNotifierProvider);
-    expect(s.status, UpdateUiStatus.latestUnusable);
+    expect(s.status, UpdateUiStatus.upToDate);
     expect(s.updateAvailable, isFalse);
   });
 
-  test('prerelease latest → latestUnusable (not offered)', () async {
-    final c = makeContainer(client: json(_release(tag: 'v9.9.9', prerelease: true)));
+  test('prerelease in-line release is ignored → upToDate (not offered)',
+      () async {
+    final c =
+        makeContainer(client: json(_release(tag: 'v9.0.5', prerelease: true)));
     await c.read(updateNotifierProvider.notifier).check();
-    expect(c.read(updateNotifierProvider).status, UpdateUiStatus.latestUnusable);
+    expect(c.read(updateNotifierProvider).status, UpdateUiStatus.upToDate);
+  });
+
+  test('higher-minor stable release is not offered to a 9.0.x user', () async {
+    final c = makeContainer(client: json(_release(tag: 'v9.1.0')));
+    await c.read(updateNotifierProvider.notifier).check();
+    final s = c.read(updateNotifierProvider);
+    expect(s.status, UpdateUiStatus.upToDate);
+    expect(s.updateAvailable, isFalse);
   });
 
   test('manual check sets checking synchronously, then resolves', () async {
@@ -184,7 +196,7 @@ void main() {
     var calls = 0;
     final c = makeContainer(client: MockClient((req) async {
       calls++;
-      return http.Response(jsonEncode(_release(tag: 'v9.0.1')), 200);
+      return http.Response(jsonEncode([_release(tag: 'v9.0.1')]), 200);
     }));
     final n = c.read(updateNotifierProvider.notifier);
     final f1 = n.check();
@@ -197,7 +209,7 @@ void main() {
     var calls = 0;
     final c = makeContainer(client: MockClient((req) async {
       calls++;
-      return http.Response(jsonEncode(_release(tag: 'v9.0.1')), 200);
+      return http.Response(jsonEncode([_release(tag: 'v9.0.1')]), 200);
     }));
     final n = c.read(updateNotifierProvider.notifier);
     await n.maybeAutoCheck(); // runs (status was unknown)
