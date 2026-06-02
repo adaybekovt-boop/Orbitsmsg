@@ -473,31 +473,33 @@ jobs:
             artifacts/orbits-android/*.apk
             artifacts/orbits-windows/*.exe
           body: |
-            ## What's new (v9.1.0) — relay & networking hardening
+            ## What's new (v9.0.2) — in-app updates
 
-            - Stronger P2P / TURN diagnostics: multi-transport TURN (UDP/TCP/TLS), honest direct-vs-TURN-relay path reporting, and a relay-only-misconfiguration warning (Settings → Connection).
-            - Encrypted text relay fallback (RELAY_URL): when a direct WebRTC channel can't be established, encrypted text/control is forwarded through a relay. The relay is content-blind (it never sees plaintext) and never carries voice, files, drop chunks, or rooms.
-            - Signed relay registration (anti peer-id hijack): a client proves ownership of its peer id by signing a server challenge with its identity key; the server pins the key (TOFU), so another client cannot register as you.
-            - Safer contact / message delivery: a message is "sent" only once a transport accepts it and "delivered" only on the receiver's end-to-end ack — a relay accepting bytes never fakes delivery.
-            - Honest rooms/voice: rooms are explicitly not 1:1-style E2EE, host-authoritative messages, room↔1:1 isolation, an explicit mesh-voice cap, and honest host-offline state.
-            - Relay server reference implementation under `relay-server/` (Node + ws) with `/healthz`, `/readyz`, `/metrics`, and a full test suite.
+            - Windows update checker and a guided in-app updater flow (Settings → Diagnostics).
+            - Version detection via GitHub Releases (numeric semver; drafts and pre-releases ignored).
+            - Same-line patch filtering: a v9.0.x build is offered the newest v9.0.x release and is NOT pushed across minor lines (it will not jump to 9.1.0). A cross-line mode exists for future use.
+            - Windows installer download with a progress indicator, saved to a private temp folder with integrity checks.
+            - Safe installer launch from inside the app: a confirmation dialog, the installer starts, then the app closes so it can update files. A failed launch keeps the app open. The running .exe is never overwritten directly and user data (chats, contacts, profile, keys) is preserved.
+            - Android / Web fallback: when the in-app installer flow is unavailable, the app shows update info and a link to the GitHub release page.
+            - Carries over the prior relay / networking hardening (encrypted text relay fallback, signed relay registration, honest delivery and rooms/voice states).
 
-            Limitations / notes:
-            - The relay server's identity-key pinning (TOFU) is currently in-memory and resets when the server restarts; a persistent key store is future work.
-            - For best cross-network reliability, configure TURN (`TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL`) and, optionally, deploy a `RELAY_URL` relay server. If `RELAY_URL` is unset, the app is unchanged WebRTC/TURN-only.
+            Notes:
+            - The Windows in-app install flow should still be smoke-tested on a real older installed build.
+            - For best cross-network reliability, configure TURN and optionally deploy a `RELAY_URL` relay server. If unset, the app is unchanged WebRTC/TURN-only.
 
-            ## Что нового (v9.1.0) — усиление ретранслятора и сети
+            ## Что нового (v9.0.2) — обновления внутри приложения
 
-            - Более честная диагностика P2P/TURN: мульти-транспортный TURN (UDP/TCP/TLS), отображение прямого пути или пути через TURN, предупреждение о неверной настройке relay-only (Настройки → Соединение).
-            - Зашифрованный резервный ретранслятор текста (RELAY_URL): если прямой WebRTC-канал установить не удаётся, зашифрованный текст/служебные пакеты идут через ретранслятор. Сервер не видит содержимое и не передаёт голос, файлы, drop-чанки или комнаты.
-            - Подписанная регистрация на ретрансляторе (защита от перехвата peer-id): клиент подтверждает владение своим peer-id, подписывая запрос сервера ключом личности; сервер закрепляет ключ (TOFU), поэтому другой клиент не сможет зарегистрироваться под вами.
-            - Более безопасные статусы доставки: «отправлено» — только когда транспорт принял пакет, «доставлено» — только по сквозному ack получателя; приём байтов ретранслятором не выдаётся за доставку.
-            - Честные комнаты/голос: комнаты явно не имеют 1:1-сквозного шифрования, авторитетность хоста, изоляция комнат от личных чатов, явный лимит mesh-голоса и честный статус «хост офлайн».
-            - Эталонный сервер-ретранслятор в `relay-server/` (Node + ws) с эндпоинтами `/healthz`, `/readyz`, `/metrics` и полным набором тестов.
+            - Проверка обновлений через GitHub Releases и пошаговый процесс обновления внутри приложения (Настройки → Диагностика).
+            - Определение версии по GitHub Releases (числовой semver; черновики и пред-релизы игнорируются).
+            - Фильтрация обновлений внутри ветки v9.0.x: сборке v9.0.x предлагается новейший релиз v9.0.x; перехода между минорными линиями нет (не будет перехода на 9.1.0). Для будущего есть режим перехода между линиями.
+            - Загрузка Windows-установщика с индикатором прогресса, во временную папку, с проверкой целостности.
+            - Безопасный запуск установщика из приложения: подтверждение, запуск установщика, затем приложение закрывается, чтобы обновить файлы. При неудачном запуске приложение остаётся открытым. Запущенный .exe не перезаписывается напрямую, данные пользователя (чаты, контакты, профиль, ключи) сохраняются.
+            - Android/Web: когда установка из приложения недоступна, показывается информация об обновлении и ссылка на страницу релиза.
+            - Включает прежние улучшения сети/relay (зашифрованный резервный ретранслятор текста, подписанная регистрация на ретрансляторе, честные статусы доставки и комнат/голоса).
 
-            Ограничения / примечания:
-            - Закрепление ключей ретранслятором (TOFU) сейчас хранится в ОЗУ и сбрасывается при перезапуске сервера; постоянное хранилище — в планах.
-            - Для максимальной надёжности между сетями настройте TURN (`TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL`) и при желании разверните `RELAY_URL`-сервер. Без `RELAY_URL` приложение работает как прежде — только WebRTC/TURN.
+            Примечания:
+            - Процесс установки на Windows стоит дополнительно проверить вручную на реальной ранее установленной сборке.
+            - Для максимальной надёжности между сетями настройте TURN и при желании разверните `RELAY_URL`-сервер. Без него приложение работает как прежде — только WebRTC/TURN.
 
             ## Download links / Ссылки
 
