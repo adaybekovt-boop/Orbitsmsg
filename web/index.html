@@ -38,16 +38,23 @@
     which is roughly 10× slower per query.
   -->
 
-  <!-- iOS meta tags & icons -->
+  <!-- Dark glass theme — status bar + browser chrome. -->
+  <meta name="theme-color" content="#0A0E16">
+
+  <!-- PWA / "Add to Home Screen" (Android + iOS Safari). -->
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="orbits_flutter">
-  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Orbits">
+
+  <!-- iOS home-screen icon. Opaque (no transparency → no black composite in
+       Safari). 180x180 is the size iOS uses for the home screen. -->
+  <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>orbits_flutter</title>
+  <title>Orbits</title>
   <link rel="manifest" href="manifest.json">
 </head>
 <body>

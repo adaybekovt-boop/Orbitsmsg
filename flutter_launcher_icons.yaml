@@ -1,0 +1,38 @@
+# Native app-icon generation for Orbits (Android + Windows).
+#
+# Web / PWA / Safari "Add to Home Screen" icons are NOT generated here — they
+# are hand-tuned, opaque, and committed under web/ (regenerate with
+# tool/branding/generate_web_icons.ps1). This config covers only the native
+# launcher icons, which this repo does NOT commit (the android/ and windows/
+# folders are created fresh in CI by `flutter create`).
+#
+# How to apply (locally with the toolchain, or as a CI step run AFTER
+# `flutter create` so the platform folders exist):
+#
+#   flutter pub add --dev flutter_launcher_icons
+#   dart run flutter_launcher_icons -f flutter_launcher_icons.yaml
+#
+# In .github/workflows/build.yml add those two lines after the
+# "Generate android/ + web/ platforms" step (Android job) and after the
+# "Generate windows/ + web/ platforms" step (Windows job). iOS has no CI build
+# job in this repo; iOS users get the icon via the web PWA path (web/).
+flutter_launcher_icons:
+  image_path: "tool/branding/orbits_icon_source.png"
+
+  # ── Android: legacy mipmaps + adaptive icon ────────────────────────────
+  android: true
+  min_sdk_android: 21
+  # Dark glass background; the mark (with its own transparent safe-zone margin)
+  # rides on top, so the circular/squircle adaptive mask never clips the ring.
+  adaptive_icon_background: "#0A0E16"
+  adaptive_icon_foreground: "tool/branding/orbits_icon_source.png"
+
+  # ── Windows: app_icon.ico ──────────────────────────────────────────────
+  windows:
+    generate: true
+    image_path: "tool/branding/orbits_icon_source.png"
+    icon_size: 256
+
+  # Web icons are hand-managed under web/ — do not let the tool overwrite them.
+  web:
+    generate: false
