@@ -23,7 +23,9 @@ import '../peer/connectivity_watch_stub.dart'
     if (dart.library.html) '../peer/connectivity_watch_web.dart';
 import '../peer/peer_connection_manager.dart';
 import '../peer/peerjs_client.dart';
+import '../peer/relay_transport.dart';
 import '../peer/signaling.dart';
+import '../peer/ws_relay_transport.dart';
 import 'auth_notifier.dart';
 
 /// Snapshot of the peer subsystem. Mirrors the flat-ish object the JS
@@ -311,6 +313,25 @@ final relayOnlyProvider = Provider<bool>((ref) => _env.relayOnly);
 /// and shows a warning rather than producing a config that can't connect.
 final relayOnlyMisconfiguredProvider =
     Provider<bool>((ref) => relayOnlyMisconfigured(_env));
+
+// ─── Encrypted text relay fallback (Phase 2) ────────────────────────
+const _relayUrlRaw = String.fromEnvironment('RELAY_URL');
+final _relayUrl = _envString(_relayUrlRaw);
+
+/// The encrypted-text relay fallback transport. Disabled (no-op) unless
+/// `RELAY_URL` is set — the app is fully functional WebRTC-only without it.
+/// Overridable in tests with a fake transport.
+final relayTransportProvider = Provider<RelayTransport>((ref) {
+  final url = _relayUrl;
+  if (url == null || url.isEmpty) return const DisabledRelayTransport();
+  final t = WsRelayTransport(url);
+  ref.onDispose(() => unawaited(t.dispose()));
+  return t;
+});
+
+/// Whether an encrypted relay fallback is configured for this build.
+final relayConfiguredProvider =
+    Provider<bool>((ref) => ref.watch(relayTransportProvider).isConfigured);
 
 final peerConnectionProvider =
     StateNotifierProvider<PeerConnectionNotifier, PeerConnectionState>((ref) {

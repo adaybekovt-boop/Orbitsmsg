@@ -160,6 +160,7 @@ jobs:
           TURN_URLS: ${{ secrets.TURN_URLS }}
           TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
           TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
+          RELAY_URL: ${{ secrets.RELAY_URL }}
           RELAY_ONLY: ${{ vars.RELAY_ONLY }}
           PEER_SERVER: ${{ vars.PEER_SERVER }}
           PEER_HOST: ${{ vars.PEER_HOST }}
@@ -167,7 +168,7 @@ jobs:
           PEER_PORT: ${{ vars.PEER_PORT }}
           PEER_SECURE: ${{ vars.PEER_SECURE }}
         run: |
-          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=TURN_URLS=${TURN_URLS} --dart-define=TURN_USERNAME=${TURN_USERNAME} --dart-define=TURN_CREDENTIAL=${TURN_CREDENTIAL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
+          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=TURN_URLS=${TURN_URLS} --dart-define=TURN_USERNAME=${TURN_USERNAME} --dart-define=TURN_CREDENTIAL=${TURN_CREDENTIAL} --dart-define=RELAY_URL=${RELAY_URL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
 
       - name: flutter build apk (split per ABI)
         run: flutter build apk --release --split-per-abi $DART_DEFINES
@@ -247,6 +248,7 @@ jobs:
           TURN_URLS: ${{ secrets.TURN_URLS }}
           TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
           TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
+          RELAY_URL: ${{ secrets.RELAY_URL }}
           RELAY_ONLY: ${{ vars.RELAY_ONLY }}
           PEER_SERVER: ${{ vars.PEER_SERVER }}
           PEER_HOST: ${{ vars.PEER_HOST }}
@@ -254,7 +256,7 @@ jobs:
           PEER_PORT: ${{ vars.PEER_PORT }}
           PEER_SECURE: ${{ vars.PEER_SECURE }}
         run: |
-          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=TURN_URLS=${TURN_URLS} --dart-define=TURN_USERNAME=${TURN_USERNAME} --dart-define=TURN_CREDENTIAL=${TURN_CREDENTIAL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
+          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=TURN_URLS=${TURN_URLS} --dart-define=TURN_USERNAME=${TURN_USERNAME} --dart-define=TURN_CREDENTIAL=${TURN_CREDENTIAL} --dart-define=RELAY_URL=${RELAY_URL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
 
       - name: flutter build web (relative base-href)
         run: |
@@ -332,6 +334,7 @@ jobs:
           TURN_URLS: ${{ secrets.TURN_URLS }}
           TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
           TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
+          RELAY_URL: ${{ secrets.RELAY_URL }}
           RELAY_ONLY: ${{ vars.RELAY_ONLY }}
           PEER_SERVER: ${{ vars.PEER_SERVER }}
           PEER_HOST: ${{ vars.PEER_HOST }}
@@ -346,6 +349,7 @@ jobs:
             "--dart-define=TURN_URLS=$env:TURN_URLS",
             "--dart-define=TURN_USERNAME=$env:TURN_USERNAME",
             "--dart-define=TURN_CREDENTIAL=$env:TURN_CREDENTIAL",
+            "--dart-define=RELAY_URL=$env:RELAY_URL",
             "--dart-define=RELAY_ONLY=$(if ($env:RELAY_ONLY) { $env:RELAY_ONLY } else { 'false' })",
             "--dart-define=PEER_SERVER=$env:PEER_SERVER",
             "--dart-define=PEER_HOST=$env:PEER_HOST",

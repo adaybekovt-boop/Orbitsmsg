@@ -30,6 +30,7 @@ the app falls back to public PeerJS + public STUN. The keys (read in
 | `TURN_URLS`        | Extra TURN URIs (comma/space separated) — multiple transports  |
 | `TURN_USERNAME`    | TURN auth username                                             |
 | `TURN_CREDENTIAL`  | TURN auth credential/password                                  |
+| `RELAY_URL`        | WebSocket URL of an encrypted text-relay fallback (optional)   |
 | `RELAY_ONLY`       | `true` to force relay-only ICE (needs TURN); default `false`   |
 | `PEER_SERVER`      | full PeerJS server URL override (disables host rotation)       |
 | `PEER_HOST`        | pinned PeerJS host (disables rotation)                         |
@@ -64,13 +65,59 @@ flutter build windows --release \
   --dart-define=TURN_CREDENTIAL=mypass
 ```
 
+## Encrypted text relay fallback (`RELAY_URL`)
+
+TURN keeps **WebRTC** connections alive across hostile NATs, but some networks
+block even relayed UDP/TCP and no DataChannel can be established at all. For
+those cases there is a separate, **optional** fallback that delivers **text
+messages only** through a lightweight relay server.
+
+Key properties:
+
+- **End-to-end encrypted, content-blind relay.** The relay is a dumb router: it
+  forwards an opaque envelope (`from`, `to`, message id, timestamp, and an
+  encrypted `frame`) from one peer to another. The `frame` is exactly what the
+  DataChannel would carry — a Double-Ratchet ciphertext string, or a
+  public-key handshake control map. **The relay never sees plaintext message
+  content.** (See `lib/peer/relay_transport.dart`.)
+- **Text + control only.** Voice, files, stickers and room traffic do **not**
+  use the relay — they stay strictly peer-to-peer over WebRTC. This is a
+  messaging lifeline, not a media path or an SFU.
+- **Same crypto path on receive.** A relay-delivered frame is fed through the
+  exact same packet router / ratchet decrypt + verify as a DataChannel frame.
+  There is no second, weaker crypto path.
+- **Honest delivery status.** A relay accepting the bytes is **not** delivery.
+  A message is only marked *delivered* when the receiver's end-to-end `ack`
+  comes back (over WebRTC or the relay). Until then it stays *sent* (handed to a
+  transport) or *pending* (queued for retry).
+- **Fully optional.** With `RELAY_URL` unset the app is exactly WebRTC-only —
+  the relay code is a no-op. Set it to a WebSocket URL to enable the fallback:
+
+```bash
+flutter build apk --release \
+  --dart-define=RELAY_URL=wss://relay.example.com/ws
+```
+
+The relay protocol is intentionally tiny (so any minimal WebSocket router can
+implement it):
+
+```text
+client → server  {"type":"register","peer":"<selfPeerId>"}
+client → server  {"type":"relay","from":...,"to":...,"id":...,"frame":...}
+server → client  {"type":"relay", ...}   # forwarded to the addressed peer
+```
+
+The diagnostics screen (**Settings → Дополнительно → Соединение → «Резервная
+доставка текста»**) shows whether the relay is configured, the last relay
+error, and which transport (direct WebRTC vs relay) was used per peer.
+
 ## CI configuration (GitHub Actions)
 
 `.github/workflows/build.yml` (APK / Web / Windows) and
 `.github/workflows/pages.yml` (Pages web) pass these through automatically.
 Configure them in **Settings → Secrets and variables → Actions**:
 
-- **Secrets** (sensitive): `TURN_URL`, `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL`
+- **Secrets** (sensitive): `TURN_URL`, `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL`, `RELAY_URL`
 - **Variables** (non-sensitive, optional): `RELAY_ONLY`, `PEER_SERVER`,
   `PEER_HOST`, `PEER_PATH`, `PEER_PORT`, `PEER_SECURE`
 

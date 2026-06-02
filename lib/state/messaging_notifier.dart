@@ -29,6 +29,7 @@ import '../storage/db.dart' as db;
 import 'auth_notifier.dart';
 import 'connections_notifier.dart';
 import 'local_profile_provider.dart';
+import 'peer_connection_provider.dart';
 import 'peers_provider.dart';
 
 /// Fire a best-effort DB write without awaiting, but surface failures in debug
@@ -395,7 +396,11 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     if (normalized.isEmpty) return;
     if (_isPeerBlocked(normalized)) return;
     final conns = _ref.read(connectionsNotifierProvider.notifier);
-    if (conns.getConn(normalized, 'reliable')?.open != true) return;
+    final webrtcOpen = conns.getConn(normalized, 'reliable')?.open == true;
+    final relayConfigured = _ref.read(relayConfiguredProvider);
+    // Nothing can ship right now: no WebRTC channel AND no relay fallback.
+    // (Text can ride the relay; voice/file/sticker are WebRTC-only by design.)
+    if (!webrtcOpen && !relayConfigured) return;
 
     List<Map<String, Object?>> rows;
     try {
@@ -431,9 +436,35 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
         unawaited(db.updateMessageStatus(id, 'failed'));
         continue;
       }
-      final ok = await conns.sendEncrypted(normalized, envelope);
-      if (!ok) break;
-      unawaited(db.updateMessageStatus(id, 'sent'));
+
+      if (type == 'text') {
+        // Text can fall back to the encrypted relay when WebRTC is down.
+        final result =
+            await conns.sendEncryptedWithFallback(normalized, envelope);
+        if (result == ReliableSendResult.webrtc ||
+            result == ReliableSendResult.relay) {
+          unawaited(db.updateMessageStatus(id, 'sent'));
+        } else {
+          // Couldn't ship via WebRTC or relay right now (offline, or a relay
+          // handshake is bootstrapping). Leave it 'pending' and stop draining —
+          // a later trigger (channel opens, handshake completes) re-flushes.
+          break;
+        }
+      } else {
+        // Voice / file / sticker are WebRTC-only by design (NO blob relay).
+        final ok = await conns.sendEncrypted(normalized, envelope);
+        if (ok) {
+          unawaited(db.updateMessageStatus(id, 'sent'));
+        } else if (webrtcOpen) {
+          // WebRTC was open but the send failed — channel likely dying. Stop.
+          break;
+        } else {
+          // No WebRTC and no blob-relay: skip this row (stays 'pending') so a
+          // later TEXT row can still ride the relay. Receivers order by
+          // timestamp, so out-of-order delivery doesn't reorder the chat.
+          continue;
+        }
+      }
     }
   }
 
@@ -580,22 +611,18 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final ts = now();
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
-    final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
 
     final sanitizedReply = _sanitizeReplyTo(replyTo);
 
-    // Persist the outbound row first — pending status if the channel's
-    // offline, sent otherwise. On refresh/app-restart the outbox picks up
-    // pending rows from here.
+    // Persist the outbound row first, as 'pending'. We promote to 'sent' ONLY
+    // once a transport (WebRTC or the encrypted relay) accepts the frame, and
+    // 'delivered' is reserved for the receiver's end-to-end ack — never for a
+    // relay merely accepting the bytes. On app-restart the outbox re-flushes
+    // any rows still 'pending'.
     //
-    // Historically we also mirrored the `delivery` state into the payload
-    // JSON so the UI could read either field; that created a drift risk
-    // because later mutations (e.g. `updateMessageStatus`) only touched
-    // the `status` column, not the embedded mirror. The outbox mapper
-    // (`pendingRowToOutboxEntry`) always hardcodes `'delivery': 'queued'`
-    // on read, so the mirror was dead weight anyway. Status column is
-    // the single source of truth now.
+    // Historically we mirrored the `delivery` state into the payload JSON too;
+    // that drifted because later mutations only touched the `status` column.
+    // Status column is the single source of truth now.
     final payload = <String, Object?>{
       'id': msgId,
       'from': selfId,
@@ -610,7 +637,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       'peerId': normalized,
       'timestamp': ts,
       'direction': 'out',
-      'status': open ? 'sent' : 'pending',
+      'status': 'pending',
       'payload': payload,
     });
 
@@ -618,13 +645,11 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     // chat list as soon as the user hits send.
     unawaited(db.savePeer({'id': normalized, 'lastSeenAt': now()}));
 
-    if (!open) {
-      // Nothing to ship right now — the flusher will pick this up when the
-      // reliable channel opens.
-      return msgId;
-    }
-
-    final ok = await conns.sendEncrypted(normalized, {
+    // Ship now over the best available transport: a live WebRTC DataChannel
+    // first, then the encrypted relay fallback. If neither is available the
+    // row stays 'pending' and the flusher retries on the next reliable-open
+    // or once a relay handshake completes.
+    final result = await conns.sendEncryptedWithFallback(normalized, {
       'type': 'msg',
       'id': msgId,
       'text': trimmed,
@@ -632,12 +657,12 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       'from': selfId,
       if (sanitizedReply != null) 'replyTo': sanitizedReply,
     });
-    if (!ok) {
-      // Demote to pending so the next flush picks it up. We only touch the
-      // `status` column — the payload itself is content-only, no delivery
-      // mirror (see note above).
-      unawaited(db.updateMessageStatus(msgId, 'pending'));
+    if (result == ReliableSendResult.webrtc ||
+        result == ReliableSendResult.relay) {
+      // Handed to a transport — 'sent' (NOT 'delivered'; that waits for ack).
+      unawaited(db.updateMessageStatus(msgId, 'sent'));
     }
+    // pendingHandshake / failed → leave as the persisted 'pending'.
     return msgId;
   }
 

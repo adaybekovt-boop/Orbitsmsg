@@ -38,6 +38,11 @@ class NetworkPage extends ConsumerWidget {
         ref.watch(connectionsNotifierProvider.select((s) => s.lastConnectError));
     final candidateTypes = ref.watch(
         connectionsNotifierProvider.select((s) => s.candidateTypeByPeer));
+    final relayConfigured = ref.watch(relayConfiguredProvider);
+    final lastRelayErr = ref.watch(
+        connectionsNotifierProvider.select((s) => s.lastRelayError));
+    final transportByPeer = ref.watch(
+        connectionsNotifierProvider.select((s) => s.lastTransportByPeer));
 
     return Scaffold(
       appBar: AppBar(
@@ -227,6 +232,56 @@ class NetworkPage extends ConsumerWidget {
               child: OrbitsGlassListTile(
                 title: const Text('Последняя ошибка соединения'),
                 subtitle: Text('${lastConnErr.peerId}: ${lastConnErr.message}'),
+              ),
+            ),
+
+          // ── Encrypted text relay fallback ────────────────────
+          const OrbsSectionTitle('Резервная доставка текста'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: OrbitsGlassListTile(
+              title: const Text('Зашифрованный ретранслятор'),
+              subtitle: Text(relayConfigured
+                  ? 'Настроен. Если прямое соединение не удаётся, текстовые '
+                      'сообщения доставляются через ретранслятор в зашифрованном '
+                      'виде — сервер не видит содержимое.'
+                  : 'Не настроен (необязательно). Текст доставляется только при '
+                      'прямом P2P-соединении. Это нормально для большинства '
+                      'пользователей.'),
+              trailing: Icon(
+                relayConfigured ? Icons.check_circle : Icons.info_outline,
+                color: relayConfigured ? tokens.success : tokens.muted,
+              ),
+            ),
+          ),
+          // Per-peer transport used for the most recent reliable send: direct
+          // WebRTC vs the encrypted relay. Honest visibility into the path.
+          if (transportByPeer.isNotEmpty)
+            for (final entry in transportByPeer.entries)
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: OrbitsGlassListTile(
+                  title: Text('Отправка: ${entry.key}'),
+                  subtitle: Text(entry.value == 'relay'
+                      ? 'через зашифрованный ретранслятор'
+                      : 'напрямую (WebRTC)'),
+                  trailing: Icon(
+                    entry.value == 'relay'
+                        ? Icons.cloud_sync_rounded
+                        : Icons.bolt_rounded,
+                    color: entry.value == 'relay'
+                        ? tokens.accent2
+                        : tokens.success,
+                  ),
+                ),
+              ),
+          if (lastRelayErr != null && lastRelayErr.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                title: const Text('Последняя ошибка ретранслятора'),
+                subtitle: Text(lastRelayErr),
               ),
             ),
 
