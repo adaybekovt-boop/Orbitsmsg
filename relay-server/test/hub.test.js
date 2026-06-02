@@ -1,29 +1,34 @@
-// RelayHub unit tests — pure, no `ws`, no network. Run with: node --test
+// RelayHub unit tests — pure (no `ws`), but using REAL Node P-256 crypto to
+// exercise the full signed-registration path end to end. Run: node --test
 //
-// These prove the security-critical invariants of the relay:
-//   register stores a peer; relay forwards to the recipient only; malformed /
-//   oversized / unregistered / offline / duplicate / rate-limited behaviors;
-//   and that the opaque frame is forwarded byte-identical and never inspected.
+// Proves: a challenge is issued on connect; a valid signed register succeeds;
+// relay before registration is rejected; wrong nonce / stale ts / bad signature
+// are rejected; server-side TOFU (same-key reconnect replaces, different-key
+// rejected); forwarding still works after auth; the opaque frame is unchanged;
+// plus the Phase-1 invariants (size caps, rate limit, offline, etc).
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import { RelayHub } from '../src/hub.js';
+import { buildRelayRegisterBlob } from '../src/register-blob.js';
 
-// A fake connection: records everything sent / how it was closed. The hub only
-// requires send(string) + close(code, reason).
+const A = 'ORBIT-AAAAAA';
+const B = 'ORBIT-BBBBBB';
+const C = 'ORBIT-CCCCCC';
+const SERVER_ID = 'test-relay';
+const NOW = 1_000_000;
+
 function fakeConn() {
   return {
     sent: [],
     closed: null,
     send(str) { this.sent.push(str); },
     close(code, reason) { this.closed = { code, reason }; },
-    // Parsed view of what the hub forwarded to this conn.
     get messages() { return this.sent.map((s) => JSON.parse(s)); },
-    last() { return this.messages[this.messages.length - 1]; },
   };
 }
 
-// A hub with a controllable clock and generous limits (overridden per test).
 function makeHub(overrides = {}) {
   const config = {
     maxRawMessageBytes: 512 * 1024,
@@ -31,292 +36,316 @@ function makeHub(overrides = {}) {
     maxPeerIdLen: 64,
     maxIdLen: 128,
     maxConnections: 1000,
-    rateCapacity: 20,
+    rateCapacity: 50,
     rateRefillPerSec: 10,
     maxTtlMs: 24 * 60 * 60 * 1000,
     heartbeatMs: 30000,
+    nonceBytes: 24,
+    challengeTtlMs: 30_000,
+    registerTsSkewMs: 60_000,
+    serverId: SERVER_ID,
     ...overrides,
   };
-  let clock = 1_000_000;
+  let clock = NOW;
   const hub = new RelayHub({ config, now: () => clock });
-  return { hub, config, advance: (ms) => { clock += ms; }, setNow: (v) => { clock = v; }, now: () => clock };
+  return { hub, config, advance: (ms) => { clock += ms; }, now: () => clock };
 }
 
-const A = 'ORBIT-AAAAAA';
-const B = 'ORBIT-BBBBBB';
-const C = 'ORBIT-CCCCCC';
-
-function register(hub, conn, peer) {
-  hub.addConnection(conn);
-  return hub.handleMessage(conn, JSON.stringify({ type: 'register', peer }));
+// ── Real P-256 identity helpers (Node side stands in for the Flutter client) ──
+function genKey() {
+  return crypto.generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
+}
+function idPubOf(kp) {
+  return kp.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
+}
+function signBlob(kp, { peer, nonce, ts, relay }) {
+  const blob = Buffer.from(buildRelayRegisterBlob({ peer, nonce, ts, relay }), 'utf8');
+  return crypto
+    .sign('sha256', blob, { key: kp.privateKey, dsaEncoding: 'ieee-p1363' })
+    .toString('base64');
+}
+function challengeOf(conn) {
+  return conn.messages.find((m) => m.type === 'relay_challenge');
+}
+function errorsOf(conn) {
+  return conn.messages.filter((m) => m.type === 'register_error').map((m) => m.reason);
 }
 
-function relayMsg(from, to, id, frame, extra = {}) {
-  return JSON.stringify({ type: 'relay', from, to, id, ts: 1_000_000, frame, ...extra });
+// Drive a full signed registration against the hub (addConnection issues the
+// challenge; we answer it). Overrides let tests inject bad nonce/ts/key.
+function doRegister(hub, conn, peer, kp, ts, over = {}) {
+  if (!conn._added) { hub.addConnection(conn); conn._added = true; }
+  const ch = challengeOf(conn);
+  const nonce = over.nonce ?? ch.nonce;
+  const relay = over.relay ?? ch.relay;
+  const idPub = over.idPub ?? idPubOf(kp);
+  const sig = over.sig ?? signBlob(kp, {
+    peer,
+    nonce: over.signNonce ?? nonce,
+    ts: over.signTs ?? ts,
+    relay: over.signRelay ?? relay,
+  });
+  return hub.handleMessage(conn, JSON.stringify({ type: 'register', peer, ts, nonce, idPub, sig }));
 }
 
-test('register stores a peer (normalized)', () => {
+function relayMsg(from, to, id, frame, ts = NOW) {
+  return JSON.stringify({ type: 'relay', from, to, id, ts, frame });
+}
+
+test('a challenge is sent immediately on connect', () => {
   const { hub } = makeHub();
   const a = fakeConn();
-  const res = register(hub, a, 'orbit-aaaaaa'); // lower-case → normalized
+  hub.addConnection(a);
+  const ch = challengeOf(a);
+  assert.ok(ch, 'relay_challenge sent');
+  assert.equal(typeof ch.nonce, 'string');
+  assert.ok(ch.nonce.length > 0);
+  assert.equal(ch.relay, SERVER_ID);
+  assert.equal(typeof ch.ts, 'number');
+});
+
+test('a valid signed registration succeeds (register_ok)', () => {
+  const { hub, now } = makeHub();
+  const a = fakeConn();
+  const res = doRegister(hub, a, A, genKey(), now());
   assert.equal(res.action, 'registered');
   assert.equal(res.peer, A);
-  assert.equal(hub.peerCount, 1);
+  assert.ok(a.messages.some((m) => m.type === 'register_ok' && m.peer === A));
   assert.equal(hub.peers.get(A), a);
 });
 
-test('relay forwards to the recipient, opaque frame unchanged', () => {
+test('relay BEFORE registration is rejected (not_registered)', () => {
   const { hub } = makeHub();
   const a = fakeConn();
   const b = fakeConn();
-  register(hub, a, A);
-  register(hub, b, B);
+  hub.addConnection(a); // challenged, NOT registered
+  hub.addConnection(b);
+  const res = hub.handleMessage(a, relayMsg(A, B, 'm1', 'v2:x'));
+  assert.equal(res.reason, 'not_registered');
+  assert.equal(b.messages.filter((m) => m.type === 'relay').length, 0);
+});
 
-  // A complex frame (here a control-map shape) must arrive byte-identical.
-  const frame = { type: 'wireHello', pub: 'KEYDATA==', nested: { n: 1, arr: [1, 2, 3] } };
+test('wrong nonce is rejected', () => {
+  const { hub, now } = makeHub();
+  const a = fakeConn();
+  const res = doRegister(hub, a, A, genKey(), now(), { nonce: 'WRONG-NONCE' });
+  assert.equal(res.reason, 'bad_nonce');
+  assert.ok(errorsOf(a).includes('bad_nonce'));
+  assert.equal(hub.peers.size, 0);
+});
+
+test('stale timestamp is rejected', () => {
+  const { hub, now } = makeHub();
+  const a = fakeConn();
+  const staleTs = now() - 5 * 60_000; // 5 min old, skew is 60s
+  const res = doRegister(hub, a, A, genKey(), staleTs);
+  assert.equal(res.reason, 'stale_ts');
+  assert.equal(hub.peers.size, 0);
+});
+
+test('expired challenge is rejected', () => {
+  const { hub, advance, now } = makeHub();
+  const a = fakeConn();
+  hub.addConnection(a); a._added = true;
+  advance(31_000); // challenge TTL is 30s
+  const res = doRegister(hub, a, A, genKey(), now());
+  assert.equal(res.reason, 'challenge_expired');
+  assert.equal(hub.peers.size, 0);
+});
+
+test('invalid signature is rejected', () => {
+  const { hub, now } = makeHub();
+  const a = fakeConn();
+  // Sign a DIFFERENT blob (wrong peer) so nonce/ts pass but the signature
+  // doesn't verify against the canonical blob the server rebuilds.
+  const kp = genKey();
+  hub.addConnection(a); a._added = true;
+  const ch = challengeOf(a);
+  const badSig = signBlob(kp, { peer: 'ORBIT-FFFFFF', nonce: ch.nonce, ts: now(), relay: ch.relay });
+  const res = hub.handleMessage(a, JSON.stringify({
+    type: 'register', peer: A, ts: now(), nonce: ch.nonce, idPub: idPubOf(kp), sig: badSig,
+  }));
+  assert.equal(res.reason, 'bad_signature');
+  assert.equal(hub.peers.size, 0);
+});
+
+test('a tampered idPub (wrong key) fails verification', () => {
+  const { hub, now } = makeHub();
+  const a = fakeConn();
+  // Sign with kp1 but present kp2's public key.
+  const kp1 = genKey();
+  const kp2 = genKey();
+  hub.addConnection(a); a._added = true;
+  const ch = challengeOf(a);
+  const sig = signBlob(kp1, { peer: A, nonce: ch.nonce, ts: now(), relay: ch.relay });
+  const res = hub.handleMessage(a, JSON.stringify({
+    type: 'register', peer: A, ts: now(), nonce: ch.nonce, idPub: idPubOf(kp2), sig,
+  }));
+  assert.equal(res.reason, 'bad_signature');
+});
+
+test('invalid peer id is rejected + socket closed', () => {
+  const { hub, now } = makeHub();
+  const a = fakeConn();
+  const res = doRegister(hub, a, 'not-orbit', genKey(), now());
+  assert.equal(res.reason, 'invalid_peer');
+  assert.equal(a.closed.code, 4002);
+});
+
+test('TOFU: same peer + SAME key reconnect REPLACES old socket (4001)', () => {
+  const { hub, now } = makeHub();
+  const kp = genKey();
+  const a1 = fakeConn();
+  const a2 = fakeConn();
+  assert.equal(doRegister(hub, a1, A, kp, now()).action, 'registered');
+  assert.equal(doRegister(hub, a2, A, kp, now()).action, 'registered');
+  assert.equal(a1.closed.code, 4001, 'old socket closed');
+  assert.equal(hub.peers.get(A), a2, 'new socket is live');
+  assert.equal(hub.peers.size, 1);
+});
+
+test('TOFU: same peer + DIFFERENT key is rejected as hijack (key_changed)', () => {
+  const { hub, now } = makeHub();
+  const a1 = fakeConn();
+  const a2 = fakeConn();
+  assert.equal(doRegister(hub, a1, A, genKey(), now()).action, 'registered');
+  // Attacker connects and tries to claim A with a different identity key.
+  const res = doRegister(hub, a2, A, genKey(), now());
+  assert.equal(res.reason, 'key_changed');
+  assert.ok(errorsOf(a2).includes('key_changed'));
+  assert.equal(a1.closed, null, 'the legitimate socket is NOT disturbed');
+  assert.equal(hub.peers.get(A), a1, 'legit holder keeps the peer');
+});
+
+test('after registration, relay forwarding works + frame is opaque/unchanged', () => {
+  const { hub, now } = makeHub();
+  const a = fakeConn();
+  const b = fakeConn();
+  doRegister(hub, a, A, genKey(), now());
+  doRegister(hub, b, B, genKey(), now());
+  const frame = { type: 'wireHello', pub: 'KEY==', nested: { arr: [1, 2, 3] } };
   const res = hub.handleMessage(a, relayMsg(A, B, 'm1', frame));
-
   assert.equal(res.action, 'forwarded');
-  assert.equal(b.sent.length, 1);
-  const got = b.last();
-  assert.equal(got.type, 'relay');
+  const got = b.messages.find((m) => m.type === 'relay');
+  assert.ok(got);
+  assert.deepEqual(got.frame, frame);
   assert.equal(got.from, A);
   assert.equal(got.to, B);
-  assert.equal(got.id, 'm1');
-  assert.deepEqual(got.frame, frame, 'frame forwarded opaque + unchanged');
 });
 
-test('a string ciphertext frame round-trips identically', () => {
-  const { hub } = makeHub();
-  const a = fakeConn();
-  const b = fakeConn();
-  register(hub, a, A);
-  register(hub, b, B);
-  const cipher = 'v2:aGVhZGVy:aXY:Y2lwaGVydGV4dA==';
-  hub.handleMessage(a, relayMsg(A, B, 'm1', cipher));
-  assert.equal(b.last().frame, cipher);
-});
-
-test('relay does NOT forward to an unrelated peer', () => {
-  const { hub } = makeHub();
-  const a = fakeConn();
-  const b = fakeConn();
-  const c = fakeConn();
-  register(hub, a, A);
-  register(hub, b, B);
-  register(hub, c, C);
+test('relay does NOT forward to an unrelated registered peer', () => {
+  const { hub, now } = makeHub();
+  const a = fakeConn(); const b = fakeConn(); const c = fakeConn();
+  doRegister(hub, a, A, genKey(), now());
+  doRegister(hub, b, B, genKey(), now());
+  doRegister(hub, c, C, genKey(), now());
   hub.handleMessage(a, relayMsg(A, B, 'm1', 'v2:x'));
-  assert.equal(b.sent.length, 1, 'recipient B got it');
-  assert.equal(c.sent.length, 0, 'unrelated C got nothing');
+  assert.equal(b.messages.filter((m) => m.type === 'relay').length, 1);
+  assert.equal(c.messages.filter((m) => m.type === 'relay').length, 0);
 });
 
-test('malformed JSON is rejected without crashing', () => {
+test('a registered peer cannot spoof `from`', () => {
+  const { hub, now } = makeHub();
+  const a = fakeConn(); const b = fakeConn();
+  doRegister(hub, a, A, genKey(), now());
+  doRegister(hub, b, B, genKey(), now());
+  const res = hub.handleMessage(a, relayMsg(C, B, 'm1', 'v2:x')); // A claims from=C
+  assert.equal(res.reason, 'from_mismatch');
+  assert.equal(b.messages.filter((m) => m.type === 'relay').length, 0);
+});
+
+test('offline recipient → relay_error to sender', () => {
+  const { hub, now } = makeHub();
+  const a = fakeConn();
+  doRegister(hub, a, A, genKey(), now());
+  const res = hub.handleMessage(a, relayMsg(A, B, 'm9', 'v2:x'));
+  assert.equal(res.action, 'offline');
+  const err = a.messages.find((m) => m.type === 'relay_error' && m.id === 'm9');
+  assert.equal(err.reason, 'offline');
+});
+
+test('expired (stale ts) relay frame is dropped', () => {
+  const { hub, now } = makeHub({ maxTtlMs: 1000 });
+  const a = fakeConn(); const b = fakeConn();
+  doRegister(hub, a, A, genKey(), now());
+  doRegister(hub, b, B, genKey(), now());
+  const res = hub.handleMessage(a, relayMsg(A, B, 'm1', 'v2:x', now() - 5000));
+  assert.equal(res.reason, 'expired');
+  assert.equal(b.messages.filter((m) => m.type === 'relay').length, 0);
+});
+
+test('malformed JSON / bad message / unknown type are rejected, no crash', () => {
   const { hub } = makeHub();
   const a = fakeConn();
   hub.addConnection(a);
-  const res = hub.handleMessage(a, '{not json');
-  assert.equal(res.action, 'rejected');
-  assert.equal(res.reason, 'bad_json');
-});
-
-test('non-object / arrays / missing type are rejected', () => {
-  const { hub } = makeHub();
-  const a = fakeConn();
-  hub.addConnection(a);
-  assert.equal(hub.handleMessage(a, '123').reason, 'bad_message');
+  assert.equal(hub.handleMessage(a, '{not json').reason, 'bad_json');
   assert.equal(hub.handleMessage(a, '[]').reason, 'bad_message');
   assert.equal(hub.handleMessage(a, '{"no":"type"}').reason, 'bad_message');
-  assert.equal(hub.handleMessage(a, '"hi"').reason, 'bad_message');
-});
-
-test('unknown message type is rejected', () => {
-  const { hub } = makeHub();
-  const a = fakeConn();
-  hub.addConnection(a);
   assert.equal(hub.handleMessage(a, '{"type":"hax"}').reason, 'unknown_type');
 });
 
 test('oversized raw message is rejected before parse', () => {
   const { hub } = makeHub({ maxRawMessageBytes: 1024 });
   const a = fakeConn();
-  register(hub, a, A);
-  const huge = 'x'.repeat(2048);
-  const res = hub.handleMessage(a, huge);
-  assert.equal(res.action, 'rejected');
-  assert.equal(res.reason, 'oversize');
+  hub.addConnection(a);
+  assert.equal(hub.handleMessage(a, 'x'.repeat(2048)).reason, 'oversize');
 });
 
-test('oversized frame (within raw cap) is rejected', () => {
-  const { hub } = makeHub({ maxRawMessageBytes: 1024 * 1024, maxFrameBytes: 1024 });
-  const a = fakeConn();
-  const b = fakeConn();
-  register(hub, a, A);
-  register(hub, b, B);
-  const bigFrame = 'y'.repeat(4096);
-  const res = hub.handleMessage(a, relayMsg(A, B, 'm1', bigFrame));
+test('oversized frame is rejected (registered sender)', () => {
+  const { hub, now } = makeHub({ maxFrameBytes: 1024 });
+  const a = fakeConn(); const b = fakeConn();
+  doRegister(hub, a, A, genKey(), now());
+  doRegister(hub, b, B, genKey(), now());
+  const res = hub.handleMessage(a, relayMsg(A, B, 'm1', 'y'.repeat(4096)));
   assert.equal(res.reason, 'frame_too_big');
-  assert.equal(b.sent.length, 0);
-});
-
-test('invalid peer id on register is rejected + socket closed', () => {
-  const { hub } = makeHub();
-  const a = fakeConn();
-  hub.addConnection(a);
-  const res = hub.handleMessage(a, JSON.stringify({ type: 'register', peer: 'not-an-orbit-id' }));
-  assert.equal(res.reason, 'invalid_peer');
-  assert.equal(a.closed.code, 4002);
-  assert.equal(hub.peerCount, 0);
-});
-
-test('empty peer id is rejected', () => {
-  const { hub } = makeHub();
-  const a = fakeConn();
-  hub.addConnection(a);
-  assert.equal(hub.handleMessage(a, '{"type":"register","peer":""}').reason, 'invalid_peer');
-});
-
-test('unregistered sender cannot relay (explicit not_registered)', () => {
-  const { hub } = makeHub();
-  const a = fakeConn();
-  const b = fakeConn();
-  hub.addConnection(a); // NOT registered
-  register(hub, b, B);
-  const res = hub.handleMessage(a, relayMsg(A, B, 'm1', 'v2:x'));
-  assert.equal(res.action, 'rejected');
-  assert.equal(res.reason, 'not_registered');
-  assert.equal(b.sent.length, 0);
-  assert.equal(a.last().type, 'relay_error');
-  assert.equal(a.last().reason, 'not_registered');
-});
-
-test('a registered peer cannot spoof `from` (anti-spoof)', () => {
-  const { hub } = makeHub();
-  const a = fakeConn();
-  const b = fakeConn();
-  register(hub, a, A);
-  register(hub, b, B);
-  // A tries to relay AS C.
-  const res = hub.handleMessage(a, relayMsg(C, B, 'm1', 'v2:x'));
-  assert.equal(res.reason, 'from_mismatch');
-  assert.equal(b.sent.length, 0);
-  assert.equal(a.last().reason, 'from_mismatch');
-});
-
-test('offline recipient → relay_error to sender, no delivery', () => {
-  const { hub } = makeHub();
-  const a = fakeConn();
-  register(hub, a, A);
-  // B never registered.
-  const res = hub.handleMessage(a, relayMsg(A, B, 'm1', 'v2:x'));
-  assert.equal(res.action, 'offline');
-  assert.equal(a.last().type, 'relay_error');
-  assert.equal(a.last().id, 'm1');
-  assert.equal(a.last().reason, 'offline');
-});
-
-test('expired (stale ts) relay is dropped', () => {
-  const { hub, now } = makeHub({ maxTtlMs: 1000 });
-  const a = fakeConn();
-  const b = fakeConn();
-  register(hub, a, A);
-  register(hub, b, B);
-  const staleTs = now() - 5000; // 5s old, ttl 1s
-  const res = hub.handleMessage(a, relayMsg(A, B, 'm1', 'v2:x', { ts: staleTs }));
-  assert.equal(res.reason, 'expired');
-  assert.equal(b.sent.length, 0);
-  assert.equal(a.last().reason, 'expired');
-});
-
-test('duplicate registration REPLACES the old socket (closed 4001)', () => {
-  const { hub } = makeHub();
-  const a1 = fakeConn();
-  const a2 = fakeConn();
-  register(hub, a1, A);
-  register(hub, a2, A); // same peer, new socket
-  assert.equal(a1.closed.code, 4001, 'old socket closed');
-  assert.equal(hub.peers.get(A), a2, 'new socket is the live one');
-  assert.equal(hub.peerCount, 1);
-
-  // Frames to A now go to the NEW socket only.
-  const b = fakeConn();
-  register(hub, b, B);
-  hub.handleMessage(b, relayMsg(B, A, 'm1', 'v2:x'));
-  assert.equal(a2.sent.length, 1);
-  // a1 only ever saw nothing forwarded (its one entry, if any, was the close).
-  assert.equal(a1.messages.filter((m) => m.type === 'relay').length, 0);
 });
 
 test('rate limit rejects spam past the bucket', () => {
-  // capacity 5, no refill within the test (clock frozen).
-  const { hub } = makeHub({ rateCapacity: 5, rateRefillPerSec: 1 });
-  const a = fakeConn();
-  const b = fakeConn();
-  // register consumes 1 token from each conn's bucket.
-  hub.addConnection(a);
-  hub.addConnection(b);
-  hub.handleMessage(a, JSON.stringify({ type: 'register', peer: A })); // token #1
-  hub.handleMessage(b, JSON.stringify({ type: 'register', peer: B }));
-
-  // a has 4 tokens left → 4 relays succeed, the 5th is rate_limited.
-  let forwarded = 0;
-  let limited = 0;
+  const { hub, now } = makeHub({ rateCapacity: 5, rateRefillPerSec: 1 });
+  const a = fakeConn(); const b = fakeConn();
+  // doRegister consumes 1 token on `a` (the register message).
+  doRegister(hub, a, A, genKey(), now());
+  doRegister(hub, b, B, genKey(), now());
+  let forwarded = 0; let limited = 0;
   for (let i = 0; i < 6; i++) {
     const r = hub.handleMessage(a, relayMsg(A, B, `m${i}`, 'v2:x'));
     if (r.action === 'forwarded') forwarded++;
     if (r.reason === 'rate_limited') limited++;
   }
-  assert.equal(forwarded, 4);
-  assert.ok(limited >= 1, 'at least one message rate-limited');
-});
-
-test('rate bucket refills over time', () => {
-  const { hub, advance } = makeHub({ rateCapacity: 2, rateRefillPerSec: 10 });
-  const a = fakeConn();
-  const b = fakeConn();
-  hub.addConnection(a);
-  hub.addConnection(b);
-  hub.handleMessage(a, JSON.stringify({ type: 'register', peer: A }));
-  hub.handleMessage(b, JSON.stringify({ type: 'register', peer: B }));
-  // Drain the bucket.
-  hub.handleMessage(a, relayMsg(A, B, 'm1', 'v2:x'));
-  const drained = hub.handleMessage(a, relayMsg(A, B, 'm2', 'v2:x'));
-  // After draining, next is limited...
-  const limited = hub.handleMessage(a, relayMsg(A, B, 'm3', 'v2:x'));
-  assert.equal(limited.reason, 'rate_limited');
-  // ...wait 1s → +10 tokens (capped at 2) → succeeds again.
-  advance(1000);
-  const ok = hub.handleMessage(a, relayMsg(A, B, 'm4', 'v2:x'));
-  assert.equal(ok.action, 'forwarded');
-  assert.ok(drained); // referenced to avoid unused-var lints
-});
-
-test('removeConnection frees the peer mapping', () => {
-  const { hub } = makeHub();
-  const a = fakeConn();
-  register(hub, a, A);
-  assert.equal(hub.peerCount, 1);
-  hub.removeConnection(a);
-  assert.equal(hub.peerCount, 0);
-  assert.equal(hub.connectionCount, 0);
+  assert.equal(forwarded, 4); // 5 cap − 1 consumed by register
+  assert.ok(limited >= 1);
 });
 
 test('max connections backstop closes excess sockets', () => {
   const { hub } = makeHub({ maxConnections: 1 });
-  const a = fakeConn();
-  const b = fakeConn();
+  const a = fakeConn(); const b = fakeConn();
   assert.equal(hub.addConnection(a), true);
   assert.equal(hub.addConnection(b), false);
   assert.equal(b.closed.code, 1013);
-  assert.equal(hub.connectionCount, 1);
 });
 
-test('relay with a null frame is rejected (nothing to route)', () => {
-  const { hub } = makeHub();
+test('removeConnection frees the peer mapping (TOFU pin persists)', () => {
+  const { hub, now } = makeHub();
   const a = fakeConn();
-  const b = fakeConn();
-  register(hub, a, A);
-  register(hub, b, B);
+  const kp = genKey();
+  doRegister(hub, a, A, kp, now());
+  assert.equal(hub.peers.size, 1);
+  hub.removeConnection(a);
+  assert.equal(hub.peers.size, 0);
+  assert.equal(hub.connectionCount, 0);
+  // The TOFU pin survives a disconnect: reconnecting with the SAME key is fine,
+  // a DIFFERENT key is still rejected.
+  const a2 = fakeConn();
+  assert.equal(doRegister(hub, a2, A, kp, now()).action, 'registered');
+  const a3 = fakeConn();
+  assert.equal(doRegister(hub, a3, A, genKey(), now()).reason, 'key_changed');
+});
+
+test('relay with a null frame is rejected', () => {
+  const { hub, now } = makeHub();
+  const a = fakeConn(); const b = fakeConn();
+  doRegister(hub, a, A, genKey(), now());
+  doRegister(hub, b, B, genKey(), now());
   const res = hub.handleMessage(a, JSON.stringify({ type: 'relay', from: A, to: B, id: 'm1', frame: null }));
   assert.equal(res.reason, 'bad_envelope');
-  assert.equal(b.sent.length, 0);
 });

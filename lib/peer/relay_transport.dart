@@ -121,6 +121,11 @@ abstract class RelayTransport {
 
   /// Envelopes the relay delivered to us (addressed to our peer id).
   Stream<RelayEnvelope> get inbound;
+
+  /// Human-readable transport / registration errors for diagnostics (e.g.
+  /// "registration rejected", "server didn't challenge"). NEVER carries frame
+  /// content. Surfaced into the connection layer's `lastRelayError`.
+  Stream<String> get errors;
 }
 
 /// The default when no relay is configured: never sends, never receives. Keeps
@@ -142,4 +147,7 @@ class DisabledRelayTransport implements RelayTransport {
 
   @override
   Stream<RelayEnvelope> get inbound => const Stream<RelayEnvelope>.empty();
+
+  @override
+  Stream<String> get errors => const Stream<String>.empty();
 }

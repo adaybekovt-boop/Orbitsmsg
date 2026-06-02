@@ -16,8 +16,10 @@
 //   • A connection must `register` a valid peer id before it can `relay`, and
 //     may only relay messages whose `from` equals its registered peer.
 
+import crypto from 'node:crypto';
 import { config as defaultConfig } from './config.js';
 import { isValidPeerId, normalizePeerId } from './peer-id.js';
+import { verifyRegistration } from './verify.js';
 
 function byteLength(value) {
   if (typeof value === 'string') return Buffer.byteLength(value, 'utf8');
@@ -49,6 +51,10 @@ export class RelayHub {
     this.connections = new Set();
     /** @type {Map<string, object>} normalized peerId -> connection (one socket per peer) */
     this.peers = new Map();
+    /** @type {Map<string, string>} server-side TOFU: peerId -> base64 SPKI of
+     * the identity key that first registered it. In-memory; resets on restart
+     * (documented). */
+    this.peerKeys = new Map();
   }
 
   get connectionCount() {
@@ -68,10 +74,26 @@ export class RelayHub {
       return false;
     }
     conn._peer = null;
+    conn._challenge = null;
     conn._rate = { tokens: this.config.rateCapacity, last: this.now() };
     this.connections.add(conn);
     this.log('connect', { connections: this.connections.size });
+    // Authenticated registration (relay Phase 2): immediately challenge the
+    // socket. It cannot register (or relay) until it answers with a valid
+    // signature over the canonical blob bound to THIS nonce.
+    this._issueChallenge(conn);
     return true;
+  }
+
+  _issueChallenge(conn) {
+    const nonce = crypto.randomBytes(this.config.nonceBytes).toString('base64');
+    conn._challenge = { nonce, issuedAt: this.now() };
+    this._safeSend(conn, {
+      type: 'relay_challenge',
+      nonce,
+      ts: this.now(),
+      relay: this.config.serverId,
+    });
   }
 
   /** Tear down a connection (called on socket close). Idempotent. */
@@ -128,13 +150,63 @@ export class RelayHub {
     const peer = normalizePeerId(msg.peer);
     if (!peer || peer.length > this.config.maxPeerIdLen || !isValidPeerId(peer)) {
       this.log('reject', { reason: 'invalid_peer' });
+      this._safeSend(conn, { type: 'register_error', reason: 'invalid_peer' });
       this._safeClose(conn, 4002, 'invalid peer');
       return { action: 'rejected', reason: 'invalid_peer' };
     }
-    // Duplicate registration policy: REPLACE. The newest socket wins (it's the
-    // live one after a reconnect); the prior socket is closed with 4001 so a
-    // stale connection can't keep intercepting this peer's frames. One active
-    // socket per peer.
+
+    // ── Challenge / freshness gates ──
+    const ch = conn._challenge;
+    if (!ch) {
+      this._safeSend(conn, { type: 'register_error', reason: 'no_challenge' });
+      return { action: 'rejected', reason: 'no_challenge' };
+    }
+    if (this.now() - ch.issuedAt > this.config.challengeTtlMs) {
+      this.log('reject', { reason: 'challenge_expired' });
+      this._safeSend(conn, { type: 'register_error', reason: 'challenge_expired' });
+      return { action: 'rejected', reason: 'challenge_expired' };
+    }
+    if (typeof msg.nonce !== 'string' || msg.nonce !== ch.nonce) {
+      this.log('reject', { reason: 'bad_nonce' });
+      this._safeSend(conn, { type: 'register_error', reason: 'bad_nonce' });
+      return { action: 'rejected', reason: 'bad_nonce' };
+    }
+    const ts = msg.ts;
+    if (typeof ts !== 'number' || !Number.isFinite(ts) ||
+        Math.abs(this.now() - ts) > this.config.registerTsSkewMs) {
+      this.log('reject', { reason: 'stale_ts' });
+      this._safeSend(conn, { type: 'register_error', reason: 'stale_ts' });
+      return { action: 'rejected', reason: 'stale_ts' };
+    }
+
+    // ── Signature ── (blob bound to OUR issued nonce + serverId)
+    const idPubB64 = msg.idPub;
+    const v = verifyRegistration({
+      peer,
+      nonce: ch.nonce,
+      ts,
+      relay: this.config.serverId,
+      idPubB64,
+      sigB64: msg.sig,
+    });
+    if (!v.ok) {
+      this.log('reject', { reason: v.reason });
+      this._safeSend(conn, { type: 'register_error', reason: v.reason });
+      return { action: 'rejected', reason: v.reason };
+    }
+
+    // ── Server-side TOFU ── first valid registration pins peer→identity key;
+    // a later DIFFERENT key for the same peer is a possible hijack → reject and
+    // log a safe warning. (Never logs the key itself.)
+    const known = this.peerKeys.get(peer);
+    if (known && known !== idPubB64) {
+      this.log('warn', { event: 'key_changed', peer: tail(peer) });
+      this._safeSend(conn, { type: 'register_error', reason: 'key_changed' });
+      return { action: 'rejected', reason: 'key_changed' };
+    }
+    if (!known) this.peerKeys.set(peer, idPubB64);
+
+    // ── Duplicate registration (same peer + same key): REPLACE old socket ──
     const prior = this.peers.get(peer);
     if (prior && prior !== conn) {
       this.log('replace', { peer: tail(peer) });
@@ -142,13 +214,14 @@ export class RelayHub {
       this.connections.delete(prior);
       this._safeClose(prior, 4001, 'registered elsewhere');
     }
-    // If this socket was previously registered as a different peer, drop that.
     if (conn._peer && conn._peer !== peer && this.peers.get(conn._peer) === conn) {
       this.peers.delete(conn._peer);
     }
     conn._peer = peer;
+    conn._challenge = null; // consumed
     this.peers.set(peer, conn);
     this.log('register', { peer: tail(peer), peers: this.peers.size });
+    this._safeSend(conn, { type: 'register_ok', peer });
     return { action: 'registered', peer };
   }
 

@@ -214,6 +214,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     // transport disconnects but keeps the stream open), so a single sub is
     // enough. DisabledRelayTransport yields an empty stream (no-op).
     _relaySub = _relay.inbound.listen(_onRelayInbound);
+    // Relay transport / registration errors → diagnostics (lastRelayError).
+    // Never carries frame content.
+    _relayErrorsSub = _relay.errors.listen(_recordRelayError);
 
     // Sign-out: close everything + disconnect the relay. Sign-in: connect the
     // relay so we can both send fallbacks AND receive frames addressed to us
@@ -316,6 +319,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   RelayTransport get _relay => _ref.read(relayTransportProvider);
 
   StreamSubscription<RelayEnvelope>? _relaySub;
+  StreamSubscription<String>? _relayErrorsSub;
   int _relaySeq = 0;
 
   /// Peers we've already kicked a relay handshake for, so a burst of queued
@@ -1060,6 +1064,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       _relaySub?.cancel();
     } catch (_) {}
     _relaySub = null;
+    try {
+      _relayErrorsSub?.cancel();
+    } catch (_) {}
+    _relayErrorsSub = null;
     _teardownAll();
     super.dispose();
   }

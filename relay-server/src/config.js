@@ -46,4 +46,22 @@ export const config = {
 
   // WebSocket liveness ping interval (terminate sockets that miss a pong).
   heartbeatMs: intEnv('RELAY_HEARTBEAT_MS', 30000),
+
+  // ── Signed registration (relay Phase 2) ──
+  // Random challenge nonce size in bytes (base64-encoded on the wire).
+  nonceBytes: intEnv('RELAY_NONCE_BYTES', 24),
+  // A challenge is only valid this long after it was issued.
+  challengeTtlMs: intEnv('RELAY_CHALLENGE_TTL_MS', 30_000),
+  // The signed `ts` must be within this many ms of the server clock (skew /
+  // replay guard), in either direction.
+  registerTsSkewMs: intEnv('RELAY_REGISTER_TS_SKEW_MS', 60_000),
+  // Identity bound into the signed blob (replay-domain separation between relay
+  // deployments). Defaults to a random per-process id; pin it with the env var
+  // for a stable multi-instance deployment.
+  serverId: process.env.RELAY_SERVER_ID || `relay-${randomId()}`,
 };
+
+function randomId() {
+  // Avoid importing crypto at module top just for this; cheap unique-ish id.
+  return Math.abs(Date.now() ^ (process.pid * 2654435761)).toString(36);
+}

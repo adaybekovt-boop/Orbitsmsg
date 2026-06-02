@@ -118,15 +118,24 @@ The protocol is intentionally tiny, so any minimal WebSocket router can
 implement it:
 
 ```text
-client → server  {"type":"register","peer":"<selfPeerId>"}
+server → client  {"type":"relay_challenge","nonce":"<random>","ts":<ms>,"relay":"<serverId>"}
+client → server  {"type":"register","peer":"<id>","ts":<ms>,"nonce":"<nonce>","idPub":"<b64 SPKI>","sig":"<b64 sig>"}
+server → client  {"type":"register_ok","peer":"<id>"} | {"type":"register_error","reason":"..."}
 client → server  {"type":"relay","from":<id>,"to":<id>,"id":<msgId>,"ts":<ms>,"frame":<opaque>}
 server → client  {"type":"relay","from":<id>,"to":<id>,"id":<msgId>,"ts":<ms>,"frame":<opaque>}
 ```
 
+Registration is now **signed** (relay Phase 2): the server challenges each
+socket and the client proves ownership of its peer id by signing a canonical
+blob with its ECDSA identity key. See **[docs/relay-server.md](relay-server.md)**
+for the full protocol, the canonical blob, and the server-side TOFU policy.
+
 A compatible server **must**:
 
-- track the `peer` from each `register` and route a `relay` message to the
-  socket(s) registered as its `to`;
+- challenge each socket on connect and only register it after verifying the
+  signed blob (fresh nonce + `ts`, valid ECDSA-P256/SHA-256 signature);
+- track the registered `peer` and route a `relay` message to the socket
+  registered as its `to`;
 - **preserve `from`, `to`, `id`, `ts`, and `frame` byte-for-byte** — clients
   de-duplicate on `id` and verify end-to-end, so mutated fields break delivery;
 - treat `frame` as **opaque** and **never inspect, log, or modify it** — it is a
@@ -138,13 +147,12 @@ A compatible server **must**:
 - **not** be relied on for delivery confirmation — relaying a frame is not an
   ack; the receiver's end-to-end `ack` is the only delivery proof.
 
-A compatible server **should** (future work, not required for the MVP):
-
-- add **peer-id hijack protection / authentication** so a client can't register
-  as someone else's `peer` and intercept their relayed frames. The current
-  protocol has no such auth — until it does, treat a deployed relay as
-  semi-trusted infrastructure (it can drop/replay/misroute, though it can never
-  read plaintext because frames are E2E-encrypted).
+Peer-id hijack protection is now implemented via signed registration + server
+TOFU (a peer's identity key is pinned on first registration; a different key for
+that peer is rejected). Caveat: the TOFU pin is **in-memory and resets on server
+restart**, and the relay is still only **semi-trusted** — it can drop / replay /
+misroute metadata (never read plaintext, which is E2E-encrypted). A persistent
+key store + a trusted key source are Phase 3 (see relay-server.md).
 
 ### Client-side relay boundary (defence in depth)
 

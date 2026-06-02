@@ -9,6 +9,7 @@
 //   • a real inbound `ack` is the ONLY thing that marks a message delivered.
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -53,6 +54,9 @@ class FakeRelayTransport implements RelayTransport {
 
   @override
   Stream<RelayEnvelope> get inbound => _in.stream;
+
+  @override
+  Stream<String> get errors => const Stream<String>.empty();
 
   void deliver(RelayEnvelope env) => _in.add(env);
 
@@ -414,4 +418,149 @@ void main() {
       expect(h.dropRouted, isEmpty);
     });
   });
+
+  // ─── Signed registration state machine (relay Phase 2) ──────────────
+  group('WsRelayTransport signed registration', () {
+    // Pump the event loop a few turns so async stream delivery + the async
+    // signer settle.
+    Future<void> pump() async {
+      for (var i = 0; i < 5; i++) {
+        await Future<void>.delayed(Duration.zero);
+      }
+    }
+
+    List<Map<String, Object?>> sentOf(_FakeRelaySocket s, String type) => s.sent
+        .map((e) => jsonDecode(e) as Map)
+        .where((m) => m['type'] == type)
+        .map((m) => Map<String, Object?>.from(m))
+        .toList();
+
+    RelayEnvelope env() => const RelayEnvelope(
+        from: 'ORBIT-AAAAAA', to: 'ORBIT-BBBBBB', id: 'm1', frame: 'v2:x', ts: 0);
+
+    // A signer that returns a canned register (no real crypto — keygen can't
+    // run in the test VM).
+    Future<Map<String, Object?>?> fakeSigner({
+      required String peer,
+      required String nonce,
+      required int ts,
+      required String relay,
+    }) async =>
+        <String, Object?>{
+          'type': 'register',
+          'peer': peer,
+          'ts': ts,
+          'nonce': nonce,
+          'idPub': 'FAKEPUB',
+          'sig': 'FAKESIG',
+        };
+
+    test('does NOT register before a challenge, and refuses to relay', () async {
+      final sock = _FakeRelaySocket();
+      final t = WsRelayTransport('wss://relay.test',
+          signer: fakeSigner, socketFactory: (_) async => sock);
+      await t.start('ORBIT-AAAAAA');
+      await pump();
+      expect(sentOf(sock, 'register'), isEmpty);
+      expect(await t.send(env()), isFalse);
+      await t.dispose();
+    });
+
+    test('registers ONLY after the challenge, then relays after register_ok',
+        () async {
+      final sock = _FakeRelaySocket();
+      final t = WsRelayTransport('wss://relay.test',
+          signer: fakeSigner, socketFactory: (_) async => sock);
+      await t.start('ORBIT-AAAAAA');
+      await pump();
+
+      sock.serverSend(
+          {'type': 'relay_challenge', 'nonce': 'N1', 'ts': 1, 'relay': 'r1'});
+      await pump();
+      final regs = sentOf(sock, 'register');
+      expect(regs, hasLength(1));
+      expect(regs.first['nonce'], 'N1');
+      expect(regs.first['peer'], 'ORBIT-AAAAAA');
+      expect(regs.first['idPub'], 'FAKEPUB');
+      expect(regs.first['sig'], 'FAKESIG');
+
+      // Not yet confirmed → relay refused.
+      expect(await t.send(env()), isFalse);
+      expect(sentOf(sock, 'relay'), isEmpty);
+
+      // Server confirms → relay now goes out.
+      sock.serverSend({'type': 'register_ok', 'peer': 'ORBIT-AAAAAA'});
+      await pump();
+      expect(await t.send(env()), isTrue);
+      expect(sentOf(sock, 'relay'), hasLength(1));
+      await t.dispose();
+    });
+
+    test('register_error surfaces a diagnostic on the errors stream', () async {
+      final sock = _FakeRelaySocket();
+      final t = WsRelayTransport('wss://relay.test',
+          signer: fakeSigner, socketFactory: (_) async => sock);
+      final errs = <String>[];
+      final sub = t.errors.listen(errs.add);
+      await t.start('ORBIT-AAAAAA');
+      await pump();
+      sock.serverSend(
+          {'type': 'relay_challenge', 'nonce': 'N1', 'ts': 1, 'relay': 'r1'});
+      await pump();
+      sock.serverSend({'type': 'register_error', 'reason': 'key_changed'});
+      await pump();
+      expect(errs.any((e) => e.contains('key_changed')), isTrue);
+      expect(await t.send(env()), isFalse);
+      await sub.cancel();
+      await t.dispose();
+    });
+
+    test('a fresh challenge (reconnect) triggers a fresh signed registration',
+        () async {
+      final sock = _FakeRelaySocket();
+      final t = WsRelayTransport('wss://relay.test',
+          signer: fakeSigner, socketFactory: (_) async => sock);
+      await t.start('ORBIT-AAAAAA');
+      await pump();
+      sock.serverSend(
+          {'type': 'relay_challenge', 'nonce': 'N1', 'ts': 1, 'relay': 'r1'});
+      await pump();
+      sock.serverSend({'type': 'register_ok', 'peer': 'ORBIT-AAAAAA'});
+      await pump();
+      sock.sent.clear();
+      sock.serverSend(
+          {'type': 'relay_challenge', 'nonce': 'N2', 'ts': 2, 'relay': 'r1'});
+      await pump();
+      final regs = sentOf(sock, 'register');
+      expect(regs, hasLength(1));
+      expect(regs.first['nonce'], 'N2');
+      await t.dispose();
+    });
+  });
+}
+
+/// In-memory [RelaySocket] for driving the transport state machine: records
+/// what the client sent, and lets the test push server messages.
+class _FakeRelaySocket implements RelaySocket {
+  final StreamController<dynamic> _ctrl =
+      StreamController<dynamic>.broadcast();
+  final List<String> sent = [];
+  bool closed = false;
+
+  @override
+  Stream<dynamic> get stream => _ctrl.stream;
+
+  @override
+  void send(String data) => sent.add(data);
+
+  @override
+  Future<void> close() async {
+    closed = true;
+    if (!_ctrl.isClosed) await _ctrl.close();
+  }
+
+  /// Simulate a server → client message.
+  void serverSend(Object msg) {
+    if (!_ctrl.isClosed) _ctrl.add(jsonEncode(msg));
+  }
 }

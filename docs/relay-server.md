@@ -66,25 +66,55 @@ flutter build apk --release \
 With `RELAY_URL` unset, the relay is a no-op and the app is WebRTC-only. Use
 `wss://` (TLS) in production; the dev server is plaintext `ws://`.
 
-## Protocol
+## Protocol (signed registration)
 
-JSON text frames only. Two client→server message types:
+JSON text frames only. The server **challenges every socket on connect**; a
+client must answer with a registration **signed by its identity key** before it
+can relay. This prevents a client from simply claiming someone else's peer id.
 
 ```text
-client → server  {"type":"register","peer":"ORBIT-XXXXXX"}
-client → server  {"type":"relay","from":"ORBIT-...","to":"ORBIT-...","id":"<msgId>","ts":<ms>,"frame":<opaque>}
-server → client  {"type":"relay","from":"ORBIT-...","to":"ORBIT-...","id":"<msgId>","ts":<ms>,"frame":<opaque>}   # forwarded verbatim
+server → client  {"type":"relay_challenge","nonce":"<random>","ts":<ms>,"relay":"<serverId>"}
+client → server  {"type":"register","peer":"ORBIT-...","ts":<ms>,"nonce":"<serverNonce>","idPub":"<b64 SPKI>","sig":"<b64 sig>"}
+server → client  {"type":"register_ok","peer":"ORBIT-..."}            # registered
+server → client  {"type":"register_error","reason":"..."}            # rejected (see reasons)
+client → server  {"type":"relay","from","to","id","ts","frame":<opaque>}   # only after register_ok
+server → client  {"type":"relay","from","to","id","ts","frame":<opaque>}   # forwarded verbatim
 server → client  {"type":"relay_error","id":"<msgId>","reason":"offline|rate_limited|expired|not_registered|from_mismatch"}
 ```
+
+### Canonical signature blob (frozen wire format)
+
+`sig` is over these exact UTF-8 bytes (no JSON, exact newlines). The builder
+lives on both sides and is golden-tested:
+`lib/peer/relay_auth.dart::buildRelayRegisterBlob` (client) and
+`relay-server/src/register-blob.js` (server).
+
+```text
+orbits-relay-register-v1
+peer:<peerId>
+nonce:<nonce>
+ts:<ts>
+relay:<relay>
+```
+
+- `idPub` = base64 of the 91-byte P-256 **SPKI DER** of the client's long-term
+  ECDSA identity key (the same key peers pin via TOFU; see `identity_key.dart`).
+- `sig` = base64 of the raw 64-byte **R‖S (IEEE P1363)** ECDSA-P256/SHA-256
+  signature over the blob. The server verifies with Node `crypto`
+  (`createPublicKey(spki/der)` + `verify('sha256', …, {dsaEncoding:'ieee-p1363'})`).
+- `relay` binds the signature to a specific relay deployment (the server's
+  `serverId`, echoed from the challenge) — replay-domain separation.
+- **No private key is ever sent.** The server only ever sees the public key.
+
+`register_error.reason` ∈ `invalid_peer | no_challenge | challenge_expired |
+bad_nonce | stale_ts | bad_idpub | bad_sig | bad_signature | key_changed`.
 
 - The forwarded `relay` message is the sender's **original object, verbatim** —
   `from`, `to`, `id`, `ts`, and `frame` are preserved exactly. The server adds
   no fields to client-bound traffic.
-- `relay_error` is best-effort feedback to the sender. **The current Flutter
-  client ignores any message whose `type` is not `relay`** (verified in
-  `ws_relay_transport.dart`), so `relay_error` is effectively server-/log-side
-  today and safe to send — a future client could surface it. Relay remains
-  *live-forward only* regardless.
+- The Flutter client surfaces `register_error` / `relay_error` into its
+  diagnostics (`lastRelayError`) and ignores any other unknown type safely.
+  Relay remains *live-forward only*.
 
 ## Limits (all env-overridable — see `relay-server/src/config.js`)
 
@@ -98,6 +128,10 @@ server → client  {"type":"relay_error","id":"<msgId>","reason":"offline|rate_l
 | Per-connection rate (token bucket) | 20 burst, 10/s refill | `RELAY_RATE_CAPACITY`, `RELAY_RATE_REFILL_PER_SEC` |
 | Relay TTL (stale `ts` dropped) | 24h | `RELAY_MAX_TTL_MS` |
 | Liveness heartbeat | 30s | `RELAY_HEARTBEAT_MS` |
+| Challenge nonce size | 24 bytes | `RELAY_NONCE_BYTES` |
+| Challenge validity (TTL) | 30s | `RELAY_CHALLENGE_TTL_MS` |
+| Register `ts` skew (replay guard) | ±60s | `RELAY_REGISTER_TS_SKEW_MS` |
+| Server identity (signature domain) | random per process | `RELAY_SERVER_ID` |
 | Listen host / port | `0.0.0.0` / `8080` | `HOST` / `PORT` |
 
 The 512 KiB raw cap is aligned with the client's inbound cap, so anything the
@@ -105,15 +139,26 @@ server accepts is also acceptable to the recipient.
 
 ## Behaviors (chosen deliberately)
 
+- **Signed registration required.** Every socket is challenged on connect and
+  must answer with a valid signature (fresh nonce, fresh `ts`, valid sig over
+  the canonical blob) before it is registered. There is **no** unauthenticated
+  registration path.
 - **Peer-id validation.** `register` requires a non-empty id matching the client
   rule `^ORBIT-[0-9A-F]{6}$` (normalized to upper-case, like
   `lib/peer/helpers.dart`). Invalid ids → the socket is closed (`4002`).
-- **Duplicate registration → REPLACE.** If a peer id registers again on a new
-  socket, the **new socket wins** and the prior one is closed (`4001`,
-  `registered elsewhere`). There is exactly one active socket per peer (the
-  client only ever holds one relay socket; a re-register is a reconnect).
-- **Unregistered senders cannot relay.** A `relay` before a valid `register` is
-  rejected (`not_registered`).
+- **Server-side TOFU (Option A).** The first peer that registers successfully
+  pins `peer → identity public key` in memory. A later registration for that
+  peer **must use the same key**; a different key is rejected as a possible
+  hijack (`key_changed`, logged as a safe warning — never the key itself) and
+  the legitimate socket is left untouched. The pin is **in-memory only and
+  resets when the server restarts** (documented limitation).
+- **Duplicate registration → REPLACE (same key).** A peer re-registering with
+  the **same** identity key on a new socket replaces the prior one (closed
+  `4001`, `registered elsewhere`). One active socket per peer (the client holds
+  one relay socket; a re-register is a reconnect). A **different** key never
+  replaces — it's rejected (above).
+- **Unregistered senders cannot relay.** A `relay` before a successful signed
+  `register` is rejected (`not_registered`).
 - **Anti-spoof.** A registered peer may only relay messages whose `from` equals
   its own registered id (`from_mismatch` otherwise). A peer cannot relay *as*
   someone else.
@@ -138,31 +183,45 @@ or `pending` (queued for retry). The server never fabricates delivery.
   encrypted between clients, so even a fully malicious relay cannot read message
   content. Logs include only counts, reject reasons, and the **last 4 chars** of
   a peer id — never payloads or frames.
-- **Semi-trusted transport.** The MVP has **no authentication of registration**.
-  A hostile relay (or anyone who can register a peer id) can drop, replay, or
-  misroute frames, and could register *as* a victim's id to intercept frames
-  addressed to them (it still cannot read them). Treat a deployed relay as
-  semi-trusted infrastructure.
+- **Authenticated registration (relay Phase 2, implemented).** A client must
+  sign a challenge-bound blob with its identity key to register, so another
+  client **cannot casually register as someone else's peer id** and intercept
+  their relayed frames. This is the hijack gap from Phase 1, now closed for the
+  casual case.
 - **TLS is your responsibility.** Terminate `wss://` at a proxy/load balancer or
   extend the server; the bundled server speaks plaintext `ws://` and expects TLS
   termination in front of it in production.
 
-### Phase 2 (not implemented here): signed registration / auth
+### What signed registration does and does NOT solve
 
-The clear next step is **authenticated registration** so a client must prove it
-owns the peer id it registers (closing the hijack gap above). The app already
-has an ECDSA identity key (`lib/core/identity_key.dart`, `signBytes`/verify), so
-a plausible design is:
+It **prevents casual peer-id hijack**: you can't claim a peer id you can't sign
+for, and once a peer's key is pinned (TOFU), a different key for that peer is
+rejected.
 
-```text
-client → server  {"type":"register","peer":"ORBIT-...","ts":<ms>,"nonce":"...","sig":<sig over peer|ts|nonce>}
-```
+It does **not** make the relay trusted:
 
-The server would verify `sig` against the peer's published identity key. This
-needs a small Flutter change (sign the register frame) **and** a way for the
-server to obtain/trust identity public keys — out of scope for this phase and
-deliberately deferred. Until then the `register` is unauthenticated; this is
-documented, not hidden.
+- **TOFU memory resets on restart.** The pin is in-memory; after a server
+  restart the next registration for a peer re-pins (first-wins again). A
+  persistent/shared key store (or distributing identity keys out-of-band) is
+  **Phase 3** and is not implemented here.
+- **The relay can still drop, replay, or misroute** metadata it routes, and a
+  hostile *operator* could pin a key of their choosing on first contact (classic
+  TOFU trust-on-first-use caveat) or deny service. Signed registration narrows
+  *who can register a peer id*, not *whether the relay behaves*.
+- **Confidentiality does not come from the relay.** Frame contents are protected
+  end-to-end by the Double Ratchet — relay registration auth only protects
+  routing metadata. A relay never sees plaintext regardless.
+- **No proof-of-freshness against a colluding first-registrant.** First-wins
+  TOFU trusts whoever registers first after a restart; for stronger guarantees
+  the server would need pre-distributed/trusted identity keys (Phase 3).
+
+### Remaining Phase 3 work
+
+- Persistent / shared TOFU store (survives restart; consistent across instances).
+- A trusted source of identity public keys (so the server isn't first-wins TOFU)
+  — e.g. keys published via the existing contact/QR exchange or a directory.
+- Optional: bind registration to a short-lived server-issued token if a broader
+  auth backend ever exists.
 
 ## Deployment notes
 
