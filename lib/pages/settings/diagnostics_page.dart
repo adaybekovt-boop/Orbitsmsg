@@ -1,10 +1,14 @@
 // Settings -> Diagnostics.
 //
 // Small operational panel for build metadata, image-cache stats, and the
-// update checker. Updates are driven by [updateNotifierProvider] (auto-update
-// Phase 2). This phase is read-only: it surfaces whether a newer GitHub Release
-// exists and links to the release page. Download + install land in a LATER
-// phase — there is intentionally NO in-app download/install button here.
+// update checker. Updates are driven by [updateNotifierProvider].
+//   • Phase 2: surfaces whether a newer GitHub Release exists + release notes.
+//   • Phase 3 (Windows): downloads the installer with progress.
+//   • Phase 4 (Windows): launches the installer (after a confirm dialog) and
+//     closes the app so it can update files.
+// On non-Windows / web the in-app flow is unavailable and the panel offers the
+// GitHub release page instead. Downloading/installing never deletes user data —
+// the installer only replaces app files.
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -47,6 +51,46 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
     final uri = Uri.tryParse(url);
     if (uri == null) return;
     await launchUrl(uri, mode: LaunchMode.externalApplication);
+  }
+
+  /// Confirm with the user, then launch the downloaded installer. On success
+  /// the notifier closes the app (so the installer can replace files); on
+  /// failure we keep the app open and surface the error.
+  Future<void> _confirmAndInstall() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Установить обновление?'),
+        content: const Text(
+          'Приложение закроется, и установщик продолжит обновление. '
+          'Ваши данные (чаты, контакты, профиль) сохранятся — обновляются '
+          'только файлы программы.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Отмена'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Установить обновление'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final result =
+        await ref.read(updateNotifierProvider.notifier).launchInstaller();
+    if (!mounted) return;
+    if (!result.launched) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result.message ?? 'Не удалось запустить установщик.'),
+        ),
+      );
+    }
+    // On success the app is exiting; nothing more to do here.
   }
 
   @override
@@ -144,8 +188,13 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
                   child: _UpdatePanel(
                     update: update,
                     fallbackVersion: info?.version,
+                    installSupported: ref.watch(installSupportedProvider),
                     onCheck: () =>
                         ref.read(updateNotifierProvider.notifier).check(),
+                    onDownload: () => ref
+                        .read(updateNotifierProvider.notifier)
+                        .downloadUpdate(),
+                    onInstall: _confirmAndInstall,
                     onOpenUrl: _openUrl,
                   ),
                 ),
@@ -189,13 +238,19 @@ class _UpdatePanel extends StatelessWidget {
   const _UpdatePanel({
     required this.update,
     required this.fallbackVersion,
+    required this.installSupported,
     required this.onCheck,
+    required this.onDownload,
+    required this.onInstall,
     required this.onOpenUrl,
   });
 
   final UpdateState update;
   final String? fallbackVersion;
+  final bool installSupported;
   final VoidCallback onCheck;
+  final VoidCallback onDownload;
+  final VoidCallback onInstall;
   final Future<void> Function(String url) onOpenUrl;
 
   @override
@@ -296,31 +351,209 @@ class _UpdatePanel extends StatelessWidget {
             ],
             if (update.updateAvailable) ...[
               const SizedBox(height: 12),
-              OrbitsGlassButton(
-                label: 'Открыть страницу релиза',
-                icon: Icons.open_in_new,
-                variant: OrbitsGlassVariant.secondary,
-                onPressed: update.releaseUrl == null
-                    ? null
-                    : () => onOpenUrl(update.releaseUrl!),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Автоматическая загрузка и установка появятся в следующем '
-                'обновлении. Пока скачайте файл вручную со страницы релиза.',
-                style: TextStyle(
-                  color: tokens.muted,
-                  fontFamily: tokens.fontBody,
-                  fontSize: 11.5,
-                  height: 1.4,
-                ),
-              ),
+              if (installSupported)
+                ..._buildWindowsFlow(context, tokens)
+              else
+                ..._buildReleasePageOnly(tokens),
             ],
           ],
         ],
       ),
     );
   }
+
+  // ── Windows in-app download + install flow (Phases 3–4) ───────────────
+  List<Widget> _buildWindowsFlow(BuildContext context, OrbitsTokens tokens) {
+    final children = <Widget>[];
+
+    switch (update.downloadStatus) {
+      case DownloadUiStatus.idle:
+        children.add(OrbitsGlassButton(
+          label: 'Скачать обновление',
+          icon: Icons.download_outlined,
+          variant: OrbitsGlassVariant.primary,
+          onPressed: onDownload,
+        ));
+
+      case DownloadUiStatus.downloading:
+        children.addAll(_downloadingRows(tokens));
+
+      case DownloadUiStatus.downloaded:
+        children.addAll(_downloadedRows(context, tokens));
+
+      case DownloadUiStatus.failed:
+        children.add(Text(
+          update.downloadError ?? 'Не удалось скачать обновление.',
+          style: TextStyle(
+            color: tokens.danger,
+            fontFamily: tokens.fontBody,
+            fontSize: 12,
+          ),
+        ));
+        children.add(const SizedBox(height: 8));
+        children.add(OrbitsGlassButton(
+          label: 'Скачать заново',
+          icon: Icons.refresh,
+          onPressed: onDownload,
+        ));
+
+      case DownloadUiStatus.unsupported:
+        children.addAll(_buildReleasePageOnly(tokens));
+        return children;
+    }
+
+    // Always offer the release page as a secondary, manual fallback.
+    children.add(const SizedBox(height: 8));
+    children.add(OrbitsGlassButton(
+      label: 'Открыть страницу релиза',
+      icon: Icons.open_in_new,
+      variant: OrbitsGlassVariant.secondary,
+      onPressed: update.releaseUrl == null
+          ? null
+          : () => onOpenUrl(update.releaseUrl!),
+    ));
+    return children;
+  }
+
+  List<Widget> _downloadingRows(OrbitsTokens tokens) {
+    final progress = update.downloadProgress; // 0..1 or null
+    final received = _formatMb(update.downloadReceived);
+    final total =
+        update.downloadTotal != null ? _formatMb(update.downloadTotal!) : null;
+    final label = total != null
+        ? 'Скачивание… $received / $total МБ'
+        : 'Скачивание… $received МБ';
+    return [
+      Text(
+        label,
+        style: TextStyle(
+          color: tokens.text,
+          fontFamily: tokens.fontBody,
+          fontSize: 12.5,
+        ),
+      ),
+      const SizedBox(height: 8),
+      ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: LinearProgressIndicator(
+          value: progress, // null → indeterminate
+          minHeight: 6,
+          backgroundColor: tokens.muted.withValues(alpha: 0.2),
+          valueColor: AlwaysStoppedAnimation<Color>(tokens.accent),
+        ),
+      ),
+    ];
+  }
+
+  List<Widget> _downloadedRows(BuildContext context, OrbitsTokens tokens) {
+    switch (update.installStatus) {
+      case InstallUiStatus.launching:
+        return [
+          Row(
+            children: [
+              SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  valueColor: AlwaysStoppedAnimation<Color>(tokens.accent),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Text(
+                'Запуск установщика…',
+                style: TextStyle(
+                  color: tokens.text,
+                  fontFamily: tokens.fontBody,
+                  fontSize: 12.5,
+                ),
+              ),
+            ],
+          ),
+        ];
+
+      case InstallUiStatus.launched:
+        return [
+          Text(
+            'Установщик запущен. Можно закрыть приложение — '
+            'обновление продолжится автоматически.',
+            style: TextStyle(
+              color: tokens.text,
+              fontFamily: tokens.fontBody,
+              fontSize: 12.5,
+              height: 1.4,
+            ),
+          ),
+        ];
+
+      case InstallUiStatus.failed:
+        return [
+          Text(
+            update.installError ?? 'Не удалось запустить установщик.',
+            style: TextStyle(
+              color: tokens.danger,
+              fontFamily: tokens.fontBody,
+              fontSize: 12,
+            ),
+          ),
+          const SizedBox(height: 8),
+          OrbitsGlassButton(
+            label: 'Скачать заново',
+            icon: Icons.refresh,
+            variant: OrbitsGlassVariant.secondary,
+            onPressed: onDownload,
+          ),
+        ];
+
+      case InstallUiStatus.idle:
+      case InstallUiStatus.readyToInstall:
+      case InstallUiStatus.unsupported:
+        return [
+          Text(
+            'Обновление скачано',
+            style: TextStyle(
+              color: tokens.text,
+              fontFamily: tokens.fontHeading,
+              fontWeight: FontWeight.w600,
+              fontSize: 13,
+            ),
+          ),
+          const SizedBox(height: 8),
+          OrbitsGlassButton(
+            label: 'Установить обновление',
+            icon: Icons.system_update_alt,
+            variant: OrbitsGlassVariant.primary,
+            onPressed: onInstall,
+          ),
+        ];
+    }
+  }
+
+  List<Widget> _buildReleasePageOnly(OrbitsTokens tokens) {
+    return [
+      OrbitsGlassButton(
+        label: 'Открыть страницу релиза',
+        icon: Icons.open_in_new,
+        variant: OrbitsGlassVariant.secondary,
+        onPressed: update.releaseUrl == null
+            ? null
+            : () => onOpenUrl(update.releaseUrl!),
+      ),
+      const SizedBox(height: 8),
+      Text(
+        'Автоматическая установка доступна в версии для Windows. '
+        'На этом устройстве скачайте файл вручную со страницы релиза.',
+        style: TextStyle(
+          color: tokens.muted,
+          fontFamily: tokens.fontBody,
+          fontSize: 11.5,
+          height: 1.4,
+        ),
+      ),
+    ];
+  }
+
+  String _formatMb(int bytes) => (bytes / 1024 / 1024).toStringAsFixed(1);
 
   String _statusText(UpdateState update) {
     switch (update.status) {

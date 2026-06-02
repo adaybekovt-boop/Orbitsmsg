@@ -9,7 +9,53 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:orbits_flutter/core/update_checker.dart';
+import 'package:orbits_flutter/core/update_downloader.dart';
+import 'package:orbits_flutter/core/update_installer.dart';
 import 'package:orbits_flutter/state/update_notifier.dart';
+
+/// Records progress callbacks and returns a canned result.
+class _FakeDownloader implements UpdateDownloader {
+  _FakeDownloader(this.result, {this.progress = const []});
+
+  final DownloadResult result;
+  final List<(int, int?)> progress;
+
+  String? lastUrl;
+  String? lastFileName;
+  int? lastExpectedSize;
+
+  @override
+  Future<DownloadResult> download(
+    String url, {
+    required String fileName,
+    int? expectedSize,
+    DownloadProgress? onProgress,
+  }) async {
+    lastUrl = url;
+    lastFileName = fileName;
+    lastExpectedSize = expectedSize;
+    for (final p in progress) {
+      onProgress?.call(p.$1, p.$2);
+    }
+    return result;
+  }
+}
+
+/// Records launch calls and returns a canned result.
+class _FakeInstaller implements UpdateInstaller {
+  _FakeInstaller(this.result);
+
+  final InstallLaunchResult result;
+  int calls = 0;
+  String? lastPath;
+
+  @override
+  Future<InstallLaunchResult> launch(String installerPath) async {
+    calls++;
+    lastPath = installerPath;
+    return result;
+  }
+}
 
 void main() {
   final uri = Uri.parse('https://example.com/latest');
@@ -17,6 +63,10 @@ void main() {
   ProviderContainer makeContainer({
     required MockClient client,
     String installed = '9.0.1',
+    UpdateDownloader? downloader,
+    UpdateInstaller? installer,
+    Future<void> Function()? appExit,
+    bool installSupported = true,
   }) {
     final container = ProviderContainer(overrides: [
       updateCheckerProvider.overrideWithValue(
@@ -27,6 +77,19 @@ void main() {
         ),
       ),
       installedVersionReaderProvider.overrideWithValue(() async => installed),
+      // Always inject safe fakes so no test ever spawns a process, hits the
+      // network, or calls exit(0) via the real platform hooks.
+      updateDownloaderProvider.overrideWithValue(
+        downloader ??
+            _FakeDownloader(const DownloadResult(DownloadStatus.error)),
+      ),
+      updateInstallerProvider.overrideWithValue(
+        installer ??
+            _FakeInstaller(
+                const InstallLaunchResult(InstallLaunchStatus.error)),
+      ),
+      appExitProvider.overrideWithValue(appExit ?? () async {}),
+      installSupportedProvider.overrideWithValue(installSupported),
     ]);
     addTearDown(container.dispose);
     return container;
@@ -142,6 +205,217 @@ void main() {
     await n.maybeAutoCheck();
     expect(calls, 1);
     expect(c.read(updateNotifierProvider).status, UpdateUiStatus.upToDate);
+  });
+
+  // ── Phase 3: download ────────────────────────────────────────────────
+  group('downloadUpdate', () {
+    final winRelease = _release(
+      tag: 'v9.0.2',
+      htmlUrl: 'https://github.com/example/release/v9.0.2',
+      assets: [
+        {
+          'name': 'orbits-windows-x64.exe',
+          'browser_download_url': 'https://x/win.exe',
+          'size': 2048,
+        },
+      ],
+    );
+
+    test('success → downloaded + installer ready + path set', () async {
+      final downloader = _FakeDownloader(
+        const DownloadResult(
+          DownloadStatus.downloaded,
+          filePath: '/tmp/orbits_update/orbits-windows-x64.exe',
+          bytes: 2048,
+        ),
+        progress: const [(1024, 2048), (2048, 2048)],
+      );
+      final c = makeContainer(client: json(winRelease), downloader: downloader);
+      await c.read(updateNotifierProvider.notifier).check();
+      await c.read(updateNotifierProvider.notifier).downloadUpdate();
+
+      final s = c.read(updateNotifierProvider);
+      expect(s.downloadStatus, DownloadUiStatus.downloaded);
+      expect(s.installStatus, InstallUiStatus.readyToInstall);
+      expect(s.isInstallerReady, isTrue);
+      expect(s.installerPath, '/tmp/orbits_update/orbits-windows-x64.exe');
+      expect(s.downloadReceived, 2048);
+      // Downloader was handed the asset url, canonical filename + expected size.
+      expect(downloader.lastUrl, 'https://x/win.exe');
+      expect(downloader.lastFileName, kWindowsInstallerFileName);
+      expect(downloader.lastExpectedSize, 2048);
+    });
+
+    test('reports progress while downloading', () async {
+      final downloader = _FakeDownloader(
+        const DownloadResult(DownloadStatus.downloaded,
+            filePath: '/tmp/x.exe', bytes: 2048),
+        progress: const [(512, 2048)],
+      );
+      final c = makeContainer(client: json(winRelease), downloader: downloader);
+      await c.read(updateNotifierProvider.notifier).check();
+      // downloadProgress reflects total once known.
+      await c.read(updateNotifierProvider.notifier).downloadUpdate();
+      final s = c.read(updateNotifierProvider);
+      expect(s.downloadProgress, closeTo(1.0, 0.001)); // ended at 2048/2048
+    });
+
+    test('http failure → failed + error message, no installer', () async {
+      final downloader = _FakeDownloader(
+        const DownloadResult(DownloadStatus.httpError, message: 'HTTP 404'),
+      );
+      final c = makeContainer(client: json(winRelease), downloader: downloader);
+      await c.read(updateNotifierProvider.notifier).check();
+      await c.read(updateNotifierProvider.notifier).downloadUpdate();
+
+      final s = c.read(updateNotifierProvider);
+      expect(s.downloadStatus, DownloadUiStatus.failed);
+      expect(s.downloadError, contains('404'));
+      expect(s.installStatus, InstallUiStatus.idle);
+      expect(s.installerPath, isNull);
+    });
+
+    test('unsupported platform → unsupported (no download attempt)', () async {
+      final downloader = _FakeDownloader(
+        const DownloadResult(DownloadStatus.downloaded, filePath: '/tmp/x.exe'),
+      );
+      final c = makeContainer(
+        client: json(winRelease),
+        downloader: downloader,
+        installSupported: false,
+      );
+      await c.read(updateNotifierProvider.notifier).check();
+      await c.read(updateNotifierProvider.notifier).downloadUpdate();
+
+      final s = c.read(updateNotifierProvider);
+      expect(s.downloadStatus, DownloadUiStatus.unsupported);
+      expect(downloader.lastUrl, isNull); // never called
+    });
+
+    test('no Windows asset in release → failed', () async {
+      final downloader = _FakeDownloader(
+        const DownloadResult(DownloadStatus.downloaded, filePath: '/tmp/x.exe'),
+      );
+      final c = makeContainer(
+        client: json(_release(tag: 'v9.0.2', assets: [
+          {
+            'name': 'orbits-android-universal.apk',
+            'browser_download_url': 'https://x/uni.apk',
+          },
+        ])),
+        downloader: downloader,
+      );
+      await c.read(updateNotifierProvider.notifier).check();
+      await c.read(updateNotifierProvider.notifier).downloadUpdate();
+
+      final s = c.read(updateNotifierProvider);
+      expect(s.downloadStatus, DownloadUiStatus.failed);
+      expect(downloader.lastUrl, isNull);
+    });
+  });
+
+  // ── Phase 4: install ─────────────────────────────────────────────────
+  group('launchInstaller', () {
+    final winRelease = _release(tag: 'v9.0.2', assets: [
+      {
+        'name': 'orbits-windows-x64.exe',
+        'browser_download_url': 'https://x/win.exe',
+        'size': 2048,
+      },
+    ]);
+
+    Future<ProviderContainer> readyContainer({
+      required UpdateInstaller installer,
+      Future<void> Function()? appExit,
+    }) async {
+      final downloader = _FakeDownloader(
+        const DownloadResult(DownloadStatus.downloaded,
+            filePath: '/tmp/orbits-windows-x64.exe', bytes: 2048),
+      );
+      final c = makeContainer(
+        client: json(winRelease),
+        downloader: downloader,
+        installer: installer,
+        appExit: appExit,
+      );
+      await c.read(updateNotifierProvider.notifier).check();
+      await c.read(updateNotifierProvider.notifier).downloadUpdate();
+      return c;
+    }
+
+    test('launched → launched state + app exit called', () async {
+      var exitCalls = 0;
+      final installer = _FakeInstaller(
+        const InstallLaunchResult(InstallLaunchStatus.launched,
+            argsUsed: ['/SP-', '/NORESTART', '/CURRENTUSER']),
+      );
+      final c = await readyContainer(
+        installer: installer,
+        appExit: () async => exitCalls++,
+      );
+
+      final result =
+          await c.read(updateNotifierProvider.notifier).launchInstaller();
+
+      expect(result.launched, isTrue);
+      expect(c.read(updateNotifierProvider).installStatus,
+          InstallUiStatus.launched);
+      expect(installer.calls, 1);
+      expect(installer.lastPath, '/tmp/orbits-windows-x64.exe');
+      expect(exitCalls, 1); // app closed AFTER successful launch
+    });
+
+    test('launch failure → failed state, app NOT closed', () async {
+      var exitCalls = 0;
+      final installer = _FakeInstaller(
+        const InstallLaunchResult(InstallLaunchStatus.launchFailed,
+            message: 'boom'),
+      );
+      final c = await readyContainer(
+        installer: installer,
+        appExit: () async => exitCalls++,
+      );
+
+      final result =
+          await c.read(updateNotifierProvider.notifier).launchInstaller();
+
+      expect(result.launched, isFalse);
+      expect(c.read(updateNotifierProvider).installStatus,
+          InstallUiStatus.failed);
+      expect(c.read(updateNotifierProvider).installError, 'boom');
+      expect(exitCalls, 0); // app stays open on failure
+    });
+
+    test('no downloaded installer → fileMissing + failed, no launch', () async {
+      final installer = _FakeInstaller(
+        const InstallLaunchResult(InstallLaunchStatus.launched),
+      );
+      // Fresh container with a checked update but NO download performed.
+      final c = makeContainer(client: json(winRelease), installer: installer);
+      await c.read(updateNotifierProvider.notifier).check();
+
+      final result =
+          await c.read(updateNotifierProvider.notifier).launchInstaller();
+
+      expect(result.status, InstallLaunchStatus.fileMissing);
+      expect(installer.calls, 0);
+      expect(c.read(updateNotifierProvider).installStatus,
+          InstallUiStatus.failed);
+    });
+
+    test('unsupported platform from installer → unsupported state', () async {
+      final installer = _FakeInstaller(
+        const InstallLaunchResult(InstallLaunchStatus.unsupportedPlatform),
+      );
+      final c = await readyContainer(installer: installer);
+
+      final result =
+          await c.read(updateNotifierProvider.notifier).launchInstaller();
+
+      expect(result.status, InstallLaunchStatus.unsupportedPlatform);
+      expect(c.read(updateNotifierProvider).installStatus,
+          InstallUiStatus.unsupported);
+    });
   });
 }
 

@@ -1,17 +1,21 @@
-// Update-check state layer (auto-update Phase 2).
+// Update-check state layer (auto-update Phases 2–4).
 //
-// Thin Riverpod wrapper around the Phase 1 [UpdateChecker]. UI/state ONLY —
-// this never downloads an asset or launches an installer. The only user action
-// wired on top of this is opening the GitHub release page (handled in the UI).
+// Riverpod wrapper around the Phase 1 [UpdateChecker] plus the Phase 3
+// downloader and Phase 4 installer launcher. Check / download / install are
+// kept as separate, understandable state machines.
 //
-// Testable + offline: the HTTP client (via [updateCheckerProvider]) and the
-// installed-version reader (via [installedVersionReaderProvider]) are both
-// overridable, so unit tests never touch package_info platform channels or the
-// live GitHub API.
+// Testable + offline + web-safe: the HTTP client (via [updateCheckerProvider]),
+// the installed-version reader (via [installedVersionReaderProvider]), the
+// downloader, installer, app-exit hook, and the "install supported" flag are all
+// overridable. The download/install services use conditional imports, so this
+// file never pulls in `dart:io` and stays importable from the web build.
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/update_checker.dart';
+import '../core/update_downloader.dart';
+import '../core/update_installer.dart';
 
 /// UI-facing status of the latest update check.
 enum UpdateUiStatus {
@@ -35,6 +39,45 @@ enum UpdateUiStatus {
   latestUnusable,
 }
 
+/// State of the Phase 3 installer download.
+enum DownloadUiStatus {
+  /// Nothing downloaded / not started.
+  idle,
+
+  /// Bytes are streaming in.
+  downloading,
+
+  /// The installer file is saved and verified.
+  downloaded,
+
+  /// The download failed (HTTP / size / IO).
+  failed,
+
+  /// This platform can't download an installer (web / non-Windows).
+  unsupported,
+}
+
+/// State of the Phase 4 installer launch.
+enum InstallUiStatus {
+  /// No installer ready / not started.
+  idle,
+
+  /// A verified installer is on disk and can be launched.
+  readyToInstall,
+
+  /// The installer process is being started.
+  launching,
+
+  /// The installer was started; the app may now close.
+  launched,
+
+  /// Launching the installer failed.
+  failed,
+
+  /// This platform can't run the installer (web / non-Windows).
+  unsupported,
+}
+
 /// Immutable snapshot the Settings/Diagnostics UI renders.
 class UpdateState {
   const UpdateState({
@@ -48,6 +91,13 @@ class UpdateState {
     this.assets = const <ReleaseAssetInfo>[],
     this.checkedAt,
     this.errorMessage,
+    this.downloadStatus = DownloadUiStatus.idle,
+    this.downloadReceived = 0,
+    this.downloadTotal,
+    this.installerPath,
+    this.downloadError,
+    this.installStatus = InstallUiStatus.idle,
+    this.installError,
   });
 
   final UpdateUiStatus status;
@@ -61,14 +111,49 @@ class UpdateState {
   final DateTime? checkedAt;
   final String? errorMessage;
 
+  // ── Phase 3: download ──────────────────────────────────────────────
+  final DownloadUiStatus downloadStatus;
+  final int downloadReceived;
+  final int? downloadTotal;
+
+  /// Absolute path to the verified installer once [downloadStatus] is
+  /// [DownloadUiStatus.downloaded].
+  final String? installerPath;
+  final String? downloadError;
+
+  // ── Phase 4: install ───────────────────────────────────────────────
+  final InstallUiStatus installStatus;
+  final String? installError;
+
   bool get isChecking => status == UpdateUiStatus.checking;
 
   /// True once at least one check has completed (success or failure).
   bool get hasChecked =>
       status != UpdateUiStatus.unknown && status != UpdateUiStatus.checking;
 
-  /// Comma-separated asset names (metadata only — no download in this phase).
+  /// Comma-separated asset names.
   String get assetsSummary => assets.map((a) => a.name).join(', ');
+
+  /// The Windows installer asset for the latest release, if any.
+  ReleaseAssetInfo? get windowsAsset {
+    for (final a in assets) {
+      if (a.isWindowsExe) return a;
+    }
+    return null;
+  }
+
+  bool get isDownloading => downloadStatus == DownloadUiStatus.downloading;
+
+  /// Download progress in 0..1, or null when the total size is unknown.
+  double? get downloadProgress {
+    final total = downloadTotal;
+    if (total == null || total <= 0) return null;
+    final p = downloadReceived / total;
+    return p.clamp(0.0, 1.0);
+  }
+
+  bool get isInstallerReady =>
+      installStatus == InstallUiStatus.readyToInstall && installerPath != null;
 
   UpdateState copyWith({
     UpdateUiStatus? status,
@@ -81,6 +166,13 @@ class UpdateState {
     List<ReleaseAssetInfo>? assets,
     Object? checkedAt = _unset,
     Object? errorMessage = _unset,
+    DownloadUiStatus? downloadStatus,
+    int? downloadReceived,
+    Object? downloadTotal = _unset,
+    Object? installerPath = _unset,
+    Object? downloadError = _unset,
+    InstallUiStatus? installStatus,
+    Object? installError = _unset,
   }) {
     return UpdateState(
       status: status ?? this.status,
@@ -104,6 +196,21 @@ class UpdateState {
       errorMessage: identical(errorMessage, _unset)
           ? this.errorMessage
           : errorMessage as String?,
+      downloadStatus: downloadStatus ?? this.downloadStatus,
+      downloadReceived: downloadReceived ?? this.downloadReceived,
+      downloadTotal: identical(downloadTotal, _unset)
+          ? this.downloadTotal
+          : downloadTotal as int?,
+      installerPath: identical(installerPath, _unset)
+          ? this.installerPath
+          : installerPath as String?,
+      downloadError: identical(downloadError, _unset)
+          ? this.downloadError
+          : downloadError as String?,
+      installStatus: installStatus ?? this.installStatus,
+      installError: identical(installError, _unset)
+          ? this.installError
+          : installError as String?,
     );
   }
 }
@@ -114,12 +221,29 @@ class UpdateNotifier extends StateNotifier<UpdateState> {
   UpdateNotifier({
     required UpdateChecker checker,
     required Future<String> Function() readVersion,
+    required UpdateDownloader downloader,
+    required UpdateInstaller installer,
+    required Future<void> Function() appExit,
+    required bool installSupported,
   })  : _checker = checker,
         _readVersion = readVersion,
+        _downloader = downloader,
+        _installer = installer,
+        _appExit = appExit,
+        _installSupported = installSupported,
         super(const UpdateState());
 
   final UpdateChecker _checker;
   final Future<String> Function() _readVersion;
+  final UpdateDownloader _downloader;
+  final UpdateInstaller _installer;
+  final Future<void> Function() _appExit;
+
+  /// Whether THIS platform can download + run a Windows installer. False on
+  /// web / Android / macOS / Linux, where the UI offers the release page only.
+  final bool _installSupported;
+
+  bool get installSupported => _installSupported;
 
   /// Manual, user-initiated check. Sets [UpdateUiStatus.checking] synchronously,
   /// then resolves to a result/failure. Never throws (the checker swallows
@@ -150,6 +274,130 @@ class UpdateNotifier extends StateNotifier<UpdateState> {
   Future<void> maybeAutoCheck() async {
     if (state.status != UpdateUiStatus.unknown) return;
     await check();
+  }
+
+  /// Phase 3 — download the Windows installer for the available update to a
+  /// private temp file, reporting progress. No-op if already downloading. This
+  /// only fetches the asset; it never overwrites the running app or touches the
+  /// install dir. User data (DB / secure storage / profile) is never touched.
+  Future<void> downloadUpdate() async {
+    if (state.isDownloading) return;
+
+    if (!_installSupported) {
+      state = state.copyWith(
+        downloadStatus: DownloadUiStatus.unsupported,
+        installStatus: InstallUiStatus.unsupported,
+      );
+      return;
+    }
+
+    final asset = state.windowsAsset;
+    if (asset == null) {
+      state = state.copyWith(
+        downloadStatus: DownloadUiStatus.failed,
+        downloadError: 'No Windows installer in the latest release.',
+      );
+      return;
+    }
+
+    final expectedSize = (asset.size ?? 0) > 0 ? asset.size : null;
+    state = state.copyWith(
+      downloadStatus: DownloadUiStatus.downloading,
+      downloadReceived: 0,
+      downloadTotal: expectedSize,
+      downloadError: null,
+      installStatus: InstallUiStatus.idle,
+      installError: null,
+      installerPath: null,
+    );
+
+    final result = await _downloader.download(
+      asset.downloadUrl,
+      fileName: kWindowsInstallerFileName,
+      expectedSize: expectedSize,
+      onProgress: (received, total) {
+        if (!mounted) return;
+        state = state.copyWith(
+          downloadReceived: received,
+          downloadTotal: total,
+        );
+      },
+    );
+    if (!mounted) return;
+
+    switch (result.status) {
+      case DownloadStatus.downloaded:
+        state = state.copyWith(
+          downloadStatus: DownloadUiStatus.downloaded,
+          downloadReceived: result.bytes ?? state.downloadReceived,
+          installerPath: result.filePath,
+          installStatus: InstallUiStatus.readyToInstall,
+          downloadError: null,
+        );
+      case DownloadStatus.unsupportedPlatform:
+        state = state.copyWith(
+          downloadStatus: DownloadUiStatus.unsupported,
+          installStatus: InstallUiStatus.unsupported,
+        );
+      default:
+        state = state.copyWith(
+          downloadStatus: DownloadUiStatus.failed,
+          downloadError: result.message ?? 'Download failed.',
+        );
+    }
+  }
+
+  /// Phase 4 — launch the downloaded installer and, if it starts, close the app
+  /// so the installer can replace files. Caller is responsible for the
+  /// confirmation dialog; this performs the launch+exit. Returns the launch
+  /// result so the UI can react (e.g. keep the app open on failure).
+  ///
+  /// The installer updates app files only — it never deletes the Drift DB,
+  /// secure storage, contacts/messages, profile, rooms, or keys.
+  Future<InstallLaunchResult> launchInstaller() async {
+    final path = state.installerPath;
+    if (path == null) {
+      const result = InstallLaunchResult(
+        InstallLaunchStatus.fileMissing,
+        message: 'No installer has been downloaded yet.',
+      );
+      state = state.copyWith(
+        installStatus: InstallUiStatus.failed,
+        installError: result.message,
+      );
+      return result;
+    }
+
+    if (state.installStatus == InstallUiStatus.launching) {
+      // Already in flight — return a benign error rather than double-launching.
+      return const InstallLaunchResult(InstallLaunchStatus.error,
+          message: 'Installer launch already in progress.');
+    }
+
+    state = state.copyWith(
+      installStatus: InstallUiStatus.launching,
+      installError: null,
+    );
+
+    final result = await _installer.launch(path);
+    if (!mounted) return result;
+
+    if (result.launched) {
+      state = state.copyWith(installStatus: InstallUiStatus.launched);
+      // Close the app AFTER the installer has started so it can update files.
+      await _appExit();
+      return result;
+    }
+
+    if (result.status == InstallLaunchStatus.unsupportedPlatform) {
+      state = state.copyWith(installStatus: InstallUiStatus.unsupported);
+    } else {
+      state = state.copyWith(
+        installStatus: InstallUiStatus.failed,
+        installError: result.message ?? 'Could not start the installer.',
+      );
+    }
+    return result;
   }
 
   UpdateState _stateFromResult(
@@ -189,6 +437,29 @@ final updateCheckerProvider = Provider<UpdateChecker>((ref) => UpdateChecker());
 final installedVersionReaderProvider =
     Provider<Future<String> Function()>((ref) => readInstalledVersion);
 
+/// Phase 3 downloader. Web-safe via conditional import; overridable in tests
+/// with an injected client + temp dir.
+final updateDownloaderProvider =
+    Provider<UpdateDownloader>((ref) => createUpdateDownloader());
+
+/// Phase 4 installer launcher. Web-safe via conditional import; overridable in
+/// tests with a recording launcher.
+final updateInstallerProvider =
+    Provider<UpdateInstaller>((ref) => createUpdateInstaller());
+
+/// App-exit hook. Overridable in tests so the launch flow never kills the test
+/// runner. Defaults to the platform-appropriate [requestAppExit].
+final appExitProvider =
+    Provider<Future<void> Function()>((ref) => requestAppExit);
+
+/// Whether this platform supports the in-app download+install flow. True only
+/// on a real Windows desktop build. Everywhere else (web / Android / macOS /
+/// Linux) the UI falls back to opening the GitHub release page. Overridable in
+/// tests to exercise both branches.
+final installSupportedProvider = Provider<bool>(
+  (ref) => !kIsWeb && defaultTargetPlatform == TargetPlatform.windows,
+);
+
 /// App-wide update state. Survives for the container lifetime, so the
 /// once-per-session cooldown in [UpdateNotifier.maybeAutoCheck] holds.
 final updateNotifierProvider =
@@ -196,5 +467,9 @@ final updateNotifierProvider =
   return UpdateNotifier(
     checker: ref.watch(updateCheckerProvider),
     readVersion: ref.watch(installedVersionReaderProvider),
+    downloader: ref.watch(updateDownloaderProvider),
+    installer: ref.watch(updateInstallerProvider),
+    appExit: ref.watch(appExitProvider),
+    installSupported: ref.watch(installSupportedProvider),
   );
 });
