@@ -291,6 +291,22 @@ class AuthNotifier extends StateNotifier<AuthState> {
     return user;
   }
 
+  /// Auto-lock: re-lock the vault WITHOUT signing out. Clears the in-memory
+  /// KEK (so at-rest secrets become unreadable) and returns to the password
+  /// screen, keeping the profile and all data on disk. No-op unless currently
+  /// authed and a password record exists (otherwise there's nothing to unlock
+  /// back into). Does NOT touch the biometric-keystore copy — the user can
+  /// re-unlock by password or biometrics.
+  Future<void> lock() async {
+    final cur = state;
+    if (cur is! AuthAuthed) return;
+    final profile = await loadLocalProfile();
+    if (profile == null || profile.passRecord == null) return;
+    clearVaultKek();
+    if (!mounted) return;
+    state = AuthLocked(profile);
+  }
+
   /// Sign out: clear the KEK and profile but keep the peerId / crypto keys.
   /// The user can onboard again to the same device without losing peer
   /// pins or TOFU history (that's what [wipeLocal] is for).

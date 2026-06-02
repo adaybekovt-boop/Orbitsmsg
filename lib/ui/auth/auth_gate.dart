@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app_shell.dart';
 import '../../state/auth_notifier.dart';
+import 'auto_lock_scope.dart';
 import 'onboarding_page.dart';
 import 'unlock_page.dart';
 
@@ -33,7 +34,7 @@ class AuthGate extends ConsumerWidget {
           AuthLoading() => const _SplashScreen(),
           AuthGuest() => const OnboardingPage(),
           AuthLocked() => const UnlockPage(),
-          AuthAuthed() => const AppShell(),
+          AuthAuthed() => const AutoLockScope(child: AppShell()),
         },
       ),
     );

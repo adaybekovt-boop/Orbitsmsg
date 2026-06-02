@@ -260,6 +260,31 @@ void main() {
     });
   });
 
+  group('auto-lock (AuthNotifier.lock)', () {
+    test('lock() clears the KEK and returns to AuthLocked (data preserved)',
+        () async {
+      final fake = _FakeAutoUnlock(
+        supported: true,
+        enabled: true,
+        stored: true,
+        retrieveResult: AutoUnlockResult(
+          AutoUnlockStatus.ok,
+          kek: Uint8List.fromList(List<int>.generate(32, (i) => 9)),
+        ),
+      );
+      final c = boot(fake);
+      expect(await settle(c), isA<AuthAuthed>());
+      expect(hasVaultKek(), isTrue);
+
+      await c.read(authNotifierProvider.notifier).lock();
+
+      expect(c.read(authNotifierProvider), isA<AuthLocked>());
+      expect(hasVaultKek(), isFalse); // KEK gone → at-rest secrets re-locked
+      // Profile still on disk → can re-unlock by password.
+      expect(await loadLocalProfile(), isNotNull);
+    });
+  });
+
   group('real default service on this desktop host', () {
     test('reports UNSUPPORTED and is a safe no-op', () async {
       final svc = createAutoUnlockService();

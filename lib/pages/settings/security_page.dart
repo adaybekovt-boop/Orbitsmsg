@@ -15,10 +15,10 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../peer/helpers.dart';
 import '../../state/auth_notifier.dart';
+import '../../state/auto_lock_provider.dart';
 import '../../state/strict_verify_provider.dart';
 import '../../themes/orbits_tokens.dart';
 import '../qr_pairing_page.dart';
@@ -36,12 +36,9 @@ class SecurityPage extends ConsumerStatefulWidget {
 }
 
 class _SecurityPageState extends ConsumerState<SecurityPage> {
-  bool? _autoLock;
   bool? _biometricUnlock;
   bool _biometricSupported = false;
   bool? _relayOnly;
-
-  static const _kAutoLockKey = 'orbits_auto_lock';
 
   @override
   void initState() {
@@ -50,7 +47,6 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
   }
 
   Future<void> _load() async {
-    final prefs = await SharedPreferences.getInstance();
     final relay = await isRelayOnlyEnabled();
     final bioSupported = ref.read(autoUnlockServiceProvider).isSupported;
     final bioEnabled = bioSupported
@@ -58,16 +54,10 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
         : false;
     if (!mounted) return;
     setState(() {
-      _autoLock = prefs.getString(_kAutoLockKey) == '1';
       _relayOnly = relay;
       _biometricSupported = bioSupported;
       _biometricUnlock = bioEnabled;
     });
-  }
-
-  Future<void> _save(String key, bool v) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(key, v ? '1' : '0');
   }
 
   Future<void> _toggleBiometric(bool v) async {
@@ -92,6 +82,7 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
     final strictVerify = ref.watch(strictVerifyProvider);
+    final autoLock = ref.watch(autoLockProvider).enabled;
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.transparent,
@@ -125,19 +116,16 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
               leading: Icon(Icons.lock_clock_outlined, color: tokens.text),
               title: const Text('Блокировка приложения'),
               subtitle: Text(
-                _autoLock == true
-                    ? 'Приложение запросит пароль через 5 минут без действий'
-                    : 'Профиль остаётся открытым пока работает приложение',
+                autoLock
+                    ? 'Запрашивать пароль после 5 минут без действий или при '
+                        'возвращении из фона. Данные не удаляются.'
+                    : 'Профиль остаётся открытым, пока работает приложение',
               ),
               trailing: OrbitsGlassSwitch(
-                value: _autoLock ?? false,
+                value: autoLock,
                 semanticLabel: 'Блокировка приложения',
-                onChanged: _autoLock == null
-                    ? null
-                    : (v) {
-                        setState(() => _autoLock = v);
-                        _save(_kAutoLockKey, v);
-                      },
+                onChanged: (v) =>
+                    ref.read(autoLockProvider.notifier).setEnabled(v),
               ),
             ),
           ),
