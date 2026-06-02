@@ -295,7 +295,8 @@ class UpdateNotifier extends StateNotifier<UpdateState> {
     if (asset == null) {
       state = state.copyWith(
         downloadStatus: DownloadUiStatus.failed,
-        downloadError: 'No Windows installer in the latest release.',
+        downloadError: 'Для этой версии нет установщика Windows. '
+            'Откройте страницу релиза, чтобы скачать вручную.',
       );
       return;
     }
@@ -342,8 +343,25 @@ class UpdateNotifier extends StateNotifier<UpdateState> {
       default:
         state = state.copyWith(
           downloadStatus: DownloadUiStatus.failed,
-          downloadError: result.message ?? 'Download failed.',
+          downloadError: _downloadErrorText(result.status),
         );
+    }
+  }
+
+  /// Calm, honest Russian copy for a failed download. We deliberately do NOT
+  /// surface the raw (often English/technical) service message to the user.
+  static String _downloadErrorText(DownloadStatus status) {
+    switch (status) {
+      case DownloadStatus.httpError:
+        return 'Не удалось скачать файл. Проверьте интернет и попробуйте ещё раз.';
+      case DownloadStatus.sizeMismatch:
+        return 'Файл скачался не полностью. Попробуйте ещё раз.';
+      case DownloadStatus.invalidFile:
+        return 'Скачанный файл повреждён. Попробуйте ещё раз.';
+      case DownloadStatus.downloaded:
+      case DownloadStatus.unsupportedPlatform:
+      case DownloadStatus.error:
+        return 'Не удалось скачать обновление. Попробуйте ещё раз.';
     }
   }
 
@@ -359,7 +377,7 @@ class UpdateNotifier extends StateNotifier<UpdateState> {
     if (path == null) {
       const result = InstallLaunchResult(
         InstallLaunchStatus.fileMissing,
-        message: 'No installer has been downloaded yet.',
+        message: 'Установщик ещё не скачан. Сначала скачайте обновление.',
       );
       state = state.copyWith(
         installStatus: InstallUiStatus.failed,
@@ -394,7 +412,8 @@ class UpdateNotifier extends StateNotifier<UpdateState> {
     } else {
       state = state.copyWith(
         installStatus: InstallUiStatus.failed,
-        installError: result.message ?? 'Could not start the installer.',
+        installError:
+            'Не удалось запустить установщик. Попробуйте скачать обновление заново.',
       );
     }
     return result;

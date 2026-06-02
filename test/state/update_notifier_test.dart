@@ -260,7 +260,7 @@ void main() {
       expect(s.downloadProgress, closeTo(1.0, 0.001)); // ended at 2048/2048
     });
 
-    test('http failure → failed + error message, no installer', () async {
+    test('http failure → failed + friendly RU message, no raw leak', () async {
       final downloader = _FakeDownloader(
         const DownloadResult(DownloadStatus.httpError, message: 'HTTP 404'),
       );
@@ -270,9 +270,33 @@ void main() {
 
       final s = c.read(updateNotifierProvider);
       expect(s.downloadStatus, DownloadUiStatus.failed);
-      expect(s.downloadError, contains('404'));
+      // Calm Russian copy — the raw technical message must NOT leak to the user.
+      expect(s.downloadError, contains('интернет'));
+      expect(s.downloadError, isNot(contains('404')));
+      expect(s.downloadError, isNot(contains('HTTP')));
       expect(s.installStatus, InstallUiStatus.idle);
       expect(s.installerPath, isNull);
+    });
+
+    test('size mismatch and corrupt file get distinct friendly messages',
+        () async {
+      final mismatch = _FakeDownloader(
+        const DownloadResult(DownloadStatus.sizeMismatch, message: 'got 1'),
+      );
+      final c1 = makeContainer(client: json(winRelease), downloader: mismatch);
+      await c1.read(updateNotifierProvider.notifier).check();
+      await c1.read(updateNotifierProvider.notifier).downloadUpdate();
+      expect(c1.read(updateNotifierProvider).downloadError,
+          contains('не полностью'));
+
+      final corrupt = _FakeDownloader(
+        const DownloadResult(DownloadStatus.invalidFile, message: 'empty'),
+      );
+      final c2 = makeContainer(client: json(winRelease), downloader: corrupt);
+      await c2.read(updateNotifierProvider.notifier).check();
+      await c2.read(updateNotifierProvider.notifier).downloadUpdate();
+      expect(c2.read(updateNotifierProvider).downloadError,
+          contains('повреждён'));
     });
 
     test('unsupported platform → unsupported (no download attempt)', () async {
@@ -382,7 +406,9 @@ void main() {
       expect(result.launched, isFalse);
       expect(c.read(updateNotifierProvider).installStatus,
           InstallUiStatus.failed);
-      expect(c.read(updateNotifierProvider).installError, 'boom');
+      // Calm Russian copy; raw technical message ('boom') must not leak.
+      expect(c.read(updateNotifierProvider).installError, contains('заново'));
+      expect(c.read(updateNotifierProvider).installError, isNot(contains('boom')));
       expect(exitCalls, 0); // app stays open on failure
     });
 

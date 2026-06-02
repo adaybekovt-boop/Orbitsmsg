@@ -84,10 +84,12 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
         await ref.read(updateNotifierProvider.notifier).launchInstaller();
     if (!mounted) return;
     if (!result.launched) {
+      // Use the calm Russian message the notifier set on state (never the raw
+      // technical service message). The panel also shows it inline.
+      final message = ref.read(updateNotifierProvider).installError ??
+          'Не удалось запустить установщик.';
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(result.message ?? 'Не удалось запустить установщик.'),
-        ),
+        SnackBar(content: Text(message)),
       );
     }
     // On success the app is exiting; nothing more to do here.
@@ -505,9 +507,13 @@ class _UpdatePanel extends StatelessWidget {
           ),
         ];
 
+      case InstallUiStatus.unsupported:
+        // The installer reported this platform can't run it. Never imply
+        // install is possible — fall back to the release page.
+        return _buildReleasePageOnly(tokens);
+
       case InstallUiStatus.idle:
       case InstallUiStatus.readyToInstall:
-      case InstallUiStatus.unsupported:
         return [
           Text(
             'Обновление скачано',
@@ -558,7 +564,7 @@ class _UpdatePanel extends StatelessWidget {
   String _statusText(UpdateState update) {
     switch (update.status) {
       case UpdateUiStatus.checking:
-        return 'Проверяем GitHub Releases...';
+        return 'Проверяем GitHub Releases…';
       case UpdateUiStatus.unknown:
         return 'Нажми, чтобы сравнить версию с GitHub Release';
       case UpdateUiStatus.failed:
