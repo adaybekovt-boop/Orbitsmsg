@@ -94,7 +94,7 @@ class _FakeAutoUnlock implements AutoUnlockService {
 void main() {
   late OrbitsDatabase database;
 
-  final lockedProfile = LocalProfile(
+  const lockedProfile = LocalProfile(
     displayName: 'Tester',
     passRecord: <String, Object?>{
       'v': 2,
