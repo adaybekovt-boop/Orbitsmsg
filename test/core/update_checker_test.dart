@@ -337,16 +337,51 @@ void main() {
       expect(r.status, UpdateStatus.upToDate);
     });
 
-    test('current 9.0.2 ignores draft/prerelease in its own line', () {
+    test('current 9.0.2 ignores a v9.0.3 DRAFT (not offered)', () {
       final r = parseGitHubReleases(
-        releases(
-          ['v9.0.2', 'v9.0.3', 'v9.0.4'],
-          draft: {'v9.0.3': true},
-          pre: {'v9.0.4': true},
-        ),
+        releases(['v9.0.1', 'v9.0.2', 'v9.0.3'], draft: {'v9.0.3': true}),
         currentVersion: '9.0.2',
       );
-      // The only stable in-line release is 9.0.2 (== current) → no update.
+      // Only stable in-line release is 9.0.2 (== current) → no update.
+      expect(r.isUpdateAvailable, isFalse);
+      expect(r.status, UpdateStatus.upToDate);
+    });
+
+    test('current 9.0.2 ignores a v9.0.3 PRE-RELEASE (not offered)', () {
+      final r = parseGitHubReleases(
+        releases(['v9.0.1', 'v9.0.2', 'v9.0.3'], pre: {'v9.0.3': true}),
+        currentVersion: '9.0.2',
+      );
+      expect(r.isUpdateAvailable, isFalse);
+      expect(r.status, UpdateStatus.upToDate);
+    });
+
+    test('current 9.0.2 ignores invalid/non-semver tags', () {
+      // A stable but unparseable tag ("nightly") must never be offered…
+      final r = parseGitHubReleases(
+        releases(['nightly', 'v9.0.2']),
+        currentVersion: '9.0.2',
+      );
+      expect(r.isUpdateAvailable, isFalse);
+      expect(r.status, UpdateStatus.upToDate);
+
+      // …even when a valid in-line update sits alongside it (it is skipped,
+      // the valid one still wins).
+      final r2 = parseGitHubReleases(
+        releases(['nightly', 'v9.0.3', 'latest']),
+        currentVersion: '9.0.2',
+      );
+      expect(r2.isUpdateAvailable, isTrue);
+      expect(r2.latestTag, 'v9.0.3');
+    });
+
+    test('no same-line release at all → clearly up to date (not an error)', () {
+      // Installed 9.5.0; only 9.0.x / 9.1.x exist → nothing on the 9.5 line.
+      final r = parseGitHubReleases(
+        releases(['v9.0.9', 'v9.1.0']),
+        currentVersion: '9.5.0',
+      );
+      expect(r.hasError, isFalse);
       expect(r.isUpdateAvailable, isFalse);
       expect(r.status, UpdateStatus.upToDate);
     });
