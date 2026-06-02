@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/haptics.dart';
+import '../../peer/relay_transport.dart' show RelayStatus;
 import '../../state/connections_notifier.dart';
 import '../../state/local_profile_provider.dart';
 import '../../state/peer_connection_provider.dart';
@@ -43,6 +44,8 @@ class NetworkPage extends ConsumerWidget {
         connectionsNotifierProvider.select((s) => s.lastRelayError));
     final transportByPeer = ref.watch(
         connectionsNotifierProvider.select((s) => s.lastTransportByPeer));
+    final relayStatus = ref.watch(
+        connectionsNotifierProvider.select((s) => s.relayStatus));
 
     return Scaffold(
       appBar: AppBar(
@@ -254,6 +257,21 @@ class NetworkPage extends ConsumerWidget {
               ),
             ),
           ),
+          // Live relay connection + signed-registration status. Honest: the
+          // app can tell you whether the relay is connected and registered, and
+          // never marks a message delivered just because the relay accepted it.
+          if (relayConfigured)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                title: const Text('Статус ретранслятора'),
+                subtitle: Text(_relayStatusLabel(relayStatus)),
+                trailing: Icon(
+                  _relayStatusIcon(relayStatus),
+                  color: _relayStatusColor(relayStatus, tokens),
+                ),
+              ),
+            ),
           // Per-peer transport used for the most recent reliable send: direct
           // WebRTC vs the encrypted relay. Honest visibility into the path.
           if (transportByPeer.isNotEmpty)
@@ -325,6 +343,55 @@ class NetworkPage extends ConsumerWidget {
       'disconnected' => 'Нет соединения',
       _ => 'Нет соединения',
     };
+  }
+}
+
+// ── Relay status diagnostics (honest connection + registration state) ──
+
+String _relayStatusLabel(RelayStatus s) {
+  switch (s) {
+    case RelayStatus.disabled:
+      return 'Не активен';
+    case RelayStatus.connecting:
+      return 'Подключение к серверу…';
+    case RelayStatus.connected:
+      return 'Соединение есть, регистрация не завершена';
+    case RelayStatus.registering:
+      return 'Регистрация (подпись)…';
+    case RelayStatus.registered:
+      return 'Подключён и зарегистрирован (готов к резервной доставке)';
+    case RelayStatus.failed:
+      return 'Регистрация не удалась — см. ошибку ниже';
+  }
+}
+
+IconData _relayStatusIcon(RelayStatus s) {
+  switch (s) {
+    case RelayStatus.registered:
+      return Icons.verified_rounded;
+    case RelayStatus.failed:
+      return Icons.error_outline_rounded;
+    case RelayStatus.disabled:
+      return Icons.info_outline;
+    case RelayStatus.connecting:
+    case RelayStatus.connected:
+    case RelayStatus.registering:
+      return Icons.sync_rounded;
+  }
+}
+
+Color _relayStatusColor(RelayStatus s, OrbitsTokens tokens) {
+  switch (s) {
+    case RelayStatus.registered:
+      return tokens.success;
+    case RelayStatus.failed:
+      return tokens.danger;
+    case RelayStatus.disabled:
+      return tokens.muted;
+    case RelayStatus.connecting:
+    case RelayStatus.connected:
+    case RelayStatus.registering:
+      return tokens.accent2;
   }
 }
 

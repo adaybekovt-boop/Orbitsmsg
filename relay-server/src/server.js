@@ -16,6 +16,19 @@ function safeLog(event, meta = {}) {
   console.log(JSON.stringify({ t: new Date().toISOString(), event, ...meta }));
 }
 
+function json(res, code, body) {
+  res.writeHead(code, { 'content-type': 'application/json' });
+  res.end(JSON.stringify(body));
+}
+
+/** Browser-origin allowlist. Native clients send no Origin and are allowed
+ * (the real auth is signed registration). Exported for tests. */
+export function originAllowed(origin, allowedOrigins) {
+  if (!allowedOrigins || allowedOrigins.length === 0) return true; // no restriction
+  if (origin === undefined || origin === null || origin === '') return true; // native
+  return allowedOrigins.includes(origin);
+}
+
 /**
  * Create (but do not start) the relay HTTP+WS server.
  * @returns {{ httpServer: import('node:http').Server, wss: WebSocketServer, hub: RelayHub, close: () => Promise<void> }}
@@ -24,16 +37,23 @@ export function createRelayServer({ config = defaultConfig, log = safeLog } = {}
   const hub = new RelayHub({ config, log });
 
   const httpServer = http.createServer((req, res) => {
-    // Tiny health endpoint for load balancers / uptime checks. Exposes only
-    // aggregate counts — never any peer id or frame.
-    if (req.method === 'GET' && (req.url === '/healthz' || req.url === '/')) {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({
-        ok: true,
-        connections: hub.connectionCount,
-        peers: hub.peerCount,
-      }));
+    if (req.method !== 'GET') {
+      res.writeHead(405, { 'content-type': 'text/plain' });
+      res.end('method not allowed');
       return;
+    }
+    const path = (req.url || '/').split('?')[0];
+    // Liveness: is the process up? (load balancers / uptime checks)
+    if (path === '/healthz' || path === '/') {
+      return json(res, 200, { ok: true, status: 'alive' });
+    }
+    // Readiness: is it accepting traffic? (config loaded, server listening)
+    if (path === '/readyz') {
+      return json(res, 200, { ok: true, ready: true });
+    }
+    // Safe aggregate counters — NO frames, ids, keys, or signatures.
+    if (path === '/metrics') {
+      return json(res, 200, hub.metricsSnapshot());
     }
     res.writeHead(404, { 'content-type': 'text/plain' });
     res.end('not found');
@@ -43,7 +63,13 @@ export function createRelayServer({ config = defaultConfig, log = safeLog } = {}
   // are rejected by `ws` itself (the hub double-checks as defense in depth).
   const wss = new WebSocketServer({ server: httpServer, maxPayload: config.maxRawMessageBytes });
 
-  wss.on('connection', (ws) => {
+  wss.on('connection', (ws, req) => {
+    // Optional browser-origin allowlist (CSRF-style; not auth).
+    if (!originAllowed(req?.headers?.origin, config.allowedOrigins)) {
+      log('reject', { reason: 'origin' });
+      try { ws.close(4003, 'origin not allowed'); } catch { /* ignore */ }
+      return;
+    }
     const conn = {
       send: (str) => ws.send(str),
       close: (code, reason) => {

@@ -66,6 +66,9 @@ class WsRelayTransport implements RelayTransport {
       StreamController<RelayEnvelope>.broadcast();
   final StreamController<String> _errors =
       StreamController<String>.broadcast();
+  final StreamController<RelayStatus> _status =
+      StreamController<RelayStatus>.broadcast();
+  RelayStatus _statusValue = RelayStatus.disabled;
 
   /// Generous cap on inbound frames before decode (anti-OOM).
   static const int _maxFrameBytes = 512 * 1024;
@@ -84,11 +87,24 @@ class WsRelayTransport implements RelayTransport {
   Stream<String> get errors => _errors.stream;
 
   @override
+  Stream<RelayStatus> get status => _status.stream;
+
+  void _setStatus(RelayStatus s) {
+    if (_statusValue == s) return;
+    _statusValue = s;
+    if (!_status.isClosed) _status.add(s);
+  }
+
+  @override
   Future<void> start(String selfPeerId) async {
     _selfId = normalizePeerId(selfPeerId);
     _closed = false;
     _registered = false;
-    if (!isConfigured) return;
+    if (!isConfigured) {
+      _setStatus(RelayStatus.disabled);
+      return;
+    }
+    _setStatus(RelayStatus.connecting);
     await _connect();
   }
 
@@ -104,6 +120,7 @@ class WsRelayTransport implements RelayTransport {
         return;
       }
       _sock = sock;
+      _setStatus(RelayStatus.connected); // ws open, awaiting challenge
       _sub = sock.stream.listen(
         _onData,
         onError: (Object _, StackTrace __) => _scheduleReconnect(),
@@ -123,6 +140,7 @@ class WsRelayTransport implements RelayTransport {
     _challengeTimer = Timer(_challengeTimeout, () {
       _challengeTimer = null;
       if (_closed || _registered) return;
+      _setStatus(RelayStatus.failed);
       _emitError('реле: сервер не прислал запрос на регистрацию');
       _scheduleReconnect();
     });
@@ -147,9 +165,11 @@ class WsRelayTransport implements RelayTransport {
         _challengeTimer = null;
         _registered = true;
         _attempt = 0; // healthy connection
+        _setStatus(RelayStatus.registered);
         return;
       case 'register_error':
         _registered = false;
+        _setStatus(RelayStatus.failed);
         final reason = json['reason'];
         _emitError('реле: регистрация отклонена'
             '${reason is String && reason.isNotEmpty ? ' ($reason)' : ''}');
@@ -183,9 +203,11 @@ class WsRelayTransport implements RelayTransport {
     if (self == null || self.isEmpty) return;
     final nonce = json['nonce'];
     if (nonce is! String || nonce.isEmpty) {
+      _setStatus(RelayStatus.failed);
       _emitError('реле: некорректный запрос регистрации');
       return;
     }
+    _setStatus(RelayStatus.registering);
     final relay = json['relay'] is String ? json['relay'] as String : '';
     final ts = DateTime.now().millisecondsSinceEpoch;
     Map<String, Object?>? register;
@@ -195,6 +217,7 @@ class WsRelayTransport implements RelayTransport {
       register = null;
     }
     if (register == null) {
+      _setStatus(RelayStatus.failed);
       _emitError('реле: не удалось подписать регистрацию');
       return;
     }
@@ -230,6 +253,7 @@ class WsRelayTransport implements RelayTransport {
   void _scheduleReconnect() {
     if (_closed) return;
     _registered = false;
+    _setStatus(RelayStatus.connecting);
     _challengeTimer?.cancel();
     _challengeTimer = null;
     try {
@@ -249,6 +273,7 @@ class WsRelayTransport implements RelayTransport {
   Future<void> stop() async {
     _closed = true;
     _registered = false;
+    _setStatus(RelayStatus.disabled);
     _reconnect?.cancel();
     _reconnect = null;
     _challengeTimer?.cancel();
@@ -269,6 +294,7 @@ class WsRelayTransport implements RelayTransport {
     await stop();
     if (!_inbound.isClosed) await _inbound.close();
     if (!_errors.isClosed) await _errors.close();
+    if (!_status.isClosed) await _status.close();
   }
 }
 

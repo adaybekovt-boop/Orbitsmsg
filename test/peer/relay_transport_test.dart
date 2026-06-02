@@ -58,6 +58,9 @@ class FakeRelayTransport implements RelayTransport {
   @override
   Stream<String> get errors => const Stream<String>.empty();
 
+  @override
+  Stream<RelayStatus> get status => const Stream<RelayStatus>.empty();
+
   void deliver(RelayEnvelope env) => _in.add(env);
 
   Future<void> close() => _in.close();
@@ -534,6 +537,68 @@ void main() {
       final regs = sentOf(sock, 'register');
       expect(regs, hasLength(1));
       expect(regs.first['nonce'], 'N2');
+      await t.dispose();
+    });
+
+    test('status transitions connecting → connected → registering → registered',
+        () async {
+      final sock = _FakeRelaySocket();
+      final t = WsRelayTransport('wss://relay.test',
+          signer: fakeSigner, socketFactory: (_) async => sock);
+      final statuses = <RelayStatus>[];
+      final ssub = t.status.listen(statuses.add);
+      await t.start('ORBIT-AAAAAA');
+      await pump();
+      sock.serverSend(
+          {'type': 'relay_challenge', 'nonce': 'N1', 'ts': 1, 'relay': 'r1'});
+      await pump();
+      sock.serverSend({'type': 'register_ok', 'peer': 'ORBIT-AAAAAA'});
+      await pump();
+      expect(statuses, [
+        RelayStatus.connecting,
+        RelayStatus.connected,
+        RelayStatus.registering,
+        RelayStatus.registered,
+      ]);
+      await ssub.cancel();
+      await t.dispose();
+    });
+
+    test('status goes to failed on register_error', () async {
+      final sock = _FakeRelaySocket();
+      final t = WsRelayTransport('wss://relay.test',
+          signer: fakeSigner, socketFactory: (_) async => sock);
+      final statuses = <RelayStatus>[];
+      final ssub = t.status.listen(statuses.add);
+      await t.start('ORBIT-AAAAAA');
+      await pump();
+      sock.serverSend(
+          {'type': 'relay_challenge', 'nonce': 'N1', 'ts': 1, 'relay': 'r1'});
+      await pump();
+      sock.serverSend({'type': 'register_error', 'reason': 'key_changed'});
+      await pump();
+      expect(statuses, contains(RelayStatus.failed));
+      await ssub.cancel();
+      await t.dispose();
+    });
+
+    test('unknown server messages are ignored safely (no crash, stays registered)',
+        () async {
+      final sock = _FakeRelaySocket();
+      final t = WsRelayTransport('wss://relay.test',
+          signer: fakeSigner, socketFactory: (_) async => sock);
+      await t.start('ORBIT-AAAAAA');
+      await pump();
+      sock.serverSend(
+          {'type': 'relay_challenge', 'nonce': 'N1', 'ts': 1, 'relay': 'r1'});
+      await pump();
+      sock.serverSend({'type': 'register_ok', 'peer': 'ORBIT-AAAAAA'});
+      await pump();
+      // An unknown message type must not crash or de-register us.
+      sock.serverSend({'type': 'some_future_thing', 'x': 1});
+      sock.serverSend('not even json-shaped for relay');
+      await pump();
+      expect(await t.send(env()), isTrue, reason: 'still registered + usable');
       await t.dispose();
     });
   });

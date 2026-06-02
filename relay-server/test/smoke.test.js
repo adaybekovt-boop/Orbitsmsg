@@ -92,6 +92,7 @@ function signingClient(port, peer) {
     registered: () => (registered ? Promise.resolve() : new Promise((r) => regWaiters.push(r))),
     relay: (to, id, frame) => ws.send(JSON.stringify({ type: 'relay', from: peer, to, id, ts: Date.now(), frame })),
     next: () => (inbox.length ? Promise.resolve(inbox.shift()) : new Promise((r) => waiters.push(r))),
+    inboxLength: () => inbox.length,
     close: () => ws.close(),
   };
 }
@@ -119,6 +120,33 @@ test('signed handshake: A & B register, A → B frame arrives identical', {
   } finally {
     a.close();
     b.close();
+    await handle.close();
+  }
+});
+
+test('unrelated client C never receives an A → B frame', {
+  skip: available ? false : 'ws not installed',
+}, async () => {
+  const C = 'ORBIT-CCCCCC';
+  const handle = await startRelayServer({ config: testConfig(), log: () => {} });
+  const port = handle.httpServer.address().port;
+  const a = signingClient(port, A);
+  const b = signingClient(port, B);
+  const c = signingClient(port, C);
+  try {
+    await Promise.all([a.open(), b.open(), c.open()]);
+    await Promise.all([a.registered(), b.registered(), c.registered()]);
+
+    a.relay(B, 'm1', 'v2:onlyForB');
+    const got = await b.next();
+    assert.equal(got.frame, 'v2:onlyForB');
+    // Give the server a moment; C must have received nothing addressed to it.
+    await new Promise((r) => setTimeout(r, 60));
+    assert.equal(c.inboxLength(), 0, 'unrelated peer C must not receive the frame');
+  } finally {
+    a.close();
+    b.close();
+    c.close();
     await handle.close();
   }
 });

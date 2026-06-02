@@ -12,7 +12,9 @@
   "scripts": {
     "start": "node src/server.js",
     "test": "node --test",
-    "test:hub": "node --test test/hub.test.js"
+    "test:hub": "node --test test/hub.test.js",
+    "smoke": "node --test test/smoke.test.js",
+    "check": "node --check src/config.js && node --check src/peer-id.js && node --check src/register-blob.js && node --check src/verify.js && node --check src/hub.js && node --check src/server.js"
   },
   "dependencies": {
     "ws": "^8.18.0"

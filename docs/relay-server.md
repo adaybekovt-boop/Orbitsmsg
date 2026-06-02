@@ -36,22 +36,27 @@ It **cannot** and must not:
 ```bash
 cd relay-server
 npm install
-npm start            # listens on ws://0.0.0.0:8080 by default
-# health check:
-curl http://127.0.0.1:8080/healthz   # {"ok":true,"connections":0,"peers":0}
+npm start            # listens on ws://0.0.0.0:8080 (override with RELAY_PORT/RELAY_HOST)
+# health checks:
+curl http://127.0.0.1:8080/healthz   # {"ok":true,"status":"alive"}
+curl http://127.0.0.1:8080/readyz    # {"ok":true,"ready":true}
+curl http://127.0.0.1:8080/metrics   # safe aggregate counters
 ```
 
-Run the tests:
+Scripts (`package.json`):
 
 ```bash
 cd relay-server
-npm test             # 23 tests: hub unit + two-client ws smoke
+npm test             # full suite: hub + metrics + protocol + blob + ws smoke
 npm run test:hub     # just the dependency-free hub tests (no install needed)
+npm run smoke        # just the two-client ws smoke tests
+npm run check        # syntax-check all sources (lint substitute; no deps)
 ```
 
-The hub tests require **no dependencies** (`node:test`, Node ≥ 18). The two ws
-smoke tests need `npm install` (the `ws` package); they skip cleanly if it's
-absent.
+The hub / metrics / protocol / blob tests require **no dependencies**
+(`node:test`, Node ≥ 18). The ws smoke tests need `npm install` (the `ws`
+package); they skip cleanly if it's absent. CI runs all of them
+(`.github/workflows/relay-server.yml`).
 
 ## Configure the Flutter client
 
@@ -132,10 +137,39 @@ bad_nonce | stale_ts | bad_idpub | bad_sig | bad_signature | key_changed`.
 | Challenge validity (TTL) | 30s | `RELAY_CHALLENGE_TTL_MS` |
 | Register `ts` skew (replay guard) | ±60s | `RELAY_REGISTER_TS_SKEW_MS` |
 | Server identity (signature domain) | random per process | `RELAY_SERVER_ID` |
-| Listen host / port | `0.0.0.0` / `8080` | `HOST` / `PORT` |
+| Listen port | `8080` | `RELAY_PORT` (or `PORT`) |
+| Listen host | `0.0.0.0` | `RELAY_HOST` (or `HOST`) |
+| Browser-origin allowlist | none (allow all) | `RELAY_ALLOWED_ORIGINS` (comma/space list) |
 
 The 512 KiB raw cap is aligned with the client's inbound cap, so anything the
-server accepts is also acceptable to the recipient.
+server accepts is also acceptable to the recipient. `RELAY_ALLOWED_ORIGINS`, if
+set, rejects WS upgrades whose browser `Origin` isn't listed — a CSRF-style
+control for web clients only (native clients send no Origin and are always
+allowed; the real auth is signed registration).
+
+## Health, readiness & metrics
+
+Three GET endpoints (JSON, no secrets, no frame content ever):
+
+| Route | Purpose | Body |
+|---|---|---|
+| `GET /healthz` | liveness (process up) | `{"ok":true,"status":"alive"}` |
+| `GET /readyz` | readiness (accepting traffic) | `{"ok":true,"ready":true}` |
+| `GET /metrics` | safe aggregate counters | see below |
+
+`/metrics` exposes **counts only** — never frames, peer ids, identity keys, or
+signatures:
+
+```json
+{
+  "activeConnections": 0, "registeredPeers": 0, "knownPeerKeys": 0,
+  "totalRelayAttempts": 0, "forwarded": 0, "offlineRecipient": 0,
+  "rejectedMalformed": 0, "rejectedAuth": 0, "rejectedRateLimit": 0
+}
+```
+
+Point your load balancer / uptime check at `/healthz` (or `/readyz`) and scrape
+`/metrics` if you want operational visibility.
 
 ## Behaviors (chosen deliberately)
 
@@ -223,14 +257,71 @@ It does **not** make the relay trusted:
 - Optional: bind registration to a short-lived server-issued token if a broader
   auth backend ever exists.
 
-## Deployment notes
+## Deployment
+
+**Target: Node.js** (chosen because the relay is plain Node ESM with one
+dependency, `ws`, and is trivially hostable on any Node platform with TLS in
+front — no build step, no framework. The routing core is portable to Cloudflare
+later, but that's not needed now.)
+
+Environment variables (all optional; see the limits table): `RELAY_PORT` /
+`RELAY_HOST`, `RELAY_SERVER_ID` (pin for multi-instance), `RELAY_ALLOWED_ORIGINS`,
+and the size / rate / TTL knobs.
 
 - **Docker:** `docker build -t orbits-relay ./relay-server && docker run -p 8080:8080 orbits-relay` (runs as non-root `node`).
-- **Node hosts (Render/Fly/Railway/VM):** `npm install --omit=dev && npm start`; set `PORT` from the platform; put TLS (`wss://`) in front.
+- **Node hosts (Render / Fly / Railway / VM):** `npm ci --omit=dev && npm start`;
+  most platforms inject `PORT` (honoured); put TLS (`wss://`) in front.
 - **Cloudflare:** the routing logic in `hub.js` is portable to a Durable Object /
   Workers WebSocket handler (swap the `ws` transport in `server.js` for the
   platform's socket API; `hub.js` is unchanged). Not bundled here.
-- Expose `GET /healthz` to your load balancer; it returns aggregate counts only.
+- **Health:** point liveness at `GET /healthz`, readiness at `GET /readyz`, and
+  scrape `GET /metrics` for safe counters.
+- **GitHub:** there is no secret to configure for the server itself. For the
+  Flutter build, set the `RELAY_URL` **secret** (already wired into
+  `build.yml` / `pages.yml`); see [turn-config.md](turn-config.md).
+
+Example Flutter build pointing at a deployed relay:
+
+```bash
+flutter build apk --release --dart-define=RELAY_URL=wss://relay.example.com
+```
+
+## Diagnostics in the app
+
+The Flutter client surfaces relay state on **Settings → Соединение → «Резервная
+доставка текста»** so a user/developer can tell what's happening:
+
+- **configured?** — whether `RELAY_URL` is set (else relay is a no-op).
+- **status** — `disabled / connecting / connected (unregistered) / registering /
+  registered / failed`, driven live by `RelayTransport.status`.
+- **last relay error** — registration/transport errors (`lastRelayError`); never
+  frame content.
+- **per-peer transport** — whether the last reliable send to a peer went
+  `webrtc` (direct) or `relay`.
+- **accepted ≠ delivered** — relay accepting bytes shows the message as *sent*,
+  never *delivered*; delivery still requires the receiver's end-to-end ack.
+
+The client also **never sends a relay frame before signed registration
+succeeds** — if registration fails it shows the diagnostic and falls back to
+WebRTC / keeps the message pending, rather than failing silently.
+
+## Manual smoke-test checklist (two real devices)
+
+Automated tests can't cover real NAT traversal; verify these by hand before
+relying on relay in production. Use the diagnostics screen above on both sides.
+
+1. **PC exe ↔ phone web, same Wi-Fi** — should connect **direct** WebRTC
+   (per-peer transport `webrtc`); relay not needed.
+2. **PC exe ↔ phone mobile data** — different networks; expect TURN to carry it
+   (candidate type `relay` under «Связь между сетями»). Still WebRTC.
+3. **TURN-only** (`RELAY_ONLY=true` + TURN configured) — forces relayed ICE;
+   confirm calls/data still connect.
+4. **Relay text fallback** — block direct WebRTC + TURN (e.g. a hostile
+   firewall) with `RELAY_URL` set: relay status reaches **registered**, a text
+   message shows *sent* then flips to *delivered* once the peer acks; the
+   transport for that peer reads `relay`. Voice/files/rooms must **not** use it.
+5. **QR / manual add contact** — add a contact by code and by QR; the chat opens
+   and messages flow (offline-first add still works with no network).
 
 ## Not solved by this server
 

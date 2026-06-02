@@ -1,0 +1,33 @@
+# CI for the encrypted-text relay server (relay-server/). Independent of the
+# Flutter build/pages workflows — it only runs when the relay server changes, so
+# it can't break the app build. Tests are dependency-light (node:test) but the
+# ws smoke test needs `npm ci`.
+name: relay-server
+
+on:
+  push:
+    paths:
+      - 'relay-server/**'
+      - '.github/workflows/relay-server.yml'
+  pull_request:
+    paths:
+      - 'relay-server/**'
+      - '.github/workflows/relay-server.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: relay-server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      # Reproducible install from the committed lockfile.
+      - run: npm ci
+      # Syntax check (cheap lint substitute — this is plain JS, no TS build).
+      - run: npm run check
+      # Full suite: dep-free hub/metrics/protocol/blob tests + ws smoke tests.
+      - run: npm test

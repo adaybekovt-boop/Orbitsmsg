@@ -55,6 +55,26 @@ export class RelayHub {
      * the identity key that first registered it. In-memory; resets on restart
      * (documented). */
     this.peerKeys = new Map();
+    /** Monotonic, SAFE counters for /metrics. Never include frames, ids, keys,
+     * or signatures — just aggregate counts. */
+    this.stats = {
+      totalRelayAttempts: 0,
+      forwarded: 0,
+      offlineRecipient: 0,
+      rejectedMalformed: 0,
+      rejectedAuth: 0,
+      rejectedRateLimit: 0,
+    };
+  }
+
+  /** A snapshot safe to expose at GET /metrics — counts only, no secrets. */
+  metricsSnapshot() {
+    return {
+      activeConnections: this.connections.size,
+      registeredPeers: this.peers.size,
+      knownPeerKeys: this.peerKeys.size,
+      ...this.stats,
+    };
   }
 
   get connectionCount() {
@@ -118,6 +138,7 @@ export class RelayHub {
     }
     // 2) Per-connection rate limit.
     if (!this._consumeToken(conn)) {
+      this.stats.rejectedRateLimit++;
       this.log('reject', { reason: 'rate_limited' });
       this._safeSend(conn, { type: 'relay_error', reason: 'rate_limited' });
       return { action: 'rejected', reason: 'rate_limited' };
@@ -127,20 +148,42 @@ export class RelayHub {
     try {
       msg = JSON.parse(typeof raw === 'string' ? raw : raw.toString('utf8'));
     } catch {
+      this.stats.rejectedMalformed++;
       this.log('reject', { reason: 'bad_json' });
       return { action: 'rejected', reason: 'bad_json' };
     }
     if (msg === null || typeof msg !== 'object' || Array.isArray(msg) ||
         typeof msg.type !== 'string') {
+      this.stats.rejectedMalformed++;
       this.log('reject', { reason: 'bad_message' });
       return { action: 'rejected', reason: 'bad_message' };
     }
     switch (msg.type) {
-      case 'register':
-        return this._handleRegister(conn, msg);
-      case 'relay':
-        return this._handleRelay(conn, msg);
+      case 'register': {
+        const r = this._handleRegister(conn, msg);
+        if (r.action === 'rejected') this.stats.rejectedAuth++;
+        return r;
+      }
+      case 'relay': {
+        this.stats.totalRelayAttempts++;
+        const r = this._handleRelay(conn, msg);
+        if (r.action === 'forwarded') {
+          this.stats.forwarded++;
+        } else if (r.action === 'offline') {
+          this.stats.offlineRecipient++;
+        } else if (r.action === 'rejected') {
+          // not_registered / from_mismatch are auth failures; the rest
+          // (bad_envelope, frame_too_big, expired) are malformed/invalid.
+          if (r.reason === 'not_registered' || r.reason === 'from_mismatch') {
+            this.stats.rejectedAuth++;
+          } else {
+            this.stats.rejectedMalformed++;
+          }
+        }
+        return r;
+      }
       default:
+        this.stats.rejectedMalformed++;
         this.log('reject', { reason: 'unknown_type' });
         return { action: 'rejected', reason: 'unknown_type' };
     }

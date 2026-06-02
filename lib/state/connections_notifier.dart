@@ -60,6 +60,7 @@ class ConnectionsState {
     this.lastRelayError,
     this.lastRelayErrorAtMs,
     this.lastTransportByPeer = const <String, String>{},
+    this.relayStatus = RelayStatus.disabled,
   });
 
   const ConnectionsState.empty()
@@ -69,7 +70,8 @@ class ConnectionsState {
         lastConnectError = null,
         lastRelayError = null,
         lastRelayErrorAtMs = null,
-        lastTransportByPeer = const <String, String>{};
+        lastTransportByPeer = const <String, String>{},
+        relayStatus = RelayStatus.disabled;
 
   final Set<String> connectedPeerIds;
 
@@ -105,6 +107,10 @@ class ConnectionsState {
   /// diagnostics show whether a peer is talking direct or via the relay.
   final Map<String, String> lastTransportByPeer;
 
+  /// Live relay connection + signed-registration status (diagnostics only).
+  /// `disabled` when `RELAY_URL` isn't configured.
+  final RelayStatus relayStatus;
+
   ConnectionsState copyWith({
     Set<String>? connectedPeerIds,
     Set<String>? connectingPeerIds,
@@ -113,6 +119,7 @@ class ConnectionsState {
     Object? lastRelayError = _unset,
     int? lastRelayErrorAtMs,
     Map<String, String>? lastTransportByPeer,
+    RelayStatus? relayStatus,
   }) =>
       ConnectionsState(
         connectedPeerIds: connectedPeerIds ?? this.connectedPeerIds,
@@ -126,6 +133,7 @@ class ConnectionsState {
             : lastRelayError as String?,
         lastRelayErrorAtMs: lastRelayErrorAtMs ?? this.lastRelayErrorAtMs,
         lastTransportByPeer: lastTransportByPeer ?? this.lastTransportByPeer,
+        relayStatus: relayStatus ?? this.relayStatus,
       );
 }
 
@@ -217,6 +225,8 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     // Relay transport / registration errors → diagnostics (lastRelayError).
     // Never carries frame content.
     _relayErrorsSub = _relay.errors.listen(_recordRelayError);
+    // Relay connection + registration status → diagnostics (relayStatus).
+    _relayStatusSub = _relay.status.listen(_recordRelayStatus);
 
     // Sign-out: close everything + disconnect the relay. Sign-in: connect the
     // relay so we can both send fallbacks AND receive frames addressed to us
@@ -320,6 +330,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   StreamSubscription<RelayEnvelope>? _relaySub;
   StreamSubscription<String>? _relayErrorsSub;
+  StreamSubscription<RelayStatus>? _relayStatusSub;
   int _relaySeq = 0;
 
   /// Peers we've already kicked a relay handshake for, so a burst of queued
@@ -477,6 +488,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       lastRelayError: message,
       lastRelayErrorAtMs: now(),
     );
+  }
+
+  void _recordRelayStatus(RelayStatus s) {
+    if (!mounted) return;
+    if (state.relayStatus == s) return;
+    state = state.copyWith(relayStatus: s);
   }
 
   /// Whether a reliable channel to [remoteId] is open (used by Drop to gate
@@ -1068,6 +1085,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       _relayErrorsSub?.cancel();
     } catch (_) {}
     _relayErrorsSub = null;
+    try {
+      _relayStatusSub?.cancel();
+    } catch (_) {}
+    _relayStatusSub = null;
     _teardownAll();
     super.dispose();
   }

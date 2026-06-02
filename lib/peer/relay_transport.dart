@@ -101,6 +101,32 @@ class RelayEnvelope {
   }
 }
 
+/// Live connection + signed-registration status of the relay transport, for
+/// honest diagnostics. NOT a delivery signal — `registered` only means the
+/// socket may now relay; a message is delivered only on the receiver's
+/// end-to-end ack.
+enum RelayStatus {
+  /// `RELAY_URL` not configured — relay is a no-op (app is WebRTC-only).
+  disabled,
+
+  /// Opening the socket / waiting to (re)connect.
+  connecting,
+
+  /// WebSocket open but NOT yet registered (challenge in flight). No relay
+  /// frames are sent in this state.
+  connected,
+
+  /// Got the server challenge; signing + sending the register.
+  registering,
+
+  /// Server confirmed our signed registration — relay may now forward frames.
+  registered,
+
+  /// Registration failed (rejected / signing failed / no challenge). Relay is
+  /// unusable until the next successful (re)registration.
+  failed,
+}
+
 /// Transport that routes [RelayEnvelope]s. Optional — when not configured the
 /// app uses [DisabledRelayTransport] and behaves exactly as WebRTC-only.
 abstract class RelayTransport {
@@ -126,6 +152,9 @@ abstract class RelayTransport {
   /// "registration rejected", "server didn't challenge"). NEVER carries frame
   /// content. Surfaced into the connection layer's `lastRelayError`.
   Stream<String> get errors;
+
+  /// Live connection + registration status transitions for diagnostics.
+  Stream<RelayStatus> get status;
 }
 
 /// The default when no relay is configured: never sends, never receives. Keeps
@@ -150,4 +179,7 @@ class DisabledRelayTransport implements RelayTransport {
 
   @override
   Stream<String> get errors => const Stream<String>.empty();
+
+  @override
+  Stream<RelayStatus> get status => Stream<RelayStatus>.value(RelayStatus.disabled);
 }

@@ -15,10 +15,29 @@ function intEnv(name, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+/** Parse a comma/space separated env var into a trimmed list, or null when
+ * unset/empty (meaning "no restriction"). */
+function parseList(raw) {
+  if (raw === undefined || raw === null) return null;
+  const items = raw
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+  return items.length > 0 ? items : null;
+}
+
 export const config = {
-  // Listen address.
-  port: intEnv('PORT', 8080),
-  host: process.env.HOST || '0.0.0.0',
+  // Listen address. `RELAY_PORT`/`RELAY_HOST` take precedence; `PORT`/`HOST`
+  // are accepted too (many platforms inject `PORT`).
+  port: intEnv('RELAY_PORT', intEnv('PORT', 8080)),
+  host: process.env.RELAY_HOST || process.env.HOST || '0.0.0.0',
+
+  // Optional browser-origin allowlist (comma/space separated). When set, a WS
+  // upgrade carrying an `Origin` header NOT in the list is rejected. Native
+  // clients (Flutter desktop/mobile) send no Origin and are always allowed —
+  // this is a browser-CSRF-style control, NOT authentication (that's the signed
+  // registration). null/empty ⇒ allow all origins.
+  allowedOrigins: parseList(process.env.RELAY_ALLOWED_ORIGINS),
 
   // Max raw WebSocket message size accepted before JSON parse. Aligned with the
   // client's 512 KiB inbound cap. Also enforced at the ws transport layer
