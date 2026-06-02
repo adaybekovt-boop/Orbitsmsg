@@ -1,52 +1,46 @@
 // Settings -> Diagnostics.
 //
 // Small operational panel for build metadata, image-cache stats, and the
-// manual update checker. Updates are intentionally opt-in: the app checks the
-// latest GitHub Release and opens the release/asset URL in the system browser.
+// update checker. Updates are driven by [updateNotifierProvider] (auto-update
+// Phase 2). This phase is read-only: it surfaces whether a newer GitHub Release
+// exists and links to the release page. Download + install land in a LATER
+// phase — there is intentionally NO in-app download/install button here.
 
-import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../core/update_checker.dart';
+import '../../state/update_notifier.dart';
 import '../../themes/orbits_tokens.dart';
 import '../../ui/primitives/adaptive_page_frame.dart';
 import '../../ui/primitives/orbits_glass_button.dart';
 import '../../ui/primitives/orbits_glass_surface.dart';
 import '../../ui/primitives/orbs_card.dart';
 
-class DiagnosticsPage extends StatefulWidget {
+class DiagnosticsPage extends ConsumerStatefulWidget {
   const DiagnosticsPage({super.key});
 
   @override
-  State<DiagnosticsPage> createState() => _DiagnosticsPageState();
+  ConsumerState<DiagnosticsPage> createState() => _DiagnosticsPageState();
 }
 
-class _DiagnosticsPageState extends State<DiagnosticsPage> {
+class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
   late final Future<PackageInfo> _packageInfoFuture;
-  final UpdateChecker _updateChecker = UpdateChecker();
-  UpdateCheckResult? _updateResult;
-  bool _checkingUpdates = false;
 
   @override
   void initState() {
     super.initState();
     _packageInfoFuture = PackageInfo.fromPlatform();
-  }
-
-  Future<void> _checkUpdates() async {
-    if (_checkingUpdates) return;
-    setState(() => _checkingUpdates = true);
-    try {
-      final info = await _packageInfoFuture;
-      final result = await _updateChecker.check(currentVersion: info.version);
+    // Lightweight, NON-BLOCKING auto-check when this screen opens (after the
+    // first frame). Guarded by a once-per-session cooldown in the notifier so
+    // it runs at most once. Deliberately NOT wired into app startup — opening
+    // Diagnostics can never slow or block app launch, and we don't make an
+    // unsolicited network call on every cold start.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      setState(() => _updateResult = result);
-    } finally {
-      if (mounted) setState(() => _checkingUpdates = false);
-    }
+      ref.read(updateNotifierProvider.notifier).maybeAutoCheck();
+    });
   }
 
   Future<void> _openUrl(String url) async {
@@ -58,6 +52,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
   @override
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
+    final update = ref.watch(updateNotifierProvider);
     final imageCache = PaintingBinding.instance.imageCache;
     final cacheBytes = imageCache.currentSizeBytes;
     final cacheMax = imageCache.maximumSizeBytes;
@@ -147,9 +142,10 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: _UpdatePanel(
-                    result: _updateResult,
-                    checking: _checkingUpdates,
-                    onCheck: _checkUpdates,
+                    update: update,
+                    fallbackVersion: info?.version,
+                    onCheck: () =>
+                        ref.read(updateNotifierProvider.notifier).check(),
                     onOpenUrl: _openUrl,
                   ),
                 ),
@@ -191,29 +187,30 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
 
 class _UpdatePanel extends StatelessWidget {
   const _UpdatePanel({
-    required this.result,
-    required this.checking,
+    required this.update,
+    required this.fallbackVersion,
     required this.onCheck,
     required this.onOpenUrl,
   });
 
-  final UpdateCheckResult? result;
-  final bool checking;
+  final UpdateState update;
+  final String? fallbackVersion;
   final VoidCallback onCheck;
   final Future<void> Function(String url) onOpenUrl;
 
   @override
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
-    final result = this.result;
-    final status = _statusText(result);
-    final statusColor = result == null
-        ? tokens.muted
-        : result.hasError
-            ? tokens.danger
-            : result.isUpdateAvailable
-                ? tokens.accent
-                : tokens.muted;
+    final checking = update.isChecking;
+    final statusColor = switch (update.status) {
+      UpdateUiStatus.failed => tokens.danger,
+      UpdateUiStatus.updateAvailable => tokens.accent,
+      UpdateUiStatus.latestUnusable => tokens.muted,
+      _ => tokens.muted,
+    };
+
+    final currentVersion = update.currentVersion ?? fallbackVersion;
+    final notes = update.releaseNotes?.trim();
 
     return OrbitsGlassSurface(
       role: OrbitsGlassRole.card,
@@ -223,7 +220,7 @@ class _UpdatePanel extends StatelessWidget {
         children: [
           OrbsSettingRow(
             label: 'Проверить обновления',
-            subtitle: status,
+            subtitle: _statusText(update),
             trailing: checking
                 ? SizedBox(
                     width: 20,
@@ -241,25 +238,33 @@ class _UpdatePanel extends StatelessWidget {
                     onPressed: onCheck,
                   ),
           ),
-          if (result != null) ...[
+          if (update.hasChecked) ...[
             const OrbsDivider(),
             OrbsSettingRow(
               label: 'Текущая версия',
-              subtitle: result.currentVersion.isEmpty
+              subtitle: (currentVersion == null || currentVersion.isEmpty)
                   ? 'Неизвестно'
-                  : result.currentVersion,
+                  : currentVersion,
             ),
             const OrbsDivider(),
             OrbsSettingRow(
               label: 'Последняя версия',
-              subtitle: result.latestVersion.isEmpty
+              subtitle: (update.latestVersion == null ||
+                      update.latestVersion!.isEmpty)
                   ? 'Неизвестно'
-                  : result.latestVersion,
+                  : update.latestVersion!,
             ),
-            if (result.errorMessage != null) ...[
+            if (update.checkedAt != null) ...[
+              const OrbsDivider(),
+              OrbsSettingRow(
+                label: 'Последняя проверка',
+                subtitle: _formatCheckedAt(update.checkedAt!),
+              ),
+            ],
+            if (update.errorMessage != null) ...[
               const SizedBox(height: 8),
               Text(
-                result.errorMessage!,
+                update.errorMessage!,
                 style: TextStyle(
                   color: statusColor,
                   fontFamily: tokens.fontBody,
@@ -267,81 +272,87 @@ class _UpdatePanel extends StatelessWidget {
                 ),
               ),
             ],
-            const SizedBox(height: 12),
-            _UpdateActions(result: result, onOpenUrl: onOpenUrl),
+            if (update.updateAvailable && notes != null && notes.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              Text(
+                'Что нового',
+                style: TextStyle(
+                  color: tokens.text,
+                  fontFamily: tokens.fontHeading,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 13,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _notesSummary(notes),
+                style: TextStyle(
+                  color: tokens.muted,
+                  fontFamily: tokens.fontBody,
+                  fontSize: 12,
+                  height: 1.4,
+                ),
+              ),
+            ],
+            if (update.updateAvailable) ...[
+              const SizedBox(height: 12),
+              OrbitsGlassButton(
+                label: 'Открыть страницу релиза',
+                icon: Icons.open_in_new,
+                variant: OrbitsGlassVariant.secondary,
+                onPressed: update.releaseUrl == null
+                    ? null
+                    : () => onOpenUrl(update.releaseUrl!),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Автоматическая загрузка и установка появятся в следующем '
+                'обновлении. Пока скачайте файл вручную со страницы релиза.',
+                style: TextStyle(
+                  color: tokens.muted,
+                  fontFamily: tokens.fontBody,
+                  fontSize: 11.5,
+                  height: 1.4,
+                ),
+              ),
+            ],
           ],
         ],
       ),
     );
   }
 
-  String _statusText(UpdateCheckResult? result) {
-    if (checking) return 'Проверяем GitHub Releases...';
-    if (result == null) return 'Нажми, чтобы сравнить версию с GitHub Release';
-    if (result.hasError) return 'Не удалось проверить обновления';
-    if (result.isUpdateAvailable) {
-      return 'Доступна новая версия ${result.latestTag}';
-    }
-    return 'Установлена актуальная версия';
-  }
-}
-
-class _UpdateActions extends StatelessWidget {
-  const _UpdateActions({
-    required this.result,
-    required this.onOpenUrl,
-  });
-
-  final UpdateCheckResult result;
-  final Future<void> Function(String url) onOpenUrl;
-
-  @override
-  Widget build(BuildContext context) {
-    final primaryAsset = _platformAssetUrl(result);
-    final primaryLabel = _platformAssetLabel();
-    final buttons = <Widget>[];
-    if (result.isUpdateAvailable && primaryAsset != null) {
-      buttons.add(
-        OrbitsGlassButton(
-          label: primaryLabel,
-          icon: Icons.download_outlined,
-          variant: OrbitsGlassVariant.primary,
-          onPressed: () => onOpenUrl(primaryAsset),
-        ),
-      );
-    }
-    buttons.add(
-      OrbitsGlassButton(
-        label: 'Открыть релиз',
-        icon: Icons.open_in_new,
-        variant: OrbitsGlassVariant.secondary,
-        onPressed: () => onOpenUrl(result.releaseUrl),
-      ),
-    );
-
-    return Wrap(
-      spacing: 10,
-      runSpacing: 10,
-      children: buttons,
-    );
-  }
-
-  String? _platformAssetUrl(UpdateCheckResult result) {
-    if (kIsWeb) return null;
-    switch (defaultTargetPlatform) {
-      case TargetPlatform.windows:
-        return result.windowsAssetUrl;
-      case TargetPlatform.android:
-        return result.preferredAndroidAssetUrl;
-      default:
-        return null;
+  String _statusText(UpdateState update) {
+    switch (update.status) {
+      case UpdateUiStatus.checking:
+        return 'Проверяем GitHub Releases...';
+      case UpdateUiStatus.unknown:
+        return 'Нажми, чтобы сравнить версию с GitHub Release';
+      case UpdateUiStatus.failed:
+        return 'Не удалось проверить обновления';
+      case UpdateUiStatus.updateAvailable:
+        final tag = update.latestTag ?? update.latestVersion ?? '';
+        return tag.isEmpty
+            ? 'Доступна новая версия'
+            : 'Доступна новая версия $tag';
+      case UpdateUiStatus.latestUnusable:
+        return 'Последний релиз пока недоступен для установки';
+      case UpdateUiStatus.upToDate:
+        return 'Установлена последняя версия';
     }
   }
 
-  String _platformAssetLabel() {
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      return 'Скачать APK';
-    }
-    return 'Скачать EXE';
+  String _notesSummary(String notes) {
+    const maxLen = 280;
+    final oneBlock = notes.replaceAll('\r\n', '\n').trim();
+    if (oneBlock.length <= maxLen) return oneBlock;
+    return '${oneBlock.substring(0, maxLen).trimRight()}…';
+  }
+
+  String _formatCheckedAt(DateTime when) {
+    final local = when.toLocal();
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(local.hour)}:${two(local.minute)} '
+        '${two(local.day)}.${two(local.month)}.${local.year}';
   }
 }
