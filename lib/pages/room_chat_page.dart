@@ -20,6 +20,7 @@ import 'package:mime/mime.dart';
 import '../peer/room_manager.dart';
 import '../peer/room_signaling_host.dart' show canHostSignalingServer;
 import '../peer/security_monitor.dart';
+import '../state/chat_prefs_provider.dart';
 import '../state/local_profile_provider.dart';
 import '../storage/db.dart' as db;
 import '../themes/orbits_tokens.dart';
@@ -1185,15 +1186,16 @@ class _ChannelRow extends StatelessWidget {
 
 // ─── Message list (per-channel, sender-clustered) ─────────────────────
 
-class _MessageList extends StatelessWidget {
+class _MessageList extends ConsumerWidget {
   const _MessageList({required this.channelId, required this.hostPeerId});
 
   final String channelId;
   final String? hostPeerId;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final tokens = OrbitsTokens.of(context);
+    final chatPrefs = ref.watch(chatPrefsProvider);
     // Outer stream: contacts' trustLevels → per-sender verification badge.
     return StreamBuilder<List<Map<String, Object?>>>(
       stream: db.watchAllPeers(),
@@ -1239,6 +1241,9 @@ class _MessageList extends StatelessWidget {
                       trustByPeer[row['peerId'] as String?]),
                   groupedWithPrevious: groupedWithPrevious,
                   isTail: isTail,
+                  textScale: chatPrefs.fontScale,
+                  bubbleStyle: chatPrefs.bubbleStyle,
+                  showSeconds: chatPrefs.showSeconds,
                 );
               },
             );

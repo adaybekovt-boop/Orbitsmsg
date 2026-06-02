@@ -28,6 +28,7 @@ import 'package:image/image.dart' as img;
 import 'package:mime/mime.dart';
 
 import '../state/calls_provider.dart';
+import '../state/chat_prefs_provider.dart';
 import '../state/connections_notifier.dart';
 import '../state/messages_provider.dart';
 import '../state/messaging_notifier.dart';
@@ -867,6 +868,10 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
             child: messagesAsync.when(
               data: (rows) {
                 if (rows.isEmpty) return const _EmptyChat();
+                // Chat appearance prefs (font size / bubble shape / seconds).
+                // Read here (during build) so layout-time itemBuilder doesn't
+                // call ref.watch; the page rebuilds when prefs change.
+                final chatPrefs = ref.watch(chatPrefsProvider);
                 // `reverse: true` means index 0 is the newest; we flip the
                 // row order when indexing so the data stays oldest-first
                 // for everyone else (matches `watchMessagesForPeer`'s
@@ -904,6 +909,9 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
                         row: row,
                         groupedWithPrevious: groupedWithPrevious,
                         isTail: isTail,
+                        textScale: chatPrefs.fontScale,
+                        bubbleStyle: chatPrefs.bubbleStyle,
+                        showSeconds: chatPrefs.showSeconds,
                         onRetry: () {
                           // Touching a pending message re-kicks the
                           // flusher for this peer. If the reliable channel

@@ -1,15 +1,18 @@
 // Settings → Чаты.
 //
-// All the per-conversation behaviour toggles, plus the bubble-style /
-// font-size pickers from `src/components/ChatSettings.jsx`. Stored under
-// `orbits_chat_prefs_v1` in SharedPreferences — same key the message
-// renderer reads, so the toggles affect message UI immediately.
-
-import 'dart:convert';
+// Real, consumed appearance prefs (read by MessageBubble via chatPrefsProvider):
+//   • Показывать секунды → timestamp format HH:MM:SS
+//   • Форма пузырей      → bubble corner shape
+//   • Размер шрифта      → message text scale (live preview below)
+//
+// Not-yet-implemented behaviours (read receipts, sound/haptic on receive) are
+// shown as disabled "СКОРО" rows instead of fake toggles — there is no runtime
+// consumer for them yet (sound core is a no-op stub; no read-receipt path).
 
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../state/chat_prefs_provider.dart';
 import '../../themes/orbits_tokens.dart';
 import '../../ui/primitives/orbits_glass_button.dart';
 import '../../ui/primitives/orbits_glass_list_tile.dart';
@@ -17,104 +20,15 @@ import '../../ui/primitives/adaptive_page_frame.dart';
 import '../../ui/primitives/orbits_glass_surface.dart';
 import '../../ui/primitives/orbits_glass_switch.dart';
 
-const _kChatPrefsKey = 'orbits_chat_prefs_v1';
-
-class ChatPrefs {
-  const ChatPrefs({
-    this.showSeconds = false,
-    this.autoRead = true,
-    this.messageSounds = true,
-    this.vibration = true,
-    this.fontSize = 'M',
-    this.bubbleStyle = 'rounded',
-  });
-
-  final bool showSeconds;
-  final bool autoRead;
-  final bool messageSounds;
-  final bool vibration;
-
-  /// One of: 'XS', 'S', 'M', 'L', 'XL'.
-  final String fontSize;
-
-  /// One of: 'rounded', 'soft', 'square', 'bubble'.
-  final String bubbleStyle;
-
-  ChatPrefs copyWith({
-    bool? showSeconds,
-    bool? autoRead,
-    bool? messageSounds,
-    bool? vibration,
-    String? fontSize,
-    String? bubbleStyle,
-  }) =>
-      ChatPrefs(
-        showSeconds: showSeconds ?? this.showSeconds,
-        autoRead: autoRead ?? this.autoRead,
-        messageSounds: messageSounds ?? this.messageSounds,
-        vibration: vibration ?? this.vibration,
-        fontSize: fontSize ?? this.fontSize,
-        bubbleStyle: bubbleStyle ?? this.bubbleStyle,
-      );
-}
-
-class ChatPrefsPage extends StatefulWidget {
+class ChatPrefsPage extends ConsumerWidget {
   const ChatPrefsPage({super.key});
 
   @override
-  State<ChatPrefsPage> createState() => _ChatPrefsPageState();
-}
-
-class _ChatPrefsPageState extends State<ChatPrefsPage> {
-  ChatPrefs _prefs = const ChatPrefs();
-  bool _loaded = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-  }
-
-  Future<void> _load() async {
-    final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getString(_kChatPrefsKey);
-    if (raw != null) {
-      try {
-        final m = jsonDecode(raw);
-        if (m is Map) {
-          _prefs = ChatPrefs(
-            showSeconds: m['showSeconds'] == true,
-            autoRead: m['autoRead'] != false,
-            messageSounds: m['messageSounds'] != false,
-            vibration: m['vibration'] != false,
-            fontSize: (m['fontSize'] as String?) ?? 'M',
-            bubbleStyle: (m['bubbleStyle'] as String?) ?? 'rounded',
-          );
-        }
-      } catch (_) {}
-    }
-    if (mounted) setState(() => _loaded = true);
-  }
-
-  Future<void> _save(ChatPrefs next) async {
-    setState(() => _prefs = next);
-    final sp = await SharedPreferences.getInstance();
-    await sp.setString(
-      _kChatPrefsKey,
-      jsonEncode({
-        'showSeconds': next.showSeconds,
-        'autoRead': next.autoRead,
-        'messageSounds': next.messageSounds,
-        'vibration': next.vibration,
-        'fontSize': next.fontSize,
-        'bubbleStyle': next.bubbleStyle,
-      }),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final tokens = OrbitsTokens.of(context);
+    final prefs = ref.watch(chatPrefsProvider);
+    final notifier = ref.read(chatPrefsProvider.notifier);
+
     return Scaffold(
       appBar: AppBar(
         backgroundColor: Colors.transparent,
@@ -138,130 +52,172 @@ class _ChatPrefsPageState extends State<ChatPrefsPage> {
       body: AdaptivePageFrame(
         maxWidth: 760,
         child: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        children: [
-          // ── Behaviour ────────────────────────────────────────
-          const _SectionLabel('Поведение'),
-          _ToggleRow(
-            icon: Icons.timer_outlined,
-            label: 'Показывать секунды',
-            subtitle: 'Время сообщений в формате ЧЧ:ММ:СС',
-            value: _prefs.showSeconds,
-            onChanged: !_loaded
-                ? null
-                : (v) => _save(_prefs.copyWith(showSeconds: v)),
-          ),
-          _ToggleRow(
-            icon: Icons.mark_chat_read_outlined,
-            label: 'Авто-прочтение',
-            subtitle: 'Помечать сообщения прочитанными при открытии чата',
-            value: _prefs.autoRead,
-            onChanged: !_loaded
-                ? null
-                : (v) => _save(_prefs.copyWith(autoRead: v)),
-          ),
-          _ToggleRow(
-            icon: Icons.volume_up_outlined,
-            label: 'Звуки сообщений',
-            subtitle: 'Тихий «динь» при получении',
-            value: _prefs.messageSounds,
-            onChanged: !_loaded
-                ? null
-                : (v) => _save(_prefs.copyWith(messageSounds: v)),
-          ),
-          _ToggleRow(
-            icon: Icons.vibration,
-            label: 'Вибрация',
-            subtitle: 'Короткое касание при новом сообщении',
-            value: _prefs.vibration,
-            onChanged: !_loaded
-                ? null
-                : (v) => _save(_prefs.copyWith(vibration: v)),
-          ),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          children: [
+            // ── Behaviour (real) ─────────────────────────────────
+            const _SectionLabel('Поведение'),
+            _ToggleRow(
+              icon: Icons.timer_outlined,
+              label: 'Показывать секунды',
+              subtitle: 'Время сообщений в формате ЧЧ:ММ:СС',
+              value: prefs.showSeconds,
+              onChanged: (v) =>
+                  notifier.update(prefs.copyWith(showSeconds: v)),
+            ),
 
-          // ── Bubble style ─────────────────────────────────────
-          const _SectionLabel('Форма пузырей'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbitsGlassSurface(
-              role: OrbitsGlassRole.card,
-              borderRadius: BorderRadius.circular(tokens.radiusCard),
-              padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      for (final style in const [
-                        ('rounded', 'Округлый'),
-                        ('soft', 'Мягкий'),
-                        ('square', 'Квадрат'),
-                        ('bubble', 'Пузырь'),
-                      ])
-                        OrbitsGlassPillButton(
-                          label: style.$2,
-                          selected: _prefs.bubbleStyle == style.$1,
-                          size: OrbitsGlassSize.small,
-                          onPressed: !_loaded
-                              ? null
-                              : () => _save(
-                                  _prefs.copyWith(bubbleStyle: style.$1)),
+            // ── Bubble style (real) ──────────────────────────────
+            const _SectionLabel('Форма пузырей'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: OrbitsGlassSurface(
+                role: OrbitsGlassRole.card,
+                borderRadius: BorderRadius.circular(tokens.radiusCard),
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final style in const [
+                          ('rounded', 'Округлый'),
+                          ('soft', 'Мягкий'),
+                          ('square', 'Квадрат'),
+                          ('bubble', 'Пузырь'),
+                        ])
+                          OrbitsGlassPillButton(
+                            label: style.$2,
+                            selected: prefs.bubbleStyle == style.$1,
+                            size: OrbitsGlassSize.small,
+                            onPressed: () => notifier
+                                .update(prefs.copyWith(bubbleStyle: style.$1)),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    _BubblePreview(prefs: prefs, tokens: tokens),
+                  ],
+                ),
+              ),
+            ),
+
+            // ── Font size (real) ─────────────────────────────────
+            const _SectionLabel('Размер шрифта'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: OrbitsGlassSurface(
+                role: OrbitsGlassRole.card,
+                borderRadius: BorderRadius.circular(tokens.radiusCard),
+                padding: const EdgeInsets.all(14),
+                child: Column(
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        for (final size in const ['XS', 'S', 'M', 'L', 'XL'])
+                          _SizeButton(
+                            label: size,
+                            selected: prefs.fontSize == size,
+                            onTap: () =>
+                                notifier.update(prefs.copyWith(fontSize: size)),
+                            tokens: tokens,
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'Пример текста сообщения',
+                        style: TextStyle(
+                          color: tokens.text,
+                          fontFamily: tokens.fontBody,
+                          fontSize: 15 * prefs.fontScale,
+                          height: 1.35,
                         ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Применяется ко всем чатам. Конкретный чат может быть '
-                    'переопределён через его настройки.',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: tokens.muted,
-                      fontFamily: tokens.fontBody,
-                      height: 1.45,
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
 
-          // ── Font size ────────────────────────────────────────
-          const _SectionLabel('Размер шрифта'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbitsGlassSurface(
-              role: OrbitsGlassRole.card,
-              borderRadius: BorderRadius.circular(tokens.radiusCard),
-              padding: const EdgeInsets.all(14),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  for (final size in const ['XS', 'S', 'M', 'L', 'XL'])
-                    _SizeButton(
-                      label: size,
-                      selected: _prefs.fontSize == size,
-                      onTap: !_loaded
-                          ? null
-                          : () => _save(_prefs.copyWith(fontSize: size)),
-                      tokens: tokens,
-                    ),
-                ],
-              ),
+            // ── Not implemented yet — honest disabled rows ───────
+            const _SectionLabel('В разработке'),
+            const _ComingSoonRow(
+              icon: Icons.mark_chat_read_outlined,
+              label: 'Авто-прочтение',
+              subtitle: 'Отметки о прочтении появятся в обновлении',
             ),
-          ),
-          const SizedBox(height: 24),
-        ],
-      ),
+            const _ComingSoonRow(
+              icon: Icons.volume_up_outlined,
+              label: 'Звуки сообщений',
+              subtitle: 'Звук при получении появится вместе со звуковым движком',
+            ),
+            const _ComingSoonRow(
+              icon: Icons.vibration,
+              label: 'Вибрация',
+              subtitle: 'Тактильный отклик при новом сообщении появится позже',
+            ),
+            const SizedBox(height: 24),
+          ],
+        ),
       ),
     );
   }
 }
 
-/// One toggle row inside a settings group — leading glyph, label + subtitle,
-/// and a glass switch on the trailing edge. Each row is its own glass card so
-/// the list reads as a stack of discrete Liquid-Glass plates.
+/// Small preview bubble that reflects the chosen shape + font size.
+class _BubblePreview extends StatelessWidget {
+  const _BubblePreview({required this.prefs, required this.tokens});
+
+  final ChatPrefs prefs;
+  final OrbitsTokens tokens;
+
+  BorderRadius get _radius {
+    switch (prefs.bubbleStyle) {
+      case 'square':
+        return BorderRadius.circular(6);
+      case 'soft':
+        return BorderRadius.circular(14);
+      case 'bubble':
+        return BorderRadius.circular(22);
+      case 'rounded':
+      default:
+        return const BorderRadius.only(
+          topLeft: Radius.circular(20),
+          topRight: Radius.circular(20),
+          bottomLeft: Radius.circular(20),
+          bottomRight: Radius.circular(6),
+        );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Align(
+      alignment: Alignment.centerRight,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        decoration: BoxDecoration(
+          color: tokens.bubbleOut,
+          borderRadius: _radius,
+          border: Border.all(color: tokens.accentAlpha(0.22)),
+        ),
+        child: Text(
+          'Пример',
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.95),
+            fontFamily: tokens.fontBody,
+            fontSize: 15 * prefs.fontScale,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ToggleRow extends StatelessWidget {
   const _ToggleRow({
     required this.icon,
@@ -275,7 +231,7 @@ class _ToggleRow extends StatelessWidget {
   final String label;
   final String subtitle;
   final bool value;
-  final ValueChanged<bool>? onChanged;
+  final ValueChanged<bool> onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -283,7 +239,7 @@ class _ToggleRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: OrbitsGlassListTile(
-        onTap: onChanged == null ? null : () => onChanged!(!value),
+        onTap: () => onChanged(!value),
         leading: Icon(icon, color: tokens.muted, size: 20),
         title: Text(label),
         subtitle: Text(subtitle),
@@ -297,7 +253,51 @@ class _ToggleRow extends StatelessWidget {
   }
 }
 
-/// Section label above each settings group — uppercase monospace caps, muted.
+class _ComingSoonRow extends StatelessWidget {
+  const _ComingSoonRow({
+    required this.icon,
+    required this.label,
+    required this.subtitle,
+  });
+
+  final IconData icon;
+  final String label;
+  final String subtitle;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
+    return Opacity(
+      opacity: 0.6,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: OrbitsGlassListTile(
+          leading: Icon(icon, color: tokens.muted, size: 20),
+          title: Text(label),
+          subtitle: Text(subtitle),
+          trailing: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            decoration: BoxDecoration(
+              color: tokens.muted.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              'СКОРО',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                fontFamily: tokens.fontMono,
+                color: tokens.muted,
+                letterSpacing: 1.0,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _SectionLabel extends StatelessWidget {
   const _SectionLabel(this.label);
 
@@ -332,7 +332,7 @@ class _SizeButton extends StatelessWidget {
 
   final String label;
   final bool selected;
-  final VoidCallback? onTap;
+  final VoidCallback onTap;
   final OrbitsTokens tokens;
 
   @override

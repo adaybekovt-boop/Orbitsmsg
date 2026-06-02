@@ -58,7 +58,20 @@ class MessageBubble extends StatelessWidget {
     this.isTail = true,
     this.hostPeerId,
     this.senderVerification,
+    this.textScale = 1.0,
+    this.bubbleStyle = 'rounded',
+    this.showSeconds = false,
   });
+
+  /// Message-text size multiplier from chat preferences (font size picker).
+  final double textScale;
+
+  /// Bubble shape from chat preferences: 'rounded' | 'soft' | 'square' |
+  /// 'bubble'. Defaults preserve the original rounded-with-tail look.
+  final String bubbleStyle;
+
+  /// When true, timestamps render HH:MM:SS instead of HH:MM (chat preference).
+  final bool showSeconds;
 
   /// Raw Drift row: id, peerId, timestamp, direction, status, payload (Map).
   final Map<String, Object?> row;
@@ -183,6 +196,7 @@ class MessageBubble extends StatelessWidget {
                   mine: mine,
                   delivery: delivery,
                   color: scheme.onSurface.withValues(alpha: 0.6),
+                  showSeconds: showSeconds,
                 ),
                 if (mine && delivery == BubbleDelivery.pending)
                   Padding(
@@ -262,6 +276,7 @@ class MessageBubble extends StatelessWidget {
                   mine: mine,
                   delivery: delivery,
                   color: scheme.onSurface.withValues(alpha: 0.6),
+                  showSeconds: showSeconds,
                 ),
                 if (mine && delivery == BubbleDelivery.pending)
                   Padding(
@@ -328,7 +343,7 @@ class MessageBubble extends StatelessWidget {
                   text,
                   style: TextStyle(
                     color: fg,
-                    fontSize: 15,
+                    fontSize: 15 * textScale,
                     height: 1.35,
                     fontFamily: OrbitsTokens.of(context).fontBody,
                   ),
@@ -339,6 +354,7 @@ class MessageBubble extends StatelessWidget {
                 mine: mine,
                 delivery: delivery,
                 color: timeColor,
+                showSeconds: showSeconds,
               ),
               if (mine && delivery == BubbleDelivery.pending)
                 Padding(
@@ -368,14 +384,26 @@ class MessageBubble extends StatelessWidget {
         bottom: 1.5,
       );
 
-  /// Cluster-aware corner radii: only the tail bubble keeps the asymmetric
-  /// "tail" corner; inner bubbles of a run are symmetrically rounded.
-  BorderRadius _bubbleRadius(bool mine) => BorderRadius.only(
-        topLeft: const Radius.circular(20),
-        topRight: const Radius.circular(20),
-        bottomLeft: Radius.circular(!mine && isTail ? 6 : 20),
-        bottomRight: Radius.circular(mine && isTail ? 6 : 20),
-      );
+  /// Bubble corner radii by chat-preference style. 'rounded' (default) keeps
+  /// the cluster-aware asymmetric "tail" corner; the other styles are uniform.
+  BorderRadius _bubbleRadius(bool mine) {
+    switch (bubbleStyle) {
+      case 'square':
+        return BorderRadius.circular(6);
+      case 'soft':
+        return BorderRadius.circular(14);
+      case 'bubble':
+        return BorderRadius.circular(22);
+      case 'rounded':
+      default:
+        return BorderRadius.only(
+          topLeft: const Radius.circular(20),
+          topRight: const Radius.circular(20),
+          bottomLeft: Radius.circular(!mine && isTail ? 6 : 20),
+          bottomRight: Radius.circular(mine && isTail ? 6 : 20),
+        );
+    }
+  }
 
   /// Shared rendering for "media-in-bubble" bodies (voice). The message
   /// chrome mirrors the text bubble (same rounded tail, same fill) so
@@ -434,6 +462,7 @@ class MessageBubble extends StatelessWidget {
                 mine: mine,
                 delivery: delivery,
                 color: timeColor,
+                showSeconds: showSeconds,
               ),
               if (mine && delivery == BubbleDelivery.pending)
                 Padding(
@@ -701,12 +730,14 @@ class _MetaRow extends StatelessWidget {
     required this.mine,
     required this.delivery,
     required this.color,
+    this.showSeconds = false,
   });
 
   final int ts;
   final bool mine;
   final BubbleDelivery delivery;
   final Color color;
+  final bool showSeconds;
 
   @override
   Widget build(BuildContext context) {
@@ -714,7 +745,7 @@ class _MetaRow extends StatelessWidget {
       mainAxisSize: MainAxisSize.min,
       children: [
         Text(
-          _formatTime(ts),
+          _formatTime(ts, showSeconds),
           style: TextStyle(
             color: color,
             fontSize: 11,
@@ -958,10 +989,12 @@ Color _outgoingTextColor(OrbitsTokens tokens) =>
         ? Colors.white.withValues(alpha: 0.95)
         : Colors.black.withValues(alpha: 0.9);
 
-String _formatTime(int epochMs) {
+String _formatTime(int epochMs, [bool showSeconds = false]) {
   if (epochMs <= 0) return '';
   final dt = DateTime.fromMillisecondsSinceEpoch(epochMs).toLocal();
   final hh = dt.hour.toString().padLeft(2, '0');
   final mm = dt.minute.toString().padLeft(2, '0');
-  return '$hh:$mm';
+  if (!showSeconds) return '$hh:$mm';
+  final ss = dt.second.toString().padLeft(2, '0');
+  return '$hh:$mm:$ss';
 }
