@@ -39,6 +39,7 @@ import '../core/orbits_drop.dart' show dropMaxBufferSize;
 import '../peer/helpers.dart';
 import '../peer/packet_router.dart';
 import '../peer/peerjs_client.dart';
+import '../peer/relay_transport.dart';
 import '../peer/wire_transport.dart';
 import '../storage/db.dart' as db;
 import 'auth_notifier.dart';
@@ -53,14 +54,38 @@ import 'peer_connection_provider.dart';
 class ConnectionsState {
   const ConnectionsState({
     required this.connectedPeerIds,
+    this.connectingPeerIds = const <String>{},
+    this.candidateTypeByPeer = const <String, String>{},
     this.lastConnectError,
+    this.lastRelayError,
+    this.lastRelayErrorAtMs,
+    this.lastTransportByPeer = const <String, String>{},
+    this.relayStatus = RelayStatus.disabled,
   });
 
   const ConnectionsState.empty()
       : connectedPeerIds = const <String>{},
-        lastConnectError = null;
+        connectingPeerIds = const <String>{},
+        candidateTypeByPeer = const <String, String>{},
+        lastConnectError = null,
+        lastRelayError = null,
+        lastRelayErrorAtMs = null,
+        lastTransportByPeer = const <String, String>{},
+        relayStatus = RelayStatus.disabled;
 
   final Set<String> connectedPeerIds;
+
+  /// Peers we have a reliable channel IN PROGRESS for (dialed/queued but the
+  /// DataChannel hasn't opened yet). Drives a "Подключение…" status so the UI
+  /// shows connecting rather than a misleading "Не в сети" during the dial.
+  /// Disjoint from [connectedPeerIds].
+  final Set<String> connectingPeerIds;
+
+  /// peerId → selected local ICE candidate type for the live reliable
+  /// connection: 'host' / 'srflx' / 'prflx' (all DIRECT) or 'relay' (via TURN).
+  /// Read best-effort from `getStats()` when a channel opens; lets diagnostics
+  /// show whether the path is direct or relayed. Absent when not yet known.
+  final Map<String, String> candidateTypeByPeer;
 
   /// Most recent failed dial — surfaced for diagnostics so a swallowed P2P
   /// error is observable (peerId + reason + timestamp). Null until something
@@ -69,15 +94,46 @@ class ConnectionsState {
   /// [connectedPeerIds].
   final ConnectError? lastConnectError;
 
+  /// Most recent relay send/receive error (diagnostics only). Null when the
+  /// relay path is healthy or unused. The chat header NEVER reads this — it's
+  /// purely for the connection diagnostics screen.
+  final String? lastRelayError;
+
+  /// Epoch-ms of [lastRelayError]. Null when there's no recorded error.
+  final int? lastRelayErrorAtMs;
+
+  /// peerId → transport used for the most recent successful reliable send:
+  /// `'webrtc'` (direct DataChannel) or `'relay'` (encrypted fallback). Lets
+  /// diagnostics show whether a peer is talking direct or via the relay.
+  final Map<String, String> lastTransportByPeer;
+
+  /// Live relay connection + signed-registration status (diagnostics only).
+  /// `disabled` when `RELAY_URL` isn't configured.
+  final RelayStatus relayStatus;
+
   ConnectionsState copyWith({
     Set<String>? connectedPeerIds,
+    Set<String>? connectingPeerIds,
+    Map<String, String>? candidateTypeByPeer,
     Object? lastConnectError = _unset,
+    Object? lastRelayError = _unset,
+    int? lastRelayErrorAtMs,
+    Map<String, String>? lastTransportByPeer,
+    RelayStatus? relayStatus,
   }) =>
       ConnectionsState(
         connectedPeerIds: connectedPeerIds ?? this.connectedPeerIds,
+        connectingPeerIds: connectingPeerIds ?? this.connectingPeerIds,
+        candidateTypeByPeer: candidateTypeByPeer ?? this.candidateTypeByPeer,
         lastConnectError: identical(lastConnectError, _unset)
             ? this.lastConnectError
             : lastConnectError as ConnectError?,
+        lastRelayError: identical(lastRelayError, _unset)
+            ? this.lastRelayError
+            : lastRelayError as String?,
+        lastRelayErrorAtMs: lastRelayErrorAtMs ?? this.lastRelayErrorAtMs,
+        lastTransportByPeer: lastTransportByPeer ?? this.lastTransportByPeer,
+        relayStatus: relayStatus ?? this.relayStatus,
       );
 }
 
@@ -95,6 +151,24 @@ class ConnectError {
   final String channel; // 'reliable' | 'ephemeral'
   final String message;
   final int atMs;
+}
+
+/// Honest outcome of a reliable send that may fall back to the relay. Lets the
+/// messaging layer distinguish "handed to a transport" (still awaiting the
+/// receiver's ack) from "couldn't send, stays queued".
+enum ReliableSendResult {
+  /// Handed to a live WebRTC DataChannel. Not yet delivered — awaits the ack.
+  webrtc,
+
+  /// Handed to the relay (WebRTC unavailable). Not yet delivered — awaits the
+  /// receiver's end-to-end ack routed back through the packet router.
+  relay,
+
+  /// No wire session yet; a relay handshake was kicked. Keep queued + retry.
+  pendingHandshake,
+
+  /// Nothing accepted the frame (no WebRTC, relay disabled/down). Keep queued.
+  failed,
 }
 
 // ─── Internal bookkeeping ────────────────────────────────────────
@@ -143,15 +217,32 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       fireImmediately: true,
     );
 
-    // Sign-out: close everything. We don't touch the peer manager here;
-    // it already transitioned to idle via its own auth listener.
+    // The encrypted relay fallback (Phase 2). Subscribe to inbound ONCE for
+    // the registry's lifetime — the stream survives logout/login (the WS
+    // transport disconnects but keeps the stream open), so a single sub is
+    // enough. DisabledRelayTransport yields an empty stream (no-op).
+    _relaySub = _relay.inbound.listen(_onRelayInbound);
+    // Relay transport / registration errors → diagnostics (lastRelayError).
+    // Never carries frame content.
+    _relayErrorsSub = _relay.errors.listen(_recordRelayError);
+    // Relay connection + registration status → diagnostics (relayStatus).
+    _relayStatusSub = _relay.status.listen(_recordRelayStatus);
+
+    // Sign-out: close everything + disconnect the relay. Sign-in: connect the
+    // relay so we can both send fallbacks AND receive frames addressed to us
+    // (a peer may relay to us because THEIR WebRTC is down, even if ours works).
+    // We don't touch the peer manager here; it has its own auth listener.
     _ref.listen<AuthState>(
       authNotifierProvider,
       (prev, next) {
-        if (prev is AuthAuthed && next is! AuthAuthed) {
+        if (next is AuthAuthed) {
+          _startRelay(next.user.peerId);
+        } else if (prev is AuthAuthed && next is! AuthAuthed) {
           _teardownAll();
+          unawaited(_relay.stop());
         }
       },
+      fireImmediately: true,
     );
   }
 
@@ -228,6 +319,181 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     final conn = getConn(remoteId, 'ephemeral');
     if (conn == null) return false;
     return _wire.sendEphemeralOn(conn, remoteId, msg);
+  }
+
+  // ─── Encrypted relay fallback (Phase 2) ────────────────────────
+
+  /// The relay transport for this build. [DisabledRelayTransport] (a no-op)
+  /// unless `RELAY_URL` is configured — so the app is fully functional
+  /// WebRTC-only without it. Read lazily; the provider caches one instance.
+  RelayTransport get _relay => _ref.read(relayTransportProvider);
+
+  StreamSubscription<RelayEnvelope>? _relaySub;
+  StreamSubscription<String>? _relayErrorsSub;
+  StreamSubscription<RelayStatus>? _relayStatusSub;
+  int _relaySeq = 0;
+
+  /// Peers we've already kicked a relay handshake for, so a burst of queued
+  /// messages doesn't fire a handshake storm. Cleared per attempt.
+  final Set<String> _relayHandshakeInFlight = <String>{};
+
+  /// Connect the relay (if configured) so we can send fallbacks and receive
+  /// frames addressed to us. Idempotent — safe to call on every auth event.
+  void _startRelay(String selfPeerId) {
+    final relay = _relay;
+    if (!relay.isConfigured) return;
+    final self = normalizePeerId(selfPeerId);
+    if (self.isEmpty) return;
+    unawaited(relay.start(self));
+  }
+
+  /// Mint a relay frame id. Not security-sensitive (the relay + receiver use it
+  /// only to de-dup), so a monotone seq + timestamp is enough.
+  String _newRelayId() => '${_selfPeerId()}-${now()}-${_relaySeq++}';
+
+  /// Put one OPAQUE [frame] (an encrypted wire-ciphertext String, or a
+  /// plaintext handshake-control Map carrying only public-key material) onto
+  /// the relay, addressed to [to]. Returns true iff the relay ACCEPTED the
+  /// bytes — NOT a delivery confirmation (the receiver's end-to-end ack is the
+  /// only delivery proof). NEVER pass plaintext message body here.
+  Future<bool> _relayPut(String to, Object frame, {String? id}) async {
+    final relay = _relay;
+    if (!relay.isConfigured) return false;
+    try {
+      final ok = await relay.send(RelayEnvelope(
+        from: _selfPeerId(),
+        to: normalizePeerId(to),
+        id: id ?? _newRelayId(),
+        frame: frame,
+        ts: now(),
+      ));
+      if (!ok) {
+        _recordRelayError('Реле не приняло пакет для $to');
+      }
+      return ok;
+    } catch (e) {
+      _recordRelayError('Ошибка отправки через реле: $e');
+      return false;
+    }
+  }
+
+  /// Plaintext handshake-control send-back over the relay (the `wireHello` /
+  /// `wireRekey` reply). Public-key material only — never message body. Used as
+  /// the router's `conn` send for relay-delivered frames.
+  void _relaySendControl(String to, Object? data) {
+    if (data == null) return;
+    unawaited(_relayPut(to, data));
+  }
+
+  /// Bootstrap a wire session over the relay when none exists yet (the peers
+  /// never managed a direct DataChannel). We send only the `wireHello` (public
+  /// keys), never the message body — the body waits for the session and is
+  /// retried by the outbox once the ratchet is ready.
+  Future<void> _bootstrapRelayHandshake(String remoteId) async {
+    if (!_relay.isConfigured) return;
+    if (_relayHandshakeInFlight.contains(remoteId)) return;
+    _relayHandshakeInFlight.add(remoteId);
+    try {
+      final hello = await _wire.createHandshakeHello(remoteId);
+      if (hello != null) await _relayPut(remoteId, hello);
+    } catch (_) {
+      // Best-effort; the next outbox retry re-attempts the bootstrap.
+    } finally {
+      _relayHandshakeInFlight.remove(remoteId);
+    }
+  }
+
+  /// Send an encrypted reliable [msg] to [remoteId], preferring a live WebRTC
+  /// DataChannel and falling back to the relay when WebRTC isn't available.
+  /// Returns an HONEST outcome so the caller can set delivery state:
+  ///   • [ReliableSendResult.webrtc] / [ReliableSendResult.relay] — the frame
+  ///     was handed to that transport. This is NOT delivery; the receiver's
+  ///     end-to-end `ack` (routed back through the packet router) is the only
+  ///     thing that marks a message delivered.
+  ///   • [ReliableSendResult.pendingHandshake] — no wire session yet; a relay
+  ///     handshake was kicked. Keep the message queued and retry shortly.
+  ///   • [ReliableSendResult.failed] — nothing accepted it; keep queued.
+  Future<ReliableSendResult> sendEncryptedWithFallback(
+      String remoteId, Object? msg) async {
+    final norm = normalizePeerId(remoteId);
+    // 1) Live WebRTC reliable DataChannel — the preferred path.
+    if (await sendEncrypted(norm, msg)) {
+      _recordTransport(norm, 'webrtc');
+      return ReliableSendResult.webrtc;
+    }
+    // 2) Relay fallback — only if configured.
+    final relay = _relay;
+    if (!relay.isConfigured) return ReliableSendResult.failed;
+    // The relay must NEVER see plaintext. Encrypt to an opaque wire frame
+    // first; if there's no session we DON'T send the body — we bootstrap a
+    // handshake over the relay and report pending so the outbox retries.
+    final frame = await _wire.encryptFrame(norm, msg);
+    if (frame == null) {
+      await _bootstrapRelayHandshake(norm);
+      return ReliableSendResult.pendingHandshake;
+    }
+    if (await _relayPut(norm, frame)) {
+      _recordTransport(norm, 'relay');
+      return ReliableSendResult.relay;
+    }
+    return ReliableSendResult.failed;
+  }
+
+  /// Route a relay-delivered envelope through a RELAY-SAFE handler. The relay
+  /// is a dumb router and the only frames it may deliver are encrypted wire
+  /// ciphertext + `wireHello`/`wireRekey` handshake control — those go through
+  /// the SAME decrypt/verify/ack-on-save path as a DataChannel frame (no
+  /// second, weaker crypto path). Anything else a relay might carry or inject —
+  /// `room_*`, drop/file-transfer, binary chunks, plaintext `msg`/`text`,
+  /// malformed data — is DROPPED here and never reaches the drop/room/file
+  /// subsystems and never acked. Replies (handshake accept, acks) go back over
+  /// whatever transport is available via [_relaySendControl] /
+  /// [sendEncryptedWithFallback].
+  Future<void> _onRelayInbound(RelayEnvelope env) async {
+    if (!mounted) return;
+    final remoteId = normalizePeerId(env.from);
+    if (remoteId.isEmpty) return;
+    if (env.isExpired(now())) return; // stale — drop, don't process
+    final ctx = _buildRouterCtx(
+      (data) => _relaySendControl(remoteId, data),
+      remoteId,
+    );
+    final handler = createRelayPacketHandler(
+      remoteId,
+      ctx,
+      onDropped: (frame) {
+        final what = frame is Map ? frame['type'] : frame.runtimeType;
+        debugPrint('[relay] dropped non-text frame from $remoteId: $what');
+      },
+    );
+    try {
+      await handler(env.frame);
+    } catch (_) {
+      // A malformed/forged frame must never crash the receive loop — the
+      // crypto layer already withholds the ack on a decrypt/persist failure.
+    }
+  }
+
+  void _recordTransport(String peerId, String transport) {
+    if (!mounted) return;
+    if (state.lastTransportByPeer[peerId] == transport) return;
+    state = state.copyWith(
+      lastTransportByPeer: {...state.lastTransportByPeer, peerId: transport},
+    );
+  }
+
+  void _recordRelayError(String message) {
+    if (!mounted) return;
+    state = state.copyWith(
+      lastRelayError: message,
+      lastRelayErrorAtMs: now(),
+    );
+  }
+
+  void _recordRelayStatus(RelayStatus s) {
+    if (!mounted) return;
+    if (state.relayStatus == s) return;
+    state = state.copyWith(relayStatus: s);
   }
 
   /// Whether a reliable channel to [remoteId] is open (used by Drop to gate
@@ -316,7 +582,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       // PeerJS not ready yet (cold-boot race: user taps chat row faster
       // than the server ACKs). Stash reliable requests so the onOpen hook
       // in `_bindToCurrentPeer` can flush them the moment we're live.
-      if (reliable) _pendingReliableTargets.add(normalized);
+      if (reliable) {
+        _pendingReliableTargets.add(normalized);
+        _refreshConnectedIds(); // show "connecting" while the dial is queued
+      }
       return;
     }
 
@@ -347,6 +616,8 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
               atMs: now(),
             ),
           );
+          // The dial never produced a binding — clear any stale "connecting".
+          _refreshConnectedIds();
         }
       }
     }());
@@ -383,7 +654,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     // Build the per-connection packet router context. Each callback reads
     // the messaging / peer-status side through `_ref.read(...)` so we don't
     // capture stale references.
-    final routerCtx = _buildRouterCtx(conn, remoteId);
+    final routerCtx = _buildRouterCtx(conn.send, remoteId);
     final onData = createPacketHandler(ch, remoteId, routerCtx);
 
     // Track the binding early so callbacks fired during `listen()` setup
@@ -394,6 +665,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       subscriptions: <StreamSubscription<dynamic>>[],
     );
     _bindings[key] = binding;
+    // Surface "connecting" the instant a reliable dial is registered (the
+    // channel isn't open yet) so the chat shows Подключение…, not Не в сети.
+    if (ch == 'reliable') _refreshConnectedIds();
 
     // Connection timeout — reliable only. Matches the JS 15s budget.
     if (ch == 'reliable') {
@@ -518,9 +792,13 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// fresh.
   final Set<String> _seenMsgIds = <String>{};
 
-  PacketRouterCtx _buildRouterCtx(PeerDataConnection conn, String remoteId) {
+  /// Build a router ctx whose reply/send-back goes through [send]. For a live
+  /// DataChannel that's `conn.send`; for a relay-delivered frame it's a relay
+  /// send — so acks/hellos reply over whatever transport the frame arrived on.
+  PacketRouterCtx _buildRouterCtx(
+      void Function(Object?) send, String remoteId) {
     return PacketRouterCtx(
-      conn: conn.send,
+      conn: send,
       flushOutbox: () {
         // Messaging layer decides how to retry. Looked up lazily — if the
         // provider hasn't been built yet (no chat opened this session) the
@@ -559,7 +837,8 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         // payload map. Our local `sendEncrypted` helper still takes both
         // since it has to route to the right connection — bridge the shapes
         // here rather than changing either contract.
-        sendEncrypted: (msg) => unawaited(sendEncrypted(remoteId, msg)),
+        sendEncrypted: (msg) =>
+            unawaited(sendEncryptedWithFallback(remoteId, msg)),
         notifyNewMessage: ({
           required String from,
           required String text,
@@ -595,10 +874,29 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   // ─── Reliable-open follow-up ──────────────────────────────────
 
+  /// Best-effort ICE-path diagnostic: once a reliable channel is open, read the
+  /// selected candidate type (direct host/srflx vs TURN relay) and record it.
+  /// Never gates connectivity — purely observable state.
+  Future<void> _captureCandidateType(
+      PeerDataConnection conn, String remoteId) async {
+    // The ICE pair is usually selected by DataChannel-open, but give it a brief
+    // moment in case selection lags, then read once.
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
+    final type = await conn.selectedCandidateType();
+    if (type == null || !mounted) return;
+    if (!state.connectedPeerIds.contains(remoteId)) return; // dropped meanwhile
+    if (state.candidateTypeByPeer[remoteId] == type) return;
+    state = state.copyWith(
+      candidateTypeByPeer: {...state.candidateTypeByPeer, remoteId: type},
+    );
+  }
+
   Future<void> _postReliableOpen(
     PeerDataConnection conn,
     String remoteId,
   ) async {
+    unawaited(_captureCandidateType(conn, remoteId));
     await _wire.initiateHandshakeOnOpen(conn, remoteId);
     final bridge = _messaging;
     unawaited(bridge.loadPendingForPeer(remoteId));
@@ -638,17 +936,42 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   }
 
   void _refreshConnectedIds() {
-    final next = <String>{};
+    final connected = <String>{};
+    final connecting = <String>{};
     for (final b in _bindings.values) {
-      if (b.channel == 'reliable' && b.conn.open) {
-        next.add(normalizePeerId(b.conn.peer));
+      if (b.channel != 'reliable') continue;
+      final id = normalizePeerId(b.conn.peer);
+      if (b.conn.open) {
+        connected.add(id);
+      } else {
+        connecting.add(id); // reliable channel dialed but not open yet
       }
     }
-    if (next.length == state.connectedPeerIds.length &&
-        next.every(state.connectedPeerIds.contains)) {
-      return; // no change
+    // Reliable dials queued before the PeerJS client opened are also "in
+    // progress" — surface them as connecting so the chat doesn't read offline.
+    for (final t in _pendingReliableTargets) {
+      connecting.add(normalizePeerId(t));
     }
-    state = state.copyWith(connectedPeerIds: next);
+    connecting.removeAll(connected); // connected wins; the two stay disjoint
+
+    // Drop candidate-type diagnostics for peers that are no longer connected.
+    final candidates = <String, String>{
+      for (final e in state.candidateTypeByPeer.entries)
+        if (connected.contains(e.key)) e.key: e.value,
+    };
+
+    final sameConnected = connected.length == state.connectedPeerIds.length &&
+        connected.every(state.connectedPeerIds.contains);
+    final sameConnecting = connecting.length == state.connectingPeerIds.length &&
+        connecting.every(state.connectingPeerIds.contains);
+    final sameCandidates =
+        candidates.length == state.candidateTypeByPeer.length;
+    if (sameConnected && sameConnecting && sameCandidates) return; // no change
+    state = state.copyWith(
+      connectedPeerIds: connected,
+      connectingPeerIds: connecting,
+      candidateTypeByPeer: candidates,
+    );
   }
 
   // ─── Peer-manager binding ─────────────────────────────────────
@@ -754,6 +1077,18 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       } catch (_) {}
     }
     _peerSubs.clear();
+    try {
+      _relaySub?.cancel();
+    } catch (_) {}
+    _relaySub = null;
+    try {
+      _relayErrorsSub?.cancel();
+    } catch (_) {}
+    _relayErrorsSub = null;
+    try {
+      _relayStatusSub?.cancel();
+    } catch (_) {}
+    _relayStatusSub = null;
     _teardownAll();
     super.dispose();
   }
@@ -771,6 +1106,14 @@ final connectionsNotifierProvider =
 final connectedPeerIdsProvider = Provider<Set<String>>((ref) {
   return ref.watch(
     connectionsNotifierProvider.select((s) => s.connectedPeerIds),
+  );
+});
+
+/// Peers with a reliable channel in progress (dialed/queued, not open yet).
+/// Lets the UI show "Подключение…" instead of a misleading "Не в сети".
+final connectingPeerIdsProvider = Provider<Set<String>>((ref) {
+  return ref.watch(
+    connectionsNotifierProvider.select((s) => s.connectingPeerIds),
   );
 });
 

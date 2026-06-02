@@ -157,8 +157,10 @@ jobs:
       - name: Compose --dart-define flags (TURN / PeerJS)
         env:
           TURN_URL: ${{ secrets.TURN_URL }}
+          TURN_URLS: ${{ secrets.TURN_URLS }}
           TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
           TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
+          RELAY_URL: ${{ secrets.RELAY_URL }}
           RELAY_ONLY: ${{ vars.RELAY_ONLY }}
           PEER_SERVER: ${{ vars.PEER_SERVER }}
           PEER_HOST: ${{ vars.PEER_HOST }}
@@ -166,7 +168,7 @@ jobs:
           PEER_PORT: ${{ vars.PEER_PORT }}
           PEER_SECURE: ${{ vars.PEER_SECURE }}
         run: |
-          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=TURN_USERNAME=${TURN_USERNAME} --dart-define=TURN_CREDENTIAL=${TURN_CREDENTIAL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
+          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=TURN_URLS=${TURN_URLS} --dart-define=TURN_USERNAME=${TURN_USERNAME} --dart-define=TURN_CREDENTIAL=${TURN_CREDENTIAL} --dart-define=RELAY_URL=${RELAY_URL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
 
       - name: flutter build apk (split per ABI)
         run: flutter build apk --release --split-per-abi $DART_DEFINES
@@ -243,8 +245,10 @@ jobs:
       - name: Compose --dart-define flags (TURN / PeerJS)
         env:
           TURN_URL: ${{ secrets.TURN_URL }}
+          TURN_URLS: ${{ secrets.TURN_URLS }}
           TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
           TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
+          RELAY_URL: ${{ secrets.RELAY_URL }}
           RELAY_ONLY: ${{ vars.RELAY_ONLY }}
           PEER_SERVER: ${{ vars.PEER_SERVER }}
           PEER_HOST: ${{ vars.PEER_HOST }}
@@ -252,7 +256,7 @@ jobs:
           PEER_PORT: ${{ vars.PEER_PORT }}
           PEER_SECURE: ${{ vars.PEER_SECURE }}
         run: |
-          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=TURN_USERNAME=${TURN_USERNAME} --dart-define=TURN_CREDENTIAL=${TURN_CREDENTIAL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
+          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=TURN_URLS=${TURN_URLS} --dart-define=TURN_USERNAME=${TURN_USERNAME} --dart-define=TURN_CREDENTIAL=${TURN_CREDENTIAL} --dart-define=RELAY_URL=${RELAY_URL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
 
       - name: flutter build web (relative base-href)
         run: |
@@ -327,8 +331,10 @@ jobs:
       - name: flutter build windows (release)
         env:
           TURN_URL: ${{ secrets.TURN_URL }}
+          TURN_URLS: ${{ secrets.TURN_URLS }}
           TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
           TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
+          RELAY_URL: ${{ secrets.RELAY_URL }}
           RELAY_ONLY: ${{ vars.RELAY_ONLY }}
           PEER_SERVER: ${{ vars.PEER_SERVER }}
           PEER_HOST: ${{ vars.PEER_HOST }}
@@ -340,8 +346,10 @@ jobs:
           # Empty env → empty --dart-define value → app reads null (public PeerJS).
           $defines = @(
             "--dart-define=TURN_URL=$env:TURN_URL",
+            "--dart-define=TURN_URLS=$env:TURN_URLS",
             "--dart-define=TURN_USERNAME=$env:TURN_USERNAME",
             "--dart-define=TURN_CREDENTIAL=$env:TURN_CREDENTIAL",
+            "--dart-define=RELAY_URL=$env:RELAY_URL",
             "--dart-define=RELAY_ONLY=$(if ($env:RELAY_ONLY) { $env:RELAY_ONLY } else { 'false' })",
             "--dart-define=PEER_SERVER=$env:PEER_SERVER",
             "--dart-define=PEER_HOST=$env:PEER_HOST",
@@ -465,19 +473,31 @@ jobs:
             artifacts/orbits-android/*.apk
             artifacts/orbits-windows/*.exe
           body: |
-            ## What's new
+            ## What's new (v9.1.0) — relay & networking hardening
 
-            - Refreshed the Flutter app with the new Apple-inspired Liquid Glass direction, including the simplified light/dark theme system and cleaner adaptive layouts.
-            - Added the foundation for temporary P2P rooms/servers: room storage, channels, members, host lifecycle, message routing, and the voice-session shell.
-            - Improved room networking safety with host-authoritative joins/messages, member/avatar sync, spoofing checks, and flood protection.
-            - Cleaned up release-blocking dependencies so GitHub Actions can resolve packages and continue building web, Android, and Windows artifacts.
+            - Stronger P2P / TURN diagnostics: multi-transport TURN (UDP/TCP/TLS), honest direct-vs-TURN-relay path reporting, and a relay-only-misconfiguration warning (Settings → Connection).
+            - Encrypted text relay fallback (RELAY_URL): when a direct WebRTC channel can't be established, encrypted text/control is forwarded through a relay. The relay is content-blind (it never sees plaintext) and never carries voice, files, drop chunks, or rooms.
+            - Signed relay registration (anti peer-id hijack): a client proves ownership of its peer id by signing a server challenge with its identity key; the server pins the key (TOFU), so another client cannot register as you.
+            - Safer contact / message delivery: a message is "sent" only once a transport accepts it and "delivered" only on the receiver's end-to-end ack — a relay accepting bytes never fakes delivery.
+            - Honest rooms/voice: rooms are explicitly not 1:1-style E2EE, host-authoritative messages, room↔1:1 isolation, an explicit mesh-voice cap, and honest host-offline state.
+            - Relay server reference implementation under `relay-server/` (Node + ws) with `/healthz`, `/readyz`, `/metrics`, and a full test suite.
 
-            ## Что нового
+            Limitations / notes:
+            - The relay server's identity-key pinning (TOFU) is currently in-memory and resets when the server restarts; a persistent key store is future work.
+            - For best cross-network reliability, configure TURN (`TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL`) and, optionally, deploy a `RELAY_URL` relay server. If `RELAY_URL` is unset, the app is unchanged WebRTC/TURN-only.
 
-            - Обновлён Flutter-интерфейс в сторону Apple Liquid Glass: упрощены светлая/тёмная темы и аккуратнее настроены адаптивные экраны.
-            - Добавлена основа временных P2P-комнат/серверов: локальные таблицы, каналы, участники, жизненный цикл хоста, маршрутизация сообщений и базовый слой голосовой сессии.
-            - Усилена безопасность комнат: хост подтверждает входы и сообщения, синхронизируются участники/аватары, добавлены проверки spoofing и защита от flood.
-            - Почищены зависимости, которые блокировали GitHub Actions, чтобы сборки web, Android и Windows могли доходить до артефактов.
+            ## Что нового (v9.1.0) — усиление ретранслятора и сети
+
+            - Более честная диагностика P2P/TURN: мульти-транспортный TURN (UDP/TCP/TLS), отображение прямого пути или пути через TURN, предупреждение о неверной настройке relay-only (Настройки → Соединение).
+            - Зашифрованный резервный ретранслятор текста (RELAY_URL): если прямой WebRTC-канал установить не удаётся, зашифрованный текст/служебные пакеты идут через ретранслятор. Сервер не видит содержимое и не передаёт голос, файлы, drop-чанки или комнаты.
+            - Подписанная регистрация на ретрансляторе (защита от перехвата peer-id): клиент подтверждает владение своим peer-id, подписывая запрос сервера ключом личности; сервер закрепляет ключ (TOFU), поэтому другой клиент не сможет зарегистрироваться под вами.
+            - Более безопасные статусы доставки: «отправлено» — только когда транспорт принял пакет, «доставлено» — только по сквозному ack получателя; приём байтов ретранслятором не выдаётся за доставку.
+            - Честные комнаты/голос: комнаты явно не имеют 1:1-сквозного шифрования, авторитетность хоста, изоляция комнат от личных чатов, явный лимит mesh-голоса и честный статус «хост офлайн».
+            - Эталонный сервер-ретранслятор в `relay-server/` (Node + ws) с эндпоинтами `/healthz`, `/readyz`, `/metrics` и полным набором тестов.
+
+            Ограничения / примечания:
+            - Закрепление ключей ретранслятором (TOFU) сейчас хранится в ОЗУ и сбрасывается при перезапуске сервера; постоянное хранилище — в планах.
+            - Для максимальной надёжности между сетями настройте TURN (`TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL`) и при желании разверните `RELAY_URL`-сервер. Без `RELAY_URL` приложение работает как прежде — только WebRTC/TURN.
 
             ## Download links / Ссылки
 

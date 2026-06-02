@@ -21,6 +21,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_acrylic/flutter_acrylic.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'core/error_reporter.dart';
 import 'storage/db.dart' as db;
 import 'storage/drift_key_store.dart';
 import 'storage/drift_sticker_store.dart';
@@ -32,6 +33,11 @@ Future<void> main() async {
   // Binding first — required before anything that hits a platform channel
   // (path_provider lookups inside Drift / flutter_secure_storage).
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Route uncaught framework (FlutterError.onError) and async
+  // (PlatformDispatcher.onError) errors into the diagnostic pipeline. Without
+  // this, crashes vanish silently. Idempotent — safe across hot-reload.
+  installGlobalHandlers();
 
   // Cap the image cache at 50 MB / 200 entries. The Flutter default is
   // ~100 MB / 1000 entries, which is overkill for a chat where most images

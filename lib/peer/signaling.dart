@@ -29,6 +29,16 @@ class PeerEnv {
   final int? peerPort;          // VITE_PEER_PORT
   final bool? peerSecure;       // VITE_PEER_SECURE
   final String? turnUrl;
+
+  /// Additional TURN URLs beyond [turnUrl] — lets one deployment offer multiple
+  /// transports under a single credential, e.g.
+  ///   turn:host:3478?transport=udp
+  ///   turn:host:3478?transport=tcp
+  ///   turns:host:443?transport=tcp   (TLS over 443, firewall-friendly)
+  /// Parsed from a comma/space-separated `TURN_URLS` dart-define. They are
+  /// merged with [turnUrl] (de-duplicated) by [turnUrlsFor].
+  final List<String>? turnUrls;
+
   final String? turnUsername;
   final String? turnCredential;
   final bool relayOnly;
@@ -58,6 +68,7 @@ class PeerEnv {
     this.peerPort,
     this.peerSecure,
     this.turnUrl,
+    this.turnUrls,
     this.turnUsername,
     this.turnCredential,
     this.relayOnly = false,
@@ -66,6 +77,39 @@ class PeerEnv {
     this.signalingHosts,
   });
 }
+
+/// All configured TURN URLs — [PeerEnv.turnUrl] plus [PeerEnv.turnUrls] —
+/// trimmed, de-duplicated, order-preserving. One entry per transport
+/// (udp/tcp/tls) is normal and expected.
+List<String> turnUrlsFor(PeerEnv env) {
+  final out = <String>[];
+  void add(String? u) {
+    final t = u?.trim() ?? '';
+    if (t.isNotEmpty && !out.contains(t)) out.add(t);
+  }
+
+  add(env.turnUrl);
+  final extra = env.turnUrls;
+  if (extra != null) {
+    for (final u in extra) {
+      add(u);
+    }
+  }
+  return out;
+}
+
+/// TURN is usable iff there is ≥1 URL AND both credentials are present.
+bool hasTurnConfigured(PeerEnv env) =>
+    turnUrlsFor(env).isNotEmpty &&
+    (env.turnUsername?.isNotEmpty ?? false) &&
+    (env.turnCredential?.isNotEmpty ?? false);
+
+/// `relayOnly` was requested but no usable TURN exists. Honoring it would force
+/// `iceTransportPolicy: relay` and block ALL candidates → nothing connects. We
+/// refuse to do that silently: [buildRtcConfig] falls back to a normal policy
+/// and this flag is surfaced in diagnostics so the misconfig is visible.
+bool relayOnlyMisconfigured(PeerEnv env) =>
+    env.relayOnly && !hasTurnConfigured(env);
 
 /// Initial rotation list of signaling hosts. Mirrors buildSignalingHosts.
 List<String> buildSignalingHosts(PeerEnv env) {
@@ -94,7 +138,8 @@ int computeBackoffMs(int attempt, {int base = 800, int maxMs = 30000, int jitter
 /// Build the ICE servers list for an RTCPeerConnection. When TURN creds are
 /// configured and the user enabled "relay only", we force iceTransportPolicy.
 ({List<Map<String, Object>> iceServers, String? iceTransportPolicy}) buildRtcConfig(PeerEnv env) {
-  final hasTurn = env.turnUrl != null && env.turnUsername != null && env.turnCredential != null;
+  final turns = turnUrlsFor(env);
+  final hasTurn = hasTurnConfigured(env);
   // Deployment-provided STUN/TURN fully replaces the public defaults when set
   // (audit L7); otherwise fall back to the bundled public servers.
   final base = (env.iceServers != null && env.iceServers!.isNotEmpty)
@@ -102,12 +147,19 @@ int computeBackoffMs(int attempt, {int base = 800, int maxMs = 30000, int jitter
       : defaultIceServers;
   final servers = [...base];
   if (hasTurn) {
-    servers.add({
-      'urls': env.turnUrl!,
+    // One ICE server entry carrying every TURN transport under the shared
+    // credential. `urls` may be a String or a list per the W3C ICE spec; we
+    // pass the list when there's more than one transport.
+    servers.add(<String, Object>{
+      'urls': turns.length == 1 ? turns.first : turns,
       'username': env.turnUsername!,
       'credential': env.turnCredential!,
     });
   }
+  // Force relay ONLY when TURN actually exists. If relayOnly was requested
+  // without usable TURN, fall back to a normal policy (STUN still works) rather
+  // than producing a config that can't connect at all (see
+  // [relayOnlyMisconfigured], surfaced in diagnostics).
   final policy = (hasTurn && env.relayOnly) ? 'relay' : null;
   return (iceServers: servers, iceTransportPolicy: policy);
 }

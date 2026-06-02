@@ -12,6 +12,7 @@
 // sidesteps the global-DB-singleton swap race that a re-entrant delivery would
 // otherwise hit.
 
+import 'package:drift/drift.dart' show driftRuntimeOptions;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -45,6 +46,11 @@ class _FakeTransport implements RoomTransport {
 
   @override
   bool hasReliable(String peerId) => wire.byId.containsKey(peerId);
+
+  @override
+  void Function() watchReliable(
+          String peerId, void Function(bool up) onChange) =>
+      () {};
 
   @override
   void openReliable(String peerId) {/* already "connected" in the harness */}
@@ -84,6 +90,13 @@ class _Wire {
 }
 
 void main() {
+  // This test deliberately runs TWO OrbitsDatabase instances (host + guest),
+  // each on its OWN in-memory NativeDatabase executor — there is no shared
+  // executor, so the race condition the warning guards against cannot occur.
+  // Opt out of the (false-positive) multi-instance warning rather than leaving
+  // noise in the test log. Idempotent + scoped to this test isolate.
+  driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
+
   const hostId = 'ORBIT-AAAAAA';
   const guestId = 'ORBIT-BBBBBB';
   // Tiny valid base64 data-URL (1×1 PNG) — content doesn't matter, it's stored

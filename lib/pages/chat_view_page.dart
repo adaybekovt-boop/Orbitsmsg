@@ -681,6 +681,8 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
     final messagesAsync = ref.watch(messagesForPeerProvider(widget.peerId));
     final isTyping = ref.watch(typingForPeerProvider(widget.peerId));
     final isOnline = ref.watch(connectedPeerIdsProvider).contains(widget.peerId);
+    final isConnecting = !isOnline &&
+        ref.watch(connectingPeerIdsProvider).contains(widget.peerId);
 
     // Header name/fallback resolution. Goes through peersProvider rather
     // than chatListProvider because chatListProvider only emits rows for
@@ -786,7 +788,9 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
                     Text(
                       isBlocked
                           ? 'Заблокирован'
-                          : (isOnline ? 'В сети · защищённый чат' : 'Не в сети'),
+                          : (isOnline
+                              ? 'В сети · защищённый чат'
+                              : (isConnecting ? 'Подключение…' : 'Не в сети')),
                       style: TextStyle(
                         fontSize: 12,
                         color: Theme.of(context)

@@ -214,6 +214,17 @@ class _SignalingSocket {
     // Any inbound byte counts as liveness — stamp before we even parse, so a
     // malformed-but-present frame still resets the watchdog.
     _lastFrameTime = DateTime.now();
+    // Hard cap on inbound signaling frames (audit P0 item 5). Real PeerJS
+    // frames are tiny (OPEN/HEARTBEAT/ERROR + an SDP/ICE relay — a few KB at
+    // most). A hostile or buggy server could otherwise stream a multi-MB blob
+    // and OOM the app on `utf8.decode` / `jsonDecode`. Drop oversized frames
+    // safely WITHOUT closing the socket (a single bad frame ≠ dead link).
+    const int maxSignalingFrameBytes = 256 * 1024;
+    if (raw is String) {
+      if (raw.length > maxSignalingFrameBytes) return;
+    } else if (raw is List<int>) {
+      if (raw.length > maxSignalingFrameBytes) return;
+    }
     Map<String, Object?>? frame;
     try {
       final decoded = raw is String
@@ -375,6 +386,41 @@ class PeerDataConnection {
   Stream<PeerError> get onError => _errorCtl.stream;
   Stream<Object?> get onData => _dataCtl.stream;
 
+  /// Best-effort: the selected LOCAL ICE candidate type for this connection —
+  /// 'host' / 'srflx' / 'prflx' (all DIRECT, no relay) or 'relay' (via TURN).
+  /// Read from `getStats()`; returns null when it can't be determined (stats
+  /// unavailable, no pair selected yet, or platform variance). Diagnostics only
+  /// — never gates connectivity.
+  Future<String?> selectedCandidateType() async {
+    try {
+      final reports = await _pc.getStats();
+      String? localId;
+      for (final r in reports) {
+        if (r.type != 'candidate-pair') continue;
+        final v = r.values;
+        final selected = v['nominated'] == true || v['selected'] == true;
+        final state = v['state'];
+        if (selected && (state == null || state == 'succeeded')) {
+          final id = v['localCandidateId'];
+          if (id is String) {
+            localId = id;
+            break;
+          }
+        }
+      }
+      if (localId == null) return null;
+      for (final r in reports) {
+        if (r.type == 'local-candidate' && r.id == localId) {
+          final ct = r.values['candidateType'];
+          return ct is String ? ct : null;
+        }
+      }
+    } catch (_) {
+      // getStats shape varies by platform / can throw on a torn-down pc.
+    }
+    return null;
+  }
+
   void _attachDataChannel(RTCDataChannel dc) {
     _dc = dc;
     dc.onDataChannelState = (state) {
@@ -388,6 +434,15 @@ class PeerDataConnection {
     };
     dc.onMessage = (msg) {
       if (_closed) return;
+      // Presence fix: a RECEIVED data channel (answerer side) can miss the
+      // initial `RTCDataChannelOpen` state callback, leaving `_open` false even
+      // though data is flowing — which made the peer show "offline" on the side
+      // that accepted the connection. Inbound data is definitive proof the
+      // channel is open, so mark it open and fire onOpen exactly once.
+      if (!_open) {
+        _open = true;
+        _openCtl.add(null);
+      }
       // Anti-OOM cap (audit finding 3): drop any frame larger than the biggest
       // legitimate payload before we allocate/decode it. The largest real frame
       // is an inline file message (≤16 MiB base64 + JSON envelope — see

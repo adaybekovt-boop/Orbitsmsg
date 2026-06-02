@@ -11,6 +11,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/haptics.dart';
+import '../../peer/relay_transport.dart' show RelayStatus;
 import '../../state/connections_notifier.dart';
 import '../../state/local_profile_provider.dart';
 import '../../state/peer_connection_provider.dart';
@@ -31,9 +32,20 @@ class NetworkPage extends ConsumerWidget {
     final user = ref.watch(localProfileProvider);
     final conn = ref.watch(peerConnectionProvider);
     final turnConfigured = ref.watch(turnConfiguredProvider);
+    final turnUrlCount = ref.watch(turnUrlCountProvider);
     final relayOnly = ref.watch(relayOnlyProvider);
+    final relayOnlyBroken = ref.watch(relayOnlyMisconfiguredProvider);
     final lastConnErr =
         ref.watch(connectionsNotifierProvider.select((s) => s.lastConnectError));
+    final candidateTypes = ref.watch(
+        connectionsNotifierProvider.select((s) => s.candidateTypeByPeer));
+    final relayConfigured = ref.watch(relayConfiguredProvider);
+    final lastRelayErr = ref.watch(
+        connectionsNotifierProvider.select((s) => s.lastRelayError));
+    final transportByPeer = ref.watch(
+        connectionsNotifierProvider.select((s) => s.lastTransportByPeer));
+    final relayStatus = ref.watch(
+        connectionsNotifierProvider.select((s) => s.relayStatus));
 
     return Scaffold(
       appBar: AppBar(
@@ -173,8 +185,8 @@ class NetworkPage extends ConsumerWidget {
               title: const Text('TURN-ретранслятор'),
               subtitle: Text(turnConfigured
                   ? (relayOnly
-                      ? 'Настроен — связь идёт только через ретранслятор'
-                      : 'Настроен — связь работает и между разными сетями')
+                      ? 'Настроен ($turnUrlCount адр.) — только через ретранслятор'
+                      : 'Настроен ($turnUrlCount адр.) — работает и между сетями')
                   : 'Не настроен. Между разными сетями (моб. интернет ↔ домашний '
                       'роутер) связь может не установиться — для надёжности '
                       'нужен TURN-сервер.'),
@@ -184,12 +196,110 @@ class NetworkPage extends ConsumerWidget {
               ),
             ),
           ),
+          // Misconfiguration: RELAY_ONLY without usable TURN. We fell back to a
+          // normal ICE policy (still connects directly) and warn rather than
+          // silently producing a config that can't connect at all.
+          if (relayOnlyBroken)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                title: const Text('Только ретранслятор без TURN'),
+                subtitle: const Text(
+                    'RELAY_ONLY включён, но TURN не задан — режим проигнорирован, '
+                    'иначе соединение было бы невозможно. Задайте TURN-сервер.'),
+                trailing: Icon(Icons.warning_amber_rounded, color: tokens.danger),
+              ),
+            ),
+          // Per-peer ICE path: direct (host/srflx) vs via TURN (relay).
+          if (candidateTypes.isNotEmpty)
+            for (final entry in candidateTypes.entries)
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: OrbitsGlassListTile(
+                  title: Text('Путь: ${entry.key}'),
+                  subtitle: Text(entry.value == 'relay'
+                      ? 'через ретранслятор (relay)'
+                      : 'напрямую (${entry.value})'),
+                  trailing: Icon(
+                    entry.value == 'relay'
+                        ? Icons.alt_route_rounded
+                        : Icons.swap_horiz_rounded,
+                    color: entry.value == 'relay' ? tokens.accent2 : tokens.success,
+                  ),
+                ),
+              ),
           if (lastConnErr != null)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
               child: OrbitsGlassListTile(
                 title: const Text('Последняя ошибка соединения'),
                 subtitle: Text('${lastConnErr.peerId}: ${lastConnErr.message}'),
+              ),
+            ),
+
+          // ── Encrypted text relay fallback ────────────────────
+          const OrbsSectionTitle('Резервная доставка текста'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: OrbitsGlassListTile(
+              title: const Text('Зашифрованный ретранслятор'),
+              subtitle: Text(relayConfigured
+                  ? 'Настроен. Если прямое соединение не удаётся, текстовые '
+                      'сообщения доставляются через ретранслятор в зашифрованном '
+                      'виде — сервер не видит содержимое.'
+                  : 'Не настроен (необязательно). Текст доставляется только при '
+                      'прямом P2P-соединении. Это нормально для большинства '
+                      'пользователей.'),
+              trailing: Icon(
+                relayConfigured ? Icons.check_circle : Icons.info_outline,
+                color: relayConfigured ? tokens.success : tokens.muted,
+              ),
+            ),
+          ),
+          // Live relay connection + signed-registration status. Honest: the
+          // app can tell you whether the relay is connected and registered, and
+          // never marks a message delivered just because the relay accepted it.
+          if (relayConfigured)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                title: const Text('Статус ретранслятора'),
+                subtitle: Text(_relayStatusLabel(relayStatus)),
+                trailing: Icon(
+                  _relayStatusIcon(relayStatus),
+                  color: _relayStatusColor(relayStatus, tokens),
+                ),
+              ),
+            ),
+          // Per-peer transport used for the most recent reliable send: direct
+          // WebRTC vs the encrypted relay. Honest visibility into the path.
+          if (transportByPeer.isNotEmpty)
+            for (final entry in transportByPeer.entries)
+              Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: OrbitsGlassListTile(
+                  title: Text('Отправка: ${entry.key}'),
+                  subtitle: Text(entry.value == 'relay'
+                      ? 'через зашифрованный ретранслятор'
+                      : 'напрямую (WebRTC)'),
+                  trailing: Icon(
+                    entry.value == 'relay'
+                        ? Icons.cloud_sync_rounded
+                        : Icons.bolt_rounded,
+                    color: entry.value == 'relay'
+                        ? tokens.accent2
+                        : tokens.success,
+                  ),
+                ),
+              ),
+          if (lastRelayErr != null && lastRelayErr.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                title: const Text('Последняя ошибка ретранслятора'),
+                subtitle: Text(lastRelayErr),
               ),
             ),
 
@@ -233,6 +343,55 @@ class NetworkPage extends ConsumerWidget {
       'disconnected' => 'Нет соединения',
       _ => 'Нет соединения',
     };
+  }
+}
+
+// ── Relay status diagnostics (honest connection + registration state) ──
+
+String _relayStatusLabel(RelayStatus s) {
+  switch (s) {
+    case RelayStatus.disabled:
+      return 'Не активен';
+    case RelayStatus.connecting:
+      return 'Подключение к серверу…';
+    case RelayStatus.connected:
+      return 'Соединение есть, регистрация не завершена';
+    case RelayStatus.registering:
+      return 'Регистрация (подпись)…';
+    case RelayStatus.registered:
+      return 'Подключён и зарегистрирован (готов к резервной доставке)';
+    case RelayStatus.failed:
+      return 'Регистрация не удалась — см. ошибку ниже';
+  }
+}
+
+IconData _relayStatusIcon(RelayStatus s) {
+  switch (s) {
+    case RelayStatus.registered:
+      return Icons.verified_rounded;
+    case RelayStatus.failed:
+      return Icons.error_outline_rounded;
+    case RelayStatus.disabled:
+      return Icons.info_outline;
+    case RelayStatus.connecting:
+    case RelayStatus.connected:
+    case RelayStatus.registering:
+      return Icons.sync_rounded;
+  }
+}
+
+Color _relayStatusColor(RelayStatus s, OrbitsTokens tokens) {
+  switch (s) {
+    case RelayStatus.registered:
+      return tokens.success;
+    case RelayStatus.failed:
+      return tokens.danger;
+    case RelayStatus.disabled:
+      return tokens.muted;
+    case RelayStatus.connecting:
+    case RelayStatus.connected:
+    case RelayStatus.registering:
+      return tokens.accent2;
   }
 }
 

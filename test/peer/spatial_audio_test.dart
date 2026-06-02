@@ -37,6 +37,10 @@ class _RecordingTransport implements RoomTransport {
   @override
   bool hasReliable(String peerId) => true;
   @override
+  void Function() watchReliable(
+          String peerId, void Function(bool up) onChange) =>
+      () {};
+  @override
   void openReliable(String peerId) {}
   @override
   PeerJsClient? get rawPeer => null;
