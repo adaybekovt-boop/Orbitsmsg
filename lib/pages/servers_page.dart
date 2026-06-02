@@ -253,6 +253,31 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
                     ],
                   ),
                 ],
+                // Security honesty (audit P1 item 7): room/server messages are
+                // NOT end-to-end encrypted like 1:1 chats. They're protected in
+                // transit (DTLS) but the room host can read them. Stated so the
+                // UI never implies room E2EE.
+                const SizedBox(height: 10),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.lock_open_rounded, size: 15, color: tokens.muted),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Сообщения в комнатах защищены при передаче, но, в отличие '
+                        'от личных чатов, без сквозного шифрования — их может видеть '
+                        'хост комнаты.',
+                        style: TextStyle(
+                          color: tokens.muted,
+                          fontSize: 12,
+                          height: 1.4,
+                          fontFamily: tokens.fontBody,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 22),
                 Text(
                   'ВАШИ СЕРВЕРЫ',

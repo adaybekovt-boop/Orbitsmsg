@@ -214,6 +214,17 @@ class _SignalingSocket {
     // Any inbound byte counts as liveness — stamp before we even parse, so a
     // malformed-but-present frame still resets the watchdog.
     _lastFrameTime = DateTime.now();
+    // Hard cap on inbound signaling frames (audit P0 item 5). Real PeerJS
+    // frames are tiny (OPEN/HEARTBEAT/ERROR + an SDP/ICE relay — a few KB at
+    // most). A hostile or buggy server could otherwise stream a multi-MB blob
+    // and OOM the app on `utf8.decode` / `jsonDecode`. Drop oversized frames
+    // safely WITHOUT closing the socket (a single bad frame ≠ dead link).
+    const int maxSignalingFrameBytes = 256 * 1024;
+    if (raw is String) {
+      if (raw.length > maxSignalingFrameBytes) return;
+    } else if (raw is List<int>) {
+      if (raw.length > maxSignalingFrameBytes) return;
+    }
     Map<String, Object?>? frame;
     try {
       final decoded = raw is String
