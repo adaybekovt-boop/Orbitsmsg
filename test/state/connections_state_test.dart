@@ -13,6 +13,16 @@ void main() {
     expect(s.lastConnectError, isNull);
   });
 
+  test('candidateTypeByPeer (direct vs relay diagnostic) round-trips', () {
+    const s = ConnectionsState.empty();
+    expect(s.candidateTypeByPeer, isEmpty);
+    final tagged = s.copyWith(candidateTypeByPeer: {'ORBIT-AAAAAA': 'relay'});
+    expect(tagged.candidateTypeByPeer['ORBIT-AAAAAA'], 'relay');
+    // An unrelated update must preserve the diagnostic map.
+    final updated = tagged.copyWith(connectedPeerIds: {'ORBIT-AAAAAA'});
+    expect(updated.candidateTypeByPeer['ORBIT-AAAAAA'], 'relay');
+  });
+
   test('copyWith tracks connecting peers independently of connected', () {
     const s = ConnectionsState(connectedPeerIds: {'ORBIT-AAAAAA'});
     final connecting = s.copyWith(connectingPeerIds: {'ORBIT-BBBBBB'});

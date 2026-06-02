@@ -386,6 +386,41 @@ class PeerDataConnection {
   Stream<PeerError> get onError => _errorCtl.stream;
   Stream<Object?> get onData => _dataCtl.stream;
 
+  /// Best-effort: the selected LOCAL ICE candidate type for this connection —
+  /// 'host' / 'srflx' / 'prflx' (all DIRECT, no relay) or 'relay' (via TURN).
+  /// Read from `getStats()`; returns null when it can't be determined (stats
+  /// unavailable, no pair selected yet, or platform variance). Diagnostics only
+  /// — never gates connectivity.
+  Future<String?> selectedCandidateType() async {
+    try {
+      final reports = await _pc.getStats();
+      String? localId;
+      for (final r in reports) {
+        if (r.type != 'candidate-pair') continue;
+        final v = r.values;
+        final selected = v['nominated'] == true || v['selected'] == true;
+        final state = v['state'];
+        if (selected && (state == null || state == 'succeeded')) {
+          final id = v['localCandidateId'];
+          if (id is String) {
+            localId = id;
+            break;
+          }
+        }
+      }
+      if (localId == null) return null;
+      for (final r in reports) {
+        if (r.type == 'local-candidate' && r.id == localId) {
+          final ct = r.values['candidateType'];
+          return ct is String ? ct : null;
+        }
+      }
+    } catch (_) {
+      // getStats shape varies by platform / can throw on a torn-down pc.
+    }
+    return null;
+  }
+
   void _attachDataChannel(RTCDataChannel dc) {
     _dc = dc;
     dc.onDataChannelState = (state) {

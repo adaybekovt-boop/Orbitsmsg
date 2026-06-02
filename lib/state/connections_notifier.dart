@@ -54,12 +54,14 @@ class ConnectionsState {
   const ConnectionsState({
     required this.connectedPeerIds,
     this.connectingPeerIds = const <String>{},
+    this.candidateTypeByPeer = const <String, String>{},
     this.lastConnectError,
   });
 
   const ConnectionsState.empty()
       : connectedPeerIds = const <String>{},
         connectingPeerIds = const <String>{},
+        candidateTypeByPeer = const <String, String>{},
         lastConnectError = null;
 
   final Set<String> connectedPeerIds;
@@ -69,6 +71,12 @@ class ConnectionsState {
   /// shows connecting rather than a misleading "Не в сети" during the dial.
   /// Disjoint from [connectedPeerIds].
   final Set<String> connectingPeerIds;
+
+  /// peerId → selected local ICE candidate type for the live reliable
+  /// connection: 'host' / 'srflx' / 'prflx' (all DIRECT) or 'relay' (via TURN).
+  /// Read best-effort from `getStats()` when a channel opens; lets diagnostics
+  /// show whether the path is direct or relayed. Absent when not yet known.
+  final Map<String, String> candidateTypeByPeer;
 
   /// Most recent failed dial — surfaced for diagnostics so a swallowed P2P
   /// error is observable (peerId + reason + timestamp). Null until something
@@ -80,11 +88,13 @@ class ConnectionsState {
   ConnectionsState copyWith({
     Set<String>? connectedPeerIds,
     Set<String>? connectingPeerIds,
+    Map<String, String>? candidateTypeByPeer,
     Object? lastConnectError = _unset,
   }) =>
       ConnectionsState(
         connectedPeerIds: connectedPeerIds ?? this.connectedPeerIds,
         connectingPeerIds: connectingPeerIds ?? this.connectingPeerIds,
+        candidateTypeByPeer: candidateTypeByPeer ?? this.candidateTypeByPeer,
         lastConnectError: identical(lastConnectError, _unset)
             ? this.lastConnectError
             : lastConnectError as ConnectError?,
@@ -613,10 +623,29 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   // ─── Reliable-open follow-up ──────────────────────────────────
 
+  /// Best-effort ICE-path diagnostic: once a reliable channel is open, read the
+  /// selected candidate type (direct host/srflx vs TURN relay) and record it.
+  /// Never gates connectivity — purely observable state.
+  Future<void> _captureCandidateType(
+      PeerDataConnection conn, String remoteId) async {
+    // The ICE pair is usually selected by DataChannel-open, but give it a brief
+    // moment in case selection lags, then read once.
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
+    final type = await conn.selectedCandidateType();
+    if (type == null || !mounted) return;
+    if (!state.connectedPeerIds.contains(remoteId)) return; // dropped meanwhile
+    if (state.candidateTypeByPeer[remoteId] == type) return;
+    state = state.copyWith(
+      candidateTypeByPeer: {...state.candidateTypeByPeer, remoteId: type},
+    );
+  }
+
   Future<void> _postReliableOpen(
     PeerDataConnection conn,
     String remoteId,
   ) async {
+    unawaited(_captureCandidateType(conn, remoteId));
     await _wire.initiateHandshakeOnOpen(conn, remoteId);
     final bridge = _messaging;
     unawaited(bridge.loadPendingForPeer(remoteId));
@@ -674,14 +703,23 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     }
     connecting.removeAll(connected); // connected wins; the two stay disjoint
 
+    // Drop candidate-type diagnostics for peers that are no longer connected.
+    final candidates = <String, String>{
+      for (final e in state.candidateTypeByPeer.entries)
+        if (connected.contains(e.key)) e.key: e.value,
+    };
+
     final sameConnected = connected.length == state.connectedPeerIds.length &&
         connected.every(state.connectedPeerIds.contains);
     final sameConnecting = connecting.length == state.connectingPeerIds.length &&
         connecting.every(state.connectingPeerIds.contains);
-    if (sameConnected && sameConnecting) return; // no change
+    final sameCandidates =
+        candidates.length == state.candidateTypeByPeer.length;
+    if (sameConnected && sameConnecting && sameCandidates) return; // no change
     state = state.copyWith(
       connectedPeerIds: connected,
       connectingPeerIds: connecting,
+      candidateTypeByPeer: candidates,
     );
   }
 

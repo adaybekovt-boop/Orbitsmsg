@@ -26,7 +26,8 @@ the app falls back to public PeerJS + public STUN. The keys (read in
 
 | dart-define        | meaning                                                        |
 |--------------------|----------------------------------------------------------------|
-| `TURN_URL`         | TURN server URI, e.g. `turn:turn.example.com:3478`             |
+| `TURN_URL`         | A TURN server URI, e.g. `turn:turn.example.com:3478`           |
+| `TURN_URLS`        | Extra TURN URIs (comma/space separated) — multiple transports  |
 | `TURN_USERNAME`    | TURN auth username                                             |
 | `TURN_CREDENTIAL`  | TURN auth credential/password                                  |
 | `RELAY_ONLY`       | `true` to force relay-only ICE (needs TURN); default `false`   |
@@ -35,8 +36,24 @@ the app falls back to public PeerJS + public STUN. The keys (read in
 | `PEER_PATH`        | PeerJS signaling path (default `/`)                            |
 | `PEER_PORT`        | PeerJS port (default 443 https / 80 http; `-1` = auto)         |
 
-`TURN_URL` + `TURN_USERNAME` + `TURN_CREDENTIAL` must **all** be set for TURN to
-take effect (see `buildRtcConfig` in `lib/peer/signaling.dart`).
+At least one of `TURN_URL`/`TURN_URLS` **plus** `TURN_USERNAME` + `TURN_CREDENTIAL`
+must be set for TURN to take effect (see `buildRtcConfig` / `hasTurnConfigured`
+in `lib/peer/signaling.dart`). `TURN_URL` and `TURN_URLS` are merged + de-duped.
+
+### Multiple transports (UDP / TCP / TLS-443)
+
+Offer several transports under one credential so a peer can fall through
+firewalls (UDP often blocked → TCP → TLS on 443):
+
+```bash
+--dart-define=TURN_URLS="turn:turn.example.com:3478?transport=udp turn:turn.example.com:3478?transport=tcp turns:turn.example.com:443?transport=tcp"
+```
+
+`turns:…:443?transport=tcp` (TURN over TLS on 443) is the most firewall-tolerant
+and is recommended as one of the entries. `RELAY_ONLY=true` without any usable
+TURN is ignored (it would block all ICE) and flagged in the in-app diagnostics
+(**Settings → Дополнительно → Соединение**), which also shows the selected path
+per peer — direct (`host`/`srflx`) vs relayed (`relay`).
 
 ### Local build with TURN
 
@@ -53,7 +70,7 @@ flutter build windows --release \
 `.github/workflows/pages.yml` (Pages web) pass these through automatically.
 Configure them in **Settings → Secrets and variables → Actions**:
 
-- **Secrets** (sensitive): `TURN_URL`, `TURN_USERNAME`, `TURN_CREDENTIAL`
+- **Secrets** (sensitive): `TURN_URL`, `TURN_URLS`, `TURN_USERNAME`, `TURN_CREDENTIAL`
 - **Variables** (non-sensitive, optional): `RELAY_ONLY`, `PEER_SERVER`,
   `PEER_HOST`, `PEER_PATH`, `PEER_PORT`, `PEER_SECURE`
 
