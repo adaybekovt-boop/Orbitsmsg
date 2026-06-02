@@ -50,6 +50,14 @@ void clearVaultKek() {
 
 bool hasVaultKek() => _kek != null;
 
+/// The raw 32-byte KEK currently in RAM, or null when locked. Used ONLY by the
+/// biometric auto-unlock service to hand the freshly-derived KEK to the OS
+/// secure keystore (mobile) right after a successful password unlock. Returns a
+/// defensive copy. The bytes never leave the process except into the OS
+/// keychain/keystore — never SharedPreferences, never disk, never logs.
+Uint8List? currentVaultKekBytes() =>
+    _kekRaw == null ? null : Uint8List.fromList(_kekRaw!);
+
 bool isWrapped(Object? value) =>
     value is String && value.startsWith(_wrapPrefix);
 

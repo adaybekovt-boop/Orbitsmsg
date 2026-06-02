@@ -18,6 +18,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../peer/helpers.dart';
+import '../../state/auth_notifier.dart';
 import '../../state/strict_verify_provider.dart';
 import '../../themes/orbits_tokens.dart';
 import '../qr_pairing_page.dart';
@@ -36,11 +37,11 @@ class SecurityPage extends ConsumerStatefulWidget {
 
 class _SecurityPageState extends ConsumerState<SecurityPage> {
   bool? _autoLock;
-  bool? _autoLogin;
+  bool? _biometricUnlock;
+  bool _biometricSupported = false;
   bool? _relayOnly;
 
   static const _kAutoLockKey = 'orbits_auto_lock';
-  static const _kAutoLoginKey = 'orbits_auto_login';
 
   @override
   void initState() {
@@ -51,17 +52,40 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
   Future<void> _load() async {
     final prefs = await SharedPreferences.getInstance();
     final relay = await isRelayOnlyEnabled();
+    final bioSupported = ref.read(autoUnlockServiceProvider).isSupported;
+    final bioEnabled = bioSupported
+        ? await ref.read(authNotifierProvider.notifier).biometricUnlockEnabled()
+        : false;
     if (!mounted) return;
     setState(() {
       _autoLock = prefs.getString(_kAutoLockKey) == '1';
-      _autoLogin = prefs.getString(_kAutoLoginKey) == '1';
       _relayOnly = relay;
+      _biometricSupported = bioSupported;
+      _biometricUnlock = bioEnabled;
     });
   }
 
   Future<void> _save(String key, bool v) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(key, v ? '1' : '0');
+  }
+
+  Future<void> _toggleBiometric(bool v) async {
+    setState(() => _biometricUnlock = v);
+    final ok =
+        await ref.read(authNotifierProvider.notifier).setBiometricUnlock(v);
+    if (!mounted) return;
+    if (v && !ok) {
+      // Enabling failed — vault locked or platform can't store the key.
+      setState(() => _biometricUnlock = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Не удалось включить биометрию. Разблокируйте профиль и повторите.',
+          ),
+        ),
+      );
+    }
   }
 
   @override
@@ -117,28 +141,49 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
               ),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: OrbitsGlassListTile(
-              leading: Icon(Icons.login_outlined, color: tokens.text),
-              title: const Text('Запоминать пароль'),
-              subtitle: Text(
-                _autoLogin == true
-                    ? 'Вход без пароля при запуске. Удобно, но менее безопасно'
-                    : 'Запрашивать пароль при каждом запуске',
+          // Biometric unlock — the honest replacement for the old
+          // "remember password" toggle. The password is NEVER stored; on
+          // supported devices the vault key lives in the OS biometric keystore.
+          // On Windows / desktop / web there is no hardware biometric keystore,
+          // so the row is clearly disabled and the app always asks for the
+          // password.
+          if (_biometricSupported)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                leading: Icon(Icons.fingerprint, color: tokens.text),
+                title: const Text('Вход по биометрии'),
+                subtitle: Text(
+                  _biometricUnlock == true
+                      ? 'При запуске вход по Face ID / отпечатку. Пароль не '
+                          'хранится — ключ защищён биометрией устройства.'
+                      : 'Входить по Face ID / отпечатку вместо пароля. Ключ '
+                          'хранится в защищённом хранилище устройства.',
+                ),
+                trailing: OrbitsGlassSwitch(
+                  value: _biometricUnlock ?? false,
+                  semanticLabel: 'Вход по биометрии',
+                  onChanged: _biometricUnlock == null ? null : _toggleBiometric,
+                ),
               ),
-              trailing: OrbitsGlassSwitch(
-                value: _autoLogin ?? false,
-                semanticLabel: 'Запоминать пароль',
-                onChanged: _autoLogin == null
-                    ? null
-                    : (v) {
-                        setState(() => _autoLogin = v);
-                        _save(_kAutoLoginKey, v);
-                      },
+            )
+          else
+            Opacity(
+              opacity: 0.6,
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: OrbitsGlassListTile(
+                  leading: Icon(Icons.fingerprint, color: tokens.muted),
+                  title: const Text('Вход по биометрии'),
+                  subtitle: const Text(
+                    'Доступно на телефоне с настроенной биометрией. На этом '
+                    'устройстве вход всегда выполняется по паролю.',
+                  ),
+                  trailing: _MutedChip(label: 'ТЕЛЕФОН', tokens: tokens),
+                ),
               ),
             ),
-          ),
 
           // ── Network privacy ──────────────────────────────────
           const OrbsSectionTitle('Приватность'),
@@ -231,11 +276,6 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
             label: 'Тревожный пароль',
             subtitle: 'Отдельный пароль — открывает пустой профиль',
           ),
-          const _ComingSoonRow(
-            icon: Icons.fingerprint,
-            label: 'Биометрия',
-            subtitle: 'Face ID или отпечаток вместо пароля',
-          ),
 
           // ── Technical details ────────────────────────────────
           const OrbsSectionTitle('Технические детали'),
@@ -299,6 +339,35 @@ class _CryptoRow extends StatelessWidget {
               letterSpacing: 1.0,
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Small muted pill used to mark a row as available elsewhere (e.g. phone-only).
+class _MutedChip extends StatelessWidget {
+  const _MutedChip({required this.label, required this.tokens});
+
+  final String label;
+  final OrbitsTokens tokens;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: tokens.muted.withValues(alpha: 0.18),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w700,
+          fontFamily: tokens.fontMono,
+          color: tokens.muted,
+          letterSpacing: 1.0,
         ),
       ),
     );

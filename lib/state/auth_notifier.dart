@@ -26,6 +26,7 @@ import '../core/scrypt_kdf.dart';
 import '../core/vault_kek.dart';
 import '../storage/db.dart' as db;
 import '../storage/secure_profile_store.dart';
+import 'auto_unlock_service.dart';
 
 // ─────────────────────────────────────────────────────────────
 // State
@@ -99,11 +100,20 @@ class AuthException implements Exception {
 // ─────────────────────────────────────────────────────────────
 
 class AuthNotifier extends StateNotifier<AuthState> {
-  AuthNotifier() : super(const AuthLoading()) {
+  AuthNotifier({AutoUnlockService? autoUnlock})
+      : _autoUnlock = autoUnlock ?? createAutoUnlockService(),
+        super(const AuthLoading()) {
     // Fire-and-forget — the state transitions to guest/locked/authed when
     // `_bootstrap()` resolves. AuthGate shows a splash while we're loading.
     _bootstrap();
   }
+
+  /// Biometric auto-unlock (mobile only). Stores the KEK behind the OS
+  /// biometric keystore so launch can skip the password. Unsupported (and a
+  /// no-op) on Windows / web / desktop.
+  final AutoUnlockService _autoUnlock;
+
+  bool get autoUnlockSupported => _autoUnlock.isSupported;
 
   Future<void> _bootstrap() async {
     try {
@@ -132,6 +142,11 @@ class AuthNotifier extends StateNotifier<AuthState> {
         return;
       }
 
+      // Try biometric auto-unlock (mobile only, when the user enabled it).
+      // Any failure path leaves the vault locked → password screen. We NEVER
+      // mark authed without a real KEK from the secure keystore.
+      if (await _tryBiometricUnlock(identity.peerId, profile)) return;
+
       state = AuthLocked(profile);
     } catch (_) {
       // Any bootstrap failure → fall back to guest so the user can re-create
@@ -139,6 +154,40 @@ class AuthNotifier extends StateNotifier<AuthState> {
       state = const AuthGuest();
     }
   }
+
+  /// Attempt to unlock the vault from the OS biometric keystore. Returns true
+  /// (and sets [AuthAuthed]) only when a real KEK was retrieved; false on every
+  /// other path so the caller shows the password screen.
+  Future<bool> _tryBiometricUnlock(String peerId, LocalProfile profile) async {
+    try {
+      if (!_autoUnlock.isSupported) return false;
+      if (!await _autoUnlock.isEnabled()) return false;
+      if (!await _autoUnlock.hasStoredKek()) return false;
+      final result = await _autoUnlock.retrieve();
+      if (!result.ok) return false;
+      await setVaultKek(result.kek!);
+      if (!mounted) return true;
+      state = AuthAuthed(_userFromProfile(peerId, profile));
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Enable/disable biometric auto-unlock. Enabling stores the CURRENT in-RAM
+  /// KEK behind the biometric gate (requires the vault to be unlocked); it
+  /// never stores the password. Returns true on success. No-op + false on
+  /// unsupported platforms or when the vault is locked.
+  Future<bool> setBiometricUnlock(bool enabled) async {
+    if (enabled) {
+      return _autoUnlock.enable(currentVaultKekBytes());
+    }
+    await _autoUnlock.disable();
+    return true;
+  }
+
+  /// Current on/off state of biometric auto-unlock (false when unsupported).
+  Future<bool> biometricUnlockEnabled() => _autoUnlock.isEnabled();
 
   /// Handle the final submit of the onboarding wizard. Derives a vault KEK,
   /// persists the password record, and transitions to [AuthAuthed].
@@ -232,6 +281,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
       }
     }
 
+    // Keep the biometric-keystore copy of the KEK fresh (no-op unless the user
+    // enabled biometric unlock on a supported platform). Never stores password.
+    await _autoUnlock.refresh(currentVaultKekBytes());
+
     final identity = await getOrCreateIdentity();
     final user = _userFromProfile(identity.peerId, profile);
     state = AuthAuthed(user);
@@ -251,6 +304,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
   /// can't bleed across a logout (audit H4).
   Future<void> logout() async {
     clearVaultKek();
+    // Drop the biometric-keystore KEK too — a logged-out device must not
+    // auto-unlock back into the (now cleared) session.
+    await _autoUnlock.clear();
     await clearLocalProfile();
     state = const AuthGuest();
   }
@@ -264,6 +320,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   /// regenerate the peerId (audit H4).
   Future<void> wipeLocal() async {
     clearVaultKek();
+    await _autoUnlock.clear();
     await clearLocalProfile();
     try {
       await db.clearAllData();
@@ -342,7 +399,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
       );
 }
 
+/// Biometric auto-unlock service. Overridable in tests. Real impl on mobile,
+/// stub (unsupported) on web/desktop.
+final autoUnlockServiceProvider =
+    Provider<AutoUnlockService>((ref) => createAutoUnlockService());
+
 /// Session-root provider. `StateNotifierProvider` is keepAlive by default —
 /// exactly what we want for the auth state sitting above everything.
 final authNotifierProvider =
-    StateNotifierProvider<AuthNotifier, AuthState>((ref) => AuthNotifier());
+    StateNotifierProvider<AuthNotifier, AuthState>(
+  (ref) => AuthNotifier(autoUnlock: ref.watch(autoUnlockServiceProvider)),
+);
