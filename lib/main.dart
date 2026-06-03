@@ -21,12 +21,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_acrylic/flutter_acrylic.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'core/device_access_stub.dart'
+    if (dart.library.html) 'core/device_access_web.dart' as device_access;
 import 'storage/db.dart' as db;
 import 'storage/drift_key_store.dart';
 import 'storage/drift_sticker_store.dart';
 import 'themes/theme_data_factory.dart';
 import 'themes/theme_notifier.dart';
 import 'ui/auth/auth_gate.dart';
+import 'ui/auth/device_blocked_page.dart';
 
 Future<void> main() async {
   // Binding first — required before anything that hits a platform channel
@@ -89,6 +92,11 @@ class OrbitsApp extends ConsumerWidget {
     // theme. After resolution the picker drives this directly.
     final manifest = ref.watch(themeManifestProvider);
     final background = manifest.background;
+    // Device gate: on web, a blocked mobile phone gets the block screen
+    // instead of the app. `isAccessDenied()` reads the verdict published by
+    // web/index.html; on native it's always false (the import resolves to the
+    // no-op stub), so this never affects desktop/mobile app builds.
+    final accessDenied = device_access.isAccessDenied();
     return MaterialApp(
       title: 'Orbits',
       debugShowCheckedModeBanner: false,
@@ -110,7 +118,7 @@ class OrbitsApp extends ConsumerWidget {
           ],
         );
       },
-      home: const AuthGate(),
+      home: accessDenied ? const DeviceBlockedPage() : const AuthGate(),
     );
   }
 }

@@ -470,18 +470,19 @@ jobs:
           body: |
             ## What's new
 
-            - Rebuilt the project as a standalone Flutter release repository so GitHub Actions runs from the correct root and includes the full app source.
-            - Updated the app version to 9.0.3 and kept the release pipeline focused on Android, Windows, and Flutter Web artifacts.
-            - Fixed release metadata and web/PWA branding so Orbits no longer ships with template app names in the visible web manifest.
-            - Tightened CI by making required code generation fail loudly instead of being ignored in the Windows build.
-            - Kept the core encryption flow intact; this release is mainly repository, build, metadata, and P2P contact/networking readiness work over 9.0.2.
+            - Added "Remember me" on the web version, so trusted computers can open Orbits without typing the password every time.
+            - Added extra safety checks before auto-unlock, so a broken or outdated saved login is ignored instead of corrupting the session.
+            - Blocked the web app on mobile phones and show a clear message asking users to open Orbits from a computer or laptop.
+            - Added the same phone-browser block to self-hosted room signaling, so phone browsers cannot sneak into rooms through a direct invite.
+            - Kept the encryption core intact; this update focuses on easier web login and safer device access.
 
             ## Что нового
 
-            - Обновлён Flutter-интерфейс в сторону Apple Liquid Glass: упрощены светлая/тёмная темы и аккуратнее настроены адаптивные экраны.
-            - Добавлена основа временных P2P-комнат/серверов: локальные таблицы, каналы, участники, жизненный цикл хоста, маршрутизация сообщений и базовый слой голосовой сессии.
-            - Усилена безопасность комнат: хост подтверждает входы и сообщения, синхронизируются участники/аватары, добавлены проверки spoofing и защита от flood.
-            - Почищены зависимости, которые блокировали GitHub Actions, чтобы сборки web, Android и Windows могли доходить до артефактов.
+            - Добавлена галочка «Запомнить меня» в веб-версии: на доверенном компьютере Orbits сможет открываться без повторного ввода пароля.
+            - Сохранённый вход теперь сначала проверяется: если данные устарели или повреждены, приложение просто попросит пароль снова.
+            - Веб-версия больше не запускается на телефонах и показывает понятное сообщение: откройте Orbits с компьютера или ноутбука.
+            - Такая же защита добавлена для приглашений в локальные комнаты: браузер телефона не сможет подключиться к комнате напрямую.
+            - Криптоядро не переписывалось; обновление про более удобный вход на вебе и более безопасный доступ с устройств.
 
             ## Download links / Ссылки
 

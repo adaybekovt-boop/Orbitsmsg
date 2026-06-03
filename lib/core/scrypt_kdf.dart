@@ -290,6 +290,24 @@ Future<ScryptVerifyResult> verifyScryptRecordEx({
   return miss;
 }
 
+/// Cheaply check whether a raw KEK (e.g. one restored from the "Remember me"
+/// store) matches a stored record — WITHOUT re-running scrypt. For v2 records
+/// this is a single HMAC-SHA256 over the verifier tag; for legacy v1 it's a
+/// direct compare against the stored raw dk. Used by the auto-unlock path to
+/// reject a stale/corrupt cached KEK before it's installed as the vault key,
+/// so a bad value surfaces here instead of as a downstream decrypt failure.
+Future<bool> kekMatchesRecord(List<int> kek, ScryptStoredRecord record) async {
+  if (record.verifierB64 != null) {
+    final verifier = await _computeVerifier(kek);
+    return _timingSafeEqualStr(bytesToBase64(verifier), record.verifierB64!);
+  }
+  if (record.dkB64 != null) {
+    return _timingSafeEqualStr(
+        bytesToBase64(Uint8List.fromList(kek)), record.dkB64!);
+  }
+  return false;
+}
+
 /// Convenience boolean wrapper matching `verifyScryptRecord`.
 Future<bool> verifyScryptRecord({
   required String username,

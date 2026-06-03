@@ -26,6 +26,8 @@ import '../core/scrypt_kdf.dart';
 import '../core/vault_kek.dart';
 import '../storage/db.dart' as db;
 import '../storage/secure_profile_store.dart';
+import 'remembered_session_stub.dart'
+    if (dart.library.html) 'remembered_session_web.dart' as remembered;
 
 // ─────────────────────────────────────────────────────────────
 // State
@@ -132,6 +134,27 @@ class AuthNotifier extends StateNotifier<AuthState> {
         return;
       }
 
+      // "Remember me" auto-unlock (web): if a remembered KEK is on file and
+      // still matches the stored record, install it and skip the lock screen.
+      // We verify the cached KEK against the record's HMAC verifier first (one
+      // HMAC, no scrypt) so a stale/corrupt value can't slip through and break
+      // at-rest decryption downstream — on mismatch we forget it and fall back
+      // to the password screen.
+      if (await remembered.isRememberSupported()) {
+        final stored = ScryptStoredRecord.fromJson(profile.passRecord!);
+        final kek = await remembered.loadKek();
+        if (stored != null &&
+            kek != null &&
+            kek.length >= 32 &&
+            await kekMatchesRecord(kek, stored)) {
+          await setVaultKek(kek);
+          state = AuthAuthed(_userFromProfile(identity.peerId, profile));
+          return;
+        }
+        // No usable remembered session — drop any stale entry.
+        await remembered.clearRememberedKek();
+      }
+
       state = AuthLocked(profile);
     } catch (_) {
       // Any bootstrap failure → fall back to guest so the user can re-create
@@ -147,6 +170,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     required String password,
     required String confirm,
     String? avatarDataUrl,
+    bool remember = false,
   }) async {
     final vu = validateUsername(displayName);
     if (!vu.ok) {
@@ -169,6 +193,13 @@ class AuthNotifier extends StateNotifier<AuthState> {
     final derived = await deriveScryptRecord(username: name, password: password);
     await setVaultKek(derived.dkBytes);
 
+    // Persist for auto-unlock when the user opted in (no-op off-web).
+    if (remember) {
+      await remembered.persistKek(derived.dkBytes);
+    } else {
+      await remembered.clearRememberedKek();
+    }
+
     final profile = LocalProfile(
       displayName: name,
       bio: '',
@@ -185,7 +216,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
   /// Verify the stored scrypt record, seed the KEK on success, and migrate
   /// any v1 record to v2 on the way out. Transitions to [AuthAuthed].
-  Future<AuthedUser> unlock({required String password}) async {
+  Future<AuthedUser> unlock({
+    required String password,
+    bool remember = false,
+  }) async {
     final cur = state;
     if (cur is! AuthLocked) {
       throw const AuthException('no_profile', 'Нет профиля');
@@ -209,6 +243,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
       throw const AuthException('bad_password', 'Неверный пароль');
     }
     await setVaultKek(result.dkBytes!);
+
+    // Honor the "Remember me" choice: persist the KEK for auto-unlock, or wipe
+    // any prior remembered session if the box is unchecked. No-op off-web.
+    if (remember) {
+      await remembered.persistKek(result.dkBytes!);
+    } else {
+      await remembered.clearRememberedKek();
+    }
 
     // v1 → v2 migration — re-derive with the stored cost parameters so the
     // next unlock reads a safe record. Failure is non-fatal; we'll try again
@@ -251,6 +293,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   /// can't bleed across a logout (audit H4).
   Future<void> logout() async {
     clearVaultKek();
+    await remembered.clearRememberedKek();
     await clearLocalProfile();
     state = const AuthGuest();
   }
@@ -264,6 +307,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
   /// regenerate the peerId (audit H4).
   Future<void> wipeLocal() async {
     clearVaultKek();
+    await remembered.clearRememberedKek();
     await clearLocalProfile();
     try {
       await db.clearAllData();
