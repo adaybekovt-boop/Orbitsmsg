@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 
 import '../../themes/orbits_tokens.dart';
 import '../../ui/primitives/orbits_glass_button.dart';
+import '../../ui/primitives/orbits_glass_app_bar.dart';
 import '../../ui/primitives/orbits_glass_surface.dart';
 
 class MicPage extends StatelessWidget {
@@ -19,16 +20,7 @@ class MicPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        flexibleSpace: const OrbitsGlassSurface(
-          role: OrbitsGlassRole.appBar,
-          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
-          child: SizedBox.expand(),
-        ),
+      appBar: OrbitsGlassAppBar(
         leading: Navigator.of(context).canPop()
             ? Center(
                 child: OrbitsGlassIconButton(

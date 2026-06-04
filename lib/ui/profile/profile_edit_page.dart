@@ -31,6 +31,7 @@ import '../../core/haptics.dart';
 import '../../state/auth_notifier.dart';
 import '../../themes/orbits_tokens.dart';
 import '../primitives/orbits_glass_button.dart';
+import '../primitives/orbits_glass_app_bar.dart';
 import '../primitives/orbits_glass_surface.dart';
 import 'my_qr_page.dart';
 
@@ -229,16 +230,7 @@ class _ProfileEditPageState extends ConsumerState<ProfileEditPage> {
     final bioLen = _bioCtl.text.length;
 
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        flexibleSpace: const OrbitsGlassSurface(
-          role: OrbitsGlassRole.appBar,
-          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
-          child: SizedBox.expand(),
-        ),
+      appBar: OrbitsGlassAppBar(
         title: Text(
           'Профиль',
           style: TextStyle(

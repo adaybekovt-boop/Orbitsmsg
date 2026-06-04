@@ -157,10 +157,8 @@ jobs:
       - name: Compose --dart-define flags (TURN / PeerJS)
         env:
           TURN_URL: ${{ secrets.TURN_URL }}
-          TURN_URLS: ${{ secrets.TURN_URLS }}
           TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
           TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
-          RELAY_URL: ${{ secrets.RELAY_URL }}
           RELAY_ONLY: ${{ vars.RELAY_ONLY }}
           PEER_SERVER: ${{ vars.PEER_SERVER }}
           PEER_HOST: ${{ vars.PEER_HOST }}
@@ -168,7 +166,7 @@ jobs:
           PEER_PORT: ${{ vars.PEER_PORT }}
           PEER_SECURE: ${{ vars.PEER_SECURE }}
         run: |
-          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=TURN_URLS=${TURN_URLS} --dart-define=TURN_USERNAME=${TURN_USERNAME} --dart-define=TURN_CREDENTIAL=${TURN_CREDENTIAL} --dart-define=RELAY_URL=${RELAY_URL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
+          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=TURN_USERNAME=${TURN_USERNAME} --dart-define=TURN_CREDENTIAL=${TURN_CREDENTIAL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
 
       - name: flutter build apk (split per ABI)
         run: flutter build apk --release --split-per-abi $DART_DEFINES
@@ -245,10 +243,8 @@ jobs:
       - name: Compose --dart-define flags (TURN / PeerJS)
         env:
           TURN_URL: ${{ secrets.TURN_URL }}
-          TURN_URLS: ${{ secrets.TURN_URLS }}
           TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
           TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
-          RELAY_URL: ${{ secrets.RELAY_URL }}
           RELAY_ONLY: ${{ vars.RELAY_ONLY }}
           PEER_SERVER: ${{ vars.PEER_SERVER }}
           PEER_HOST: ${{ vars.PEER_HOST }}
@@ -256,7 +252,7 @@ jobs:
           PEER_PORT: ${{ vars.PEER_PORT }}
           PEER_SECURE: ${{ vars.PEER_SECURE }}
         run: |
-          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=TURN_URLS=${TURN_URLS} --dart-define=TURN_USERNAME=${TURN_USERNAME} --dart-define=TURN_CREDENTIAL=${TURN_CREDENTIAL} --dart-define=RELAY_URL=${RELAY_URL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
+          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=TURN_USERNAME=${TURN_USERNAME} --dart-define=TURN_CREDENTIAL=${TURN_CREDENTIAL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
 
       - name: flutter build web (relative base-href)
         run: |
@@ -324,17 +320,18 @@ jobs:
             --project-name="$PROJECT_NAME" \
             .
 
+      # Codegen MUST succeed here too — lib/storage/* depends on the
+      # generated *.g.dart files, so a silent codegen failure would only
+      # surface later as a confusing "Type X not found" wall during the
+      # windows kernel compile. Kept fatal, matching the android/web jobs.
       - name: Generate code (drift / build_runner)
         run: dart run build_runner build --delete-conflicting-outputs
-        continue-on-error: true
 
       - name: flutter build windows (release)
         env:
           TURN_URL: ${{ secrets.TURN_URL }}
-          TURN_URLS: ${{ secrets.TURN_URLS }}
           TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
           TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
-          RELAY_URL: ${{ secrets.RELAY_URL }}
           RELAY_ONLY: ${{ vars.RELAY_ONLY }}
           PEER_SERVER: ${{ vars.PEER_SERVER }}
           PEER_HOST: ${{ vars.PEER_HOST }}
@@ -346,10 +343,8 @@ jobs:
           # Empty env → empty --dart-define value → app reads null (public PeerJS).
           $defines = @(
             "--dart-define=TURN_URL=$env:TURN_URL",
-            "--dart-define=TURN_URLS=$env:TURN_URLS",
             "--dart-define=TURN_USERNAME=$env:TURN_USERNAME",
             "--dart-define=TURN_CREDENTIAL=$env:TURN_CREDENTIAL",
-            "--dart-define=RELAY_URL=$env:RELAY_URL",
             "--dart-define=RELAY_ONLY=$(if ($env:RELAY_ONLY) { $env:RELAY_ONLY } else { 'false' })",
             "--dart-define=PEER_SERVER=$env:PEER_SERVER",
             "--dart-define=PEER_HOST=$env:PEER_HOST",
@@ -473,33 +468,21 @@ jobs:
             artifacts/orbits-android/*.apk
             artifacts/orbits-windows/*.exe
           body: |
-            ## What's new (v9.0.2) — in-app updates
+            ## What's new
 
-            - Windows update checker and a guided in-app updater flow (Settings → Diagnostics).
-            - Version detection via GitHub Releases (numeric semver; drafts and pre-releases ignored).
-            - Same-line patch filtering: a v9.0.x build is offered the newest v9.0.x release and is NOT pushed across minor lines (it will not jump to 9.1.0). A cross-line mode exists for future use.
-            - Windows installer download with a progress indicator, saved to a private temp folder with integrity checks.
-            - Safe installer launch from inside the app: a confirmation dialog, the installer starts, then the app closes so it can update files. A failed launch keeps the app open. The running .exe is never overwritten directly and user data (chats, contacts, profile, keys) is preserved.
-            - Android / Web fallback: when the in-app installer flow is unavailable, the app shows update info and a link to the GitHub release page.
-            - Carries over the prior relay / networking hardening (encrypted text relay fallback, signed relay registration, honest delivery and rooms/voice states).
+            - Added "Remember me" on the web version, so trusted computers can open Orbits without typing the password every time.
+            - Added extra safety checks before auto-unlock, so a broken or outdated saved login is ignored instead of corrupting the session.
+            - Blocked the web app on mobile phones and show a clear message asking users to open Orbits from a computer or laptop.
+            - Added the same phone-browser block to self-hosted room signaling, so phone browsers cannot sneak into rooms through a direct invite.
+            - Kept the encryption core intact; this update focuses on easier web login and safer device access.
 
-            Notes:
-            - The Windows in-app install flow should still be smoke-tested on a real older installed build.
-            - For best cross-network reliability, configure TURN and optionally deploy a `RELAY_URL` relay server. If unset, the app is unchanged WebRTC/TURN-only.
+            ## Что нового
 
-            ## Что нового (v9.0.2) — обновления внутри приложения
-
-            - Проверка обновлений через GitHub Releases и пошаговый процесс обновления внутри приложения (Настройки → Диагностика).
-            - Определение версии по GitHub Releases (числовой semver; черновики и пред-релизы игнорируются).
-            - Фильтрация обновлений внутри ветки v9.0.x: сборке v9.0.x предлагается новейший релиз v9.0.x; перехода между минорными линиями нет (не будет перехода на 9.1.0). Для будущего есть режим перехода между линиями.
-            - Загрузка Windows-установщика с индикатором прогресса, во временную папку, с проверкой целостности.
-            - Безопасный запуск установщика из приложения: подтверждение, запуск установщика, затем приложение закрывается, чтобы обновить файлы. При неудачном запуске приложение остаётся открытым. Запущенный .exe не перезаписывается напрямую, данные пользователя (чаты, контакты, профиль, ключи) сохраняются.
-            - Android/Web: когда установка из приложения недоступна, показывается информация об обновлении и ссылка на страницу релиза.
-            - Включает прежние улучшения сети/relay (зашифрованный резервный ретранслятор текста, подписанная регистрация на ретрансляторе, честные статусы доставки и комнат/голоса).
-
-            Примечания:
-            - Процесс установки на Windows стоит дополнительно проверить вручную на реальной ранее установленной сборке.
-            - Для максимальной надёжности между сетями настройте TURN и при желании разверните `RELAY_URL`-сервер. Без него приложение работает как прежде — только WebRTC/TURN.
+            - Добавлена галочка «Запомнить меня» в веб-версии: на доверенном компьютере Orbits сможет открываться без повторного ввода пароля.
+            - Сохранённый вход теперь сначала проверяется: если данные устарели или повреждены, приложение просто попросит пароль снова.
+            - Веб-версия больше не запускается на телефонах и показывает понятное сообщение: откройте Orbits с компьютера или ноутбука.
+            - Такая же защита добавлена для приглашений в локальные комнаты: браузер телефона не сможет подключиться к комнате напрямую.
+            - Криптоядро не переписывалось; обновление про более удобный вход на вебе и более безопасный доступ с устройств.
 
             ## Download links / Ссылки
 

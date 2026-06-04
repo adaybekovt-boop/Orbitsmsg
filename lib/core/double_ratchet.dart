@@ -401,120 +401,55 @@ Future<RatchetEnvelope> ratchetEncrypt(
   );
 }
 
-/// Immutable snapshot of every mutable [RatchetState] field. Used to make
-/// [ratchetDecrypt] TRANSACTIONAL: we mutate freely while deriving keys, then
-/// roll back if the authenticated decrypt (or any step) fails, so a corrupted /
-/// tampered / bad-MAC packet can never advance or destroy the session.
-/// Public for tests (rollback bookkeeping is verified directly — a live
-/// ratchet can't run in the VM since P-256 keygen is unimplemented there).
-class RatchetStateSnapshot {
-  RatchetStateSnapshot(RatchetState s)
-      : rootKey = s.rootKey,
-        sendCk = s.sendCk,
-        recvCk = s.recvCk,
-        dhKeyPair = s.dhKeyPair,
-        dhPubSpki = s.dhPubSpki,
-        remoteDhPub = s.remoteDhPub,
-        ns = s.ns,
-        nr = s.nr,
-        pn = s.pn,
-        // Shallow copy: entries (key→Uint8List) are never mutated in place, only
-        // added/removed, so restoring the map's membership is sufficient.
-        skipped = Map<String, Uint8List>.from(s.skipped);
-
-  final Uint8List rootKey;
-  final Uint8List? sendCk;
-  final Uint8List? recvCk;
-  final EcKeyPair dhKeyPair;
-  final Uint8List dhPubSpki;
-  final Uint8List? remoteDhPub;
-  final int ns;
-  final int nr;
-  final int pn;
-  final Map<String, Uint8List> skipped;
-
-  void restore(RatchetState s) {
-    s.rootKey = rootKey;
-    s.sendCk = sendCk;
-    s.recvCk = recvCk;
-    s.dhKeyPair = dhKeyPair;
-    s.dhPubSpki = dhPubSpki;
-    s.remoteDhPub = remoteDhPub;
-    s.ns = ns;
-    s.nr = nr;
-    s.pn = pn;
-    s.skipped
-      ..clear()
-      ..addAll(skipped);
-  }
-}
-
-/// Decrypt one wire envelope. Returns the plaintext bytes.
-///
-/// TRANSACTIONAL: all ratchet mutations (DH-ratchet step, skipped-key
-/// derivation, chain advance, skipped-cache consumption) are committed ONLY if
-/// the authenticated AES-GCM decrypt succeeds. On tamper / replay / bad-MAC /
-/// too-many-skipped the original state is restored and the error rethrown, so a
-/// single bad packet can't permanently kill the session (it previously could —
-/// e.g. a forged header with a new DH pub would generate a fresh send keypair
-/// and replace the send chain before decryption even ran).
+/// Decrypt one wire envelope. Mutates [state] and returns the plaintext bytes.
+/// Throws on tamper, replay, or too-many-skipped.
 Future<Uint8List> ratchetDecrypt(
   RatchetState state,
   RatchetEnvelope envelope,
 ) async {
-  final snapshot = RatchetStateSnapshot(state);
-  try {
-    final header = decodeHeader(envelope.headerB64);
-    final iv = base64ToBytes(envelope.ivB64);
-    final ctPlusTag = base64ToBytes(envelope.ctB64);
-    final aad = utf8.encode(envelope.headerB64);
+  final header = decodeHeader(envelope.headerB64);
+  final iv = base64ToBytes(envelope.ivB64);
+  final ctPlusTag = base64ToBytes(envelope.ctB64);
+  final aad = utf8.encode(envelope.headerB64);
 
-    // 1. Out-of-order message from an older chain. (The skipped key is only
-    //    truly consumed once we commit — on failure the snapshot re-adds it.)
-    final remoteKey = bytesToBase64(header.dhPubSpki);
-    final skKey = '$remoteKey|${header.n}';
-    final cachedMk = state.skipped.remove(skKey);
-    if (cachedMk != null) {
-      return await _aesGcmDecrypt(
-        messageKey: cachedMk,
-        iv: iv,
-        ctPlusTag: ctPlusTag,
-        aad: aad,
-      );
-    }
-
-    // 2. If the sender's DH pub changed, run a DH ratchet step. Before stepping
-    //    we must capture any skipped tail of the outgoing receive chain up to
-    //    header.pn so late-arrivals under the old chain still decrypt.
-    if (!_bytesEqual(state.remoteDhPub, header.dhPubSpki)) {
-      if (state.recvCk != null) {
-        await _skipRecvKeys(state, header.pn);
-      }
-      await _dhRatchetStep(state, header.dhPubSpki);
-    }
-
-    // 3. Skip forward within the current receive chain up to header.n.
-    await _skipRecvKeys(state, header.n);
-
-    // 4. Derive the expected message key and advance the chain.
-    if (state.recvCk == null) {
-      throw StateError('ratchet: recvCk missing after DH step');
-    }
-    final step = await kdfCk(state.recvCk!);
-    state.recvCk = step.chainKey;
-    state.nr += 1;
-
-    return await _aesGcmDecrypt(
-      messageKey: step.messageKey,
+  // 1. Out-of-order message from an older chain.
+  final remoteKey = bytesToBase64(header.dhPubSpki);
+  final skKey = '$remoteKey|${header.n}';
+  final cachedMk = state.skipped.remove(skKey);
+  if (cachedMk != null) {
+    return _aesGcmDecrypt(
+      messageKey: cachedMk,
       iv: iv,
       ctPlusTag: ctPlusTag,
       aad: aad,
     );
-  } catch (_) {
-    // Authenticated decrypt (or an earlier step) failed — roll back EVERY
-    // mutation so the session survives a bad packet. Commit happens only on the
-    // success paths above (which `return` before reaching here).
-    snapshot.restore(state);
-    rethrow;
   }
+
+  // 2. If the sender's DH pub changed, run a DH ratchet step. Before stepping
+  //    we must capture any skipped tail of the outgoing receive chain up to
+  //    header.pn so late-arrivals under the old chain still decrypt.
+  if (!_bytesEqual(state.remoteDhPub, header.dhPubSpki)) {
+    if (state.recvCk != null) {
+      await _skipRecvKeys(state, header.pn);
+    }
+    await _dhRatchetStep(state, header.dhPubSpki);
+  }
+
+  // 3. Skip forward within the current receive chain up to header.n.
+  await _skipRecvKeys(state, header.n);
+
+  // 4. Derive the expected message key and advance the chain.
+  if (state.recvCk == null) {
+    throw StateError('ratchet: recvCk missing after DH step');
+  }
+  final step = await kdfCk(state.recvCk!);
+  state.recvCk = step.chainKey;
+  state.nr += 1;
+
+  return _aesGcmDecrypt(
+    messageKey: step.messageKey,
+    iv: iv,
+    ctPlusTag: ctPlusTag,
+    aad: aad,
+  );
 }

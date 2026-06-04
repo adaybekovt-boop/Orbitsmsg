@@ -13,6 +13,7 @@ import '../themes/orbits_tokens.dart';
 import '../themes/registry.dart';
 import '../themes/theme_notifier.dart';
 import '../ui/primitives/adaptive_page_frame.dart';
+import '../ui/primitives/orbits_glass_app_bar.dart';
 
 class ThemesPage extends ConsumerWidget {
   const ThemesPage({super.key});
@@ -24,7 +25,7 @@ class ThemesPage extends ConsumerWidget {
     final manifests = listThemeIds().map((id) => themeCatalog[id]!).toList();
 
     return Scaffold(
-      appBar: AppBar(
+      appBar: OrbitsGlassAppBar(
         title: Text(
           'Тема',
           style: TextStyle(

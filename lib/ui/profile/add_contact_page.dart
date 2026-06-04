@@ -28,6 +28,7 @@ import '../../state/local_profile_provider.dart';
 import '../../storage/db.dart' as db;
 import '../../themes/orbits_tokens.dart';
 import '../primitives/orbits_glass_button.dart';
+import '../primitives/orbits_glass_app_bar.dart';
 import '../primitives/orbits_glass_surface.dart';
 import 'my_qr_page.dart';
 
@@ -85,12 +86,9 @@ class _AddContactPageState extends ConsumerState<AddContactPage>
   /// recoverable failure (unrecognised code, self, save error) so it can re-arm
   /// and let the user try again. Never throws.
   Future<bool> _accept(String raw) async {
-    // Deterministic pipeline: parse → validate → save → open chat. Each step
-    // has an explicit outcome; a network/peer being offline is NEVER treated
-    // as an add failure (offline-first).
     final pid = parseContactQrPayload(raw);
     if (pid == null) {
-      _toast('Код не похож на контакт TK Messenger');
+      _toast('QR не похож на контакт TK Messenger');
       return false;
     }
     final selfId = normalizePeerId(ref.read(currentPeerIdProvider) ?? '');
@@ -98,13 +96,6 @@ class _AddContactPageState extends ConsumerState<AddContactPage>
       _toast('Это твой собственный код');
       return false;
     }
-
-    // Capture the navigator + messenger BEFORE any await. If this page is torn
-    // down during the DB write (tab rebuild, scanner stop, etc.), the captured
-    // NavigatorState is still valid — so a successful add ALWAYS opens the chat
-    // instead of silently stranding the user (the "added but chat didn't open"
-    // bug). NavigatorState survives even if this widget unmounts.
-    final navigator = Navigator.of(context);
 
     final existed = (await db.getPeer(pid)) != null;
     bool saved;
@@ -123,20 +114,14 @@ class _AddContactPageState extends ConsumerState<AddContactPage>
       return false;
     }
 
-    // Contact is now saved locally — this is the source of truth and is never
-    // rolled back below, even if opening the chat fails.
+    if (!mounted) return true;
+    // Visible result + distinct message; the contact is saved regardless of
+    // whether the peer is online. Keep this page in the back stack (don't pop)
+    // so the SnackBar stays visible and "add another" is one back-tap away.
     _toast(existed ? 'Контакт уже добавлен' : 'Контакт добавлен');
-
-    // Open the chat deterministically. The chat opens regardless of whether the
-    // peer is online (the page shows в сети / не в сети honestly). If the push
-    // itself fails, the contact is still saved and we say so explicitly.
-    try {
-      navigator.push(
-        MaterialPageRoute(builder: (_) => ChatViewPage(peerId: pid)),
-      );
-    } catch (_) {
-      _toast('Контакт сохранён, но чат не открылся — он в списке чатов');
-    }
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => ChatViewPage(peerId: pid)),
+    );
     return true;
   }
 
@@ -158,16 +143,7 @@ class _AddContactPageState extends ConsumerState<AddContactPage>
       // Transparent so the app's animated glass backdrop shows through —
       // matches every other pushed page (settings, games, chat…).
       backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        flexibleSpace: const OrbitsGlassSurface(
-          role: OrbitsGlassRole.appBar,
-          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
-          child: SizedBox.expand(),
-        ),
+      appBar: OrbitsGlassAppBar(
         title: Text(
           'Добавить контакт',
           style: TextStyle(
@@ -248,10 +224,6 @@ class _ScanTabState extends State<_ScanTab> {
   /// bad/duplicate scan never permanently wedges the scanner.
   bool _handled = false;
 
-  /// Drives the "QR распознан — добавляем…" success overlay. Without it, the
-  /// stopped camera shows a blank/gray frame that reads as "frozen/failed".
-  bool _busy = false;
-
   @override
   void initState() {
     super.initState();
@@ -281,23 +253,14 @@ class _ScanTabState extends State<_ScanTab> {
 
     _handled = true;
     hapticTap();
-    // Show an explicit "recognized — processing" overlay BEFORE stopping the
-    // camera, so the user never sees a blank/gray frozen-looking frame.
-    if (mounted) setState(() => _busy = true);
     await _controller?.stop();
     final ok = await widget.onResult(hit);
     if (!mounted) return;
     if (!ok) {
-      // Unrecognised / self / save failure — drop the overlay, re-arm, and
-      // resume scanning so the user can try another code.
-      setState(() {
-        _busy = false;
-        _handled = false;
-      });
+      // Self / save failure — let the user point at another code.
+      _handled = false;
       await _controller?.start();
     }
-    // On success the chat has been pushed on top; the overlay stays as the
-    // last visible state (not a blank camera) underneath it.
   }
 
   @override
@@ -369,69 +332,26 @@ class _ScanTabState extends State<_ScanTab> {
             ],
           ),
         ),
-        // Torch + camera-flip controls in the top-right (hidden while busy).
-        if (!_busy)
-          Positioned(
-            top: 16,
-            right: 16,
-            child: Column(
-              children: [
-                _ScanIconButton(
-                  icon: Icons.flash_on,
-                  tooltip: 'Фонарик',
-                  onTap: () => controller.toggleTorch(),
-                ),
-                const SizedBox(height: 8),
-                _ScanIconButton(
-                  icon: Icons.cameraswitch_outlined,
-                  tooltip: 'Сменить камеру',
-                  onTap: () => controller.switchCamera(),
-                ),
-              ],
-            ),
-          ),
-        // Success / processing overlay — covers the stopped (gray) camera with
-        // a clear "recognized → adding" state instead of a blank frozen frame.
-        if (_busy)
-          Positioned.fill(
-            child: ColoredBox(
-              color: Colors.black.withValues(alpha: 0.72),
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.qr_code_scanner_rounded,
-                        color: tokens.success, size: 56),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'QR распознан',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    const Text(
-                      'Добавляем контакт и открываем чат…',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.white70, fontSize: 14),
-                    ),
-                    const SizedBox(height: 18),
-                    SizedBox(
-                      width: 26,
-                      height: 26,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2.5,
-                        valueColor:
-                            AlwaysStoppedAnimation<Color>(tokens.accent),
-                      ),
-                    ),
-                  ],
-                ),
+        // Torch + camera-flip controls in the top-right.
+        Positioned(
+          top: 16,
+          right: 16,
+          child: Column(
+            children: [
+              _ScanIconButton(
+                icon: Icons.flash_on,
+                tooltip: 'Фонарик',
+                onTap: () => controller.toggleTorch(),
               ),
-            ),
+              const SizedBox(height: 8),
+              _ScanIconButton(
+                icon: Icons.cameraswitch_outlined,
+                tooltip: 'Сменить камеру',
+                onTap: () => controller.switchCamera(),
+              ),
+            ],
           ),
+        ),
       ],
     );
   }

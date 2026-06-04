@@ -38,13 +38,13 @@
     which is roughly 10× slower per query.
   -->
 
-  <!-- Dark glass theme — status bar + browser chrome. -->
+  <!-- Dark theme — status bar + browser chrome. -->
   <meta name="theme-color" content="#0A0E16">
 
   <!-- PWA / "Add to Home Screen" (Android + iOS Safari). -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
   <meta name="apple-mobile-web-app-title" content="Orbits">
 
   <!-- iOS home-screen icon. Opaque (no transparency → no black composite in
@@ -69,6 +69,58 @@
   <script>
     (function () {
       const cleanupKey = 'orbits-flutter-web-cleanup-v1';
+
+      // ── Device gate ────────────────────────────────────────────────────
+      // Block mobile *phones* from the web version BEFORE the Flutter bundle
+      // loads, so the main app never starts on a phone (requirement: "don't
+      // load the main functionality"). Tablets/iPad and desktops are allowed.
+      //
+      // Detection does NOT rely on screen width (a small laptop window must
+      // not be mistaken for a phone). Primary signal is UA-Client-Hints
+      // (`navigator.userAgentData.mobile`); we fall back to UA-string checks.
+      // The Dart side and the embedded signaling server mirror this logic
+      // (see lib/core/mobile_ua.dart) for defense in depth.
+      function isMobilePhone() {
+        const nav = window.navigator || {};
+        const ua = nav.userAgent || '';
+        // UA-CH: authoritative phone flag on Chromium/Android.
+        if (nav.userAgentData && nav.userAgentData.mobile === true) return true;
+        // iPhone / iPod. (iPadOS reports a "Macintosh" desktop UA → allowed.)
+        if (/iPhone|iPod/i.test(ua)) return true;
+        // Android phones carry the "Mobile" token; Android tablets omit it.
+        if (/Android/i.test(ua) && /Mobile/i.test(ua)) return true;
+        // Legacy mobile browsers.
+        if (/(BlackBerry|BB10|IEMobile|Opera Mini|webOS|Windows Phone)/i.test(ua)) {
+          return true;
+        }
+        return false;
+      }
+
+      function renderBlocked() {
+        document.title = 'Orbits — откройте с компьютера';
+        document.body.innerHTML =
+          '<div style="position:fixed;inset:0;display:flex;align-items:center;' +
+          'justify-content:center;padding:24px;box-sizing:border-box;' +
+          'background:#0f1115;color:#e8eaed;font-family:-apple-system,' +
+          'BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;">' +
+          '<div style="max-width:420px;text-align:center;">' +
+          '<div style="font-size:48px;line-height:1;margin-bottom:20px;">🖥️</div>' +
+          '<h1 style="font-size:20px;font-weight:700;margin:0 0 12px;">' +
+          'Доступ с мобильных устройств запрещён</h1>' +
+          '<p style="font-size:15px;line-height:1.5;margin:0;opacity:.75;">' +
+          'Веб-версия Orbits недоступна на телефонах. Пожалуйста, откройте ' +
+          'сайт с компьютера или ноутбука.</p>' +
+          '</div></div>';
+      }
+
+      if (isMobilePhone()) {
+        window.__orbitsAccessDenied = true;
+        renderBlocked();
+        return;
+      }
+      // Publish the verdict so the Dart in-app gate (device_access_web.dart)
+      // can read it as a backstop.
+      window.__orbitsAccessDenied = false;
 
       function loadFlutter() {
         const script = document.createElement('script');

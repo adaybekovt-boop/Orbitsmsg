@@ -261,6 +261,55 @@ void main() {
         client.close(force: true);
       }
     });
+
+    // Server-side device gate: a mobile-phone browser User-Agent is refused
+    // with 403 before any WebSocket upgrade (mirrors web/index.html). Native
+    // guests send a Dart UA (no phone match) and are unaffected.
+    const phoneUa = 'Mozilla/5.0 (Linux; Android 13; Pixel 7) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 '
+        'Mobile Safari/537.36';
+    const desktopUa = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+        'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 '
+        'Safari/537.36';
+
+    test('GET with a phone User-Agent is rejected with 403', () async {
+      final client = HttpClient();
+      try {
+        final req = await client.getUrl(
+          Uri.parse('http://127.0.0.1:${server.port}/'),
+        );
+        req.headers.set(HttpHeaders.userAgentHeader, phoneUa);
+        final resp = await req.close().timeout(const Duration(seconds: 5));
+        expect(resp.statusCode, 403);
+        await resp.drain<void>();
+      } finally {
+        client.close(force: true);
+      }
+    });
+
+    test('WebSocket upgrade with a phone User-Agent is refused', () async {
+      // The 403 is written before the upgrade, so the handshake never
+      // completes and `WebSocket.connect` throws.
+      await expectLater(
+        WebSocket.connect(
+          wsUri('A', 'ta').toString(),
+          headers: {HttpHeaders.userAgentHeader: phoneUa},
+        ),
+        throwsA(isA<WebSocketException>()),
+      );
+    });
+
+    test('WebSocket upgrade with a desktop User-Agent still gets OPEN',
+        () async {
+      final ws = await WebSocket.connect(
+        wsUri('A', 'ta').toString(),
+        headers: {HttpHeaders.userAgentHeader: desktopUa},
+      );
+      final first =
+          await ws.map(_json).first.timeout(const Duration(seconds: 5));
+      expect(first['type'], PeerServerFrame.open);
+      await ws.close();
+    });
   });
 }
 

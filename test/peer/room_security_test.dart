@@ -38,11 +38,6 @@ class _CaptureTransport implements RoomTransport {
   bool hasReliable(String peerId) => true;
 
   @override
-  void Function() watchReliable(
-          String peerId, void Function(bool up) onChange) =>
-      () {};
-
-  @override
   void openReliable(String peerId) {}
 
   @override

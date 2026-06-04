@@ -6,8 +6,11 @@
 build/
 .flutter-plugins
 .flutter-plugins-dependencies
-.metadata
-pubspec.lock
+
+# NB: `.metadata` and `pubspec.lock` are intentionally committed — this is an
+# application, not a package. `.metadata` is version-controlled per Flutter's
+# own header, and committing `pubspec.lock` pins the exact resolved dependency
+# set so CI and local builds are reproducible.
 
 # Generated platform folders. CI recreates these with `flutter create`.
 android/
@@ -38,3 +41,9 @@ test/.test_coverage.dart
 .env.local
 *.key
 *.pem
+
+# CI release staging output (artifacts are uploaded, never committed)
+dist/
+
+# Claude Code worktrees / local agent scratch
+.claude/

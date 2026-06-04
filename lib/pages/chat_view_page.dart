@@ -43,6 +43,7 @@ import '../ui/chat/sticker_picker_sheet.dart';
 import '../ui/chat/typing_indicator.dart';
 import '../ui/chat/voice_recorder_sheet.dart';
 import '../ui/primitives/orbits_glass_button.dart';
+import '../ui/primitives/orbits_glass_app_bar.dart';
 import '../ui/primitives/orbits_glass_surface.dart';
 
 class ChatViewPage extends ConsumerStatefulWidget {
@@ -682,8 +683,6 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
     final messagesAsync = ref.watch(messagesForPeerProvider(widget.peerId));
     final isTyping = ref.watch(typingForPeerProvider(widget.peerId));
     final isOnline = ref.watch(connectedPeerIdsProvider).contains(widget.peerId);
-    final isConnecting = !isOnline &&
-        ref.watch(connectingPeerIdsProvider).contains(widget.peerId);
 
     // Header name/fallback resolution. Goes through peersProvider rather
     // than chatListProvider because chatListProvider only emits rows for
@@ -736,19 +735,8 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
     }
 
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
+      appBar: OrbitsGlassAppBar(
         titleSpacing: 0,
-        // Frosted glass header strip — real blur on Impeller platforms, painted
-        // glass on web/Windows. Sits behind the title + actions.
-        flexibleSpace: const OrbitsGlassSurface(
-          role: OrbitsGlassRole.appBar,
-          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
-          child: SizedBox.expand(),
-        ),
         leading: Navigator.of(context).canPop()
             ? Center(
                 child: OrbitsGlassIconButton(
@@ -789,9 +777,7 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
                     Text(
                       isBlocked
                           ? 'Заблокирован'
-                          : (isOnline
-                              ? 'В сети · защищённый чат'
-                              : (isConnecting ? 'Подключение…' : 'Не в сети')),
+                          : (isOnline ? 'В сети · защищённый чат' : 'Не в сети'),
                       style: TextStyle(
                         fontSize: 12,
                         color: Theme.of(context)

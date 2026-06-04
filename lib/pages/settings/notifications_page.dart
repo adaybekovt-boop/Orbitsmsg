@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 
 import '../../themes/orbits_tokens.dart';
 import '../../ui/primitives/adaptive_page_frame.dart';
+import '../../ui/primitives/orbits_glass_app_bar.dart';
 import '../../ui/primitives/orbits_glass_list_tile.dart';
 import '../../ui/primitives/orbits_glass_surface.dart';
 
@@ -23,16 +24,7 @@ class NotificationsPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
     return Scaffold(
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        surfaceTintColor: Colors.transparent,
-        elevation: 0,
-        scrolledUnderElevation: 0,
-        flexibleSpace: const OrbitsGlassSurface(
-          role: OrbitsGlassRole.appBar,
-          borderRadius: BorderRadius.vertical(bottom: Radius.circular(20)),
-          child: SizedBox.expand(),
-        ),
+      appBar: OrbitsGlassAppBar(
         title: Text(
           'Уведомления',
           style: TextStyle(

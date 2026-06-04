@@ -18,18 +18,15 @@ import 'embedded_signaling_server.dart'
 import 'upnp_port_mapper.dart'
     if (dart.library.html) 'upnp_port_mapper_stub.dart';
 
-/// Pure capability decision (testable without platform overrides): can the
-/// given platform run a self-hosted, persistent-while-open room server?
+/// Whether this platform can run the embedded signaling server (i.e. *host* a
+/// room). Desktop only:
 ///   • web   — a browser can't bind a listening socket;
 ///   • mobile— can technically bind, but is unreachable in the background and
 ///     usually behind carrier-grade NAT, so we don't advertise hosting there.
 /// A guest can still *join* a self-hosted room from any platform.
-bool canHostSignalingServerOn({
-  required bool isWeb,
-  required TargetPlatform platform,
-}) {
-  if (isWeb) return false;
-  switch (platform) {
+bool get canHostSignalingServer {
+  if (kIsWeb) return false;
+  switch (defaultTargetPlatform) {
     case TargetPlatform.windows:
     case TargetPlatform.macOS:
     case TargetPlatform.linux:
@@ -37,31 +34,6 @@ bool canHostSignalingServerOn({
     default:
       return false;
   }
-}
-
-/// Whether THIS platform can run the embedded signaling server (i.e. *host* a
-/// persistent-while-open room). Desktop only — see [canHostSignalingServerOn].
-bool get canHostSignalingServer =>
-    canHostSignalingServerOn(isWeb: kIsWeb, platform: defaultTargetPlatform);
-
-/// One-line, honest summary of what hosting means on THIS platform, for the
-/// create-server UX. Never over-promises persistence the platform can't keep.
-String hostingLimitationSummary({
-  bool? isWeb,
-  TargetPlatform? platform,
-}) {
-  final canHost = canHostSignalingServerOn(
-    isWeb: isWeb ?? kIsWeb,
-    platform: platform ?? defaultTargetPlatform,
-  );
-  if (canHost) {
-    return 'Сервер работает на этом ПК, пока приложение открыто. Закроете '
-        'приложение — комната станет недоступна (история сохранится). '
-        'Постоянного облачного сервера нет.';
-  }
-  return 'На этом устройстве сервер активен только пока открыто приложение и '
-      'НЕ сохраняется как постоянный. Для постоянного сервера используйте '
-      'приложение для ПК (Windows/macOS/Linux).';
 }
 
 /// Build a [PeerJsClient] that signals through an embedded server reachable at

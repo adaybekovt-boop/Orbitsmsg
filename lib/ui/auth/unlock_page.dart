@@ -12,6 +12,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/haptics.dart';
 import '../../state/auth_notifier.dart';
+import '../../state/remembered_session_stub.dart'
+    if (dart.library.html) '../../state/remembered_session_web.dart'
+    as remembered;
 import '../../themes/orbits_tokens.dart';
 import '../primitives/orbits_glass_button.dart';
 import '../primitives/orbits_glass_dialog.dart';
@@ -32,6 +35,18 @@ class _UnlockPageState extends ConsumerState<UnlockPage> {
   bool _showPass = false;
   bool _busy = false;
   String? _error;
+  // "Remember me" is only offered where secure persistence exists (web with a
+  // secure context + IndexedDB/WebCrypto). Resolved async in initState.
+  bool _rememberSupported = false;
+  bool _remember = false;
+
+  @override
+  void initState() {
+    super.initState();
+    remembered.isRememberSupported().then((supported) {
+      if (mounted && supported) setState(() => _rememberSupported = true);
+    });
+  }
 
   @override
   void dispose() {
@@ -58,7 +73,7 @@ class _UnlockPageState extends ConsumerState<UnlockPage> {
     try {
       await ref
           .read(authNotifierProvider.notifier)
-          .unlock(password: _passwordCtrl.text);
+          .unlock(password: _passwordCtrl.text, remember: _remember);
     } on AuthException catch (e) {
       if (mounted) setState(() => _error = e.message);
     } catch (e) {
@@ -211,6 +226,48 @@ class _UnlockPageState extends ConsumerState<UnlockPage> {
                       ],
                     ),
                   ),
+                  if (_rememberSupported) ...[
+                    const SizedBox(height: 6),
+                    InkWell(
+                      borderRadius: BorderRadius.circular(tokens.radiusButton),
+                      onTap: () {
+                        hapticTap();
+                        setState(() => _remember = !_remember);
+                      },
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 4),
+                        child: Row(
+                          children: [
+                            SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: Checkbox(
+                                value: _remember,
+                                onChanged: (v) {
+                                  hapticTap();
+                                  setState(() => _remember = v ?? false);
+                                },
+                                activeColor: tokens.accent,
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Text(
+                                'Запомнить меня на этом устройстве',
+                                style: TextStyle(
+                                  fontFamily: tokens.fontBody,
+                                  fontSize: 13,
+                                  color: tokens.text,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                   if (_error != null) ...[
                     const SizedBox(height: 14),
                     Container(

@@ -42,35 +42,13 @@ import 'row_codec.dart';
 //
 // Migration is lazy and lossless: [_secureDecode] passes a legacy plaintext
 // blob straight through (the cipher frame is self-identifying), and the next
-// write re-stores it encrypted.
-//
-// FAIL-CLOSED (audit P0 item 2): `data` blobs carry SENSITIVE content — message
-// plaintext and contact metadata. If the vault is locked we have no KEK to
-// encrypt them, so [_secureEncode] THROWS [VaultLockedError] instead of silently
-// writing plaintext to disk. The write call sites (saveMessage / savePeer /
-// updateMessage) catch it and return `false` (write skipped) so the caller can
-// retry/NACK rather than leak cleartext or report a false success.
-//
-// What is intentionally stored UNENCRYPTED: only non-secret routing/index
-// columns — `rooms` / `room_channels` / `room_members` rows (room id, channel
-// names, member peer ids + display names) and the promoted index columns on
-// messages/peers (id, peerId, timestamp, status…). These are metadata, not
-// message content, and are needed for plaintext SQL queries.
-
-/// Thrown by [_secureEncode] when the vault KEK is unavailable, so a write of
-/// sensitive content fails closed (no plaintext on disk).
-class VaultLockedError implements Exception {
-  const VaultLockedError();
-  @override
-  String toString() =>
-      'VaultLockedError: vault locked — refusing to write unencrypted content';
-}
+// write re-stores it encrypted. Writes while locked fall back to plaintext
+// (content is lower-sensitivity than keys) — in practice messages/peers are
+// only written while unlocked.
 
 Uint8List _secureEncode(Map<String, Object?> row) {
   final plain = encodeRow(row);
-  final wrapped = wrapBlobSync(plain);
-  if (wrapped == null) throw const VaultLockedError();
-  return wrapped;
+  return wrapBlobSync(plain) ?? plain;
 }
 
 /// Decode an encrypted-or-legacy `data` blob. Throws if the blob is encrypted
@@ -472,8 +450,7 @@ Future<bool> savePeer(Map<String, Object?> peer) async {
   // packet) can't interleave and clobber each other with a stale merge —
   // e.g. a block flag being overwritten by a profile update that read the
   // row before the block landed (audit M6).
-  try {
-    return await db.transaction<bool>(() async {
+  return db.transaction<bool>(() async {
     final existing = await _getPeerRaw(id);
     final existingMap = existing ?? const <String, Object?>{};
 
@@ -565,10 +542,7 @@ Future<bool> savePeer(Map<String, Object?> peer) async {
           ),
         );
     return true;
-    });
-  } on VaultLockedError {
-    return false; // locked → skip rather than store plaintext peer metadata
-  }
+  });
 }
 
 // ─── Chat-settings helpers ──────────────────────────────────────────
@@ -620,31 +594,19 @@ Future<bool> markChatRead(String peerId, {int? at}) =>
 Future<int> clearMessagesForPeer(String peerId) async {
   if (peerId.isEmpty) return 0;
   final db = orbitsDb();
-  // Reap blobs owned by THIS peer's messages via a peer-scoped subquery
-  // (O(peer's rows)) instead of a full O(N) orphan sweep over every blob in
-  // the DB (audit P1 item 6). Done in one transaction with the message delete.
-  return db.transaction<int>(() async {
-    await db.customStatement(
-      'DELETE FROM voice_blobs WHERE id IN '
-      '(SELECT id FROM messages WHERE peer_id = ?)',
-      [peerId],
-    );
-    await db.customStatement(
-      'DELETE FROM file_blobs WHERE id IN '
-      '(SELECT id FROM messages WHERE peer_id = ?)',
-      [peerId],
-    );
-    return (db.delete(db.messagesTable)
-          ..where((t) => t.peerId.equals(peerId)))
-        .go();
-  });
+  final n = await (db.delete(db.messagesTable)
+        ..where((t) => t.peerId.equals(peerId)))
+      .go();
+  // The just-deleted messages may have owned voice/file blobs — reap them.
+  await sweepOrphanBlobs();
+  return n;
 }
 
-/// Orphan-blob garbage collector — a maintenance sweep for blobs whose owning
-/// message no longer exists. The `NOT IN (SELECT id FROM messages)` anti-join
-/// is O(N), so it is reserved for the once-per-launch startup reap (see
-/// `main()`); the per-delete hot paths (deleteMessageRow / clearMessagesForPeer)
-/// now do targeted, id-scoped cleanup instead (audit P1 item 6).
+/// Orphan-blob garbage collector. Voice/file blobs are keyed by the owning
+/// message id (`voice_blobs.id` / `file_blobs.id` == `messages.id`), so a row
+/// whose id no longer appears in `messages` is dead weight bloating the SQLite
+/// file. A single `NOT IN (SELECT id FROM messages)` subquery per table sweeps
+/// them. Call after chat deletions, message revokes, and once at app start.
 Future<void> sweepOrphanBlobs() async {
   final db = orbitsDb();
   await db.transaction(() async {
@@ -708,14 +670,6 @@ Future<bool> saveMessage(Map<String, Object?> message) async {
   };
 
   final db = orbitsDb();
-  final Uint8List encoded;
-  try {
-    encoded = _secureEncode(row);
-  } on VaultLockedError {
-    // Fail closed: don't persist message plaintext while locked. Report failure
-    // so the caller (e.g. _persistBestEffort) can NACK/retry instead of acking.
-    return false;
-  }
   await db.into(db.messagesTable).insertOnConflictUpdate(
         MessagesTableCompanion.insert(
           id: id,
@@ -723,7 +677,7 @@ Future<bool> saveMessage(Map<String, Object?> message) async {
           timestamp: ts,
           direction: direction,
           status: status,
-          data: encoded,
+          data: _secureEncode(row),
           roomId: Value(roomId),
           channelId: Value(channelId),
         ),
@@ -743,34 +697,30 @@ Future<Map<String, Object?>?> getMessageById(String id) async {
 Future<bool> updateMessage(String id, Map<String, Object?> patch) async {
   if (id.isEmpty) return false;
   final db = orbitsDb();
-  try {
-    return await db.transaction(() async {
-      final row = await (db.select(db.messagesTable)
-            ..where((t) => t.id.equals(id)))
-          .getSingleOrNull();
-      if (row == null) return false;
-      final current = _secureDecode(row.data);
-      final merged = <String, Object?>{...current, ...patch};
+  return db.transaction(() async {
+    final row = await (db.select(db.messagesTable)
+          ..where((t) => t.id.equals(id)))
+        .getSingleOrNull();
+    if (row == null) return false;
+    final current = _secureDecode(row.data);
+    final merged = <String, Object?>{...current, ...patch};
 
-      final ts = (merged['timestamp'] as num?)?.toInt() ?? row.timestamp;
-      final direction = (merged['direction'] as String?) ?? row.direction;
-      final status = _normalizeMessageStatus(merged['status'], direction);
-      final peerId = (merged['peerId'] as String?) ?? row.peerId;
+    final ts = (merged['timestamp'] as num?)?.toInt() ?? row.timestamp;
+    final direction = (merged['direction'] as String?) ?? row.direction;
+    final status = _normalizeMessageStatus(merged['status'], direction);
+    final peerId = (merged['peerId'] as String?) ?? row.peerId;
 
-      await (db.update(db.messagesTable)..where((t) => t.id.equals(id))).write(
-        MessagesTableCompanion(
-          peerId: Value(peerId),
-          timestamp: Value(ts),
-          direction: Value(direction),
-          status: Value(status),
-          data: Value(_secureEncode(merged)),
-        ),
-      );
-      return true;
-    });
-  } on VaultLockedError {
-    return false; // locked → don't rewrite plaintext; leave the row as-is
-  }
+    await (db.update(db.messagesTable)..where((t) => t.id.equals(id))).write(
+      MessagesTableCompanion(
+        peerId: Value(peerId),
+        timestamp: Value(ts),
+        direction: Value(direction),
+        status: Value(status),
+        data: Value(_secureEncode(merged)),
+      ),
+    );
+    return true;
+  });
 }
 
 Future<bool> updateMessageStatus(String id, String status) =>
@@ -845,14 +795,9 @@ Future<List<Map<String, Object?>>> getMessages(
 Future<bool> deleteMessageRow(String id) async {
   if (id.isEmpty) return true;
   final db = orbitsDb();
-  // Blobs are keyed by the owning message id, so delete THIS message's blobs
-  // directly (O(1)) instead of a full O(N) orphan sweep over both blob tables
-  // on every single revoke (audit P1 item 6).
-  await db.transaction(() async {
-    await (db.delete(db.messagesTable)..where((t) => t.id.equals(id))).go();
-    await (db.delete(db.voiceBlobsTable)..where((t) => t.id.equals(id))).go();
-    await (db.delete(db.fileBlobsTable)..where((t) => t.id.equals(id))).go();
-  });
+  await (db.delete(db.messagesTable)..where((t) => t.id.equals(id))).go();
+  // Revoking a message orphans its voice/file blob — sweep it now.
+  await sweepOrphanBlobs();
   return true;
 }
 
@@ -954,12 +899,7 @@ Stream<List<Map<String, Object?>>> watchMessagesForPeer(
   if (peerId.isEmpty) return Stream.value(const []);
   final db = orbitsDb();
   return (db.select(db.messagesTable)
-        // 1:1 chat ONLY. A message tagged with a `roomId` belongs to a
-        // Discord-style room channel (read via [watchChannelMessages]); without
-        // this `roomId IS NULL` filter a room message authored by a peer who is
-        // also a 1:1 contact would leak into their private DM thread and corrupt
-        // normal chat state (Phase 3 state-isolation fix).
-        ..where((t) => t.peerId.equals(peerId) & t.roomId.isNull())
+        ..where((t) => t.peerId.equals(peerId))
         ..orderBy([(t) => OrderingTerm.desc(t.timestamp)])
         ..limit(limit))
       .watch()
@@ -1337,7 +1277,7 @@ Stream<List<Map<String, Object?>>> watchChatMetas() {
       MAX(m.timestamp) AS lastTs,
       (
         SELECT data FROM messages
-        WHERE peer_id = m.peer_id AND room_id IS NULL
+        WHERE peer_id = m.peer_id
         ORDER BY timestamp DESC
         LIMIT 1
       ) AS lastData,
@@ -1348,11 +1288,6 @@ Stream<List<Map<String, Object?>>> watchChatMetas() {
       END) AS unreadCount
     FROM messages m
     LEFT JOIN peers p ON p.id = m.peer_id
-    -- 1:1 conversations ONLY. Room-channel messages (room_id set) must never
-    -- surface as a DM preview or inflate a contact's unread count, and a room
-    -- author who isn't a 1:1 contact must not appear as a phantom chat
-    -- (Phase 3 state-isolation fix).
-    WHERE m.room_id IS NULL
     GROUP BY m.peer_id
     ''',
     readsFrom: {db.messagesTable, db.peersTable},

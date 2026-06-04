@@ -23,9 +23,7 @@ import '../peer/connectivity_watch_stub.dart'
     if (dart.library.html) '../peer/connectivity_watch_web.dart';
 import '../peer/peer_connection_manager.dart';
 import '../peer/peerjs_client.dart';
-import '../peer/relay_transport.dart';
 import '../peer/signaling.dart';
-import '../peer/ws_relay_transport.dart';
 import 'auth_notifier.dart';
 
 /// Snapshot of the peer subsystem. Mirrors the flat-ish object the JS
@@ -257,18 +255,6 @@ class _ResumeObserver extends WidgetsBindingObserver {
 String? _envString(String value) => value.isEmpty ? null : value;
 int? _envInt(int value) => value < 0 ? null : value;
 
-/// Split a comma/space/semicolon-separated env value into a clean list, or null
-/// when empty. Used for `TURN_URLS`.
-List<String>? _envList(String value) {
-  if (value.isEmpty) return null;
-  final parts = value
-      .split(RegExp(r'[,;\s]+'))
-      .map((s) => s.trim())
-      .where((s) => s.isNotEmpty)
-      .toList();
-  return parts.isEmpty ? null : parts;
-}
-
 const _peerServerRaw = String.fromEnvironment('PEER_SERVER');
 const _peerHostRaw = String.fromEnvironment('PEER_HOST');
 const _peerPathRaw = String.fromEnvironment('PEER_PATH');
@@ -276,7 +262,6 @@ const _peerPortRaw = int.fromEnvironment('PEER_PORT', defaultValue: -1);
 const _peerSecureSet = bool.fromEnvironment('PEER_SECURE_SET');
 const _peerSecureRaw = bool.fromEnvironment('PEER_SECURE');
 const _turnUrlRaw = String.fromEnvironment('TURN_URL');
-const _turnUrlsRaw = String.fromEnvironment('TURN_URLS');
 const _turnUserRaw = String.fromEnvironment('TURN_USERNAME');
 const _turnCredRaw = String.fromEnvironment('TURN_CREDENTIAL');
 
@@ -289,49 +274,20 @@ final _env = PeerEnv(
   // force it off pass `--dart-define=PEER_SECURE_SET=true --dart-define=PEER_SECURE=false`.
   peerSecure: _peerSecureSet ? _peerSecureRaw : null,
   turnUrl: _envString(_turnUrlRaw),
-  // Multiple TURN transports (udp/tcp/tls-443) under one credential.
-  turnUrls: _envList(_turnUrlsRaw),
   turnUsername: _envString(_turnUserRaw),
   turnCredential: _envString(_turnCredRaw),
   relayOnly: const bool.fromEnvironment('RELAY_ONLY', defaultValue: false),
 );
 
-/// Whether a usable TURN relay is configured in THIS build (≥1 URL + creds,
-/// via `--dart-define`). Without TURN, WebRTC across different NATs/networks
-/// (phone mobile-data ↔ PC behind a router) can fail — surfaced in diagnostics.
-final turnConfiguredProvider =
-    Provider<bool>((ref) => hasTurnConfigured(_env));
+/// Whether a TURN relay is configured in THIS build (via `--dart-define`).
+/// Without TURN, WebRTC across different NATs/networks (e.g. phone mobile-data
+/// ↔ PC behind a router) can fail to establish — surfaced in diagnostics so
+/// the user understands why a contact may stay "не в сети" cross-network.
+final turnConfiguredProvider = Provider<bool>(
+    (ref) => _env.turnUrl != null && _env.turnUrl!.isNotEmpty);
 
-/// Number of distinct TURN URLs (transports) configured. 0 when none.
-final turnUrlCountProvider = Provider<int>((ref) => turnUrlsFor(_env).length);
-
-/// Whether this build requests relay-only ICE.
+/// Whether this build forces relay-only ICE (requires TURN to connect at all).
 final relayOnlyProvider = Provider<bool>((ref) => _env.relayOnly);
-
-/// True when RELAY_ONLY was set but no usable TURN exists — a misconfiguration:
-/// the app falls back to a normal ICE policy (so it still connects directly)
-/// and shows a warning rather than producing a config that can't connect.
-final relayOnlyMisconfiguredProvider =
-    Provider<bool>((ref) => relayOnlyMisconfigured(_env));
-
-// ─── Encrypted text relay fallback (Phase 2) ────────────────────────
-const _relayUrlRaw = String.fromEnvironment('RELAY_URL');
-final _relayUrl = _envString(_relayUrlRaw);
-
-/// The encrypted-text relay fallback transport. Disabled (no-op) unless
-/// `RELAY_URL` is set — the app is fully functional WebRTC-only without it.
-/// Overridable in tests with a fake transport.
-final relayTransportProvider = Provider<RelayTransport>((ref) {
-  final url = _relayUrl;
-  if (url == null || url.isEmpty) return const DisabledRelayTransport();
-  final t = WsRelayTransport(url);
-  ref.onDispose(() => unawaited(t.dispose()));
-  return t;
-});
-
-/// Whether an encrypted relay fallback is configured for this build.
-final relayConfiguredProvider =
-    Provider<bool>((ref) => ref.watch(relayTransportProvider).isConfigured);
 
 final peerConnectionProvider =
     StateNotifierProvider<PeerConnectionNotifier, PeerConnectionState>((ref) {

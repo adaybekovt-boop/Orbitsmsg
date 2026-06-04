@@ -11,6 +11,9 @@ import '../../core/auth_validation.dart';
 import '../../core/haptics.dart';
 import '../../core/identity.dart';
 import '../../state/auth_notifier.dart';
+import '../../state/remembered_session_stub.dart'
+    if (dart.library.html) '../../state/remembered_session_web.dart'
+    as remembered;
 import '../../themes/orbits_tokens.dart';
 import '../primitives/orbits_glass_button.dart';
 import '../primitives/orbits_glass_surface.dart';
@@ -42,11 +45,19 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
   /// on step 3. The «Принять и завершить» button stays disabled until.
   bool _termsAccepted = false;
 
+  /// "Remember me" — offered on the final step only where secure persistence
+  /// exists (web with a secure context). Resolved async in initState.
+  bool _rememberSupported = false;
+  bool _remember = false;
+
   @override
   void initState() {
     super.initState();
     getOrCreateIdentity().then((id) {
       if (mounted) setState(() => _identity = id);
+    });
+    remembered.isRememberSupported().then((supported) {
+      if (mounted && supported) setState(() => _rememberSupported = true);
     });
   }
 
@@ -117,6 +128,7 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
             displayName: _displayNameCtrl.text,
             password: _passwordCtrl.text,
             confirm: _confirmCtrl.text,
+            remember: _remember,
           );
       // AuthGate listens to auth state and swaps screens — nothing to do.
     } on AuthException catch (e) {
@@ -269,6 +281,12 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
               _termsAccepted = v;
               if (v) _error = null;
             });
+          },
+          rememberSupported: _rememberSupported,
+          remember: _remember,
+          onToggleRemember: (v) {
+            hapticTap();
+            setState(() => _remember = v);
           },
           busy: _busy,
           error: _error,
@@ -659,6 +677,9 @@ class _StepTerms extends StatelessWidget {
     super.key,
     required this.accepted,
     required this.onToggleAccepted,
+    required this.rememberSupported,
+    required this.remember,
+    required this.onToggleRemember,
     required this.busy,
     required this.error,
     required this.onFinish,
@@ -666,6 +687,9 @@ class _StepTerms extends StatelessWidget {
 
   final bool accepted;
   final ValueChanged<bool> onToggleAccepted;
+  final bool rememberSupported;
+  final bool remember;
+  final ValueChanged<bool> onToggleRemember;
   final bool busy;
   final String? error;
   final VoidCallback onFinish;
@@ -753,6 +777,47 @@ class _StepTerms extends StatelessWidget {
             ),
           ),
         ),
+
+        if (rememberSupported) ...[
+          const SizedBox(height: 10),
+          InkWell(
+            onTap: () => onToggleRemember(!remember),
+            borderRadius: BorderRadius.circular(tokens.radiusButton),
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
+              decoration: BoxDecoration(
+                color: remember
+                    ? tokens.accentAlpha(0.10)
+                    : tokens.surface.withValues(alpha: 0.4),
+                borderRadius: BorderRadius.circular(tokens.radiusButton),
+                border: Border.all(
+                  color: remember ? tokens.accent : tokens.border,
+                  width: remember ? 1.4 : 1,
+                ),
+              ),
+              child: Row(
+                children: [
+                  _Checkbox(checked: remember, tokens: tokens),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Запомнить меня на этом устройстве',
+                      style: TextStyle(
+                        fontFamily: tokens.fontBody,
+                        fontSize: 13,
+                        height: 1.4,
+                        color: tokens.text,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
 
         if (error != null) ...[
           const SizedBox(height: 12),
