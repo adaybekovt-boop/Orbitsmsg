@@ -18,7 +18,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mime/mime.dart';
 
 import '../peer/room_manager.dart';
-import '../peer/room_signaling_host.dart' show canHostSignalingServer;
+import '../peer/room_signaling_host.dart'
+    show canHostSignalingServer, kServerHostDesktopOnlyMessage;
 import '../peer/security_monitor.dart';
 import '../state/chat_prefs_provider.dart';
 import '../state/local_profile_provider.dart';
@@ -669,24 +670,37 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => _CreateJoinSheet(defaultName: myName),
+      // The sheet hides "create" off desktop (servers are hosted on a PC only);
+      // joining stays available everywhere.
+      builder: (_) => _CreateJoinSheet(
+        defaultName: myName,
+        canCreate: canHostSignalingServer,
+      ),
     );
     if (result == null) return;
     if (result.isCreate) {
-      // Match ServersHomePage: on desktop host our own signaling server; on
-      // web/mobile fall back to a cloud (peerjs.com) room.
-      await _rooms.createRoom(result.value,
-          selfHosted: canHostSignalingServer);
+      // Defense in depth: even if a create result somehow arrives off desktop,
+      // never fall back to a cloud room — block with the clear message instead.
+      if (!canHostSignalingServer) {
+        _toast(kServerHostDesktopOnlyMessage);
+        return;
+      }
+      // Always self-hosted — never a cloud (peerjs.com) room.
+      await _rooms.createRoom(result.value, selfHosted: true);
     } else {
       await _rooms.joinRoom(result.value, myName);
     }
     if (!mounted) return;
     final st = ref.read(roomManagerProvider);
+    // A self-host failure (or any create/join error) sets joinError with no live
+    // session — surface it and DON'T navigate, so a failure never looks like a
+    // working room.
     if (st.joinError != null) {
       _toast(st.joinError!);
       _rooms.clearJoinError();
       return;
     }
+    if (st.role == RoomRole.none) return; // nothing created — stay put
     setState(() {
       _viewRoomId = st.roomId;
       _selectedChannelId = null;
@@ -1287,8 +1301,12 @@ class _JoinOrCreate {
 }
 
 class _CreateJoinSheet extends StatefulWidget {
-  const _CreateJoinSheet({required this.defaultName});
+  const _CreateJoinSheet({required this.defaultName, required this.canCreate});
   final String defaultName;
+
+  /// Whether this platform can host (desktop). When false the create form is
+  /// replaced by a short "servers are created on a PC" note; join stays usable.
+  final bool canCreate;
 
   @override
   State<_CreateJoinSheet> createState() => _CreateJoinSheetState();
@@ -1343,25 +1361,28 @@ class _CreateJoinSheetState extends State<_CreateJoinSheet> {
               const SizedBox(height: 18),
               _label('Создать сервер', tokens),
               const SizedBox(height: 8),
-              TextField(
-                controller: _nameCtl,
-                decoration: const InputDecoration(
-                  hintText: 'Название сервера',
-                  border: OutlineInputBorder(),
+              if (widget.canCreate) ...[
+                TextField(
+                  controller: _nameCtl,
+                  decoration: const InputDecoration(
+                    hintText: 'Название сервера',
+                    border: OutlineInputBorder(),
+                  ),
                 ),
-              ),
-              const SizedBox(height: 10),
-              OrbitsGlassButton(
-                label: 'Создать',
-                icon: Icons.add,
-                variant: OrbitsGlassVariant.primary,
-                expand: true,
-                onPressed: () {
-                  final v = _nameCtl.text.trim();
-                  if (v.isEmpty) return;
-                  Navigator.of(context).pop(_JoinOrCreate(true, v));
-                },
-              ),
+                const SizedBox(height: 10),
+                OrbitsGlassButton(
+                  label: 'Создать',
+                  icon: Icons.add,
+                  variant: OrbitsGlassVariant.primary,
+                  expand: true,
+                  onPressed: () {
+                    final v = _nameCtl.text.trim();
+                    if (v.isEmpty) return;
+                    Navigator.of(context).pop(_JoinOrCreate(true, v));
+                  },
+                ),
+              ] else
+                _DesktopOnlyServerNote(tokens: tokens),
               const SizedBox(height: 22),
               Row(
                 children: [
@@ -1416,4 +1437,42 @@ class _CreateJoinSheetState extends State<_CreateJoinSheet> {
           color: tokens.muted,
         ),
       );
+}
+
+/// Shown in place of the create form on web/mobile: a calm note that servers
+/// are hosted on a desktop, so the user isn't left wondering why they can't
+/// create one here. Joining (below it in the sheet) still works.
+class _DesktopOnlyServerNote extends StatelessWidget {
+  const _DesktopOnlyServerNote({required this.tokens});
+  final OrbitsTokens tokens;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: tokens.muted.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: tokens.muted.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.desktop_windows_rounded, size: 18, color: tokens.muted),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              kServerHostDesktopOnlyMessage,
+              style: TextStyle(
+                color: tokens.muted,
+                fontSize: 12.5,
+                height: 1.4,
+                fontFamily: tokens.fontBody,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

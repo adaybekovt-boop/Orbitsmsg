@@ -36,6 +36,49 @@ bool get canHostSignalingServer {
   }
 }
 
+/// User-facing (RU) explanation shown when *creating/hosting* a server is
+/// attempted on a platform that can't host (web / phone). Hosting runs an
+/// embedded signaling server, which a browser or phone can't do — so we block
+/// the create action with this message instead of silently falling back to a
+/// cloud-signaled room. Joining an existing server stays available everywhere.
+const String kServerHostDesktopOnlyMessage =
+    'Создавать серверы можно только на ПК — в приложении для Windows, macOS '
+    'или Linux. На этом устройстве доступно только подключение к уже '
+    'созданным серверам.';
+
+/// Why a self-host startup failed, in a platform-neutral form so the UI/manager
+/// layers (which never import `dart:io`) can translate it to a clear message.
+enum SelfHostFailure {
+  /// Couldn't bind the listening socket — port in use, permission, firewall, or
+  /// a bind timeout.
+  bind,
+
+  /// The server bound, but the host has no LAN IPv4 address, so guests on the
+  /// network can't reach it and there's nothing for UPnP to map.
+  noLanAddress,
+
+  /// The embedded server is up, but the host's own loopback client never
+  /// reached `open` (usually a local firewall blocking loopback).
+  clientTimeout,
+
+  /// Hosting was requested on a platform that can't host (defensive — the UI
+  /// blocks this earlier).
+  unsupported,
+}
+
+/// A self-host startup failure carrying a [SelfHostFailure] reason and an
+/// optional low-level [detail] string (kept for logs / appended to the message).
+class SelfHostException implements Exception {
+  SelfHostException(this.failure, [this.detail]);
+
+  final SelfHostFailure failure;
+  final String? detail;
+
+  @override
+  String toString() =>
+      'SelfHostException(${failure.name}${detail == null ? '' : ': $detail'})';
+}
+
 /// Build a [PeerJsClient] that signals through an embedded server reachable at
 /// [host]:[port] over plaintext `ws` (LAN). Used for BOTH the host's loopback
 /// client and a guest's client. `allowInsecureTransport` keeps it on `ws`
@@ -77,15 +120,37 @@ class RoomSignalingHost {
   bool get running => _server?.running ?? false;
 
   /// Start the embedded server and return a LAN-only invite for [roomId].
-  /// Caller must have checked [canHostSignalingServer]; throws otherwise.
+  /// Caller must have checked [canHostSignalingServer]. On failure throws a
+  /// [SelfHostException] tagged with a specific [SelfHostFailure] reason so the
+  /// caller can show a clear diagnostic instead of a generic error.
   Future<RoomInvite> start({required String roomId, String key = 'peerjs'}) async {
     if (!canHostSignalingServer) {
-      throw UnsupportedError('Hosting requires a desktop platform.');
+      throw SelfHostException(SelfHostFailure.unsupported);
     }
     final server = EmbeddedSignalingServer(key: key);
-    await server.start(host: '0.0.0.0', port: 0);
+    try {
+      await server.start(host: '0.0.0.0', port: 0);
+    } catch (e) {
+      // Bind failed (port in use / permission / firewall) or timed out. Clean
+      // up the half-open server and surface a typed, platform-neutral reason —
+      // we can't reference dart:io's SocketException above this layer.
+      try {
+        await server.stop();
+      } catch (_) {}
+      throw SelfHostException(SelfHostFailure.bind, e.toString());
+    }
     _server = server;
     final lan = await EmbeddedSignalingServer.localIpv4Addresses();
+    if (lan.isEmpty) {
+      // Bound, but no LAN IPv4 → guests on the network can't reach us and UPnP
+      // has nothing to map. Fail clearly instead of handing back a dead invite
+      // that only the host's own loopback could ever use.
+      try {
+        await server.stop();
+      } catch (_) {}
+      _server = null;
+      throw SelfHostException(SelfHostFailure.noLanAddress);
+    }
     return RoomInvite(
       roomId: roomId,
       lanHosts: lan,

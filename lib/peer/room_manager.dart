@@ -388,14 +388,37 @@ class RoomManager extends StateNotifier<RoomState> {
     }
 
     if (selfHosted && !canHostSignalingServer) {
-      state = const RoomState(
-        joinError:
-            'Свой сервер можно поднять только на ПК (Windows/macOS/Linux).',
-      );
+      state = const RoomState(joinError: kServerHostDesktopOnlyMessage);
       return;
     }
 
     final roomId = selfId; // host peer code IS the room code
+
+    // Self-hosted: stand up the embedded signaling server + the host's loopback
+    // client BEFORE persisting anything. A start failure must surface a SPECIFIC
+    // reason (bind/firewall, no LAN address, loopback timeout) and create
+    // NOTHING — never a half-baked "offline" room that looks like success
+    // (audit: a failed create must look like a failure, not a working server).
+    String? invite;
+    if (selfHosted) {
+      try {
+        // Bounded so a stuck embedded server / loopback client can never hang
+        // the create flow forever. host.start + _waitClientOpen are each
+        // bounded internally; this is the outer backstop.
+        invite =
+            await _startSelfHost(roomId).timeout(const Duration(seconds: 15));
+      } catch (e) {
+        // Keep logs useful but clean: the typed reason already carries the
+        // low-level detail (e.g. the OS bind error) via its toString — far more
+        // useful than the async stack, which here is mostly test/event-loop noise.
+        debugPrint('[room] self-host start failed: $e');
+        await _teardownSelfHost();
+        state = RoomState(joinError: _selfHostErrorMessage(e));
+        return;
+      }
+    }
+
+    _security.reset(); // fresh fraud/flood state per session
 
     await db.saveRoom({
       'id': roomId,
@@ -420,51 +443,55 @@ class RoomManager extends StateNotifier<RoomState> {
       (c) => c['type'] == 'text',
       orElse: () => channels.isNotEmpty ? channels.first : const {},
     );
-    _security.reset(); // fresh fraud/flood state per session
-
-    String? invite;
-    var serverActive = true;
-    String? notice;
-    if (selfHosted) {
-      try {
-        // Bounded so a stuck embedded server / loopback client can never hang
-        // the create flow forever. host.start + _waitClientOpen are each
-        // bounded internally; this is the outer backstop.
-        invite =
-            await _startSelfHost(roomId).timeout(const Duration(seconds: 15));
-      } catch (e) {
-        debugPrint('[room] self-host start failed: $e');
-        await _teardownSelfHost();
-        // Don't strand the user: the room row + channels already persist, so
-        // keep it as a LOCAL, offline server they can still open and use (text
-        // history works locally) and retry hosting later — instead of leaving a
-        // zombie 'active' row with no server behind it (audit: zombie room).
-        await db.setRoomStatus(roomId, 'offline');
-        serverActive = false;
-        notice = 'Сервер создан, но запустить сеть не удалось — он работает '
-            'офлайн. Откройте его позже или пересоздайте.';
-      }
-    }
 
     state = RoomState(
       role: RoomRole.host,
       roomId: roomId,
       hostPeerId: selfId,
       activeChannelId: general['id'] as String?,
-      serverActive: serverActive,
+      serverActive: true,
       selfHostInvite: invite,
-      joinError: notice,
     );
 
     // Best-effort internet exposure runs in the background so room creation is
     // instant and LAN-usable immediately; if UPnP succeeds the invite upgrades.
-    if (selfHosted && serverActive) unawaited(_upgradeToInternet(roomId));
+    if (selfHosted) unawaited(_upgradeToInternet(roomId));
+  }
+
+  /// Map a self-host startup failure to a clear, user-facing RU diagnostic.
+  /// [SelfHostException] carries a typed reason; a bare [TimeoutException] is
+  /// the outer 15s backstop firing. Anything else falls through to a generic —
+  /// but still non-silent — message.
+  String _selfHostErrorMessage(Object e) {
+    if (e is SelfHostException) {
+      switch (e.failure) {
+        case SelfHostFailure.bind:
+          final d = e.detail;
+          return 'Не удалось открыть сетевой порт для сервера. Возможно, его '
+              'блокирует брандмауэр/антивирус или порт уже занят'
+              '${d != null && d.isNotEmpty ? ' ($d)' : ''}.';
+        case SelfHostFailure.noLanAddress:
+          return 'Не удалось определить адрес компьютера в локальной сети '
+              '(LAN). Подключитесь к Wi-Fi или Ethernet и попробуйте снова.';
+        case SelfHostFailure.clientTimeout:
+          return 'Сервер запущен, но подключиться к нему не удалось (таймаут '
+              'локального клиента). Проверьте брандмауэр — он может блокировать '
+              'локальные соединения.';
+        case SelfHostFailure.unsupported:
+          return kServerHostDesktopOnlyMessage;
+      }
+    }
+    if (e is TimeoutException) {
+      return 'Сервер не запустился вовремя (таймаут). Проверьте сеть и '
+          'брандмауэр, затем попробуйте снова.';
+    }
+    return 'Не удалось запустить сервер: $e';
   }
 
   /// Start the embedded server + the host's loopback room-scoped client. Swaps
   /// [_selfHostedTransport] in and returns the (LAN-only) invite string.
   Future<String?> _startSelfHost(String roomId) async {
-    final host = RoomSignalingHost();
+    final host = _ref.read(roomSignalingHostFactoryProvider)();
     final invite = await host.start(roomId: roomId);
     _selfHost = host;
 
@@ -481,7 +508,7 @@ class RoomManager extends StateNotifier<RoomState> {
 
     await client.start();
     if (!await _waitClientOpen(client)) {
-      throw TimeoutException('embedded signaling client did not open');
+      throw SelfHostException(SelfHostFailure.clientTimeout);
     }
     return invite.encode();
   }
@@ -1883,6 +1910,14 @@ class _ConnRoomTransport implements RoomTransport {
 /// Production room transport. Overridable in tests with a fake.
 final roomTransportProvider =
     Provider<RoomTransport>((ref) => _ConnRoomTransport(ref));
+
+/// Builds the [RoomSignalingHost] used by a self-hosted create. A provider so
+/// tests can inject a fake that fails (bind/no-LAN/timeout) or records the call
+/// without binding real sockets — the self-host path is otherwise untestable.
+typedef RoomSignalingHostFactory = RoomSignalingHost Function();
+
+final roomSignalingHostFactoryProvider =
+    Provider<RoomSignalingHostFactory>((ref) => RoomSignalingHost.new);
 
 /// App-wide room session. Created lazily on first read (createRoom/joinRoom or
 /// a UI watch); persists for the container lifetime so inbound `room_*`

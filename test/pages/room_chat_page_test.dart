@@ -374,4 +374,46 @@ void main() {
     await settle(tester);
     expect(find.byType(SpatialAudioCanvas), findsNothing);
   });
+
+  // ── Create/join sheet on web/mobile: create is disabled (servers are hosted
+  //    on a PC), join stays available. NOT a roomTest — that pins macOS; this
+  //    needs a non-hosting platform, so it runs on the default (android). ──
+  testWidgets('mobile: create/join sheet disables create, keeps join',
+      (tester) async {
+    setSize(tester, const Size(400, 820));
+    final c = ProviderContainer(overrides: [
+      localProfileProvider.overrideWithValue(_hostUser),
+      roomTransportProvider.overrideWithValue(_FakeTransport()),
+    ]);
+    containers.add(c);
+    await tester.pumpWidget(app(c));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // From the empty state, open the create/join sheet.
+    expect(find.text('Создать или войти'), findsOneWidget);
+    await tester.tap(find.text('Создать или войти'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+
+    // Create is replaced by a desktop-only note; the create button is gone, but
+    // joining is still offered.
+    expect(find.textContaining('только на ПК'), findsOneWidget);
+    expect(find.text('Создать'), findsNothing,
+        reason: 'no create button off desktop');
+    expect(find.text('Подключиться'), findsOneWidget,
+        reason: 'joining stays available');
+
+    // Nothing was created just by viewing the sheet.
+    late List<Map<String, Object?>> rooms;
+    await tester.runAsync(() async {
+      rooms = await db.watchRooms().first;
+    });
+    expect(rooms, isEmpty);
+
+    // Unmount so the sheet route + Drift streams tear down before the pending-
+    // timer check (same drain pattern roomTest uses).
+    await tester.pumpWidget(const SizedBox.shrink());
+    await tester.pump(const Duration(milliseconds: 1));
+  });
 }

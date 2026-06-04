@@ -10,7 +10,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../peer/room_invite.dart';
 import '../peer/room_manager.dart';
-import '../peer/room_signaling_host.dart' show canHostSignalingServer;
+import '../peer/room_signaling_host.dart'
+    show canHostSignalingServer, kServerHostDesktopOnlyMessage;
 import '../state/local_profile_provider.dart';
 import '../storage/db.dart' as db;
 import '../themes/orbits_tokens.dart';
@@ -55,12 +56,17 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
 
   Future<void> _createServer() async {
     if (_busy) return; // reentrancy / double-tap guard
+    // Hosting runs an embedded signaling server, which only a desktop OS can do
+    // (a browser/phone can't bind a listening socket). Block the create action
+    // here with a clear explanation instead of silently falling back to a
+    // cloud-signaled room. Joining an existing server stays available.
+    if (!canHostSignalingServer) {
+      await _showDesktopOnlyNotice();
+      return;
+    }
     final myName = ref.read(localProfileProvider)?.displayName ?? '';
-    // On a desktop platform we host our OWN signaling server (no peerjs.com);
-    // elsewhere we fall back to a cloud-signaled room.
-    final selfHost = canHostSignalingServer;
     final name = await _promptText(
-      title: selfHost ? 'Создать свой сервер' : 'Создать сервер',
+      title: 'Создать свой сервер',
       hint: 'Название сервера',
       initial: myName.isNotEmpty ? '$myName: сервер' : '',
       confirm: 'Создать',
@@ -72,7 +78,9 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
       _busyLabel = 'Создаём сервер…';
     });
     try {
-      await _rooms.createRoom(name.trim(), selfHosted: selfHost);
+      // Always self-hosted — never a cloud room. (We already returned above on
+      // a non-desktop platform, so hosting is supported here.)
+      await _rooms.createRoom(name.trim(), selfHosted: true);
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -102,6 +110,37 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
       if (!mounted) return;
     }
     if (st.roomId != null) _openRoom(st.roomId);
+  }
+
+  /// Explain (RU) that servers are created only on desktop. Shown when the user
+  /// taps "Создать сервер" on web/mobile — a firm, readable block, not a 2s
+  /// snackbar — so they understand to host from the Windows/macOS/Linux app.
+  Future<void> _showDesktopOnlyNotice() async {
+    final tokens = OrbitsTokens.of(context);
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: tokens.surface,
+        title: Text(
+          'Сервер создаётся на ПК',
+          style: TextStyle(fontFamily: tokens.fontHeading, color: tokens.text),
+        ),
+        content: Text(
+          kServerHostDesktopOnlyMessage,
+          style: TextStyle(
+            fontFamily: tokens.fontBody,
+            color: tokens.text,
+            height: 1.4,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Понятно'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _joinServer() async {
