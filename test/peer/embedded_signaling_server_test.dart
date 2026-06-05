@@ -262,9 +262,10 @@ void main() {
       }
     });
 
-    // Server-side device gate: a mobile-phone browser User-Agent is refused
-    // with 403 before any WebSocket upgrade (mirrors web/index.html). Native
-    // guests send a Dart UA (no phone match) and are unaffected.
+    // Any device may connect: a mobile-phone browser User-Agent is NOT blocked
+    // anymore (the old server-side gate was removed so mobile web can join
+    // rooms). Hosting/creating a server stays desktop-only, gated in-app via
+    // canHostSignalingServer — not by a User-Agent check here.
     const phoneUa = 'Mozilla/5.0 (Linux; Android 13; Pixel 7) '
         'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 '
         'Mobile Safari/537.36';
@@ -272,7 +273,7 @@ void main() {
         'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 '
         'Safari/537.36';
 
-    test('GET with a phone User-Agent is rejected with 403', () async {
+    test('GET with a phone User-Agent is allowed (200, not blocked)', () async {
       final client = HttpClient();
       try {
         final req = await client.getUrl(
@@ -280,23 +281,24 @@ void main() {
         );
         req.headers.set(HttpHeaders.userAgentHeader, phoneUa);
         final resp = await req.close().timeout(const Duration(seconds: 5));
-        expect(resp.statusCode, 403);
-        await resp.drain<void>();
+        expect(resp.statusCode, 200);
+        final body = await resp.transform(utf8.decoder).join();
+        expect(body, contains('orbits'));
       } finally {
         client.close(force: true);
       }
     });
 
-    test('WebSocket upgrade with a phone User-Agent is refused', () async {
-      // The 403 is written before the upgrade, so the handshake never
-      // completes and `WebSocket.connect` throws.
-      await expectLater(
-        WebSocket.connect(
-          wsUri('A', 'ta').toString(),
-          headers: {HttpHeaders.userAgentHeader: phoneUa},
-        ),
-        throwsA(isA<WebSocketException>()),
+    test('WebSocket upgrade with a phone User-Agent gets OPEN (can join)',
+        () async {
+      final ws = await WebSocket.connect(
+        wsUri('P', 'tp').toString(),
+        headers: {HttpHeaders.userAgentHeader: phoneUa},
       );
+      final first =
+          await ws.map(_json).first.timeout(const Duration(seconds: 5));
+      expect(first['type'], PeerServerFrame.open);
+      await ws.close();
     });
 
     test('WebSocket upgrade with a desktop User-Agent still gets OPEN',

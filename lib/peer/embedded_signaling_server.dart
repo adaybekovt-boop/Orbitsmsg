@@ -20,7 +20,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import '../core/mobile_ua.dart';
 import 'peer_server_core.dart';
 
 /// A reachable address the server is listening on, for building invite codes.
@@ -86,26 +85,10 @@ class EmbeddedSignalingServer {
   }
 
   Future<void> _onRequest(HttpRequest req) async {
-    // Server-side device gate (defense in depth): refuse mobile-phone web
-    // browsers before they can join the room, mirroring the client-side gate
-    // in web/index.html. We only ever see the UA *string* here (no UA-CH), so
-    // this leans on `isMobilePhoneUserAgent`. Native app guests connect via
-    // dart:io WebSocket and send a `Dart/...` UA, so they're never matched —
-    // only a real phone-in-a-browser is rejected. This runs while the request
-    // is still a plain HttpRequest, before any WebSocket upgrade.
-    final ua = req.headers.value(HttpHeaders.userAgentHeader);
-    if (isMobilePhoneUserAgent(ua)) {
-      try {
-        req.response
-          ..statusCode = HttpStatus.forbidden
-          ..headers.contentType = ContentType.text
-          ..write('Mobile phones are not allowed. Open from a computer.');
-        await req.response.close();
-      } catch (_) {}
-      return;
-    }
-
-    // A plain GET (health check / curious browser) gets a friendly 200.
+    // A plain GET (health check / curious browser) gets a friendly 200. Any
+    // device may connect — joining a room from a mobile web browser is allowed.
+    // (Hosting/creating a server stays desktop-only; that's gated in the app via
+    // canHostSignalingServer, not by a User-Agent block here.)
     if (!WebSocketTransformer.isUpgradeRequest(req)) {
       try {
         req.response
