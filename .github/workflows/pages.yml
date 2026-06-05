@@ -70,6 +70,14 @@ jobs:
           test -f build/web/drift_worker.js
           test -s build/web/sw.js
           test -s build/web/flutter_service_worker.js
+          # Branding: favicon / Safari touch icon / PWA manifest + icons must
+          # survive into the deployed bundle, or installs lose the Orbits icon.
+          test -s build/web/favicon.png
+          test -s build/web/apple-touch-icon.png
+          test -s build/web/manifest.json
+          for i in Icon-192 Icon-512 Icon-maskable-192 Icon-maskable-512; do
+            test -s "build/web/icons/$i.png"
+          done
 
       - uses: actions/configure-pages@v5
 

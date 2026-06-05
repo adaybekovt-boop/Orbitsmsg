@@ -143,5 +143,16 @@ dev_dependencies:
   drift_dev: ^2.20.0
   build_runner: ^2.4.13
 
+  # Native launcher-icon generation (Android mipmaps + adaptive icon, Windows
+  # app_icon.ico) from the single source tool/branding/orbits_icon_source.png.
+  # Config lives in flutter_launcher_icons.yaml; CI runs it after `flutter
+  # create` (the android/ + windows/ folders aren't committed). Web icons are
+  # hand-managed under web/ and intentionally NOT generated here.
+  flutter_launcher_icons: ^0.14.1
+
+  # Parse flutter_launcher_icons.yaml in launcher_icons_config_test.dart so a
+  # regression in the icon config fails `flutter test` early.
+  yaml: ^3.1.2
+
 flutter:
   uses-material-design: true

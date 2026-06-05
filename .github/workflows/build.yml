@@ -139,6 +139,39 @@ jobs:
             --project-name="$PROJECT_NAME" \
             .
 
+      # Brand the freshly-created project with the Orbits launcher icon. flutter
+      # create writes the default Flutter logo; flutter_launcher_icons replaces
+      # it (legacy mipmaps + adaptive foreground/background) from the single
+      # source of truth, tool/branding/orbits_icon_source.png. The verify block
+      # fails the job if generation didn't run, so the APK can never ship with
+      # the stock Flutter icon.
+      - name: Generate & verify Orbits launcher icons (Android)
+        run: |
+          set -euo pipefail
+          res=android/app/src/main/res
+          before="$(sha256sum "$res/mipmap-hdpi/ic_launcher.png" 2>/dev/null | awk '{print $1}' || true)"
+
+          dart run flutter_launcher_icons -f flutter_launcher_icons.yaml
+
+          # Adaptive icon descriptor + its foreground/background wiring…
+          test -f "$res/mipmap-anydpi-v26/ic_launcher.xml"
+          grep -q ic_launcher_foreground "$res/mipmap-anydpi-v26/ic_launcher.xml"
+          grep -q ic_launcher_background "$res/mipmap-anydpi-v26/ic_launcher.xml"
+          grep -q ic_launcher_background "$res/values/colors.xml"
+          # …legacy + adaptive-foreground bitmaps for every density…
+          for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            test -s "$res/mipmap-$d/ic_launcher.png"
+            test -s "$res/drawable-$d/ic_launcher_foreground.png"
+          done
+          # …and the legacy icon must DIFFER from the flutter-create default,
+          # proving flutter_launcher_icons actually ran (not the stock logo).
+          after="$(sha256sum "$res/mipmap-hdpi/ic_launcher.png" | awk '{print $1}')"
+          if [ -n "$before" ] && [ "$before" = "$after" ]; then
+            echo "::error::Android launcher icon is still the flutter-create default — flutter_launcher_icons did not run"
+            exit 1
+          fi
+          echo "Android launcher icons generated from tool/branding/orbits_icon_source.png"
+
       - name: Patch AndroidManifest + signing config
         run: |
           sed -i 's/\r$//' tool/ci/patch_android.sh
@@ -260,6 +293,19 @@ jobs:
           # rewrite to relative ./ for static-host / file:// previews
           sed -i 's|<base href="/">|<base href="./">|' build/web/index.html
 
+      # The hand-tuned web/PWA/Safari icons are copied verbatim by `flutter build
+      # web`; fail loudly if any referenced file went missing from the bundle.
+      - name: Verify branding icons survive into build/web
+        run: |
+          set -euo pipefail
+          test -s build/web/favicon.png
+          test -s build/web/apple-touch-icon.png
+          test -s build/web/manifest.json
+          for i in Icon-192 Icon-512 Icon-maskable-192 Icon-maskable-512; do
+            test -s "build/web/icons/$i.png"
+          done
+          echo "web branding icons present in build/web"
+
       - name: Stage relative-base bundle
         run: |
           mkdir -p dist
@@ -319,6 +365,28 @@ jobs:
             --org="$PROJECT_ORG" \
             --project-name="$PROJECT_NAME" \
             .
+
+      # Brand the EXE icon BEFORE `flutter build windows`. flutter create writes
+      # the default app_icon.ico, which windows/runner/Runner.rc compiles into
+      # the runner EXE; flutter_launcher_icons overwrites it with the Orbits icon
+      # from the single source. The verify block fails the job if it didn't run,
+      # so the EXE / installer / shortcuts can never carry the stock icon.
+      - name: Generate & verify Orbits launcher icon (Windows)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ico=windows/runner/resources/app_icon.ico
+          before="$(sha256sum "$ico" 2>/dev/null | awk '{print $1}' || true)"
+
+          dart run flutter_launcher_icons -f flutter_launcher_icons.yaml
+
+          test -s "$ico"
+          after="$(sha256sum "$ico" | awk '{print $1}')"
+          if [ -n "$before" ] && [ "$before" = "$after" ]; then
+            echo "::error::windows/runner/resources/app_icon.ico is still the flutter-create default — flutter_launcher_icons did not run"
+            exit 1
+          fi
+          echo "Windows app_icon.ico generated from tool/branding/orbits_icon_source.png"
 
       # Codegen MUST succeed here too — lib/storage/* depends on the
       # generated *.g.dart files, so a silent codegen failure would only
@@ -415,13 +483,20 @@ jobs:
           ArchitecturesAllowed=x64
           ArchitecturesInstallIn64BitMode=x64
           WizardStyle=modern
+          ; Branding: the Orbits icon on the installer wizard EXE and in
+          ; Add/Remove Programs. SetupIconFile is relative to this .iss (repo
+          ; root); the app_icon.ico is the one flutter_launcher_icons generated.
+          SetupIconFile=windows\runner\resources\app_icon.ico
+          UninstallDisplayIcon={app}\{#MyAppExeName}
 
           [Files]
           Source: "build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
           [Icons]
-          Name: "{group}\Orbits"; Filename: "{app}\{#MyAppExeName}"
-          Name: "{commondesktop}\Orbits"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+          ; Shortcuts draw their glyph from the app EXE (which embeds app_icon.ico
+          ; via Runner.rc) — set IconFilename explicitly so it's unambiguous.
+          Name: "{group}\Orbits"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"
+          Name: "{commondesktop}\Orbits"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
           [Tasks]
           Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
