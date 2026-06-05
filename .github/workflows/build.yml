@@ -374,27 +374,31 @@ jobs:
             --project-name="$PROJECT_NAME" \
             .
 
-      # Brand the EXE icon BEFORE `flutter build windows`. flutter create writes
-      # the default app_icon.ico, which windows/runner/Runner.rc compiles into
-      # the runner EXE; flutter_launcher_icons overwrites it with the Orbits icon
-      # from the single source. The verify block fails the job if it didn't run,
-      # so the EXE / installer / shortcuts can never carry the stock icon.
+      # Brand the EXE icon BEFORE `flutter build windows`. The Orbits app_icon.ico
+      # is force-tracked, and `flutter create` keeps it; flutter_launcher_icons
+      # regenerates it from the single source anyway. windows/runner/Runner.rc
+      # compiles it into the runner EXE (window + taskbar + EXE + installer all
+      # use it). The verify fails the job if the icon is the default Flutter logo,
+      # regardless of whether `flutter create` overwrote or kept it.
       - name: Generate & verify Orbits launcher icon (Windows)
         shell: bash
         run: |
           set -euo pipefail
           ico=windows/runner/resources/app_icon.ico
-          before="$(sha256sum "$ico" 2>/dev/null | awk '{print $1}' || true)"
 
           dart run flutter_launcher_icons -f flutter_launcher_icons.yaml
 
           test -s "$ico"
-          after="$(sha256sum "$ico" | awk '{print $1}')"
-          if [ -n "$before" ] && [ "$before" = "$after" ]; then
-            echo "::error::windows/runner/resources/app_icon.ico is still the flutter-create default — flutter_launcher_icons did not run"
-            exit 1
-          fi
-          echo "Windows app_icon.ico generated from tool/branding/orbits_icon_source.png"
+          hash="$(sha256sum "$ico" | awk '{print $1}')"
+          # Fail if the EXE would carry the default Flutter icon (the blue logo).
+          while IFS= read -r d; do
+            case "$d" in ''|\#*) continue ;; esac
+            if [ "$hash" = "$d" ]; then
+              echo "::error::windows/runner/resources/app_icon.ico is the default Flutter icon — flutter_launcher_icons did not produce the Orbits icon"
+              exit 1
+            fi
+          done < tool/windows/flutter_default_app_icon.sha256
+          echo "Windows app_icon.ico is the Orbits icon ($hash)"
 
       # Codegen MUST succeed here too — lib/storage/* depends on the
       # generated *.g.dart files, so a silent codegen failure would only

@@ -17,7 +17,17 @@ android/
 ios/
 linux/
 macos/
-windows/
+# windows/ is generated too, BUT we force-track the app icon so a checkout never
+# silently builds with the default Flutter icon (the blue logo). `flutter create`
+# keeps an existing app_icon.ico, so a normal build picks up the Orbits icon
+# without any extra step. Regenerate via tool/windows/restore_app_icon.sh; the
+# guard test (test/branding/windows_app_icon_test.dart) fails on the default.
+windows/*
+!windows/runner/
+windows/runner/*
+!windows/runner/resources/
+windows/runner/resources/*
+!windows/runner/resources/app_icon.ico
 
 # IDE
 .idea/

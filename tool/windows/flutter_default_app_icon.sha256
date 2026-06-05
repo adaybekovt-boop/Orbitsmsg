@@ -1,0 +1,15 @@
+# SHA-256 of known DEFAULT Flutter Windows app_icon.ico files — the blue Flutter
+# logo that `flutter create` writes into windows/runner/resources/app_icon.ico.
+#
+# The committed windows/runner/resources/app_icon.ico must NEVER match any of
+# these, or the Windows EXE / window / taskbar / installer would show the stock
+# logo instead of Orbits. Enforced by:
+#   • test/branding/windows_app_icon_test.dart  (runs in `flutter test`)
+#   • the "Generate & verify Orbits launcher icon (Windows)" CI step.
+#
+# One hash per line. Add a line if a future Flutter SDK ships a different default
+# (run `flutter create --platforms=windows .` in an empty dir and sha256 the
+# generated app_icon.ico).
+
+# Flutter 3.32.0 (stable) — windows/runner/resources/app_icon.ico
+c098d3fc85cacff98b8e69811b48e9f0d852fcee278132d794411d978869cbf8
