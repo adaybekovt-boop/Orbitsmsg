@@ -131,10 +131,14 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
-      - name: Generate android/ + web/ platforms
+      # windows/ is scaffolded here too (this job only builds the APK) so the
+      # ONE shared flutter_launcher_icons.yaml — which covers BOTH Android and
+      # Windows — runs without erroring on a missing windows/ folder. The
+      # unused windows/ folder is ignored by `flutter build apk`.
+      - name: Generate android/ + windows/ + web/ platforms
         run: |
           flutter create \
-            --platforms=android,web \
+            --platforms=android,web,windows \
             --org="$PROJECT_ORG" \
             --project-name="$PROJECT_NAME" \
             .
@@ -357,11 +361,15 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
-      - name: Generate windows/ + web/ platforms
+      # android/ is scaffolded here too (this job only builds the EXE) so the
+      # ONE shared flutter_launcher_icons.yaml — which covers BOTH Android and
+      # Windows — runs without erroring on a missing android/ folder. The
+      # unused android/ folder is ignored by `flutter build windows`.
+      - name: Generate windows/ + android/ + web/ platforms
         shell: bash
         run: |
           flutter create \
-            --platforms=windows,web \
+            --platforms=windows,web,android \
             --org="$PROJECT_ORG" \
             --project-name="$PROJECT_NAME" \
             .
