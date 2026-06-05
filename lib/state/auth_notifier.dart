@@ -27,7 +27,7 @@ import '../core/vault_kek.dart';
 import '../storage/db.dart' as db;
 import '../storage/secure_profile_store.dart';
 import 'auto_unlock_service.dart';
-import 'remembered_session_stub.dart'
+import 'remembered_session_io.dart'
     if (dart.library.html) 'remembered_session_web.dart' as remembered;
 
 // ─────────────────────────────────────────────────────────────

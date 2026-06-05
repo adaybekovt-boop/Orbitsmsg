@@ -11,7 +11,7 @@ import '../../core/auth_validation.dart';
 import '../../core/haptics.dart';
 import '../../core/identity.dart';
 import '../../state/auth_notifier.dart';
-import '../../state/remembered_session_stub.dart'
+import '../../state/remembered_session_io.dart'
     if (dart.library.html) '../../state/remembered_session_web.dart'
     as remembered;
 import '../../themes/orbits_tokens.dart';
@@ -46,7 +46,8 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
   bool _termsAccepted = false;
 
   /// "Remember me" — offered on the final step only where secure persistence
-  /// exists (web with a secure context). Resolved async in initState.
+  /// exists: desktop (OS-backed secure storage) or web with a secure context.
+  /// Resolved async in initState.
   bool _rememberSupported = false;
   bool _remember = false;
 

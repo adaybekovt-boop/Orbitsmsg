@@ -12,7 +12,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/haptics.dart';
 import '../../state/auth_notifier.dart';
-import '../../state/remembered_session_stub.dart'
+import '../../state/remembered_session_io.dart'
     if (dart.library.html) '../../state/remembered_session_web.dart'
     as remembered;
 import '../../themes/orbits_tokens.dart';
@@ -35,8 +35,9 @@ class _UnlockPageState extends ConsumerState<UnlockPage> {
   bool _showPass = false;
   bool _busy = false;
   String? _error;
-  // "Remember me" is only offered where secure persistence exists (web with a
-  // secure context + IndexedDB/WebCrypto). Resolved async in initState.
+  // "Remember me" is only offered where secure persistence exists: desktop
+  // (OS-backed secure storage — DPAPI/Keychain/libsecret) or web with a secure
+  // context (IndexedDB/WebCrypto). Resolved async in initState.
   bool _rememberSupported = false;
   bool _remember = false;
 

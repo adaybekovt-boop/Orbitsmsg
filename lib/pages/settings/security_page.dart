@@ -19,6 +19,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../peer/helpers.dart';
 import '../../state/auth_notifier.dart';
 import '../../state/auto_lock_provider.dart';
+import '../../state/remembered_session_io.dart'
+    if (dart.library.html) '../../state/remembered_session_web.dart'
+    as remembered;
 import '../../state/strict_verify_provider.dart';
 import '../../themes/orbits_tokens.dart';
 import '../qr_pairing_page.dart';
@@ -38,6 +41,10 @@ class SecurityPage extends ConsumerStatefulWidget {
 class _SecurityPageState extends ConsumerState<SecurityPage> {
   bool? _biometricUnlock;
   bool _biometricSupported = false;
+  // True where auto-login via "Запомнить меня" exists (desktop OS-backed secure
+  // storage, or web with a secure context). Drives the access-row copy so we
+  // don't claim "always password" on a device that can actually auto-unlock.
+  bool _rememberSupported = false;
   bool? _relayOnly;
 
   @override
@@ -52,11 +59,13 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
     final bioEnabled = bioSupported
         ? await ref.read(authNotifierProvider.notifier).biometricUnlockEnabled()
         : false;
+    final rememberSupported = await remembered.isRememberSupported();
     if (!mounted) return;
     setState(() {
       _relayOnly = relay;
       _biometricSupported = bioSupported;
       _biometricUnlock = bioEnabled;
+      _rememberSupported = rememberSupported;
     });
   }
 
@@ -123,9 +132,10 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
           // Biometric unlock — the honest replacement for the old
           // "remember password" toggle. The password is NEVER stored; on
           // supported devices the vault key lives in the OS biometric keystore.
-          // On Windows / desktop / web there is no hardware biometric keystore,
-          // so the row is clearly disabled and the app always asks for the
-          // password.
+          // Off-mobile there's no hardware biometric keystore, but desktop (and
+          // web) CAN still auto-login via "Запомнить меня" at sign-in (the KEK
+          // in OS-backed secure storage), so we describe that instead of
+          // claiming the device always asks for the password.
           if (_biometricSupported)
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -144,6 +154,20 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
                   semanticLabel: 'Вход по биометрии',
                   onChanged: _biometricUnlock == null ? null : _toggleBiometric,
                 ),
+              ),
+            )
+          else if (_rememberSupported)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                leading: Icon(Icons.vpn_key_outlined, color: tokens.text),
+                title: const Text('Автоматический вход'),
+                subtitle: const Text(
+                  'Отметьте «Запомнить меня» при входе, чтобы открывать профиль '
+                  'без пароля. Ключ хранится в защищённом хранилище системы, '
+                  'сам пароль не сохраняется.',
+                ),
+                trailing: _MutedChip(label: 'ПРИ ВХОДЕ', tokens: tokens),
               ),
             )
           else
