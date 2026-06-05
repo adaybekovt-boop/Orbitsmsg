@@ -545,19 +545,19 @@ jobs:
           body: |
             ## What's new
 
-            - Added "Remember me" on the web version, so trusted computers can open Orbits without typing the password every time.
-            - Added extra safety checks before auto-unlock, so a broken or outdated saved login is ignored instead of corrupting the session.
-            - Blocked the web app on mobile phones and show a clear message asking users to open Orbits from a computer or laptop.
-            - Added the same phone-browser block to self-hosted room signaling, so phone browsers cannot sneak into rooms through a direct invite.
-            - Kept the encryption core intact; this update focuses on easier web login and safer device access.
+            - Servers are now created only in the desktop app (Windows, macOS, Linux). The web version can still join servers, but it no longer creates them — so you won't end up with a "server" that has nowhere to actually run.
+            - On Windows, if a server can't start, Orbits now tells you exactly why — for example a blocked port, a firewall, or no local network — instead of quietly pretending it worked.
+            - "Remember me" now works on Windows: tick it when you sign in and Orbits can reopen without asking for your password. The key is kept in Windows' own secure storage, and your password is never saved.
+            - The Windows app, its installer, and the desktop and Start-menu shortcuts now show the Orbits icon instead of the default placeholder.
+            - The encryption core was not rewritten; this update is about where servers can be created, clearer error messages, easier sign-in on Windows, and correct branding.
 
             ## Что нового
 
-            - Добавлена галочка «Запомнить меня» в веб-версии: на доверенном компьютере Orbits сможет открываться без повторного ввода пароля.
-            - Сохранённый вход теперь сначала проверяется: если данные устарели или повреждены, приложение просто попросит пароль снова.
-            - Веб-версия больше не запускается на телефонах и показывает понятное сообщение: откройте Orbits с компьютера или ноутбука.
-            - Такая же защита добавлена для приглашений в локальные комнаты: браузер телефона не сможет подключиться к комнате напрямую.
-            - Криптоядро не переписывалось; обновление про более удобный вход на вебе и более безопасный доступ с устройств.
+            - Серверы теперь создаются только в настольном приложении (Windows, macOS, Linux). Веб-версия по-прежнему может подключаться к серверам, но больше не создаёт их — чтобы не появлялся «сервер», которому негде работать.
+            - На Windows, если сервер не удаётся запустить, Orbits теперь честно показывает причину — например, занятый порт, брандмауэр или отсутствие локальной сети — а не делает вид, что всё получилось.
+            - На Windows заработала галочка «Запомнить меня»: отметьте её при входе, и Orbits сможет открываться без пароля. Ключ хранится в защищённом хранилище Windows, а сам пароль никогда не сохраняется.
+            - Приложение для Windows, его установщик и ярлыки (на рабочем столе и в меню «Пуск») теперь показывают значок Orbits вместо стандартной заглушки.
+            - Криптоядро не переписывалось; обновление про то, где можно создавать серверы, понятные сообщения об ошибках, удобный вход на Windows и правильный значок.
 
             ## Download links / Ссылки
 

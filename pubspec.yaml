@@ -1,7 +1,7 @@
 name: orbits_flutter
 description: Orbits P2P Messenger — Flutter port. Mirrors the React/Vite project in git_push/.
 publish_to: 'none'
-version: 9.0.5+905
+version: 9.0.6+906
 
 environment:
   # Dart 3.6+ / Flutter 3.27+ for `Color.withValues(alpha:)` and related
