@@ -36,6 +36,7 @@ import 'settings/advanced_page.dart';
 import 'settings/chat_prefs_page.dart';
 import 'settings/notifications_page.dart';
 import 'settings/security_page.dart';
+import 'settings/updates_page.dart';
 import 'themes_page.dart';
 
 class SettingsPage extends ConsumerWidget {
@@ -99,6 +100,12 @@ class SettingsPage extends ConsumerWidget {
             title: 'Безопасность',
             subtitle: 'Блокировка, пароль, проверка контактов',
             onTap: () => _push(context, const SecurityPage()),
+          ),
+          _ActionRow(
+            icon: Icons.system_update_alt,
+            title: 'Обновления',
+            subtitle: 'Проверить и установить новую версию',
+            onTap: () => _push(context, const UpdatesPage()),
           ),
           const SizedBox(height: 8),
           _ActionRow(

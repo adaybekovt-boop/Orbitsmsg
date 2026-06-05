@@ -146,9 +146,10 @@ const List<SettingDescriptor> kSettingsRegistry = [
     consumer: 'network_page.dart → live connection/relay state (read-only)',
   ),
   SettingDescriptor(
-    id: 'diagnostics.updates',
+    id: 'settings.updates',
     title: 'Обновления',
     status: SettingStatus.platformLimited,
-    consumer: 'diagnostics_page.dart → update_notifier (Windows install flow)',
+    consumer: 'updates_page.dart → update_notifier (check; Windows download + '
+        'install flow, release link elsewhere)',
   ),
 ];
