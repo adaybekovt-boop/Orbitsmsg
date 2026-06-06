@@ -5,8 +5,9 @@
 // Design notes (see the redesign brief / DeepResearch):
 //   • Real `BackdropFilter` blur is used ONLY for large, rarely-rebuilt chrome
 //     (app bar / nav bar / sidebar / sheet / dialog / input) AND only where the
-//     token `allowRealBlur` is true (Android/iOS via Impeller). Web/CanvasKit
-//     and Windows fall back to painted fake-glass with no BackdropFilter.
+//     token `allowRealBlur` is true (Android/iOS/macOS via Impeller, plus
+//     Windows). Only Web/CanvasKit falls back to painted fake-glass with no
+//     BackdropFilter.
 //   • Small / repeated surfaces (card, button, pill, chat bubble) are ALWAYS
 //     painted fake-glass — never a BackdropFilter per list row.
 //   • Blur sigma is a static token; it is never tweened per frame.
@@ -80,10 +81,12 @@ class OrbitsGlassSurface extends StatelessWidget {
   /// BackdropFilter; set `false` to force painted fake-glass.
   final bool? realBlur;
 
-  /// Opt-in thin prismatic (spectral) optical highlight along the edge — a
-  /// barely-visible rainbow catch for *interactive / selected* controls only
-  /// (buttons, active toggles). Kept very low opacity so the surface stays
-  /// monochrome; never used as a decorative RGB effect.
+  /// Opt-in thin specular edge catch for *interactive / selected* controls only
+  /// (buttons, active toggles): a barely-visible white glint that runs along
+  /// the rim like light catching a glass edge. STRICTLY monochrome — pure white
+  /// at low alpha, never a spectral/rainbow RGB effect — so the surface stays
+  /// black-and-white. (The field keeps its `prismatic` name for call-site
+  /// compatibility.)
   final bool prismatic;
 
   /// Pointer-reactive "live" specular: a soft light catch that follows the
@@ -371,8 +374,13 @@ class _GlassEdgePainter extends CustomPainter {
         ).createShader(rect),
     );
 
-    // 2. Thin prismatic optical highlight (interactive / selected only).
+    // 2. Thin specular edge catch (interactive / selected only). STRICTLY
+    // monochrome — a moving white light glints along the rim like a real glass
+    // edge under a single light source. No spectral/rainbow colour: the app's
+    // palette is black-and-white, so the catch is pure white at varying alpha.
     if (prismaticOpacity > 0) {
+      final glint = Colors.white.withValues(alpha: prismaticOpacity);
+      final glintSoft = Colors.white.withValues(alpha: prismaticOpacity * 0.55);
       canvas.drawRRect(
         outer,
         Paint()
@@ -383,11 +391,11 @@ class _GlassEdgePainter extends CustomPainter {
             transform: const GradientRotation(-1.25),
             colors: [
               const Color(0x00FFFFFF),
-              const Color(0xFF8FE3FF).withValues(alpha: prismaticOpacity),
-              const Color(0xFF9DBBFF).withValues(alpha: prismaticOpacity),
-              const Color(0xFFC9A9FF).withValues(alpha: prismaticOpacity),
-              const Color(0xFFFFB3D9).withValues(alpha: prismaticOpacity),
-              const Color(0xFFFFE9C7).withValues(alpha: prismaticOpacity),
+              glintSoft,
+              glint,
+              glintSoft,
+              glint,
+              glintSoft,
               const Color(0x00FFFFFF),
             ],
             stops: const [0.0, 0.16, 0.34, 0.52, 0.7, 0.86, 1.0],

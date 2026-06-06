@@ -735,6 +735,11 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
     }
 
     return Scaffold(
+      // Let the message list scroll UP behind the frosted glass header so the
+      // real BackdropFilter actually refracts the bubbles passing under it —
+      // the signature Apple-glass messenger moment. The list adds matching top
+      // padding (below) so the newest content is never hidden behind the bar.
+      extendBodyBehindAppBar: true,
       appBar: OrbitsGlassAppBar(
         titleSpacing: 0,
         leading: Navigator.of(context).canPop()
@@ -865,7 +870,14 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
                 return ListView.builder(
                   controller: _scrollCtl,
                   reverse: true,
-                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  // Top padding clears the glass header the list now scrolls
+                  // behind (extendBodyBehindAppBar above): window inset +
+                  // toolbar height, so the first message rests just under the
+                  // bar yet still frosts it on scroll. Bottom stays a calm 8px.
+                  padding: EdgeInsets.only(
+                    top: MediaQuery.paddingOf(context).top + kToolbarHeight + 8,
+                    bottom: 8,
+                  ),
                   itemCount: rows.length,
                   // Hold ~2000 logical px of off-screen bubbles in memory
                   // on each side of the viewport. With reverse:true and

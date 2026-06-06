@@ -45,9 +45,11 @@ import 'orbits_tokens.dart';
     highlight: isDark ? const Color(0x3DFFFFFF) : const Color(0xCCFFFFFF),
     shadow: isDark ? const Color(0x59000000) : const Color(0x1A1B2533),
     // Kept inside the deep-research budget (effective blur radius ≤ ~40px on
-    // compact phones; ≤ 3 simultaneous blur layers). 26/22 over-frosted and
-    // over-spent GPU; 18/16 reads as clear frosted glass for less cost.
-    blurSigma: isDark ? 18.0 : 16.0,
+    // compact phones; ≤ 3 simultaneous blur layers). 26/22 over-frosts and
+    // over-spends GPU; 22/20 reads as confident frosted glass — a touch
+    // stronger than the old 18/16 so the real BackdropFilter (now also live on
+    // Windows) clearly refracts the content behind chrome without smearing.
+    blurSigma: isDark ? 22.0 : 20.0,
   );
 }
 
@@ -55,19 +57,25 @@ ThemeData buildOrbitsTheme(ThemeManifest manifest) {
   final colors = manifest.tokens;
   final brightness = manifest.colorScheme;
 
-  // Real BackdropFilter blur ONLY where Impeller makes it cheap and correct:
-  // Android / iOS / macOS. Web (CanvasKit/Skwasm) and Windows fall back to
-  // painted fake-glass — the strengthened OrbitsGlassSurface stack reads as
-  // glass without a live blur, and Windows gets its real translucency from
-  // flutter_acrylic at the OS-window level (not from BackdropFilter inside the
-  // app). OrbitsGlassSurface further restricts real blur to large, low-churn
-  // chrome (nav/appbar/sheet/dialog/sidebar/input) and never blurs list-
-  // repeated surfaces (cards/buttons/bubbles). The painted path is also the
-  // fallback whenever glassBlurSigma is 0.
-  final allowRealBlur = !kIsWeb &&
-      (defaultTargetPlatform == TargetPlatform.android ||
-          defaultTargetPlatform == TargetPlatform.iOS ||
-          defaultTargetPlatform == TargetPlatform.macOS);
+  // Real BackdropFilter blur on every target: Android / iOS / macOS (Impeller),
+  // Windows, AND Web. A live in-app BackdropFilter is the ONLY thing that
+  // refracts the app's own content — the chat scrolling under the header, the
+  // content behind a sheet/dialog, messages behind the composer — which is what
+  // makes the glass read as REAL rather than a painted film. (Windows also
+  // composites Mica behind the OS window for the *margin* translucency, but
+  // Mica can't frost in-app content.) The cost worry on Web/CanvasKit was
+  // per-frame blur churn; we avoid it because OrbitsGlassSurface restricts real
+  // blur to large, LOW-CHURN chrome (nav/appbar/sheet/dialog/sidebar/input) and
+  // NEVER blurs list-repeated surfaces (cards/buttons/bubbles) — so scrolling a
+  // 1000-message list adds zero blur layers and stays smooth even on Web. Where
+  // a glass surface sits over a transparent area (Windows Mica margin) the
+  // filter samples transparent pixels and is a harmless no-op. The painted path
+  // remains the fallback whenever glassBlurSigma is 0.
+  final allowRealBlur = kIsWeb ||
+      defaultTargetPlatform == TargetPlatform.android ||
+      defaultTargetPlatform == TargetPlatform.iOS ||
+      defaultTargetPlatform == TargetPlatform.macOS ||
+      defaultTargetPlatform == TargetPlatform.windows;
 
   // Glass palette is brightness-derived (pure helper so it's unit-testable
   // without booting fonts/ThemeData).
