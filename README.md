@@ -1,49 +1,41 @@
 # Orbits
 
-A private, peer-to-peer messenger with end-to-end encryption. Messages, calls,
-and files travel directly between devices — there's no central server storing
-your conversations.
+Orbits is a private peer-to-peer messenger with end-to-end encryption. Messages, calls, and files are exchanged directly between devices, without a central server storing conversation content.
 
 ## Features
 
-- 🔒 End-to-end encryption (X3DH + Double Ratchet, forward secrecy)
-- 📞 Voice & video calls, screen sharing
-- 🖼️ Images, files, voice messages, stickers
-- 🌗 Themes
-- 📱 Android, 🖥️ Windows, and 🌐 Web
+- End-to-end encryption using X3DH and Double Ratchet
+- Voice and video calls with screen sharing
+- Images, files, voice messages, and stickers
+- Light and dark themes
+- Android, Windows, and Web support
 
-## Download
+## Downloads
 
-Get the latest version from the website:
+| Platform | Download |
+| --- | --- |
+| Android | [APK](https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-android-universal.apk) |
+| Windows | [EXE](https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-windows-x64.exe) |
+| Web | [Open Orbits](https://orbits-eeo.pages.dev/) |
 
-**https://orbits-eeo.pages.dev/**
+The latest releases are also available on the [Orbits website](https://orbits-eeo.pages.dev/).
 
-Or download directly from GitHub:
+On Android, installation from unknown sources may need to be enabled for the APK.
 
-| Platform | Link |
-|----------|------|
-| Android (APK) | https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-android-universal.apk |
-| Windows (EXE) | https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-windows-x64.exe |
-| Web | https://orbits-eeo.pages.dev/ |
+## Getting started
 
-> On Android you may need to allow installs from unknown sources.
+1. Install Orbits and create a password. The password is used to encrypt your keys on the device.
+2. Share your ID or QR code with the person you want to contact.
+3. Add their ID and start a conversation.
 
-## How to use
+## Security
 
-1. Install the app and set a password — it encrypts your keys on the device.
-2. Share your ID (or QR code) with the person you want to chat with.
-3. Add them by their ID and start messaging.
-
-Your password is never stored or transmitted. If you forget it, local data
-cannot be recovered — that's part of the security model.
+Your password is never stored or transmitted. If it is lost, encrypted local data cannot be recovered.
 
 ## Support
 
-Questions and bug reports: please use
-[Issues](https://github.com/adaybekovt-boop/tkmessenger/issues).
+For bug reports and questions, use [GitHub Issues](https://github.com/adaybekovt-boop/tkmessenger/issues).
 
----
+## License
 
-© Orbits. All rights reserved. This is proprietary software. Copying, modifying,
-or redistributing the source code, or creating derivative products based on it,
-without the author's written permission is prohibited.
+Orbits is proprietary software. All rights reserved. Copying, modifying, redistributing the source code, or creating derivative products without written permission from the author is prohibited.
