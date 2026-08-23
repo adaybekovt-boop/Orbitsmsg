@@ -5,7 +5,8 @@ backend that stores conversations. The default build still talks to
 **public third-party infrastructure** so peers can find each other and so
 WebRTC can traverse NAT. Those parties can see connection metadata. They
 cannot read 1:1 message bodies (X3DH + Double Ratchet). **Rooms are not
-end-to-end encrypted** — see [rooms.md](rooms.md).
+end-to-end encrypted** — see [rooms.md](rooms.md). The phrase “not end-to-end”
+is the product limitation, not a temporary UI omission.
 
 This page is an inventory of what leaves the device in a default install.
 
