@@ -327,6 +327,14 @@ class _WindowsUpdateActions extends StatelessWidget {
           ),
           const SizedBox(height: 10),
         ],
+        if (state.installError != null) ...[
+          Text(
+            state.installError!,
+            style: TextStyle(
+                color: tokens.danger, fontSize: 12.5, fontFamily: tokens.fontBody),
+          ),
+          const SizedBox(height: 10),
+        ],
         OrbitsGlassButton(
           label: 'Скачать обновление',
           icon: Icons.download_outlined,

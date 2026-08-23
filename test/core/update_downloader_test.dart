@@ -189,4 +189,100 @@ void main() {
       expect(r.bytes, bytes.length);
     });
   });
+
+  group('size cap, timeout, atomic rename (U-1)', () {
+    test('writes via .part and leaves no partial file on success', () async {
+      final bytes = utf8.encode('MZ-installer-body');
+      final d = downloader(streamingBytes(bytes));
+      final r = await d.download(
+        'https://x/win.exe',
+        fileName: kWindowsInstallerFileName,
+      );
+
+      expect(r.status, DownloadStatus.downloaded);
+      expect(File(r.filePath!).existsSync(), isTrue);
+      expect(
+        File('${tempDir.path}${Platform.pathSeparator}$kWindowsInstallerFileName.part')
+            .existsSync(),
+        isFalse,
+      );
+    });
+
+    test('body larger than maxBytes → tooLarge and no files kept', () async {
+      final bytes = List<int>.filled(32, 0x4d);
+      final d = IoUpdateDownloader(
+        client: streamingBytes(bytes, chunkSize: 8, withContentLength: false),
+        dirResolver: dirResolver,
+        isWindows: true,
+        maxBytes: 16,
+      );
+      final r = await d.download(
+        'https://x/win.exe',
+        fileName: kWindowsInstallerFileName,
+      );
+
+      expect(r.status, DownloadStatus.tooLarge);
+      expect(
+        File('${tempDir.path}${Platform.pathSeparator}$kWindowsInstallerFileName')
+            .existsSync(),
+        isFalse,
+      );
+      expect(
+        File('${tempDir.path}${Platform.pathSeparator}$kWindowsInstallerFileName.part')
+            .existsSync(),
+        isFalse,
+      );
+    });
+
+    test('Content-Length above cap → tooLarge without keeping a file', () async {
+      final bytes = List<int>.filled(8, 1);
+      final d = IoUpdateDownloader(
+        client: streamingBytes(bytes),
+        dirResolver: dirResolver,
+        isWindows: true,
+        maxBytes: 4,
+      );
+      final r = await d.download(
+        'https://x/win.exe',
+        fileName: kWindowsInstallerFileName,
+      );
+      expect(r.status, DownloadStatus.tooLarge);
+    });
+
+    test('stalled stream → timeout', () async {
+      final client = MockClient.streaming((request, bodyStream) async {
+        Stream<List<int>> chunks() async* {
+          await Future<void>.delayed(const Duration(milliseconds: 200));
+          yield utf8.encode('MZ');
+        }
+
+        return http.StreamedResponse(chunks(), 200, contentLength: 2);
+      });
+      final d = IoUpdateDownloader(
+        client: client,
+        dirResolver: dirResolver,
+        isWindows: true,
+        idleTimeout: const Duration(milliseconds: 30),
+      );
+      final r = await d.download(
+        'https://x/win.exe',
+        fileName: kWindowsInstallerFileName,
+      );
+      expect(r.status, DownloadStatus.timeout);
+      expect(
+        File('${tempDir.path}${Platform.pathSeparator}$kWindowsInstallerFileName')
+            .existsSync(),
+        isFalse,
+      );
+    });
+
+    test('path traversal fileName → invalidFile', () async {
+      final d = downloader(streamingBytes(utf8.encode('MZ')));
+      final r = await d.download(
+        'https://x/win.exe',
+        fileName: '../escape.exe',
+      );
+      expect(r.status, DownloadStatus.invalidFile);
+    });
+  });
 }

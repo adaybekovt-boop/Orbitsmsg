@@ -285,6 +285,25 @@ void main() {
           contains('повреждён'));
     });
 
+    test('tooLarge and timeout get distinct friendly messages (U-1)', () async {
+      final huge = _FakeDownloader(
+        const DownloadResult(DownloadStatus.tooLarge, message: '200MB'),
+      );
+      final c1 = makeContainer(client: json(winRelease), downloader: huge);
+      await c1.read(updateNotifierProvider.notifier).check();
+      await c1.read(updateNotifierProvider.notifier).downloadUpdate();
+      expect(c1.read(updateNotifierProvider).downloadError, contains('большой'));
+
+      final slow = _FakeDownloader(
+        const DownloadResult(DownloadStatus.timeout, message: 'idle'),
+      );
+      final c2 = makeContainer(client: json(winRelease), downloader: slow);
+      await c2.read(updateNotifierProvider.notifier).check();
+      await c2.read(updateNotifierProvider.notifier).downloadUpdate();
+      expect(
+          c2.read(updateNotifierProvider).downloadError, contains('времени'));
+    });
+
     test('unsupported platform → unsupported (no download attempt)', () async {
       final downloader = _FakeDownloader(
         const DownloadResult(DownloadStatus.downloaded, filePath: '/tmp/x.exe'),
@@ -390,6 +409,30 @@ void main() {
       expect(
           c.read(updateNotifierProvider).installError, isNot(contains('boom')));
       expect(exitCalls, 0); // app stays open on failure
+    });
+
+    test('untrusted Authenticode → failed, no exit, no raw leak (U-1)',
+        () async {
+      var exitCalls = 0;
+      final installer = _FakeInstaller(
+        const InstallLaunchResult(InstallLaunchStatus.signatureUntrusted,
+            message: 'Authenticode NotSigned'),
+      );
+      final c = await readyContainer(
+        installer: installer,
+        appExit: () async => exitCalls++,
+      );
+
+      final result =
+          await c.read(updateNotifierProvider.notifier).launchInstaller();
+
+      expect(result.status, InstallLaunchStatus.signatureUntrusted);
+      expect(c.read(updateNotifierProvider).installStatus,
+          InstallUiStatus.failed);
+      expect(c.read(updateNotifierProvider).installError, contains('издателем'));
+      expect(c.read(updateNotifierProvider).installError,
+          isNot(contains('Authenticode')));
+      expect(exitCalls, 0);
     });
 
     test('no downloaded installer → fileMissing + failed, no launch', () async {

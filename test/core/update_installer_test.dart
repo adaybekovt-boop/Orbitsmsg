@@ -6,6 +6,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbits_flutter/core/authenticode.dart';
 import 'package:orbits_flutter/core/update_installer.dart';
 import 'package:orbits_flutter/core/update_installer_io.dart';
 
@@ -41,6 +42,14 @@ void main() {
 
     return (calls: calls, fn: fn);
   }
+
+  AuthenticodeVerifier trustedVerifier({
+    String subject = 'CN=Orbits, OU=Release, O=Orbits, C=US',
+  }) =>
+      _StubVerifier(AuthenticodeResult(
+        AuthenticodeStatus.valid,
+        subject: subject,
+      ));
 
   group('platform guard', () {
     test('non-Windows → unsupportedPlatform (no launch attempt)', () async {
@@ -99,7 +108,11 @@ void main() {
   group('launch (Windows, valid file)', () {
     test('launches with safe default Inno flags and reports launched', () async {
       final rec = recordingLauncher();
-      final installer = IoUpdateInstaller(isWindows: true, launcher: rec.fn);
+      final installer = IoUpdateInstaller(
+        isWindows: true,
+        launcher: rec.fn,
+        verifier: trustedVerifier(),
+      );
       final exe = writeFile('orbits-windows-x64.exe', content: 'MZ-fake');
 
       final result = await installer.launch(exe);
@@ -117,6 +130,7 @@ void main() {
         isWindows: true,
         launcher: rec.fn,
         config: const InstallerConfig(silent: true),
+        verifier: trustedVerifier(),
       );
       final exe = writeFile('orbits-windows-x64.exe', content: 'MZ-fake');
 
@@ -129,7 +143,11 @@ void main() {
 
     test('launcher returning false → launchFailed', () async {
       final rec = recordingLauncher(succeeds: false);
-      final installer = IoUpdateInstaller(isWindows: true, launcher: rec.fn);
+      final installer = IoUpdateInstaller(
+        isWindows: true,
+        launcher: rec.fn,
+        verifier: trustedVerifier(),
+      );
       final exe = writeFile('orbits-windows-x64.exe', content: 'MZ-fake');
 
       final result = await installer.launch(exe);
@@ -143,14 +161,73 @@ void main() {
         throw const ProcessException('inno', [], 'boom');
       }
 
-      final installer =
-          IoUpdateInstaller(isWindows: true, launcher: throwing);
+      final installer = IoUpdateInstaller(
+        isWindows: true,
+        launcher: throwing,
+        verifier: trustedVerifier(),
+      );
       final exe = writeFile('orbits-windows-x64.exe', content: 'MZ-fake');
 
       final result = await installer.launch(exe);
 
       expect(result.status, InstallLaunchStatus.launchFailed);
       expect(result.message, isNotNull);
+    });
+
+    test('unsigned exe is not launched (U-1)', () async {
+      final rec = recordingLauncher();
+      final installer = IoUpdateInstaller(
+        isWindows: true,
+        launcher: rec.fn,
+        verifier: _StubVerifier(const AuthenticodeResult(
+          AuthenticodeStatus.notSigned,
+        )),
+      );
+      final exe = writeFile('orbits-windows-x64.exe', content: 'MZ-fake');
+      File('$exe.sha256').writeAsStringSync('deadbeef  orbits-windows-x64.exe');
+
+      final result = await installer.launch(exe);
+
+      expect(result.status, InstallLaunchStatus.signatureUntrusted);
+      expect(result.launched, isFalse);
+      expect(rec.calls, isEmpty);
+    });
+
+    test('wrong publisher is not launched even if Authenticode is Valid',
+        () async {
+      final rec = recordingLauncher();
+      final installer = IoUpdateInstaller(
+        isWindows: true,
+        launcher: rec.fn,
+        verifier: _StubVerifier(const AuthenticodeResult(
+          AuthenticodeStatus.valid,
+          subject: 'CN=Contoso, O=Contoso, C=US',
+        )),
+      );
+      final exe = writeFile('orbits-windows-x64.exe', content: 'MZ-fake');
+
+      final result = await installer.launch(exe);
+
+      expect(result.status, InstallLaunchStatus.signatureUntrusted);
+      expect(rec.calls, isEmpty);
+    });
+
+    test('fail-closed default verifier on non-Windows does not launch',
+        () async {
+      // isWindows:true simulates the product path; the default verifier is
+      // still FailClosedAuthenticodeVerifier because this test host is not
+      // Windows. Unsigned GitHub EXEs must not start.
+      final rec = recordingLauncher();
+      final installer = IoUpdateInstaller(
+        isWindows: true,
+        launcher: rec.fn,
+      );
+      final exe = writeFile('orbits-windows-x64.exe', content: 'MZ-fake');
+
+      final result = await installer.launch(exe);
+
+      expect(result.status, InstallLaunchStatus.signatureUntrusted);
+      expect(rec.calls, isEmpty);
     });
   });
 
@@ -165,4 +242,17 @@ void main() {
           ['/SP-', '/NORESTART', '/CURRENTUSER', '/VERYSILENT']);
     });
   });
+}
+
+class _StubVerifier implements AuthenticodeVerifier {
+  _StubVerifier(this.result);
+
+  final AuthenticodeResult result;
+  String? lastPath;
+
+  @override
+  Future<AuthenticodeResult> verify(String path) async {
+    lastPath = path;
+    return result;
+  }
 }

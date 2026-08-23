@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 
+import 'authenticode.dart';
+import 'authenticode_io.dart';
 import 'update_installer.dart';
 
 /// Launches a detached process. Returns true if it started (pid > 0). Injectable
@@ -20,14 +22,25 @@ class IoUpdateInstaller implements UpdateInstaller {
     this.config = const InstallerConfig(),
     DetachedLauncher? launcher,
     bool? isWindows,
+    AuthenticodeVerifier? verifier,
+    AuthenticodePolicy? policy,
   })  : _launcher = launcher ?? _startDetached,
         // kIsWeb is always false here (this lib only loads off-web); gate on the
         // real OS. Overridable so tests can simulate either platform.
-        _isWindows = isWindows ?? (!kIsWeb && Platform.isWindows);
+        _isWindows = isWindows ?? (!kIsWeb && Platform.isWindows),
+        // Real Windows uses PowerShell. Everywhere else (including tests that
+        // set isWindows:true on Linux) fail closed unless a verifier is injected.
+        _verifier = verifier ??
+            (!kIsWeb && Platform.isWindows
+                ? PowershellAuthenticodeVerifier()
+                : const FailClosedAuthenticodeVerifier()),
+        _policy = policy ?? kDefaultAuthenticodePolicy;
 
   final InstallerConfig config;
   final DetachedLauncher _launcher;
   final bool _isWindows;
+  final AuthenticodeVerifier _verifier;
+  final AuthenticodePolicy _policy;
 
   static Future<bool> _startDetached(String exe, List<String> args) async {
     // Detached so the installer keeps running after we exit. We deliberately do
@@ -63,6 +76,18 @@ class IoUpdateInstaller implements UpdateInstaller {
       return const InstallLaunchResult(
         InstallLaunchStatus.invalidFile,
         message: 'Installer file is empty',
+      );
+    }
+
+    // U-1: never launch until Authenticode is valid AND the publisher pin
+    // matches. An adjacent `.sha256` file is ignored — hashes without a
+    // publisher signature are not a trust boundary.
+    final signature = await _verifier.verify(installerPath);
+    if (!_policy.allows(signature)) {
+      return InstallLaunchResult(
+        InstallLaunchStatus.signatureUntrusted,
+        message: signature.message ??
+            'Authenticode ${signature.status.name} subject=${signature.subject}',
       );
     }
 
