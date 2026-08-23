@@ -345,7 +345,11 @@ jobs:
   build-windows:
     name: Build Windows (EXE)
     needs: analyze
-    runs-on: windows-latest
+    # Flutter 3.32.0 maps only VS major 17 → "Visual Studio 17 2022".
+    # windows-latest (2025+) reports VS 18, which the SDK treats as
+    # "Visual Studio 16 2019" — not installed — and cmake fails.
+    # windows-2022 matches the pinned SDK and the VC redist paths below.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 

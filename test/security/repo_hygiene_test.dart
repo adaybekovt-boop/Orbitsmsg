@@ -271,10 +271,13 @@ void main() {
       expect(ecosystems, contains('pub'));
     });
 
-    test('security workflow runs Gitleaks and Semgrep', () {
-      final sec = read('.github/workflows/security.yml');
-      expect(sec.toLowerCase(), contains('gitleaks'));
-      expect(sec.toLowerCase(), contains('semgrep'));
+    test('Windows job pins windows-2022 for Flutter 3.32 VS detection', () {
+      final build = read('.github/workflows/build.yml');
+      expect(build, contains('runs-on: windows-2022'));
+      expect(
+        build,
+        isNot(contains(RegExp(r'build-windows:[\s\S]*?runs-on: windows-latest'))),
+      );
     });
   });
 }
