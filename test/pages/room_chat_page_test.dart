@@ -20,6 +20,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/vault_kek.dart';
 import 'package:orbits_flutter/pages/room_chat_page.dart';
 import 'package:orbits_flutter/peer/peerjs_client.dart' show PeerJsClient;
+import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_manager.dart';
 import 'package:orbits_flutter/state/auth_notifier.dart' show AuthedUser;
 import 'package:orbits_flutter/state/connections_notifier.dart' show RoomBridge;
@@ -28,6 +29,7 @@ import 'package:orbits_flutter/storage/database.dart';
 import 'package:orbits_flutter/storage/db.dart' as db;
 import 'package:orbits_flutter/ui/chat/message_bubble.dart';
 import 'package:orbits_flutter/ui/primitives/orbits_glass_switch.dart';
+import 'package:orbits_flutter/ui/room/room_not_e2e_banner.dart';
 import 'package:orbits_flutter/ui/room/spatial_audio_canvas.dart';
 import 'package:orbits_flutter/ui/room/voice_channel_panel.dart';
 
@@ -178,6 +180,8 @@ void main() {
     expect(tester.takeException(), isNull); // three-panel, no overflow
     expect(find.text('MSG-GENERAL'), findsOneWidget);
     expect(find.text('MSG-SECOND'), findsNothing);
+    expect(find.byType(RoomNotE2eBanner), findsOneWidget);
+    expect(find.text(kRoomNotE2eBannerRu), findsOneWidget);
 
     await tester.tap(find.text('second')); // channel row
     await settle(tester);
@@ -392,6 +396,7 @@ void main() {
 
     // From the empty state, open the create/join sheet.
     expect(find.text('Создать или войти'), findsOneWidget);
+    expect(find.text(kRoomNotE2eBannerRu), findsOneWidget);
     await tester.tap(find.text('Создать или войти'));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));

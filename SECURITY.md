@@ -49,5 +49,6 @@ GitHub Releases used for updates) are in scope **only** insofar as the client
 trusts them unsafely. Compromising those services themselves should be
 reported to their operators.
 
-Please see future `docs/security.md` for the encryption map (what is E2E,
-what is not, and which metadata remains visible).
+Please see [`docs/rooms.md`](docs/rooms.md) for room (group) crypto: rooms are
+**not** end-to-end encrypted. A fuller encryption map (1:1 vs rooms vs at-rest
+metadata) will live in `docs/security.md`.
