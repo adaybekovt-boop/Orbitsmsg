@@ -16,7 +16,7 @@ while unlocked (`lib/core/vault_kek.dart`). It is never written to disk.
 | Contact / peer rows | Same `OB1` blob cipher. |
 | Voice recordings, file attachments, thumbs, avatars | Same `OB1` blob cipher on the byte columns. Legacy unencrypted blobs still read. |
 | Double-ratchet / identity / prekey scalars | Fail-closed `orb-wrap-v1` (`wrapSecret`). Never written while locked. |
-| SQLite file as a whole | **Not** SQLCipher. A stolen DB file is ciphertext at the row/blob layer but table names, peer IDs, timestamps, message status, file names, MIME types, and sizes are readable. |
+| SQLite file as a whole | **Not** SQLCipher (`kSqlCipherFileEncryptionEnabled == false` in `lib/storage/sqlcipher_status.dart`). Decision: `sqlcipher_flutter_libs` clashes with `sqlite3_flutter_libs` on Windows CMake (`sqlite3` target). A stolen DB file is ciphertext at the row/blob layer but table names, peer IDs, timestamps, message status, file names, MIME types, and sizes are readable. This is **not** the same control as fail-closed blob writes. |
 | Stickers, room membership lists, channel names | Not covered by the blob cipher. Treat as metadata. |
 
 ## On the wire
