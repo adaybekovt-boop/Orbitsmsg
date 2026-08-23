@@ -4,8 +4,11 @@ on:
   push:
     branches: [main, master]
     tags: ['v*']
+  # No branches: filter. Stacked Phase PRs target the previous phase
+  # branch, not main. GitHub evaluates pull_request triggers from the
+  # *base* branch, so this must be open on Phase 0 or later stacked PRs
+  # never get CI.
   pull_request:
-    branches: [main, master]
   workflow_dispatch:
 
 # Least privilege by default (U-3). The release job opts into contents:write.

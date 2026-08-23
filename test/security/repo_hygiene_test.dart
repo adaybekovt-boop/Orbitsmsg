@@ -279,5 +279,26 @@ void main() {
         isNot(contains(RegExp(r'build-windows:[\s\S]*?runs-on: windows-latest'))),
       );
     });
+
+    test('Build and Security workflows run on every pull request', () {
+      // GitHub evaluates pull_request filters from the *base* branch.
+      // Restricting to main would skip stacked Phase PRs.
+      for (final rel in [
+        '.github/workflows/build.yml',
+        '.github/workflows/security.yml',
+      ]) {
+        final doc = loadYaml(read(rel)) as YamlMap;
+        final on = doc['on'] as YamlMap;
+        expect(on.containsKey('pull_request'), isTrue, reason: rel);
+        final pr = on['pull_request'];
+        if (pr is YamlMap) {
+          expect(
+            pr.containsKey('branches'),
+            isFalse,
+            reason: '$rel pull_request.branches skips PRs stacked on a phase branch',
+          );
+        }
+      }
+    });
   });
 }
