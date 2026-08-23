@@ -16,6 +16,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../core/qr_pairing.dart';
 import '../../peer/helpers.dart';
 import '../../state/auth_notifier.dart';
 import '../../state/auto_lock_provider.dart';
@@ -235,37 +236,41 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
             ),
           ),
 
-          // ── Device linking (QR login) ────────────────────────
-          const OrbsSectionTitle('Связь устройств'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: OrbitsGlassListTile(
-              leading:
-                  Icon(Icons.qr_code_scanner_rounded, color: tokens.text),
-              title: const Text('Связать с ПК'),
-              subtitle: const Text(
-                'Подписать одноразовый QR-токен ключом телефона. Это не вход '
-                'в профиль и не копирование сейфа на компьютер.',
-              ),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const QrScanPage()),
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: OrbitsGlassListTile(
-              leading: Icon(Icons.qr_code_2_rounded, color: tokens.text),
-              title: const Text('Показать QR для связки'),
-              subtitle: const Text(
-                'Одноразовый токен. Подпись телефона не открывает сейф и не '
-                'копирует профиль на этот компьютер.',
-              ),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const QrPairingPage()),
+          // QR device linking is hidden until vault/session transfer exists.
+          // Round 1 only rewrote the subtitle; the phone still said
+          // «Вход подтверждён на компьютере» after a token signature.
+          if (kQrDeviceLinkingEnabled) ...[
+            const OrbsSectionTitle('Связь устройств'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                leading:
+                    Icon(Icons.qr_code_scanner_rounded, color: tokens.text),
+                title: const Text('Связать с ПК'),
+                subtitle: const Text(
+                  'Подписать одноразовый QR-токен ключом телефона. Это не вход '
+                  'в профиль и не копирование сейфа на компьютер.',
+                ),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const QrScanPage()),
+                ),
               ),
             ),
-          ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                leading: Icon(Icons.qr_code_2_rounded, color: tokens.text),
+                title: const Text('Показать QR для связки'),
+                subtitle: const Text(
+                  'Одноразовый токен. Подпись телефона не открывает сейф и не '
+                  'копирует профиль на этот компьютер.',
+                ),
+                onTap: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const QrPairingPage()),
+                ),
+              ),
+            ),
+          ],
 
           // ── Coming soon stubs ───────────────────────────────
           const OrbsSectionTitle('В разработке'),
