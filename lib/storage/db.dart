@@ -42,14 +42,16 @@ import 'row_codec.dart';
 //
 // Migration is lazy and lossless: [_secureDecode] passes a legacy plaintext
 // blob straight through (the cipher frame is self-identifying), and the next
-// write re-stores it encrypted. Writes while locked fall back to plaintext
-// (content is lower-sensitivity than keys) — in practice messages/peers are
-// only written while unlocked.
+// write re-stores it encrypted. Writes while locked throw — they must not
+// fall back to plaintext (S-1 / S-2).
 
 Uint8List _secureEncode(Map<String, Object?> row) {
-  final plain = encodeRow(row);
-  return wrapBlobSync(plain) ?? plain;
+  return wrapBlobSync(encodeRow(row));
 }
+
+Uint8List _secureBytesEncode(List<int> plain) => wrapBlobSync(plain);
+
+Uint8List _secureBytesDecode(List<int> stored) => unwrapBlobSync(stored);
 
 /// Decode an encrypted-or-legacy `data` blob. Throws if the blob is encrypted
 /// but the vault is locked — callers on one-shot read paths run while unlocked.
@@ -246,7 +248,7 @@ Future<bool> saveVoiceBlob(
           mime: Value(mime ?? 'audio/webm'),
           duration: Value(duration),
           createdAt: Value(_now()),
-          bytes: Uint8List.fromList(bytes),
+          bytes: _secureBytesEncode(bytes),
           data: encodeRow(meta),
         ),
       );
@@ -276,7 +278,7 @@ Future<Map<String, Object?>?> getVoiceBlob(String id) async {
     'createdAt': row.createdAt,
     // Output map key is 'blob' (the public contract callers read) even
     // though the Drift column is named `bytes`.
-    'blob': row.bytes,
+    'blob': _secureBytesDecode(row.bytes),
     'waveform': waveform,
   };
 }
@@ -320,9 +322,10 @@ Future<bool> saveFileBlob(
           height: Value(height),
           duration: Value(duration),
           createdAt: Value(_now()),
-          bytes: Uint8List.fromList(bytes),
-          thumb:
-              thumb == null ? const Value.absent() : Value(Uint8List.fromList(thumb)),
+          bytes: _secureBytesEncode(bytes),
+          thumb: thumb == null
+              ? const Value.absent()
+              : Value(_secureBytesEncode(thumb)),
           data: encodeRow(<String, Object?>{}),
         ),
       );
@@ -347,8 +350,8 @@ Future<Map<String, Object?>?> getFileBlob(String id) async {
     'duration': row.duration,
     'createdAt': row.createdAt,
     // See note in getVoiceBlob — map key stays 'blob' for caller contract.
-    'blob': row.bytes,
-    'thumb': row.thumb,
+    'blob': _secureBytesDecode(row.bytes),
+    'thumb': row.thumb == null ? null : _secureBytesDecode(row.thumb!),
   };
 }
 
@@ -827,7 +830,7 @@ Future<bool> saveAvatar(String peerId, String avatarDataUrl) async {
   // backstop for any caller that reaches the DB without pre-validating.
   if (safeAvatarDataUrl(avatarDataUrl) == null) return false;
   final db = orbitsDb();
-  final bytes = Uint8List.fromList(utf8.encode(avatarDataUrl));
+  final bytes = _secureBytesEncode(utf8.encode(avatarDataUrl));
   await db.into(db.avatarsTable).insertOnConflictUpdate(
         AvatarsTableCompanion.insert(
           peerId: peerId,
@@ -846,7 +849,7 @@ Future<String?> getAvatar(String peerId) async {
       .getSingleOrNull();
   if (row == null) return null;
   try {
-    return utf8.decode(row.data);
+    return utf8.decode(_secureBytesDecode(row.data));
   } catch (_) {
     return null;
   }

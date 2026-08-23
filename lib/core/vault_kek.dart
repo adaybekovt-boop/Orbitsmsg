@@ -96,12 +96,15 @@ Uint8List _gcm({
   return cipher.process(input);
 }
 
-/// Encrypt a storage blob under the KEK. Returns null when the vault is locked
-/// so callers can fall back to plaintext (content is lower-sensitivity than the
-/// long-term keys, which use the fail-closed [wrapSecret]).
-Uint8List? wrapBlobSync(List<int> plaintext) {
+/// Encrypt a storage blob under the KEK. Throws [StateError] when the vault
+/// is locked — callers must not fall back to plaintext (S-1 / S-2).
+Uint8List wrapBlobSync(List<int> plaintext) {
   final key = _kekRaw;
-  if (key == null) return null;
+  if (key == null) {
+    throw StateError(
+      'vault: refusing to persist a content blob while locked (no KEK)',
+    );
+  }
   final nonce = Uint8List(_blobNonceLen);
   for (var i = 0; i < _blobNonceLen; i++) {
     nonce[i] = _blobRng.nextInt(256);

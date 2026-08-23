@@ -80,17 +80,17 @@ void main() {
 
     test('round-trips an encrypted blob under the KEK', () async {
       await setVaultKek(_key32());
-      final enc = wrapBlobSync(plain)!;
+      final enc = wrapBlobSync(plain);
       expect(isBlobWrapped(enc), isTrue);
       expect(enc, isNot(equals(plain))); // actually encrypted
       final dec = unwrapBlobSync(enc);
       expect(dec, equals(plain));
     });
 
-    test('wrapBlobSync returns null when locked (caller falls back to plain)',
+    test('wrapBlobSync throws when locked (no plaintext fallback, S-1 / S-2)',
         () {
       expect(hasVaultKek(), isFalse);
-      expect(wrapBlobSync(plain), isNull);
+      expect(() => wrapBlobSync(plain), throwsStateError);
     });
 
     test('unwrapBlobSync passes a legacy plaintext blob through unchanged',
@@ -103,21 +103,21 @@ void main() {
 
     test('decrypting an encrypted blob throws once the vault locks', () async {
       await setVaultKek(_key32());
-      final enc = wrapBlobSync(plain)!;
+      final enc = wrapBlobSync(plain);
       clearVaultKek();
       expect(() => unwrapBlobSync(enc), throwsStateError);
     });
 
     test('a tampered blob fails authentication', () async {
       await setVaultKek(_key32());
-      final enc = wrapBlobSync(plain)!;
+      final enc = wrapBlobSync(plain);
       enc[enc.length - 1] ^= 0x01; // flip a ciphertext/tag byte
       expect(() => unwrapBlobSync(enc), throwsA(anything));
     });
 
     test('a different KEK cannot decrypt', () async {
       await setVaultKek(_key32());
-      final enc = wrapBlobSync(plain)!;
+      final enc = wrapBlobSync(plain);
       clearVaultKek();
       await setVaultKek(
         Uint8List.fromList(List<int>.generate(32, (i) => 255 - i)),
