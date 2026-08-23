@@ -285,7 +285,7 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
           const _CryptoRow(
             title: 'AES-256-GCM',
             subtitle:
-                'Личные чаты — Double Ratchet. Ключи неэкспортируемые',
+                'Личные чаты — Double Ratchet. Ключи в памяти приложения, не в Secure Enclave / Keystore',
           ),
           const _CryptoRow(
             title: 'PBKDF2 + scrypt',
