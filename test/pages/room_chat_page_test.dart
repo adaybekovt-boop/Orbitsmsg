@@ -22,6 +22,7 @@ import 'package:orbits_flutter/pages/room_chat_page.dart';
 import 'package:orbits_flutter/peer/peerjs_client.dart' show PeerJsClient;
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_manager.dart';
+import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
 import 'package:orbits_flutter/state/auth_notifier.dart' show AuthedUser;
 import 'package:orbits_flutter/state/connections_notifier.dart' show RoomBridge;
 import 'package:orbits_flutter/state/local_profile_provider.dart';
@@ -196,6 +197,23 @@ void main() {
     await settle(tester);
 
     await tester.tap(find.text('second'));
+    await settle(tester);
+
+    // Opening a room from the rail does not inherit a sheet ack. Send
+    // without the in-chat checkbox must be a no-op (A.2).
+    await tester.enterText(find.byType(TextField), 'HELLO-BLOCKED');
+    await tester.pump();
+    await tester.tap(find.byIcon(Icons.send));
+    await settle(tester);
+    await tester.runAsync(() async {
+      final blocked = await db.watchChannelMessages(s.secondId).first;
+      expect(
+        blocked.any((m) => (m['payload'] as Map)['text'] == 'HELLO-BLOCKED'),
+        isFalse,
+      );
+    });
+
+    await tester.tap(find.byKey(kRoomPlaintextAckKey));
     await settle(tester);
 
     await tester.enterText(find.byType(TextField), 'HELLO-SECOND');
