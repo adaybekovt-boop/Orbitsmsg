@@ -1,11 +1,11 @@
-// Native SQLCipher is intentionally disabled for release builds.
-//
-// The app still encrypts sensitive row payloads through the vault KEK layer in
-// storage/db.dart. Full-file SQLCipher encryption needs a separate integration:
-// sqlcipher_flutter_libs conflicts with sqlite3_flutter_libs on Windows because
-// both register a CMake target named "sqlite3". Until the SQLite provider is
-// wired per-platform without that duplicate target, fall back to Drift's normal
-// native opener from database.dart.
+// Native SQLCipher opener. See sqlcipher_status.dart — this is intentionally
+// null, not a forgotten stub. Row/blob encryption is a different layer.
 import 'package:drift/drift.dart';
 
-QueryExecutor? openCipherExecutor() => null;
+import 'sqlcipher_status.dart';
+
+QueryExecutor? openCipherExecutor() {
+  if (!kSqlCipherFileEncryptionEnabled) return null;
+  // Per-platform SQLCipher executor would be constructed here.
+  return null;
+}

@@ -12,6 +12,7 @@ import 'package:drift_flutter/drift_flutter.dart';
 
 import 'db_cipher_opener_stub.dart'
     if (dart.library.io) 'db_cipher_opener_io.dart';
+import 'sqlcipher_status.dart';
 import 'tables.dart';
 
 part 'database.g.dart';
@@ -171,13 +172,10 @@ class OrbitsDatabase extends _$OrbitsDatabase {
 
 /// Open the on-disk database.
 ///
-/// Native full-file SQLCipher is currently disabled because
-/// `sqlcipher_flutter_libs` conflicts with `sqlite3_flutter_libs` in Windows
-/// CMake builds. The app still encrypts sensitive row payloads before writing
-/// them to SQLite; this opener uses Drift's normal native/web database until a
-/// per-platform SQLCipher integration is wired safely.
+/// See [kSqlCipherFileEncryptionEnabled] in sqlcipher_status.dart.
+/// When that flag is false, this is plaintext SQLite (plus row/blob cipher).
 QueryExecutor _open() {
-  final cipher = openCipherExecutor();
+  final cipher = kSqlCipherFileEncryptionEnabled ? openCipherExecutor() : null;
   if (cipher != null) return cipher;
   return driftDatabase(
     name: 'orbits',
