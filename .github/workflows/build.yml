@@ -152,7 +152,6 @@ jobs:
         run: |
           set -euo pipefail
           res=android/app/src/main/res
-          before="$(sha256sum "$res/mipmap-hdpi/ic_launcher.png" 2>/dev/null | awk '{print $1}' || true)"
 
           dart run flutter_launcher_icons -f flutter_launcher_icons.yaml
 
@@ -166,14 +165,18 @@ jobs:
             test -s "$res/mipmap-$d/ic_launcher.png"
             test -s "$res/drawable-$d/ic_launcher_foreground.png"
           done
-          # …and the legacy icon must DIFFER from the flutter-create default,
-          # proving flutter_launcher_icons actually ran (not the stock logo).
+          # Committed Orbits icons are already the source of truth, so
+          # regeneration is idempotent (before==after is expected). Fail only
+          # if the bitmap still matches a known flutter-create default.
           after="$(sha256sum "$res/mipmap-hdpi/ic_launcher.png" | awk '{print $1}')"
-          if [ -n "$before" ] && [ "$before" = "$after" ]; then
-            echo "::error::Android launcher icon is still the flutter-create default — flutter_launcher_icons did not run"
-            exit 1
-          fi
-          echo "Android launcher icons generated from tool/branding/orbits_icon_source.png"
+          while IFS= read -r d; do
+            case "$d" in ''|\#*) continue ;; esac
+            if [ "$after" = "$d" ]; then
+              echo "::error::Android launcher icon is the flutter-create default (blue logo)"
+              exit 1
+            fi
+          done < tool/branding/flutter_default_android_hdpi.sha256
+          echo "Android launcher icons generated from tool/branding/orbits_icon_source.png ($after)"
 
       - name: Patch AndroidManifest + signing config
         run: |
@@ -363,6 +366,8 @@ jobs:
         run: |
           set -euo pipefail
           test -s windows/runner/resources/app_icon.ico
+          test -f windows/CMakeLists.txt
+          test -f windows/runner/main.cpp
           test -f android/app/src/main/AndroidManifest.xml
           test -f web/index.html
 

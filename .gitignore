@@ -18,18 +18,9 @@ build/
 # .gitignore for local build output. Do not `flutter create --overwrite` over
 # them in CI — that clobbers the security files.
 #
-# windows/ is still mostly generated, BUT we force-track the app icon so a
-# checkout never silently builds with the default Flutter icon (the blue
-# logo). `flutter create` keeps an existing app_icon.ico, so a normal build
-# picks up the Orbits icon without any extra step. Regenerate via
-# tool/windows/restore_app_icon.sh; the guard test
-# (test/branding/windows_app_icon_test.dart) fails on the default.
-windows/*
-!windows/runner/
-windows/runner/*
-!windows/runner/resources/
-windows/runner/resources/*
-!windows/runner/resources/app_icon.ico
+# windows/runner/resources/app_icon.ico is the Orbits icon compiled into the
+# EXE. test/branding/windows_app_icon_test.dart fails if it is missing or the
+# default Flutter logo.
 
 # Generated JS compiler .deps files embed absolute developer paths
 # and must never be committed.

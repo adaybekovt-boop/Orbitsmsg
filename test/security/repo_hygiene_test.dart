@@ -7,6 +7,7 @@
 
 import 'dart:io';
 
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yaml/yaml.dart';
 
@@ -155,6 +156,17 @@ void main() {
           read('android/app/src/main/res/xml/data_extraction_rules.xml');
       expect(extract, contains('cloud-backup'));
       expect(extract, contains('device-transfer'));
+
+      final png = file('android/app/src/main/res/mipmap-hdpi/ic_launcher.png');
+      expect(png.existsSync(), isTrue);
+      final hash = sha256.convert(png.readAsBytesSync()).toString();
+      final defaults = file('tool/branding/flutter_default_android_hdpi.sha256')
+          .readAsLinesSync()
+          .map((l) => l.trim())
+          .where((l) => l.isNotEmpty && !l.startsWith('#'))
+          .toSet();
+      expect(defaults.contains(hash), isFalse,
+          reason: 'Android hdpi launcher is the flutter-create default logo');
     });
 
     test('iOS ATS is fail-closed and entitlements exist', () {
@@ -187,9 +199,11 @@ void main() {
       expect(debug, contains('com.apple.security.network.server'));
     });
 
-    test('linux desktop scaffold is committed', () {
+    test('linux and windows desktop scaffolds are committed', () {
       expect(file('linux/CMakeLists.txt').existsSync(), isTrue);
       expect(file('linux/runner/main.cc').existsSync(), isTrue);
+      expect(file('windows/CMakeLists.txt').existsSync(), isTrue);
+      expect(file('windows/runner/main.cpp').existsSync(), isTrue);
     });
   });
 
