@@ -8,7 +8,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/scrypt_kdf.dart';
 
 void main() {
-  const fast = ScryptParams(n: 8192);
+  const fast = ScryptParams(n: scryptMinN);
 
   test('accepts the genuine derived KEK (v2 verifier)', () async {
     final rec = await deriveScryptRecord(

@@ -227,7 +227,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
     final vp = validatePassword(password);
     if (!vp.ok) {
-      throw const AuthException('password', 'Пароль: минимум 8 символов');
+      throw AuthException('password', passwordPolicyHint());
     }
     final vc = validatePasswordConfirm(password, confirm);
     if (!vc.ok) {

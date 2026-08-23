@@ -41,6 +41,17 @@ const int kMaxDropFileBytes = 100 * 1024 * 1024; // 100 MiB
 const int kMaxDropIncoming = 4;
 const int kMaxDropFrameBytes = dropChunkSize + 32;
 
+/// Strip path segments and illegal filename characters from a Drop name.
+String sanitizeDropFileName(String? raw) {
+  var name = (raw ?? '').trim().replaceAll('\\', '/');
+  if (name.contains('/')) {
+    name = name.split('/').last;
+  }
+  name = name.replaceAll(RegExp(r'[\x00-\x1f\\/:*?"<>|]'), '_').trim();
+  if (name.isEmpty || name == '.' || name == '..') return 'file';
+  return name.length > 200 ? name.substring(0, 200) : name;
+}
+
 const int _frameVersion = 1;
 const int _fileIdLen = 16;
 const int _frameHeaderLen = 1 + _fileIdLen + 4; // ver + fileId + seq
@@ -241,7 +252,7 @@ class DropEngine {
     }
     final meta = DropFileMeta(
       fileId: idHex,
-      name: (packet['name'] as String?) ?? 'file',
+      name: sanitizeDropFileName(packet['name'] as String?),
       size: size,
       mime: (packet['mime'] as String?) ?? 'application/octet-stream',
       hash: (packet['hash'] as String?) ?? '',

@@ -49,6 +49,12 @@ const int scryptDefaultR = 8;
 const int scryptDefaultP = 1;
 const int scryptDefaultDkLen = 32;
 
+/// Reject stored records weaker than the web floor (2^14) or with a
+/// non-power-of-two / huge N (CPU DoS). Existing web profiles at 2^14 still
+/// verify; anything below is treated as corrupt.
+const int scryptMinN = 16384; // 2^14
+const int scryptMaxN = 1 << 20; // 2^20
+
 /// Web-only cost floor. The browser has no isolates, so scrypt runs on the
 /// single UI thread (see [_scrypt]); at N=2^16 that blocks the page for many
 /// seconds — the "frozen onboarding" symptom. Web therefore derives at a
@@ -183,7 +189,7 @@ Future<ScryptRecord> deriveScryptRecord({
   ScryptParams? params,
 }) async {
   final salt = _randomBytes(16);
-  final n = max(8192, params?.n ?? platformDefaultScryptN());
+  final n = max(scryptMinN, params?.n ?? platformDefaultScryptN());
   final r = max(8, params?.r ?? scryptDefaultR);
   final p = max(1, params?.p ?? scryptDefaultP);
   final dkLen = max(32, params?.dkLen ?? scryptDefaultDkLen);
@@ -264,6 +270,11 @@ Future<ScryptVerifyResult> verifyScryptRecordEx({
   required ScryptStoredRecord record,
 }) async {
   const miss = (ok: false, dkBytes: null);
+  if (record.n < scryptMinN ||
+      record.n > scryptMaxN ||
+      (record.n & (record.n - 1)) != 0) {
+    return miss;
+  }
   final salt = base64ToBytes(record.saltB64);
   final dk = await _scrypt(
     password: _keyMaterial(username, password),

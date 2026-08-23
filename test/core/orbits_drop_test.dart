@@ -143,6 +143,16 @@ void main() {
     });
   });
 
+  group('sanitizeDropFileName', () {
+    test('strips path segments and illegal characters', () {
+      expect(sanitizeDropFileName(r'..\..\Windows\win.ini'), 'win.ini');
+      expect(sanitizeDropFileName('/etc/passwd'), 'passwd');
+      expect(sanitizeDropFileName('ok photo.jpg'), 'ok photo.jpg');
+      expect(sanitizeDropFileName('..'), 'file');
+      expect(sanitizeDropFileName(''), 'file');
+    });
+  });
+
   group('DropEngine inbound caps', () {
     test('rejects file-start above kMaxDropFileBytes', () async {
       String? failure;
