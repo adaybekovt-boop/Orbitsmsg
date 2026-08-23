@@ -7,6 +7,34 @@
 // tolerant regexes (not a full XML parser, to avoid a new dependency); on any
 // shape we don't recognise the caller falls back to LAN-only.
 
+/// True if [uri] is a safe UPnP HTTP(S) target: no credentials, IPv4
+/// RFC1918 only. Blocks SSRF via a hostile SSDP LOCATION or controlURL
+/// (localhost, link-local metadata, public internet).
+bool isAllowedUpnpUri(Uri uri) {
+  if (uri.scheme != 'http' && uri.scheme != 'https') return false;
+  if (uri.userInfo.isNotEmpty) return false;
+  if (uri.host.isEmpty) return false;
+  return _isRfc1918Ipv4(uri.host);
+}
+
+bool _isRfc1918Ipv4(String host) {
+  final parts = host.split('.');
+  if (parts.length != 4) return false;
+  final oct = <int>[];
+  for (final p in parts) {
+    if (p.isEmpty || (p.length > 1 && p.startsWith('0'))) return false;
+    final n = int.tryParse(p);
+    if (n == null || n < 0 || n > 255) return false;
+    oct.add(n);
+  }
+  final a = oct[0];
+  final b = oct[1];
+  if (a == 10) return true;
+  if (a == 172 && b >= 16 && b <= 31) return true;
+  if (a == 192 && b == 168) return true;
+  return false;
+}
+
 /// Extract the `LOCATION` header (the device-description URL) from an SSDP
 /// M-SEARCH response. Case-insensitive header name, trims CR/LF.
 String? parseSsdpLocation(String response) {
@@ -56,6 +84,8 @@ UpnpService? parseWanService(String descriptionXml, Uri baseUrl) {
     final isPpp = lower.contains('wanpppconnection');
     if (!isIp && !isPpp) continue;
     final resolved = _resolveUrl(baseUrl, control.trim());
+    final resolvedUri = Uri.tryParse(resolved);
+    if (resolvedUri == null || !isAllowedUpnpUri(resolvedUri)) continue;
     final svc = UpnpService(serviceType: type.trim(), controlUrl: resolved);
     if (isIp) return svc; // strongest preference
     ppp ??= svc;

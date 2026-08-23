@@ -65,6 +65,37 @@ class PeerEnv {
     this.iceServers,
     this.signalingHosts,
   });
+
+  PeerEnv copyWith({
+    String? peerServer,
+    String? peerHost,
+    String? peerPath,
+    int? peerPort,
+    bool? peerSecure,
+    String? turnUrl,
+    String? turnUsername,
+    String? turnCredential,
+    bool? relayOnly,
+    bool? allowInsecureTransport,
+    List<Map<String, Object>>? iceServers,
+    List<String>? signalingHosts,
+  }) {
+    return PeerEnv(
+      peerServer: peerServer ?? this.peerServer,
+      peerHost: peerHost ?? this.peerHost,
+      peerPath: peerPath ?? this.peerPath,
+      peerPort: peerPort ?? this.peerPort,
+      peerSecure: peerSecure ?? this.peerSecure,
+      turnUrl: turnUrl ?? this.turnUrl,
+      turnUsername: turnUsername ?? this.turnUsername,
+      turnCredential: turnCredential ?? this.turnCredential,
+      relayOnly: relayOnly ?? this.relayOnly,
+      allowInsecureTransport:
+          allowInsecureTransport ?? this.allowInsecureTransport,
+      iceServers: iceServers ?? this.iceServers,
+      signalingHosts: signalingHosts ?? this.signalingHosts,
+    );
+  }
 }
 
 /// Initial rotation list of signaling hosts. Mirrors buildSignalingHosts.

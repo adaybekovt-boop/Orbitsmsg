@@ -756,6 +756,8 @@ bool isReady(String peerId) {
   return s != null && s.ready;
 }
 
+bool isVerified(String peerId) => _sessions[peerId]?.verified == true;
+
 /// Encrypt an arbitrary Dart object → wire string. The object is JSON-encoded
 /// first, so it must be JSON-safe (primitives, lists, maps with string keys).
 Future<String> encryptOutbound(String peerId, Object? obj) async {

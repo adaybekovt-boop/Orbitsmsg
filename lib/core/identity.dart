@@ -2,7 +2,7 @@
 //
 // This sits ABOVE the cryptographic identity (see `identity_key.dart`):
 // those are long-lived ECDSA/ECDH keys the ratchet and TOFU pins depend on.
-// The "identity" here is just the user-facing peerId (ORBIT-XXXXXX) and the
+// The "identity" here is just the user-facing peerId (ORBIT- + 6 or 16 hex)
 // display name — non-secret metadata that lives next to it.
 //
 // Storage mapping:
@@ -24,7 +24,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 const String _kIdentityKey = 'orbits_identity_v1';
 const String _kLegacyPeerIdKey = 'orbits_peer_id';
 
-final RegExp _peerIdRe = RegExp(r'^ORBIT-[0-9A-F]{6}$');
+/// Legacy ids are 6 hex chars (24 bits). New ids are 16 hex chars (64 bits).
+/// Both remain valid so existing contacts keep working.
+final RegExp _peerIdRe = RegExp(r'^ORBIT-[0-9A-F]{6}(?:[0-9A-F]{10})?$');
 final Random _random = Random.secure();
 
 /// Immutable view of the user-facing identity.
@@ -47,14 +49,12 @@ class LocalIdentity {
 
 bool isValidPeerId(String? id) => id != null && _peerIdRe.hasMatch(id);
 
-/// Generate a random ORBIT-XXXXXX peer id. JS pulled 3 random bytes and
-/// hex-uppercased them; we do the same so existing peers stay interoperable.
+/// Generate a random ORBIT- peer id. New ids use 8 random bytes (64 bits) —
+/// the old 3-byte / 24-bit space was enumerable and collided quickly.
+/// [isValidPeerId] still accepts legacy `ORBIT-` + 6 hex so existing
+/// contacts keep working.
 String generatePeerId() {
-  final b = [
-    _random.nextInt(256),
-    _random.nextInt(256),
-    _random.nextInt(256),
-  ];
+  final b = List<int>.generate(8, (_) => _random.nextInt(256));
   final hex = b
       .map((v) => v.toRadixString(16).padLeft(2, '0'))
       .join()

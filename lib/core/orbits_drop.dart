@@ -33,6 +33,14 @@ const int dropChunkSize = 65536;
 /// layer, not used by the engine directly.
 const int dropMaxBufferSize = 1 << 20; // 1 MB
 
+/// Reject `file-start` above this (and frames larger than a chunk + header).
+/// Unauthenticated binary used to land in the engine before the wire
+/// handshake; the router now gates that, and these caps bound a verified
+/// peer that still tries to OOM the receiver.
+const int kMaxDropFileBytes = 100 * 1024 * 1024; // 100 MiB
+const int kMaxDropIncoming = 4;
+const int kMaxDropFrameBytes = dropChunkSize + 32;
+
 const int _frameVersion = 1;
 const int _fileIdLen = 16;
 const int _frameHeaderLen = 1 + _fileIdLen + 4; // ver + fileId + seq
@@ -223,6 +231,14 @@ class DropEngine {
     if (fileIdB64 is! String || fileIdB64.isEmpty) return;
     final idHex = _toHex(base64ToBytes(fileIdB64));
     final size = (packet['size'] as num?)?.toInt() ?? 0;
+    if (size < 0 || size > kMaxDropFileBytes) {
+      onFailed?.call(idHex, DropDirection.incoming, 'Файл слишком большой');
+      return;
+    }
+    if (_incoming.length >= kMaxDropIncoming && !_incoming.containsKey(idHex)) {
+      onFailed?.call(idHex, DropDirection.incoming, 'Слишком много передач');
+      return;
+    }
     final meta = DropFileMeta(
       fileId: idHex,
       name: (packet['name'] as String?) ?? 'file',
@@ -239,6 +255,7 @@ class DropEngine {
 
   bool _handleChunk(Uint8List frame) {
     if (frame.length < _frameHeaderLen) return false;
+    if (frame.length > kMaxDropFrameBytes) return false;
     if (frame[0] != _frameVersion) return false;
     final idHex = _toHex(frame.sublist(1, 1 + _fileIdLen));
     final state = _incoming[idHex];

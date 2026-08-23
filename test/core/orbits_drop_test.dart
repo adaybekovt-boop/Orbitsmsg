@@ -4,6 +4,7 @@
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbits_flutter/core/base64_helpers.dart';
 import 'package:orbits_flutter/core/orbits_drop.dart';
 
 Uint8List _bytes(int n) =>
@@ -90,21 +91,29 @@ void main() {
 
     test('survives duplicate chunks (dedup)', () async {
       final data = _bytes(64 * 3);
-      final r = await _transfer(data, chunkSize: 64, tamper: (packets) {
-        // Duplicate the first binary chunk right after itself.
-        final idx = packets.indexWhere((p) => p is Uint8List);
-        packets.insert(idx + 1, packets[idx]);
-      });
+      final r = await _transfer(
+        data,
+        chunkSize: 64,
+        tamper: (packets) {
+          // Duplicate the first binary chunk right after itself.
+          final idx = packets.indexWhere((p) => p is Uint8List);
+          packets.insert(idx + 1, packets[idx]);
+        },
+      );
       expect(r!.bytes, equals(data));
     });
 
     test('fails the integrity check on a corrupted chunk', () async {
       final data = _bytes(64 * 3);
-      final r = await _transfer(data, chunkSize: 64, tamper: (packets) {
-        final idx = packets.indexWhere((p) => p is Uint8List);
-        final frame = packets[idx] as Uint8List;
-        frame[frame.length - 1] ^= 0xff; // flip a payload byte
-      });
+      final r = await _transfer(
+        data,
+        chunkSize: 64,
+        tamper: (packets) {
+          final idx = packets.indexWhere((p) => p is Uint8List);
+          final frame = packets[idx] as Uint8List;
+          frame[frame.length - 1] ^= 0xff; // flip a payload byte
+        },
+      );
       expect(r, isNull); // onFailed fired, no file delivered
     });
   });
@@ -134,13 +143,67 @@ void main() {
     });
   });
 
+  group('DropEngine inbound caps', () {
+    test('rejects file-start above kMaxDropFileBytes', () async {
+      String? failure;
+      var started = false;
+      final receiver = DropEngine(
+        onIncomingStart: (_) => started = true,
+        onFailed: (_, __, reason) => failure = reason,
+      );
+      final fileId = bytesToBase64(Uint8List(16));
+      await receiver.handleInbound(<String, Object?>{
+        'type': 'file-start',
+        'fileId': fileId,
+        'name': 'huge.bin',
+        'size': kMaxDropFileBytes + 1,
+      });
+      expect(started, isFalse);
+      expect(failure, isNotNull);
+    });
+
+    test('ignores oversized inbound frames', () async {
+      final receiver = DropEngine();
+      final frame = Uint8List(kMaxDropFrameBytes + 1);
+      frame[0] = 1;
+      expect(await receiver.handleInbound(frame), isFalse);
+    });
+
+    test('caps concurrent inbound transfers', () async {
+      String? failure;
+      final receiver = DropEngine(
+        onFailed: (_, __, reason) => failure = reason,
+      );
+      for (var i = 0; i < kMaxDropIncoming; i++) {
+        final id = Uint8List(16)..[0] = i + 1;
+        await receiver.handleInbound(<String, Object?>{
+          'type': 'file-start',
+          'fileId': bytesToBase64(id),
+          'name': 'f$i',
+          'size': 10,
+        });
+      }
+      expect(failure, isNull);
+      await receiver.handleInbound(<String, Object?>{
+        'type': 'file-start',
+        'fileId': bytesToBase64(Uint8List(16)..[0] = 99),
+        'name': 'overflow',
+        'size': 10,
+      });
+      expect(failure, isNotNull);
+    });
+  });
+
   group('DropEngine progress', () {
     test('reports monotonic outgoing progress ending at total', () async {
       final data = _bytes(64 * 4);
       final sent = <int>[];
-      final sender = DropEngine(chunkSize: 64, onProgress: (id, s, t, dir) {
-        if (dir == DropDirection.outgoing) sent.add(s);
-      });
+      final sender = DropEngine(
+        chunkSize: 64,
+        onProgress: (id, s, t, dir) {
+          if (dir == DropDirection.outgoing) sent.add(s);
+        },
+      );
       await sender.sendFile(
         bytes: data,
         name: 'f',
