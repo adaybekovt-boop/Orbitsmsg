@@ -99,7 +99,7 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
                       children: [
                         OrbsSettingRow(
                           label: 'Версия',
-                          subtitle: 'TK Messenger • $versionText',
+                          subtitle: 'Orbits • $versionText',
                         ),
                         const OrbsDivider(),
                         const OrbsSettingRow(

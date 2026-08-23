@@ -49,7 +49,7 @@ String contactQrPayload(String peerId) =>
     'orbits://contact/${normalizePeerId(peerId)}';
 
 /// Extract a canonical peerId from whatever a contact QR / pasted code holds,
-/// or null if it doesn't look like a TK Messenger contact. Tolerant of:
+/// or null if it doesn't look like an Orbits contact. Tolerant of:
 ///   • bare `ORBIT-ABC123` (any case, surrounding whitespace)
 ///   • `orbits://contact/ORBIT-ABC123`
 ///   • `orbits:contact:ORBIT-ABC123`

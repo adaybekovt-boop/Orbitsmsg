@@ -1,7 +1,7 @@
 // Unit tests for the contact-QR payload parser + writer (peer/helpers.dart).
 //
 // This is the single chokepoint both the scanner and the manual-entry field
-// use to decide "is this a TK Messenger contact, and which peerId?". Every
+// use to decide "is this an Orbits contact, and which peerId?". Every
 // supported QR shape must round-trip; everything else must return null so the
 // UI can say "QR не похож на контакт" instead of saving garbage.
 
