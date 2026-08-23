@@ -12,22 +12,42 @@ build/
 # own header, and committing `pubspec.lock` pins the exact resolved dependency
 # set so CI and local builds are reproducible.
 
-# Generated platform folders. CI recreates these with `flutter create`.
-android/
-ios/
-linux/
-macos/
-# windows/ is generated too, BUT we force-track the app icon so a checkout never
-# silently builds with the default Flutter icon (the blue logo). `flutter create`
-# keeps an existing app_icon.ico, so a normal build picks up the Orbits icon
-# without any extra step. Regenerate via tool/windows/restore_app_icon.sh; the
-# guard test (test/branding/windows_app_icon_test.dart) fails on the default.
+# Platform folders (android/, ios/, linux/, macos/, windows/, web/) ARE
+# committed so native security configs can be reviewed (network security,
+# backup rules, entitlements, Info.plist). Each platform folder has its own
+# .gitignore for local build output. Do not `flutter create --overwrite` over
+# them in CI — that clobbers the security files.
+#
+# windows/ is still mostly generated, BUT we force-track the app icon so a
+# checkout never silently builds with the default Flutter icon (the blue
+# logo). `flutter create` keeps an existing app_icon.ico, so a normal build
+# picks up the Orbits icon without any extra step. Regenerate via
+# tool/windows/restore_app_icon.sh; the guard test
+# (test/branding/windows_app_icon_test.dart) fails on the default.
 windows/*
 !windows/runner/
 windows/runner/*
 !windows/runner/resources/
 windows/runner/resources/*
 !windows/runner/resources/app_icon.ico
+
+# Generated JS compiler .deps files embed absolute developer paths
+# and must never be committed.
+**/*.js.deps
+**/*.dart.js.deps
+
+# Stale local build archives / debug symbols / CMake cache — never commit.
+orbit.zip
+**/*.pdb
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/CMakeFiles/
+
+# FVM downloads the SDK into these paths; the pin itself is `.fvmrc` +
+# `.flutter-version`.
+.fvm/flutter_sdk
+.fvm/versions
+.fvm/release
 
 # IDE
 .idea/
@@ -46,11 +66,14 @@ coverage/
 *.lcov
 test/.test_coverage.dart
 
-# Local environment files
+# Local environment files / key material
 .env
 .env.local
 *.key
 *.pem
+*.jks
+*.keystore
+key.properties
 
 # CI release staging output (artifacts are uploaded, never committed)
 dist/
