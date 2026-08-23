@@ -19,6 +19,12 @@ import '../core/update_checker.dart';
 import '../core/update_downloader.dart';
 import '../core/update_installer.dart';
 
+/// Shown when Authenticode verification fails. A.1 is not fully closed
+/// (no production SHA-256 thumbprint / signtool secret yet), so Install
+/// must say why it stopped instead of looking hung.
+const String kUpdateSignatureUntrustedMessage =
+    'Не удалось проверить подпись обновления, установка отменена';
+
 /// UI-facing status of the latest update check.
 enum UpdateUiStatus {
   /// Not checked yet this session.
@@ -417,8 +423,7 @@ class UpdateNotifier extends StateNotifier<UpdateState> {
     } else if (result.status == InstallLaunchStatus.signatureUntrusted) {
       state = state.copyWith(
         installStatus: InstallUiStatus.failed,
-        installError:
-            'Установщик не подписан издателем Orbits. Скачайте обновление со страницы релиза.',
+        installError: kUpdateSignatureUntrustedMessage,
       );
     } else {
       state = state.copyWith(
