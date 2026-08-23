@@ -5,7 +5,7 @@
     "display": "standalone",
     "background_color": "#0A0E16",
     "theme_color": "#0A0E16",
-    "description": "Orbits — private peer-to-peer encrypted messenger.",
+    "description": "Orbits — P2P messenger. 1:1 chats are E2E; rooms are host-plaintext. Default signalling uses public PeerJS and STUN.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

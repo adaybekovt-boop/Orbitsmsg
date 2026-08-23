@@ -1,11 +1,17 @@
 # Orbits
 
-A private, peer-to-peer messenger. **1:1 chats** use X3DH + Double Ratchet
+A peer-to-peer messenger. **1:1 chats** use X3DH + Double Ratchet
 end-to-end encryption. **Rooms are not end-to-end encrypted**: the host relays
 plaintext text, files, and stickers to every guest (DTLS protects only the hop
-to the host). There is no central server storing your conversations.
+to the host). There is no Orbits server storing your conversations.
 
-See [docs/rooms.md](docs/rooms.md).
+The default build still uses **public third-party** signalling and STUN
+(PeerJS `*.peerjs.com`, Google/Mozilla/Twilio STUN). Those operators see
+connection metadata, not 1:1 message bodies. Updates are checked against
+GitHub Releases. Theme fonts are bundled — the app does not fetch Google Fonts
+at runtime.
+
+See [docs/rooms.md](docs/rooms.md) and [docs/privacy.md](docs/privacy.md).
 
 ## Features
 
@@ -40,6 +46,18 @@ Or download directly from GitHub:
 
 Your password is never stored or transmitted. If you forget it, local data
 cannot be recovered — that's part of the security model.
+
+## Network (default build)
+
+| Path | Who sees what |
+|------|----------------|
+| PeerJS signalling (`0.peerjs.com` … `2.peerjs.com`) | Peer ID, online status, SDP/ICE introduce |
+| Public STUN (Google, Mozilla, Twilio) | Your public IP and that you use WebRTC |
+| Optional TURN (runtime prefs, not CI `--dart-define`) | Relayed bytes if you configured a TURN server |
+| GitHub Releases API | Update checks and installer downloads |
+| Theme fonts | Bundled in the app; no Google Fonts CDN |
+
+Details: [docs/privacy.md](docs/privacy.md).
 
 ## Support
 

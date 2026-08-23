@@ -24,7 +24,6 @@
 import 'package:flutter/foundation.dart'
     show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 import 'manifest.dart';
 import 'orbits_tokens.dart';
@@ -144,12 +143,9 @@ ThemeData buildOrbitsTheme(ThemeManifest manifest) {
   // express it as a plain `double` (Flutter takes spacing in logical pixels,
   // not em). Multiplying happens in the heading styles below.
   //
-  // We resolve each manifest font name through `GoogleFonts.getFont` so the
-  // brand families (Manrope, Cormorant Garamond, Instrument Serif, Geist,
-  // Noto Serif, JetBrains Mono) load at runtime — no need to bundle 5 MB
-  // of TTF in the install. `_resolveFont` swallows lookups that aren't on
-  // Google Fonts and falls back to `fontFamily:` so future themes can ship
-  // bundled fonts without a code change.
+  // Families are registered in pubspec.yaml from fonts/*.ttf. `_resolveFont`
+  // sets `fontFamily` to the manifest name (Manrope, Inter, JetBrainsMono,
+  // …). There is no runtime download and no webfont CDN hop.
   final body = _resolveFont(
     manifest.typography.fontBody,
     color: colors.text,
@@ -298,52 +294,19 @@ Color _onColorFor(Color fill) {
   return fill.computeLuminance() > 0.55 ? Colors.black : Colors.white;
 }
 
-/// Map our PascalCase manifest font names to the canonical Google Fonts
-/// family slug, then resolve through `GoogleFonts.getFont`. If the lookup
-/// throws (typo, non-Google family, offline first-run), fall back to a
-/// plain `TextStyle` with the family name so the platform's font matcher
-/// can do its best. Either way the call site gets a usable `TextStyle`.
+/// Resolve a manifest font name to a [TextStyle] that uses the bundled
+/// family registered in `pubspec.yaml`. Unknown names still set
+/// `fontFamily` so the platform matcher can fall back.
 TextStyle _resolveFont(
   String family, {
   Color? color,
   double? height,
   FontWeight? weight,
 }) {
-  final canonical = _googleFontsName(family);
-  try {
-    return GoogleFonts.getFont(
-      canonical,
-      color: color,
-      height: height,
-      fontWeight: weight,
-    );
-  } catch (_) {
-    return TextStyle(
-      fontFamily: family,
-      color: color,
-      height: height,
-      fontWeight: weight,
-    );
-  }
-}
-
-/// Strip CamelCase + insert spaces so manifest names line up with the
-/// Google Fonts CDN's canonical labels. e.g. `'JetBrainsMono'` →
-/// `'JetBrains Mono'`, `'CormorantGaramond'` → `'Cormorant Garamond'`.
-/// Names that already contain spaces (or are single-word like `'Manrope'`)
-/// pass through unchanged.
-String _googleFontsName(String family) {
-  if (family.contains(' ')) return family;
-  final buf = StringBuffer();
-  for (var i = 0; i < family.length; i++) {
-    final c = family[i];
-    if (i > 0 &&
-        c == c.toUpperCase() &&
-        c != c.toLowerCase() &&
-        family[i - 1] != family[i - 1].toUpperCase()) {
-      buf.write(' ');
-    }
-    buf.write(c);
-  }
-  return buf.toString();
+  return TextStyle(
+    fontFamily: family,
+    color: color,
+    height: height,
+    fontWeight: weight,
+  );
 }

@@ -1,5 +1,5 @@
 name: orbits_flutter
-description: Orbits P2P Messenger — Flutter port. Mirrors the React/Vite project in git_push/.
+description: Orbits — Flutter P2P messenger. 1:1 chats use X3DH + Double Ratchet; rooms are host-plaintext. Default signalling and STUN use public third-party servers.
 publish_to: 'none'
 version: 9.0.6+906
 
@@ -84,15 +84,9 @@ dependencies:
   mime: ^2.0.0
   image: ^4.3.0
 
-  # Day-5 / launch-blocker packages — fonts, QR display, QR scanning.
-  #
-  # `google_fonts` downloads the brand fonts (Manrope, Cormorant Garamond,
-  # Geist, Instrument Serif, Noto Serif, JetBrains Mono) at runtime instead
-  # of bundling them — keeps the install size reasonable while letting each
-  # theme spec its own family. First-paint uses the system fallback for
-  # ~150 ms while the network request resolves; subsequent launches read
-  # from disk cache.
-  google_fonts: ^6.2.1
+  # Day-5 / launch-blocker packages — QR display, QR scanning.
+  # Theme typefaces are bundled under fonts/ (see flutter: fonts:) so the
+  # client never fetches from fonts.googleapis.com / fonts.gstatic.com.
 
   # `qr_flutter` renders the user's peerId as a scannable QR code on the
   # "Show my QR" screen. Pure-Dart, no native deps.
@@ -158,3 +152,30 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+
+  fonts:
+    - family: Manrope
+      fonts:
+        - asset: fonts/Manrope-Variable.ttf
+    - family: Inter
+      fonts:
+        - asset: fonts/Inter-Variable.ttf
+    - family: JetBrainsMono
+      fonts:
+        - asset: fonts/JetBrainsMono-Variable.ttf
+    - family: CormorantGaramond
+      fonts:
+        - asset: fonts/CormorantGaramond-Variable.ttf
+    - family: NotoSerif
+      fonts:
+        - asset: fonts/NotoSerif-Variable.ttf
+    - family: InstrumentSerif
+      fonts:
+        - asset: fonts/InstrumentSerif-Regular.ttf
+          weight: 400
+    - family: Geist
+      fonts:
+        - asset: fonts/Geist-Regular.ttf
+          weight: 400
+        - asset: fonts/Geist-SemiBold.ttf
+          weight: 600
