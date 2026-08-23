@@ -5,8 +5,8 @@ name: Security scans
 on:
   push:
     branches: [main, master]
+  # No branches: filter — same reason as build.yml (stacked Phase PRs).
   pull_request:
-    branches: [main, master]
   schedule:
     # Weekly catch-up if a PR slipped through without a scan.
     - cron: '17 4 * * 1'
