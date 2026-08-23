@@ -32,6 +32,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import '../core/orbits_drop.dart' show kMaxDropFrameBytes;
 import '../core/wire_crypto.dart';
 import '../messaging/message_protocol.dart';
 
@@ -98,6 +99,7 @@ class PacketRouterCtx {
     this.dropHandlePacket,
     this.dropInbound,
     this.roomInbound,
+    this.dropAllowed,
   });
 
   /// Plaintext send over the underlying DataConnection. The router uses
@@ -131,7 +133,15 @@ class PacketRouterCtx {
   /// the reliable channel and feeds them into the `RoomManager`
   /// (star-topology room signalling). Null leaves rooms disabled.
   final void Function(String remoteId, Map<String, Object?> data)? roomInbound;
+
+  /// Drop / file-transfer frames (binary chunks and `file-*` / drop-* maps)
+  /// must not run before a verified wire handshake (audit: Drop-before-Wire
+  /// DoS). Null is fail-closed — treat as denied.
+  final bool Function(String remoteId)? dropAllowed;
 }
+
+bool _dropPermitted(String remoteId, PacketRouterCtx ctx) =>
+    ctx.dropAllowed?.call(remoteId) == true;
 
 // ─── Middlewares ──────────────────────────────────────────────────
 
@@ -140,6 +150,7 @@ class PacketRouterCtx {
 /// [reliableMiddleware]).
 bool dropMiddleware(String remoteId, Object? data, PacketRouterCtx ctx) {
   if (!isDropPacket(data)) return false;
+  if (!_dropPermitted(remoteId, ctx)) return true;
   ctx.dropHandlePacket
       ?.call(remoteId, Map<String, Object?>.from(data as Map));
   return true;
@@ -175,7 +186,9 @@ Future<bool> ephemeralMiddleware(
   // Drop-beacon packets can ride the ephemeral channel (lower latency for
   // discovery). Same short-circuit as the reliable drop middleware.
   if (isDropPacket(mapPayload)) {
-    ctx.dropHandlePacket?.call(remoteId, mapPayload);
+    if (_dropPermitted(remoteId, ctx)) {
+      ctx.dropHandlePacket?.call(remoteId, mapPayload);
+    }
     return true;
   }
 
@@ -239,12 +252,17 @@ PacketHandler createPacketHandler(
     // Binary chunk frame → Drop engine. Nothing else on the reliable channel
     // sends raw binary (wire ciphertext is a String, control is a Map).
     if (data is Uint8List) {
-      ctx.dropInbound?.call(remoteId, data);
+      if (_dropPermitted(remoteId, ctx) &&
+          data.length <= kMaxDropFrameBytes) {
+        ctx.dropInbound?.call(remoteId, data);
+      }
       return;
     }
     // file-start / file-end / file-abort control maps → Drop engine.
     if (data is Map && _fileTransferTypes.contains(data['type'])) {
-      ctx.dropInbound?.call(remoteId, Map<String, Object?>.from(data));
+      if (_dropPermitted(remoteId, ctx)) {
+        ctx.dropInbound?.call(remoteId, data);
+      }
       return;
     }
     // Room-protocol control maps + QR-pairing auth responses (both plaintext,

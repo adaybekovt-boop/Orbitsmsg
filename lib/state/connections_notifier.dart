@@ -34,6 +34,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/bundle_cache.dart';
+import '../core/wire_session.dart' show isVerified;
 import '../messaging/message_protocol.dart';
 import '../core/orbits_drop.dart' show dropMaxBufferSize;
 import '../peer/helpers.dart';
@@ -588,6 +589,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       // Orbits-Drop file-transfer frames (binary chunks + file-* control) on
       // the reliable channel go straight to the Drop engine.
       dropInbound: (rid, packet) => _drop.handleInbound(rid, packet),
+      dropAllowed: isVerified,
       // Plaintext `room_*` control maps → RoomManager (star-topology rooms).
       roomInbound: (rid, packet) => _room.handleInbound(rid, packet),
     );
