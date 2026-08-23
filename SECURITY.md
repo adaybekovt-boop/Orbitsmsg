@@ -51,3 +51,9 @@ reported to their operators.
 
 Please see future `docs/security.md` for the encryption map (what is E2E,
 what is not, and which metadata remains visible).
+
+## Android release signing
+
+Release APKs must never be signed with the well-known Android SDK debug
+keystore. See `docs/android-signing.md` for the upload-key env vars, GitHub
+secrets, rotation, and what to do if a key is compromised.

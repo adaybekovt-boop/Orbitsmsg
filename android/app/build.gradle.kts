@@ -5,6 +5,27 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// GH-C01 / U-5: release signing is env-driven and never falls back to the
+// Android debug keystore. `flutter run` / assembleDebug still use the
+// implicit debug config. Missing env at configuration time is allowed so
+// those debug tasks keep working; assembleRelease / bundleRelease fail in
+// `whenReady` instead (see docs/android-signing.md).
+val uploadStorePath: String = System.getenv("ORBITS_UPLOAD_STORE_FILE") ?: ""
+val uploadStorePassword: String = System.getenv("ORBITS_UPLOAD_STORE_PASSWORD") ?: ""
+val uploadKeyAlias: String = System.getenv("ORBITS_UPLOAD_KEY_ALIAS") ?: ""
+val uploadKeyPassword: String = System.getenv("ORBITS_UPLOAD_KEY_PASSWORD") ?: ""
+
+fun releaseSigningConfigured(): Boolean {
+    if (uploadStorePath.isBlank() ||
+        uploadStorePassword.isBlank() ||
+        uploadKeyAlias.isBlank() ||
+        uploadKeyPassword.isBlank()
+    ) {
+        return false
+    }
+    return file(uploadStorePath).isFile
+}
+
 android {
     namespace = "com.orbits.orbits_flutter"
     compileSdk = 36
@@ -20,27 +41,51 @@ android {
     }
 
     defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.orbits.orbits_flutter"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
         minSdk = 23
         targetSdk = 36
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
+    // ORBITS_RELEASE_SIGNING
+    signingConfigs {
+        create("release") {
+            if (uploadStorePath.isNotBlank()) {
+                storeFile = file(uploadStorePath)
+            }
+            storePassword = uploadStorePassword
+            keyAlias = uploadKeyAlias
+            keyPassword = uploadKeyPassword
+        }
+    }
+
     buildTypes {
         release {
-            // ORBITS_RELEASE_SIGNING — sideload-only until Phase 1 (GH-C01 / U-5).
-            // Production upload keystore is NOT in this repository. CI currently
-            // signs with the debug key so `flutter build apk --release` produces
-            // an installable APK. That is a known critical defect and is replaced
-            // in the Phase 1 signing PR; do not treat this as a Play-store key.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
             isShrinkResources = false
         }
+    }
+}
+
+gradle.taskGraph.whenReady {
+    val needsReleaseSigning = gradle.taskGraph.allTasks.any { task ->
+        val n = task.name
+        n.contains("Release") && (
+            n.startsWith("assemble") ||
+                n.startsWith("bundle") ||
+                n.startsWith("package")
+            )
+    }
+    if (needsReleaseSigning && !releaseSigningConfigured()) {
+        throw org.gradle.api.GradleException(
+            "Release builds require ORBITS_UPLOAD_STORE_FILE, " +
+                "ORBITS_UPLOAD_STORE_PASSWORD, ORBITS_UPLOAD_KEY_ALIAS, and " +
+                "ORBITS_UPLOAD_KEY_PASSWORD pointing at a real keystore. " +
+                "There is no debug-keystore fallback (GH-C01 / U-5). " +
+                "See docs/android-signing.md."
+        )
     }
 }
 
