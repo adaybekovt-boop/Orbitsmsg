@@ -36,7 +36,7 @@ dependencies:
   convert: ^3.1.1                # hex / base64 helpers
 
   # P2P (porting src/peer/*.js — PeerJS over WebRTC)
-  flutter_webrtc: ^1.4.1         # Raw WebRTC (equivalent of browser RTCPeerConnection)
+  flutter_webrtc: ^1.6.0         # Raw WebRTC (equivalent of browser RTCPeerConnection)
   web_socket_channel: ^3.0.1     # Signaling transport to PeerJS server
 
   # Storage (porting src/core/db.js, idbStore.js) — Drift over SQLite.
