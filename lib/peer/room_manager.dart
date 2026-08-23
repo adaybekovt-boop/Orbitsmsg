@@ -44,6 +44,7 @@ import '../storage/db.dart' as db;
 import '../utils/common.dart' show safeAvatarDataUrl;
 import 'helpers.dart';
 import 'peerjs_client.dart';
+import 'peer_server_core.dart';
 import 'room_invite.dart';
 import 'room_scoped_transport.dart';
 import 'room_signaling_host.dart';
@@ -496,11 +497,13 @@ class RoomManager extends StateNotifier<RoomState> {
     final invite = await host.start(roomId: roomId);
     _selfHost = host;
 
-    // The host connects to its OWN server over loopback.
+    // The host connects to its OWN server over loopback using the room key
+    // (never the public 'peerjs' default).
     final client = buildRoomScopedClient(
       selfId: roomId,
       host: '127.0.0.1',
       port: host.port,
+      key: invite.key ?? generateRoomSignalingKey(),
     );
     final transport = RoomScopedTransport(client)
       ..wire()
@@ -622,6 +625,12 @@ class RoomManager extends StateNotifier<RoomState> {
       state = const RoomState(joinError: 'В приглашении нет адреса сервера.');
       return;
     }
+    if (isForbiddenEmbeddedSignalingKey(invite.key)) {
+      state = const RoomState(
+        joinError: 'Приглашение без ключа комнаты. Попросите новый код.',
+      );
+      return;
+    }
 
     final roomId = hostPeerId;
     await db.saveRoom({
@@ -647,7 +656,7 @@ class RoomManager extends StateNotifier<RoomState> {
         selfId: selfId,
         host: hp.$1,
         port: hp.$2,
-        key: invite.key ?? 'peerjs',
+        key: invite.key ?? '',
       );
       final transport = RoomScopedTransport(client)
         ..wire()

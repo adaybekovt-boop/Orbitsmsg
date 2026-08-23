@@ -48,17 +48,24 @@ class SignalingReachability {
 /// Host-side PeerJS signaling server. One instance per hosted room session.
 class EmbeddedSignalingServer {
   EmbeddedSignalingServer({
-    String key = 'peerjs',
+    String? key,
     this.echoHeartbeat = true,
     int maxClients = 64,
+    this.maxConnectsPerIp = 12,
+    this.connectWindow = const Duration(minutes: 1),
   }) : _core = PeerServerCore(
-          key: key,
+          key: isForbiddenEmbeddedSignalingKey(key)
+              ? generateRoomSignalingKey()
+              : key!,
           echoHeartbeat: echoHeartbeat,
           maxClients: maxClients,
         );
 
   final PeerServerCore _core;
   final bool echoHeartbeat;
+  final int maxConnectsPerIp;
+  final Duration connectWindow;
+  final Map<String, List<DateTime>> _connectsByIp = {};
 
   HttpServer? _http;
   StreamSubscription<HttpRequest>? _reqSub;
@@ -70,6 +77,7 @@ class EmbeddedSignalingServer {
   int get port => _http?.port ?? 0;
   int get clientCount => _core.clientCount;
   List<String> get connectedIds => _core.connectedIds;
+  String get key => _core.key;
 
   /// Bind and begin accepting WebSocket upgrades. [host] '0.0.0.0' listens on
   /// every interface (needed so LAN guests can reach us); [port] 0 lets the OS
@@ -95,6 +103,17 @@ class EmbeddedSignalingServer {
           ..statusCode = HttpStatus.ok
           ..headers.contentType = ContentType.text
           ..write('orbits embedded signaling server');
+        await req.response.close();
+      } catch (_) {}
+      return;
+    }
+
+    final ip = req.connectionInfo?.remoteAddress.address ?? 'unknown';
+    if (!_allowConnectFrom(ip)) {
+      try {
+        req.response
+          ..statusCode = HttpStatus.tooManyRequests
+          ..write('rate limited');
         await req.response.close();
       } catch (_) {}
       return;
@@ -160,6 +179,16 @@ class EmbeddedSignalingServer {
     _core.disconnect(id, token: token);
   }
 
+  bool _allowConnectFrom(String ip) {
+    final now = DateTime.now();
+    final windowStart = now.subtract(connectWindow);
+    final list = _connectsByIp.putIfAbsent(ip, () => <DateTime>[]);
+    list.removeWhere((t) => t.isBefore(windowStart));
+    if (list.length >= maxConnectsPerIp) return false;
+    list.add(now);
+    return true;
+  }
+
   Map<String, Object?>? _decode(dynamic raw) {
     try {
       final decoded = raw is String
@@ -204,6 +233,7 @@ class EmbeddedSignalingServer {
   Future<void> stop() async {
     final sockets = List<WebSocket>.from(_sockets.values);
     _sockets.clear();
+    _connectsByIp.clear();
     _core.clear();
     for (final ws in sockets) {
       try {

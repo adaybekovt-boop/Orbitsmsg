@@ -27,12 +27,17 @@ class SignalingReachability {
 /// it because hosting is platform-gated off on web.
 class EmbeddedSignalingServer {
   EmbeddedSignalingServer({
-    String key = 'peerjs',
+    String? key,
     this.echoHeartbeat = true,
     int maxClients = 64,
-  });
+    this.maxConnectsPerIp = 12,
+    this.connectWindow = const Duration(minutes: 1),
+  }) : key = key ?? '';
 
   final bool echoHeartbeat;
+  final int maxConnectsPerIp;
+  final Duration connectWindow;
+  final String key;
 
   bool get running => false;
   int get port => 0;

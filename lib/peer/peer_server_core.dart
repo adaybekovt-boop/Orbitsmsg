@@ -27,6 +27,10 @@
 // tests wire fake sinks. Keeping the routing here — free of sockets — is what
 // makes the protocol unit-testable without binding a port.
 
+import 'dart:convert';
+import 'dart:math';
+import 'dart:typed_data';
+
 /// A sink that delivers one JSON signaling frame to a connected client.
 typedef FrameSink = void Function(Map<String, Object?> frame);
 
@@ -49,7 +53,23 @@ abstract class PeerServerFrame {
 }
 
 /// Why a connection attempt was rejected (null === accepted).
-enum PeerServerReject { invalidKey, idTaken, missingId }
+enum PeerServerReject { invalidKey, idTaken, missingId, missingToken }
+
+/// Well-known PeerJS cloud key. Embedded rooms must never use it: anyone
+/// who can reach the port already knows it.
+const String kForbiddenEmbeddedSignalingKey = 'peerjs';
+
+/// 16 bytes, base64url, no padding — room-scoped, not guessable like 'peerjs'.
+String generateRoomSignalingKey() {
+  final rng = Random.secure();
+  final bytes = Uint8List.fromList(List<int>.generate(16, (_) => rng.nextInt(256)));
+  return base64Url.encode(bytes).replaceAll('=', '');
+}
+
+bool isForbiddenEmbeddedSignalingKey(String? key) {
+  final k = key?.trim() ?? '';
+  return k.isEmpty || k == kForbiddenEmbeddedSignalingKey;
+}
 
 /// One registered client: its id, the session token it presented, and the sink
 /// used to push frames to it. `token` lets a reconnect under the same id
@@ -108,9 +128,21 @@ class PeerServerCore {
     required String clientKey,
     required FrameSink send,
   }) {
+    // The public PeerJS default is not a secret. Embedded rooms that still
+    // use it (or accept a client presenting it) are open to anyone on the
+    // port — including after UPnP. Reject even when it "matches".
+    if (isForbiddenEmbeddedSignalingKey(key) ||
+        isForbiddenEmbeddedSignalingKey(clientKey)) {
+      send({'type': PeerServerFrame.invalidKey});
+      return PeerServerReject.invalidKey;
+    }
     if (clientKey != key) {
       send({'type': PeerServerFrame.invalidKey});
       return PeerServerReject.invalidKey;
+    }
+    if (token.trim().isEmpty) {
+      send({'type': PeerServerFrame.error, 'payload': 'missing token'});
+      return PeerServerReject.missingToken;
     }
     if (id.isEmpty) {
       send({'type': PeerServerFrame.error, 'payload': 'missing id'});
