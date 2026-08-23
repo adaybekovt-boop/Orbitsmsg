@@ -6,12 +6,11 @@
 #      `<queries>` blocks for `share_plus` / file picker intents and the
 #      `usesCleartextTraffic` flag we toggle for local PeerJS dev signaling.
 #
-#   2. build.gradle(.kts) — point release builds at the *debug* keystore.
-#      The user has no upload key. The debug keystore is auto-generated
-#      and cached in CI (so updates work without "INSTALL_FAILED_UPDATE
-#      _INCOMPATIBLE" — the signature stays stable across runs). This is
-#      a sideload-only setup; you cannot ship to Play Store like this,
-#      but `adb install` and "open APK on phone" both work.
+#   2. build.gradle(.kts) — release currently signs with the debug keystore
+#      (ORBITS_RELEASE_SIGNING). That is a known Critical defect (GH-C01 / U-5)
+#      and is replaced in Phase 1. This script only ensures the marker is
+#      present so a regenerated template still produces a sideloadable APK
+#      until that PR lands. Do not treat the debug key as a Play upload key.
 #
 #   3. gradle.properties — bump the JVM heap so the d8/r8 step doesn't
 #      OOM on the GitHub-hosted runner with the larger transitive
@@ -76,15 +75,27 @@ if n == 0:
     print("ERROR: could not find <application tag", file=sys.stderr)
     sys.exit(1)
 
-# Allow cleartext traffic — needed if the user points the app at a local
-# `peerjs-server` over plain ws:// during development. Production build
-# can override this with a network_security_config.xml later.
-new_xml = re.sub(
-    r'(<application\b)([^>]*?)(\s*>)',
-    lambda m: m.group(1) + m.group(2) + ' android:usesCleartextTraffic="true"' + m.group(3),
-    new_xml,
-    count=1,
-)
+# Allow cleartext traffic ONLY via network_security_config.xml (localhost
+# / 127.0.0.1 / 10.0.2.2). Never set usesCleartextTraffic=true on the
+# application — that would permit plaintext HTTP/ws to the public internet.
+if 'android:networkSecurityConfig=' not in new_xml:
+    new_xml = re.sub(
+        r'(<application\b)([^>]*?)(\s*>)',
+        lambda m: m.group(1) + m.group(2)
+            + ' android:networkSecurityConfig="@xml/network_security_config"'
+            + ' android:usesCleartextTraffic="false"'
+            + ' android:allowBackup="false"'
+            + m.group(3),
+        new_xml,
+        count=1,
+    )
+else:
+    # Belt-and-braces: a regenerated template must not re-enable global cleartext.
+    new_xml = re.sub(
+        r'android:usesCleartextTraffic="true"',
+        'android:usesCleartextTraffic="false"',
+        new_xml,
+    )
 
 path.write_text(new_xml, encoding="utf-8")
 print(f"Patched permissions into {path}")

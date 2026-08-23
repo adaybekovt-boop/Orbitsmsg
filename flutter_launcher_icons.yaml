@@ -2,12 +2,10 @@
 #
 # Web / PWA / Safari "Add to Home Screen" icons are NOT generated here — they
 # are hand-tuned, opaque, and committed under web/ (regenerate with
-# tool/branding/generate_web_icons.ps1). This config covers only the native
-# launcher icons, which this repo does NOT commit (the android/ and windows/
-# folders are created fresh in CI by `flutter create`).
-#
-# How to apply (locally with the toolchain, or as the CI step that runs AFTER
-# `flutter create` so the platform folders exist):
+# tool/branding/generate_web_icons.ps1). Android mipmaps are committed so a
+# local `flutter build apk` does not ship the default Flutter logo; CI still
+# regenerates them from tool/branding/orbits_icon_source.png as a belt-and-
+# braces check. Do not `flutter create --overwrite` over android/.
 #
 #   dart run flutter_launcher_icons -f flutter_launcher_icons.yaml
 #

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Auto Backup (API 23–30) — exclude everything that could contain
+  messages, keys, vault state, or contact graphs. Combined with
+  android:allowBackup="false" this is defense in depth: even if a
+  future change re-enables backup, sensitive domains stay out.
+-->
+<full-backup-content>
+    <exclude domain="database" />
+    <exclude domain="sharedpref" />
+    <exclude domain="file" />
+    <exclude domain="external" />
+    <exclude domain="root" />
+</full-backup-content>
