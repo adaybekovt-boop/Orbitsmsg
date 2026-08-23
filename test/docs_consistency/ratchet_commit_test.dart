@@ -1,3 +1,7 @@
+// DOCS-CHECK, NOT A SECURITY TEST
+// Round 2 A.3: moved out of test/security/. These asserts are source/docs
+// greps (readAsStringSync + contains). They do not demonstrate an attack.
+
 // Phase 2.1: transactional ratchet decrypt (clone → AES-GCM → adopt).
 //
 // These fail on origin/main: ratchetDecrypt removed skipped keys and advanced

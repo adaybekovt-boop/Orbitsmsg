@@ -1,3 +1,7 @@
+// DOCS-CHECK, NOT A SECURITY TEST
+// Round 2 A.3: moved out of test/security/. These asserts are source/docs
+// greps (readAsStringSync + contains). They do not demonstrate an attack.
+
 // Phase 3 source guards: Drop-before-Wire, 64-bit peer IDs, UPnP RFC1918,
 // no compile-time TURN secrets in CI.
 

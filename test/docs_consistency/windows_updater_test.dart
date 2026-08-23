@@ -1,3 +1,7 @@
+// DOCS-CHECK, NOT A SECURITY TEST
+// Round 2 A.3: moved out of test/security/. These asserts are source/docs
+// greps (readAsStringSync + contains). They do not demonstrate an attack.
+
 // Phase 1.2 Windows updater guards (U-1).
 //
 // These fail on origin/main / Phase 0: the installer launched any non-empty
