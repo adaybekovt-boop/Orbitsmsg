@@ -59,7 +59,7 @@ class AdvancedPage extends StatelessWidget {
             const _AdvancedRow(
               icon: Icons.mic,
               title: 'Микрофон',
-              subtitle: 'Появится вместе со звонками (в разработке)',
+              subtitle: 'Звонки в чате работают; эхо/AGC — позже',
               page: MicPage(),
             ),
             const _AdvancedRow(
