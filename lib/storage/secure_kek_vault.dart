@@ -78,6 +78,11 @@ enum KekRetrieveStatus {
   error,
 }
 
+/// Fail-closed gate: do not read a stored KEK unless biometrics are usable
+/// and the upcoming prompt can actually run. `null` means "proceed to prompt".
+KekRetrieveStatus? biometricAvailabilityGate(bool usable) =>
+    usable ? null : KekRetrieveStatus.cancelled;
+
 /// Value-object returned from [SecureKekVault.retrieveKek]. Exactly one
 /// shape is meaningful per status: [bytes] is non-null only when
 /// [status] == [KekRetrieveStatus.ok].
@@ -186,9 +191,9 @@ class SecureKekVault {
     } catch (_) {
       available = false;
     }
-    // No enrolled/usable biometric — don't lock the user out of their own KEK;
-    // the master-password path is still the authoritative fallback upstream.
-    if (!available) return null;
+    // Fail closed: a stored KEK is never returned without a successful
+    // biometric prompt. Missing hardware/enrollment → password path.
+    if (!available) return biometricAvailabilityGate(false);
 
     try {
       final ok = await auth.authenticate(
@@ -207,8 +212,8 @@ class SecureKekVault {
       if (e.code == auth_error.notAvailable ||
           e.code == auth_error.notEnrolled ||
           e.code == auth_error.passcodeNotSet) {
-        // Sensor disappeared between the probe and the prompt — degrade.
-        return null;
+        // Sensor disappeared between the probe and the prompt — fail closed.
+        return KekRetrieveStatus.cancelled;
       }
       return KekRetrieveStatus.cancelled;
     } catch (_) {
