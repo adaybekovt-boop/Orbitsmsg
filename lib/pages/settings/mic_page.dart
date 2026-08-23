@@ -73,8 +73,9 @@ class MicPage extends StatelessWidget {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    'Эхо-подавление, шумоподавление, авто-усиление и тест '
-                    'уровня появятся вместе с экраном звонка в обновлении.',
+                    'Аудио- и видеозвонки в чате уже вызывают микрофон '
+                    '(getUserMedia). Отдельные настройки эхо-подавления, '
+                    'шумоподавления и AGC на этом экране ещё не сделаны.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontFamily: tokens.fontBody,
