@@ -1,3 +1,7 @@
+// DOCS-CHECK, NOT A SECURITY TEST
+// Round 2 A.3: moved out of test/security/. These asserts are source/docs
+// greps (readAsStringSync + contains). They do not demonstrate an attack.
+
 // Phase 1.3 fail-closed at-rest encryption (S-1 / S-2).
 //
 // These fail on origin/main: wrapBlobSync returned null when locked and

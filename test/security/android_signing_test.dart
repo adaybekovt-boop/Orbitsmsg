@@ -1,4 +1,7 @@
 // Phase 1.1 Android release signing guards (GH-C01 / U-5).
+// prepare_upload_keystore.sh / patch_android.sh groups are behavioral
+// (Process.run + keytool). gradle/workflow `contains` groups are source
+// guards, not attack demos.
 //
 // These fail on the Phase 0 tree: release still assigned the Android debug
 // keystore, CI cached ~/.android/debug.keystore, and there was no upload-key

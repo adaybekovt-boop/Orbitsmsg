@@ -1,3 +1,7 @@
+// DOCS-CHECK, NOT A SECURITY TEST
+// Round 2 A.3: moved out of test/security/. These asserts are source/docs
+// greps (readAsStringSync + contains). They do not demonstrate an attack.
+
 // Phase 0 repo-hygiene guards. These would fail on origin/main before the
 // hygiene PR: no LICENSE, no SECURITY.md, android/ gitignored, Actions pinned
 // to mutable tags, analyze run with --no-fatal-warnings, generated .deps

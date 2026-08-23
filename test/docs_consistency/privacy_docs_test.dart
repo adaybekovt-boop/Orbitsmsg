@@ -1,3 +1,7 @@
+// DOCS-CHECK, NOT A SECURITY TEST
+// Round 2 A.3: moved out of test/security/. These asserts are source/docs
+// greps (readAsStringSync + contains). They do not demonstrate an attack.
+
 // Phase 5: no runtime Google Fonts fetch; honest privacy / endpoint docs.
 //
 // Audit: webfont CDN phone-home; overstated "encrypted messenger" copy;
