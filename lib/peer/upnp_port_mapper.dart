@@ -15,6 +15,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'upnp_parse.dart';
 
@@ -71,14 +72,14 @@ class UpnpPortMapper {
     if (location == null) return null;
 
     final descUri = Uri.tryParse(location);
-    if (descUri == null) return null;
+    if (descUri == null || !isAllowedUpnpUri(descUri)) return null;
     final descXml = await _httpGet(descUri);
     if (descXml == null) return null;
 
     final svc = parseWanService(descXml, descUri);
     if (svc == null) return null;
     final controlUri = Uri.tryParse(svc.controlUrl);
-    if (controlUri == null) return null;
+    if (controlUri == null || !isAllowedUpnpUri(controlUri)) return null;
 
     // External IP (informational for the invite; mapping can still succeed if
     // this fails, but we need an ip for `pub=`, so bail if absent).
@@ -112,7 +113,7 @@ class UpnpPortMapper {
   Future<void> unmap(UpnpMapping mapping) async {
     try {
       final controlUri = Uri.tryParse(mapping.controlUrl);
-      if (controlUri == null) return;
+      if (controlUri == null || !isAllowedUpnpUri(controlUri)) return;
       await _soap(controlUri, mapping.serviceType, 'DeletePortMapping', {
         'NewRemoteHost': '',
         'NewExternalPort': mapping.externalPort,
@@ -148,7 +149,10 @@ class UpnpPortMapper {
         if (dg == null) return;
         final resp = utf8.decode(dg.data, allowMalformed: true);
         final loc = parseSsdpLocation(resp);
-        if (loc != null && !completer.isCompleted) completer.complete(loc);
+        if (loc == null) return;
+        final locUri = Uri.tryParse(loc);
+        if (locUri == null || !isAllowedUpnpUri(locUri)) return;
+        if (!completer.isCompleted) completer.complete(loc);
       });
       // Bounded wait for the first usable LOCATION.
       final result = await completer.future
@@ -162,14 +166,19 @@ class UpnpPortMapper {
     }
   }
 
+  static const _maxHttpBytes = 256 * 1024;
+
   Future<String?> _httpGet(Uri uri) async {
+    if (!isAllowedUpnpUri(uri)) return null;
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 3);
     try {
       final req = await client.getUrl(uri);
+      req.followRedirects = false;
+      req.maxRedirects = 0;
       final resp = await req.close().timeout(const Duration(seconds: 3));
       if (resp.statusCode != 200) return null;
-      return await resp.transform(utf8.decoder).join();
+      return await _readLimited(resp, _maxHttpBytes);
     } catch (_) {
       return null;
     } finally {
@@ -183,23 +192,34 @@ class UpnpPortMapper {
     String action,
     Map<String, Object?> args,
   ) async {
+    if (!isAllowedUpnpUri(controlUri)) return null;
     final client = HttpClient()
       ..connectionTimeout = const Duration(seconds: 3);
     try {
       final body = buildSoapBody(serviceType, action, args);
       final req = await client.postUrl(controlUri);
+      req.followRedirects = false;
+      req.maxRedirects = 0;
       req.headers
         ..set(HttpHeaders.contentTypeHeader, 'text/xml; charset="utf-8"')
         ..set('SOAPAction', soapActionHeader(serviceType, action));
       req.add(utf8.encode(body));
       final resp = await req.close().timeout(const Duration(seconds: 4));
-      final text = await resp.transform(utf8.decoder).join();
       if (resp.statusCode != 200) return null; // SOAP fault
-      return text;
+      return await _readLimited(resp, _maxHttpBytes);
     } catch (_) {
       return null;
     } finally {
       client.close(force: true);
     }
   }
+}
+
+Future<String?> _readLimited(HttpClientResponse resp, int maxBytes) async {
+  final buf = BytesBuilder(copy: false);
+  await for (final chunk in resp) {
+    buf.add(chunk);
+    if (buf.length > maxBytes) return null;
+  }
+  return utf8.decode(buf.takeBytes(), allowMalformed: true);
 }
