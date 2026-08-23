@@ -41,7 +41,6 @@ import '../state/connections_notifier.dart';
 import '../state/local_profile_provider.dart';
 import '../state/peer_connection_provider.dart';
 import '../storage/db.dart' as db;
-import '../storage/security_log.dart';
 import '../utils/common.dart' show safeAvatarDataUrl;
 import 'helpers.dart';
 import 'peerjs_client.dart';
@@ -343,8 +342,10 @@ class RoomManager extends StateNotifier<RoomState> {
   /// fallback on mobile/desktop.
   final SpatialAudioEngine _spatialAudio = createSpatialAudioEngine();
 
-  /// Fraud / flood detector (IP collision + IP hop + rate limit). Pure
-  /// in-memory; the UI reads [RoomState.securityAlert] for the warning banner.
+  /// Flood detector (rate limit). The IP-collision / IP-hop helpers on
+  /// [SecurityMonitor] are unit-tested but are **not** fed from ICE
+  /// `getStats` — a previous `recordPeerConnection` wrapper was dead code
+  /// and was removed so it could not look like live protection.
   final SecurityMonitor _security = SecurityMonitor();
 
   /// Optional handler for inbound `qr_auth_response` packets, registered by the
@@ -1382,30 +1383,6 @@ class RoomManager extends StateNotifier<RoomState> {
         ts: ts,
         content: content,
       );
-    }
-  }
-
-  /// Feed a peer's TRANSPORT-OBSERVED IP (read from the selected ICE candidate
-  /// pair on the RTCPeerConnection) to the fraud detector. If it looks like an
-  /// IP collision (sybil) or an IP hop, surface the warning via
-  /// [RoomState.securityAlert] so the chat shows the red banner.
-  ///
-  /// SECURITY (audit item 5): callers must ONLY pass an IP the local transport
-  /// itself observed. NEVER pass a self-reported address from a `room_*` packet
-  /// — an attacker could forge it to raise a fake banner or frame another peer.
-  /// TODO: wire a real ICE-candidate IP reader (RTCPeerConnection.getStats) and
-  /// call this from there. No caller currently feeds it self-reported IPs.
-  void recordPeerConnection(String peerId, String ipAddress) {
-    final finding = _security.recordConnection(peerId, ipAddress);
-    // Persist to the security audit log (Drift-backed) for after-the-fact review.
-    unawaited(appendSecurityLog(SecurityLogEntry(
-      peerId: peerId,
-      ipAddress: ipAddress,
-      timestamp: now(),
-      eventType: finding == null ? 'connect' : 'fraud:${finding.kind.name}',
-    )));
-    if (finding != null) {
-      state = state.copyWith(securityAlert: finding.message);
     }
   }
 
