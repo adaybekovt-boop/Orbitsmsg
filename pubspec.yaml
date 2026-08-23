@@ -143,7 +143,7 @@ dev_dependencies:
 
   # Drift codegen (tables.dart → tables.g.dart, database.dart → database.g.dart)
   drift_dev: ^2.20.0
-  build_runner: ^2.4.13
+  build_runner: ^2.15.1
 
   # Native launcher-icon generation (Android mipmaps + adaptive icon, Windows
   # app_icon.ico) from the single source tool/branding/orbits_icon_source.png.
