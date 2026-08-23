@@ -26,7 +26,7 @@ while unlocked (`lib/core/vault_kek.dart`). It is never written to disk.
 | 1:1 chat (X3DH + Double Ratchet) | E2E between the two devices. |
 | Rooms / group chat | **Not** E2E. The room host sees member messages in plaintext. See `docs/rooms.md`. |
 | File transfer (Drop) | Raw DataChannel frames, only after a **verified** wire handshake. Size / concurrency caps apply. |
-| Voice/video calls | WebRTC DTLS-SRTP to the peer. ICE may use STUN/TURN. |
+| Voice/video calls | WebRTC DTLS-SRTP to the peer. Default ICE uses public Google/Mozilla/Twilio STUN (IP leak to those operators). See `docs/privacy.md`. |
 | TURN credentials | Username/credential are loaded at runtime (`orbits_turn_username` / `orbits_turn_credential`). CI does **not** pass them as `--dart-define`. `TURN_URL` may still be compile-time (it is not a secret). |
 | UPnP IGD mapping | HTTP(S) to RFC1918 IPv4 only; no redirects. Hostile SSDP `LOCATION` / `controlURL` is ignored. |
 | Windows auto-update | GitHub TLS plus **pinned Authenticode** before launch (`docs/windows-signing.md`). |

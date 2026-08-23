@@ -1,6 +1,6 @@
 // Lightweight ThemeData carrying an OrbitsTokens extension for widget tests of
-// glass primitives — built by hand (no GoogleFonts, which throws async in
-// `flutter test`). Glass colours come from the real brightness helper so the
+// glass primitives — built by hand so widget tests stay offline. Glass
+// colours come from the real brightness helper so the
 // tokens match production shape.
 
 import 'package:flutter/material.dart';
