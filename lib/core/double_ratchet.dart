@@ -74,7 +74,8 @@ Future<({Uint8List rootKey, Uint8List chainKey})> kdfRk({
 /// KDF_CK: advance a chain key. Message key is one-shot.
 /// Mirrors doubleRatchet.js:55-58 (empty salt → 32-byte zero-salt fallback).
 Future<({Uint8List chainKey, Uint8List messageKey})> kdfCk(
-    List<int> chainKey) async {
+  List<int> chainKey,
+) async {
   final out = await hkdfBits(
     ikm: chainKey,
     salt: const <int>[],
@@ -98,11 +99,7 @@ Future<Uint8List> exportSpkiBytes(EcKeyPair keyPair) async {
 
 Future<Uint8List> _dhShared(EcKeyPair priv, List<int> remoteSpki) async {
   final point = parseP256Spki(remoteSpki);
-  final remote = EcPublicKey(
-    x: point.x,
-    y: point.y,
-    type: KeyPairType.p256,
-  );
+  final remote = EcPublicKey(x: point.x, y: point.y, type: KeyPairType.p256);
   final secret = await _ecdh.sharedSecretKey(
     keyPair: priv,
     remotePublicKey: remote,
@@ -162,7 +159,11 @@ RatchetHeader decodeHeader(String b64) {
 
 /// Wire envelope — matches the JS `{ headerB64, ivB64, ctB64 }` shape.
 class RatchetEnvelope {
-  RatchetEnvelope({required this.headerB64, required this.ivB64, required this.ctB64});
+  RatchetEnvelope({
+    required this.headerB64,
+    required this.ivB64,
+    required this.ctB64,
+  });
   final String headerB64;
   final String ivB64;
   final String ctB64;
@@ -211,8 +212,50 @@ class RatchetState {
   int ns;
   int nr;
   int pn;
+
   /// "<b64spki>|<n>" → 32-byte message key. Bounded by [maxSkipped].
   final Map<String, Uint8List> skipped;
+
+  /// Deep-copies key material, counters, and skipped message keys.
+  ///
+  /// [dhKeyPair] is shared with the original until a DH ratchet step replaces
+  /// it on the copy. Decrypt uses this so a failed AES-GCM (tampered ct/tag
+  /// or AAD) cannot burn skipped keys or commit a DH step on the live state.
+  RatchetState clone() {
+    return RatchetState(
+      rootKey: Uint8List.fromList(rootKey),
+      dhKeyPair: dhKeyPair,
+      dhPubSpki: Uint8List.fromList(dhPubSpki),
+      sendCk: sendCk == null ? null : Uint8List.fromList(sendCk!),
+      recvCk: recvCk == null ? null : Uint8List.fromList(recvCk!),
+      remoteDhPub: remoteDhPub == null
+          ? null
+          : Uint8List.fromList(remoteDhPub!),
+      ns: ns,
+      nr: nr,
+      pn: pn,
+      skipped: <String, Uint8List>{
+        for (final e in skipped.entries) e.key: Uint8List.fromList(e.value),
+      },
+    );
+  }
+
+  /// Overwrites this state's fields with [other]'s. Used to commit a
+  /// speculative decrypt that already succeeded on a [clone].
+  void adopt(RatchetState other) {
+    rootKey = other.rootKey;
+    sendCk = other.sendCk;
+    recvCk = other.recvCk;
+    dhKeyPair = other.dhKeyPair;
+    dhPubSpki = other.dhPubSpki;
+    remoteDhPub = other.remoteDhPub;
+    ns = other.ns;
+    nr = other.nr;
+    pn = other.pn;
+    skipped
+      ..clear()
+      ..addAll(other.skipped);
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -301,8 +344,9 @@ Future<void> _skipRecvKeys(RatchetState state, int until) async {
   if (gap > maxSkipPerStep) {
     throw StateError('ratchet: too many skipped messages in one step');
   }
-  final remoteKey =
-      state.remoteDhPub != null ? bytesToBase64(state.remoteDhPub!) : '';
+  final remoteKey = state.remoteDhPub != null
+      ? bytesToBase64(state.remoteDhPub!)
+      : '';
   var ck = state.recvCk!;
   while (state.nr < until) {
     final step = await kdfCk(ck);
@@ -355,7 +399,11 @@ Future<Uint8List> _aesGcmDecrypt({
   final ct = ctPlusTag.sublist(0, ctLen);
   final mac = Mac(ctPlusTag.sublist(ctLen));
   final box = SecretBox(ct, nonce: iv, mac: mac);
-  final pt = await _aes.decrypt(box, secretKey: SecretKey(messageKey), aad: aad);
+  final pt = await _aes.decrypt(
+    box,
+    secretKey: SecretKey(messageKey),
+    aad: aad,
+  );
   return Uint8List.fromList(pt);
 }
 
@@ -401,9 +449,24 @@ Future<RatchetEnvelope> ratchetEncrypt(
   );
 }
 
-/// Decrypt one wire envelope. Mutates [state] and returns the plaintext bytes.
+/// Decrypt one wire envelope. Mutates [state] **only if** AES-GCM succeeds.
+///
+/// Speculative work (skipped-key removal, skip-forward, DH ratchet step,
+/// Nr/Ck advance) runs on a [RatchetState.clone]. [RatchetState.adopt] copies
+/// that clone back only after the tag verifies. Tampered ct/tag/AAD therefore
+/// cannot burn skipped message keys or commit a DH step (transactional decrypt).
 /// Throws on tamper, replay, or too-many-skipped.
 Future<Uint8List> ratchetDecrypt(
+  RatchetState state,
+  RatchetEnvelope envelope,
+) async {
+  final work = state.clone();
+  final plaintext = await _ratchetDecryptInPlace(work, envelope);
+  state.adopt(work);
+  return plaintext;
+}
+
+Future<Uint8List> _ratchetDecryptInPlace(
   RatchetState state,
   RatchetEnvelope envelope,
 ) async {
@@ -412,17 +475,21 @@ Future<Uint8List> ratchetDecrypt(
   final ctPlusTag = base64ToBytes(envelope.ctB64);
   final aad = utf8.encode(envelope.headerB64);
 
-  // 1. Out-of-order message from an older chain.
+  // 1. Out-of-order message from an older chain. Peek, then drop the cached
+  //    key only after GCM succeeds — the live state never sees a failed peek
+  //    because this runs on a clone that is discarded on throw.
   final remoteKey = bytesToBase64(header.dhPubSpki);
   final skKey = '$remoteKey|${header.n}';
-  final cachedMk = state.skipped.remove(skKey);
+  final cachedMk = state.skipped[skKey];
   if (cachedMk != null) {
-    return _aesGcmDecrypt(
+    final pt = await _aesGcmDecrypt(
       messageKey: cachedMk,
       iv: iv,
       ctPlusTag: ctPlusTag,
       aad: aad,
     );
+    state.skipped.remove(skKey);
+    return pt;
   }
 
   // 2. If the sender's DH pub changed, run a DH ratchet step. Before stepping
