@@ -25,6 +25,16 @@ import 'identity_key.dart';
 const String kPairingScheme = 'orbits_pairing';
 const String kQrAuthResponseType = 'qr_auth_response';
 
+/// QR device linking signs a one-time token. It does **not** copy the vault
+/// or open a session on the other device. Hidden until that transfer exists
+/// (Round 2 C.3, variant B). False success ("Вход подтверждён") is worse
+/// than no button. Flip this only after a real key-transfer protocol lands.
+const bool kQrDeviceLinkingEnabled = false;
+
+/// Copy after the phone signs a token. Must not claim the PC logged in.
+const String kQrScanSentUserMessage =
+    'Токен подписан. Ключи и сейф на компьютер не перенесены.';
+
 /// Fresh 32-byte one-time session token (base64url, no padding) from a CSPRNG.
 String generateSessionToken() {
   final rng = Random.secure();

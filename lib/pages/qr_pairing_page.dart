@@ -34,7 +34,7 @@ class QrPairingPage extends ConsumerStatefulWidget {
 enum _PairStatus { waiting, verifying, success, rejected }
 
 class _QrPairingPageState extends ConsumerState<QrPairingPage> {
-  late final String _token;
+  String? _token;
   _PairStatus _status = _PairStatus.waiting;
   String? _pairedPeerId;
 
@@ -43,6 +43,7 @@ class _QrPairingPageState extends ConsumerState<QrPairingPage> {
   @override
   void initState() {
     super.initState();
+    if (!kQrDeviceLinkingEnabled) return;
     _token = generateSessionToken();
     _rooms.setQrAuthListener(_onAuthPacket);
   }
@@ -57,7 +58,9 @@ class _QrPairingPageState extends ConsumerState<QrPairingPage> {
       String remoteId, Map<String, Object?> packet) async {
     if (!mounted || _status == _PairStatus.success) return;
     setState(() => _status = _PairStatus.verifying);
-    final result = await verifyAuthResponse(packet, _token);
+    final token = _token;
+    if (token == null) return;
+    final result = await verifyAuthResponse(packet, token);
     if (!mounted) return;
     if (result == null) {
       setState(() => _status = _PairStatus.rejected);
@@ -73,8 +76,11 @@ class _QrPairingPageState extends ConsumerState<QrPairingPage> {
   @override
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
+    if (!kQrDeviceLinkingEnabled) {
+      return _qrLinkingUnavailableScaffold(tokens, title: 'QR-связка устройств');
+    }
     final pcPeerId = ref.watch(currentPeerIdProvider) ?? '';
-    final qrData = buildPairingUri(pcPeerId, _token);
+    final qrData = buildPairingUri(pcPeerId, _token!);
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -313,6 +319,9 @@ class _QrScanPageState extends ConsumerState<QrScanPage> {
   @override
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
+    if (!kQrDeviceLinkingEnabled) {
+      return _qrLinkingUnavailableScaffold(tokens, title: 'Связать с ПК');
+    }
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -369,7 +378,7 @@ class _QrScanPageState extends ConsumerState<QrScanPage> {
           mainAxisSize: MainAxisSize.min,
           children: [
             _line(tokens, Icons.check_circle_rounded, tokens.success,
-                'Вход подтверждён на компьютере.'),
+                kQrScanSentUserMessage),
             const SizedBox(height: 12),
             OrbitsGlassButton(
               label: 'Готово',
@@ -417,4 +426,40 @@ class _QrScanPageState extends ConsumerState<QrScanPage> {
       ],
     );
   }
+}
+
+Widget _qrLinkingUnavailableScaffold(OrbitsTokens tokens, {required String title}) {
+  return Scaffold(
+    backgroundColor: Colors.transparent,
+    appBar: OrbitsGlassAppBar(
+      iconTheme: IconThemeData(color: tokens.text),
+      title: Text(
+        title,
+        style: TextStyle(
+          fontFamily: tokens.fontHeading,
+          fontWeight: FontWeight.w600,
+          color: tokens.text,
+        ),
+      ),
+    ),
+    body: AdaptivePageFrame(
+      maxWidth: 460,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Text(
+            'Связка устройств пока недоступна. Подпись QR-токена не переносит '
+            'ключи и не открывает сессию на другом устройстве.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontFamily: tokens.fontBody,
+              fontSize: 14,
+              height: 1.4,
+              color: tokens.muted,
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
 }
