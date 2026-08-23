@@ -429,7 +429,10 @@ void main() {
       expect(result.status, InstallLaunchStatus.signatureUntrusted);
       expect(c.read(updateNotifierProvider).installStatus,
           InstallUiStatus.failed);
-      expect(c.read(updateNotifierProvider).installError, contains('издателем'));
+      expect(
+        c.read(updateNotifierProvider).installError,
+        kUpdateSignatureUntrustedMessage,
+      );
       expect(c.read(updateNotifierProvider).installError,
           isNot(contains('Authenticode')));
       expect(exitCalls, 0);
