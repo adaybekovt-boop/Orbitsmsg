@@ -32,7 +32,7 @@ dependencies:
   # Add it back (and pin a stable release) if/when we ever turn on
   # hardware-backed crypto.
   cryptography: ^2.7.0           # AES-GCM, PBKDF2, HKDF, ECDH P-256, ECDSA P-256
-  pointycastle: ^3.9.1           # scrypt (the cryptography package doesn't ship it)
+  pointycastle: ^4.0.0           # scrypt (the cryptography package doesn't ship it)
   convert: ^3.1.1                # hex / base64 helpers
 
   # P2P (porting src/peer/*.js — PeerJS over WebRTC)
