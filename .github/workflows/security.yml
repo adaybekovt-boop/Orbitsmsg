@@ -1,0 +1,56 @@
+# Pin GitHub Actions to full commit SHAs (U-3). Least-privilege
+# contents:read. Secret scanning (Gitleaks) + basic SAST (Semgrep).
+name: Security scans
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    # Weekly catch-up if a PR slipped through without a scan.
+    - cron: '17 4 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gitleaks:
+    name: Gitleaks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 0
+
+      # Official action; public repos do not need GITLEAKS_LICENSE.
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  semgrep:
+    name: Semgrep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - name: Install Semgrep
+        run: python3 -m pip install --user 'semgrep==1.110.0'
+
+      - name: Semgrep scan
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          semgrep scan \
+            --config p/security-audit \
+            --config p/secrets \
+            --error \
+            --metrics=off \
+            --exclude=.git \
+            --exclude=build \
+            --exclude=.dart_tool \
+            --exclude=.fvm

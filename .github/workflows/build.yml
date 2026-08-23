@@ -8,6 +8,10 @@ on:
     branches: [main, master]
   workflow_dispatch:
 
+# Least privilege by default (U-3). The release job opts into contents:write.
+permissions:
+  contents: read
+
 # Pin Flutter once so all jobs agree.
 #
 # 3.32.0 (stable, May 2025) is the first Flutter release whose
@@ -28,18 +32,16 @@ concurrency:
 
 jobs:
   # ────────────────────────────────────────────────────────────────────
-  # Lint + tests. Non-fatal: we still ship even if analyze warns, because
-  # the project is mid-migration and `flutter_lints` flags pre-existing
-  # noise we haven't cleaned up yet. The build jobs depend on this so the
-  # report is at least produced.
+  # Lint + tests. Analyzer warnings are fatal. Infos stay
+  # non-blocking so generated Drift noise doesn't fail the gate.
   # ────────────────────────────────────────────────────────────────────
   analyze:
     name: Analyze & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: ${{ env.FLUTTER_CHANNEL }}
@@ -48,22 +50,24 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
+      - name: Pinned SDK matches toolchain manifest
+        run: |
+          set -euo pipefail
+          pinned="$(tr -d '[:space:]' < .flutter-version)"
+          if [ "$pinned" != "$FLUTTER_VERSION" ]; then
+            echo "::error::.flutter-version ($pinned) != FLUTTER_VERSION ($FLUTTER_VERSION)"
+            exit 1
+          fi
+
       # Codegen failures now fail the job — a missing `database.g.dart`
       # cascades into a confusing "Type _$OrbitsDatabase not found" wall
       # downstream, much harder to read than the real codegen error.
       - name: Generate code (drift / build_runner)
         run: dart run build_runner build --delete-conflicting-outputs
 
-      # Hard-fail on Dart compile errors (the analyzer treats those as
-      # `error` severity even with --no-fatal-infos --no-fatal-warnings).
-      # Without this gate a typo or wrong-version API call sails past
-      # analyze and we only find out 6+ minutes later when `flutter build
-      # apk` falls over on the kernel compile, with no actionable log
-      # surfaced in the GitHub UI. Warnings/infos still don't block —
-      # the project is mid-migration and has plenty of pre-existing
-      # noise that's tracked separately.
+      # Warnings block merge. Infos (mostly generated Drift) do not.
       - name: flutter analyze
-        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+        run: flutter analyze --no-fatal-infos
 
       # Test failures now also fail the job; the crypto roundtrip suite
       # is pure-Dart and stable, so any red here is a real regression.
@@ -71,27 +75,23 @@ jobs:
         run: flutter test --reporter expanded
 
   # ────────────────────────────────────────────────────────────────────
-  # Android. The platform folders aren't checked in — we generate them
-  # fresh on every CI run so a checkout of just `lib/` + `pubspec.yaml`
-  # builds. Then we patch:
-  #   • AndroidManifest.xml — INTERNET, CAMERA, RECORD_AUDIO permissions
-  #     for WebRTC, mobile_scanner and `record`.
-  #   • build.gradle — point release `signingConfig` at the debug keystore
-  #     so `flutter build apk --release` produces a sideloadable APK
-  #     without a real upload key. Cannot ship to Play Store like this,
-  #     but it installs and updates fine on any device.
+  # Android. Platform folders ARE committed (network_security_config,
+  # backup rules). Do not `flutter create --overwrite` — that clobbers
+  # those files. Icon generation still runs so the APK never ships the
+  # stock Flutter logo.
   #
-  # The debug keystore lives in actions/cache so the signature stays
-  # stable across runs (otherwise updates would require uninstall first).
+  # Release signing still uses the debug keystore (GH-C01 / U-5) until
+  # Phase 1 lands a production upload key from CI secrets. The debug
+  # keystore is cached so the signature stays stable across runs.
   # ────────────────────────────────────────────────────────────────────
   build-android:
     name: Build Android (APK)
     needs: analyze
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
         with:
           distribution: 'temurin'
           java-version: '17'
@@ -99,18 +99,18 @@ jobs:
       # Make sure SDK platform 36 + matching build-tools/NDK are present on
       # the runner. ubuntu-latest ships 33/34 by default; mobile_scanner 6
       # and current Android plugins require compileSdk 36 + NDK 27.
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3.2.2
         with:
           packages: 'platforms;android-36 build-tools;36.0.0 platform-tools ndk;27.0.12077973'
 
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
 
       - name: Cache debug keystore
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.android
           key: android-debug-keystore-v1
@@ -131,17 +131,16 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
-      # windows/ is scaffolded here too (this job only builds the APK) so the
-      # ONE shared flutter_launcher_icons.yaml — which covers BOTH Android and
-      # Windows — runs without erroring on a missing windows/ folder. The
-      # unused windows/ folder is ignored by `flutter build apk`.
-      - name: Generate android/ + windows/ + web/ platforms
+      - name: Verify committed Android security configs
         run: |
-          flutter create \
-            --platforms=android,web,windows \
-            --org="$PROJECT_ORG" \
-            --project-name="$PROJECT_NAME" \
-            .
+          set -euo pipefail
+          test -f android/app/src/main/AndroidManifest.xml
+          test -f android/app/src/main/res/xml/network_security_config.xml
+          test -f android/app/src/main/res/xml/backup_rules.xml
+          test -f android/app/src/main/res/xml/data_extraction_rules.xml
+          grep -q 'android:allowBackup="false"' android/app/src/main/AndroidManifest.xml
+          grep -q 'android:networkSecurityConfig="@xml/network_security_config"' android/app/src/main/AndroidManifest.xml
+          test -f windows/runner/resources/app_icon.ico
 
       # Brand the freshly-created project with the Orbits launcher icon. flutter
       # create writes the default Flutter logo; flutter_launcher_icons replaces
@@ -220,7 +219,7 @@ jobs:
           cp build/app/outputs/flutter-apk/app-x86_64-release.apk     dist/orbits-android-x86_64.apk    || true
           ls -lah dist/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: orbits-android
           path: dist/*.apk
@@ -242,9 +241,9 @@ jobs:
     needs: analyze
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: ${{ env.FLUTTER_CHANNEL }}
@@ -256,13 +255,11 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
-      - name: Generate web/ platform
+      - name: Verify committed web/ platform
         run: |
-          flutter create \
-            --platforms=web \
-            --org="$PROJECT_ORG" \
-            --project-name="$PROJECT_NAME" \
-            .
+          set -euo pipefail
+          test -f web/index.html
+          test -f web/drift_worker.js
 
       - name: Generate code (drift / build_runner)
         run: dart run build_runner build --delete-conflicting-outputs
@@ -329,7 +326,7 @@ jobs:
           (cd dist && zip -qr orbits-web-pages.zip orbits-web-pages)
           ls -lah dist/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: orbits-web
           path: dist/*.zip
@@ -347,9 +344,9 @@ jobs:
     needs: analyze
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: ${{ env.FLUTTER_CHANNEL }}
@@ -361,18 +358,13 @@ jobs:
       - name: flutter pub get
         run: flutter pub get
 
-      # android/ is scaffolded here too (this job only builds the EXE) so the
-      # ONE shared flutter_launcher_icons.yaml — which covers BOTH Android and
-      # Windows — runs without erroring on a missing android/ folder. The
-      # unused android/ folder is ignored by `flutter build windows`.
-      - name: Generate windows/ + android/ + web/ platforms
+      - name: Verify committed Windows + Android platforms
         shell: bash
         run: |
-          flutter create \
-            --platforms=windows,web,android \
-            --org="$PROJECT_ORG" \
-            --project-name="$PROJECT_NAME" \
-            .
+          set -euo pipefail
+          test -s windows/runner/resources/app_icon.ico
+          test -f android/app/src/main/AndroidManifest.xml
+          test -f web/index.html
 
       # Brand the EXE icon BEFORE `flutter build windows`. The Orbits app_icon.ico
       # is force-tracked, and `flutter create` keeps it; flutter_launcher_icons
@@ -523,7 +515,7 @@ jobs:
           }
           Get-ChildItem dist
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: orbits-windows
           path: dist/orbits-windows-x64.exe
@@ -542,14 +534,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
 
       - name: Show artifacts
         run: ls -R artifacts
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@c95fe1489396fe8a9eb87c0abf8aa5b2ef267fda # v2.2.1
         with:
           files: |
             artifacts/orbits-android/*.apk
