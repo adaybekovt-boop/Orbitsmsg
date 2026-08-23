@@ -529,6 +529,14 @@ jobs:
           }
           Get-ChildItem dist
 
+      # A.1: actually invoke signtool when a PFX secret exists. Tags without
+      # a cert fail closed (unsigned release EXEs are not shippable).
+      - name: Authenticode-sign Windows installer (U-1 / A.1)
+        env:
+          WINDOWS_CERT_PFX_BASE64: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+          WINDOWS_CERT_PFX_PASSWORD: ${{ secrets.WINDOWS_CERT_PFX_PASSWORD }}
+        run: bash tool/ci/sign_windows_exe.sh dist/orbits-windows-x64.exe
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: orbits-windows

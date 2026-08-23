@@ -58,8 +58,12 @@ default PeerJS / public STUN / GitHub update endpoints and bundled fonts
 
 ## Windows auto-update
 
-The in-app updater must not launch an installer unless Authenticode is valid
-and the publisher matches the Orbits pin. See `docs/windows-signing.md`.
+The in-app updater must not launch an installer unless Authenticode is
+Valid, Subject CN/O equal `Orbits` exactly, and the certificate SHA-256
+is in `kOrbitsAuthenticodeSha256Thumbprints`. That list is empty until a
+code-signing cert is provisioned — the updater then refuses every EXE.
+See `docs/windows-signing.md`. CI calls `signtool sign` when
+`WINDOWS_CERT_PFX_BASE64` is set; `v*` tags without that secret fail.
 
 ## Android release signing
 
