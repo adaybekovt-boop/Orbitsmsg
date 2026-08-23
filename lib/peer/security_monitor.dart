@@ -1,9 +1,9 @@
 // Fraud / abuse detector for room connections (Phase 5 — security).
 //
 // Pure in-memory logic (no I/O) so it stays deterministic and unit-testable.
-// The RoomManager feeds it the IP it reads from each peer's ICE candidates and
-// the timestamp of every inbound room message; the UI reads [findings] to show
-// the red warning banner and [isBlocked] to hide a spamming peer's messages.
+// RoomManager feeds [recordMessage] for inbound flood control. [recordConnection]
+// (ICE IP collision / hop) is **not** wired to RTCPeerConnection.getStats —
+// do not read this file as proof that sybil/IP-hop detection is live.
 //
 // Three signals:
 //   • IP collision (sybil / cloning) — two or more DISTINCT peerIds connect
