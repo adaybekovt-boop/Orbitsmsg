@@ -92,7 +92,7 @@ class SettingsPage extends ConsumerWidget {
           _ActionRow(
             icon: Icons.notifications,
             title: 'Уведомления',
-            subtitle: 'Звуки и вибрация',
+            subtitle: 'Пока недоступны',
             onTap: () => _push(context, const NotificationsPage()),
           ),
           _ActionRow(
