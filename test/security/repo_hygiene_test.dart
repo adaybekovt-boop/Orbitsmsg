@@ -97,8 +97,12 @@ void main() {
       for (final rel in paths) {
         final f = file(rel);
         if (!f.existsSync()) continue;
-        // Skip docs/config that mention the path as a forbidden example.
-        if (rel == '.gitignore' || rel.endsWith('.md')) continue;
+        // Skip docs/config/this test, which mention the path as a forbidden example.
+        if (rel == '.gitignore' ||
+            rel.endsWith('.md') ||
+            rel.endsWith('repo_hygiene_test.dart')) {
+          continue;
+        }
         if (rel.endsWith('.png') ||
             rel.endsWith('.ico') ||
             rel.endsWith('.wasm') ||
@@ -109,7 +113,10 @@ void main() {
         // Cheap ASCII scan; skip obviously-binary files.
         if (bytes.length > 2 * 1024 * 1024) continue;
         final text = String.fromCharCodes(bytes);
-        if (text.contains(r'C:\Users\') || text.contains('C:/Users/')) {
+        // Build needles at runtime so this test file does not contain them.
+        final winNeedle = ['C:', r'\Users', r'\'].join();
+        final posixNeedle = ['C:', '/Users/'].join();
+        if (text.contains(winNeedle) || text.contains(posixNeedle)) {
           hits.add(rel);
         }
       }
