@@ -284,7 +284,8 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
           const OrbsSectionTitle('Технические детали'),
           const _CryptoRow(
             title: 'AES-256-GCM',
-            subtitle: 'Все сообщения зашифрованы, ключи неэкспортируемые',
+            subtitle:
+                'Личные чаты — Double Ratchet. Ключи неэкспортируемые',
           ),
           const _CryptoRow(
             title: 'PBKDF2 + scrypt',
@@ -292,7 +293,12 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
           ),
           const _CryptoRow(
             title: 'X3DH + Double Ratchet',
-            subtitle: 'Сессионные ключи на каждое сообщение',
+            subtitle: 'Сессионные ключи на каждое сообщение в личном чате',
+          ),
+          const _CryptoRow(
+            title: 'Комнаты',
+            subtitle:
+                'Без сквозного шифрования: организатор видит текст и файлы',
           ),
           const SizedBox(height: 24),
         ],

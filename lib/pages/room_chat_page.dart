@@ -17,6 +17,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mime/mime.dart';
 
+import '../peer/room_disclaimer.dart';
 import '../peer/room_manager.dart';
 import '../peer/room_signaling_host.dart'
     show canHostSignalingServer, kServerHostDesktopOnlyMessage;
@@ -34,6 +35,7 @@ import '../ui/primitives/orbits_glass_button.dart';
 import '../ui/primitives/orbits_glass_app_bar.dart';
 import '../ui/primitives/orbits_glass_surface.dart';
 import '../ui/primitives/orbits_glass_switch.dart';
+import '../ui/room/room_not_e2e_banner.dart';
 import '../ui/room/spatial_audio_canvas.dart';
 import '../ui/room/voice_channel_panel.dart';
 
@@ -528,6 +530,7 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
           children: [
             if (showHeader && effectiveChannelId != null)
               _channelHeader(channelName),
+            const RoomNotE2eBanner(),
             Expanded(
               child: effectiveChannelId == null
                   ? Center(
@@ -646,6 +649,17 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
                 'приглашения.',
                 textAlign: TextAlign.center,
                 style: TextStyle(color: tokens.muted, fontFamily: tokens.fontBody),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                kRoomNotE2eBannerRu,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: tokens.muted,
+                  fontSize: 12.5,
+                  height: 1.35,
+                  fontFamily: tokens.fontBody,
+                ),
               ),
               const SizedBox(height: 20),
               OrbitsGlassButton(
@@ -1419,6 +1433,17 @@ class _CreateJoinSheetState extends State<_CreateJoinSheet> {
                   if (v.isEmpty) return;
                   Navigator.of(context).pop(_JoinOrCreate(false, v));
                 },
+              ),
+              const SizedBox(height: 14),
+              Text(
+                kRoomNotE2eBannerRu,
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  color: tokens.muted,
+                  fontSize: 12,
+                  height: 1.35,
+                  fontFamily: tokens.fontBody,
+                ),
               ),
             ],
           ),

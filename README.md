@@ -1,12 +1,16 @@
 # Orbits
 
-A private, peer-to-peer messenger with end-to-end encryption. Messages, calls,
-and files travel directly between devices — there's no central server storing
-your conversations.
+A private, peer-to-peer messenger. **1:1 chats** use X3DH + Double Ratchet
+end-to-end encryption. **Rooms are not end-to-end encrypted**: the host relays
+plaintext text, files, and stickers to every guest (DTLS protects only the hop
+to the host). There is no central server storing your conversations.
+
+See [docs/rooms.md](docs/rooms.md).
 
 ## Features
 
-- 🔒 End-to-end encryption (X3DH + Double Ratchet, forward secrecy)
+- 🔒 1:1 chats: X3DH + Double Ratchet (forward secrecy)
+- ⚠️ Rooms: host-relayed plaintext — the organizer can read every message
 - 📞 Voice & video calls, screen sharing
 - 🖼️ Images, files, voice messages, stickers
 - 🌗 Themes
