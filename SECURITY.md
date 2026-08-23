@@ -49,5 +49,10 @@ GitHub Releases used for updates) are in scope **only** insofar as the client
 trusts them unsafely. Compromising those services themselves should be
 reported to their operators.
 
+## Windows auto-update
+
+The in-app updater must not launch an installer unless Authenticode is valid
+and the publisher matches the Orbits pin. See `docs/windows-signing.md`.
+
 Please see future `docs/security.md` for the encryption map (what is E2E,
 what is not, and which metadata remains visible).

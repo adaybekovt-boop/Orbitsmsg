@@ -16,6 +16,8 @@ enum InstallLaunchStatus {
   unsupportedPlatform,
   fileMissing,
   invalidFile,
+  /// Authenticode missing, untrusted, or publisher pin mismatch (U-1).
+  signatureUntrusted,
   launchFailed,
   error,
 }

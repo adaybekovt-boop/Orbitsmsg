@@ -359,6 +359,10 @@ class UpdateNotifier extends StateNotifier<UpdateState> {
         return 'Файл скачался не полностью. Попробуйте ещё раз.';
       case DownloadStatus.invalidFile:
         return 'Скачанный файл повреждён. Попробуйте ещё раз.';
+      case DownloadStatus.tooLarge:
+        return 'Файл слишком большой. Скачайте обновление со страницы релиза.';
+      case DownloadStatus.timeout:
+        return 'Скачивание заняло слишком много времени. Попробуйте ещё раз.';
       case DownloadStatus.downloaded:
       case DownloadStatus.unsupportedPlatform:
       case DownloadStatus.error:
@@ -410,6 +414,12 @@ class UpdateNotifier extends StateNotifier<UpdateState> {
 
     if (result.status == InstallLaunchStatus.unsupportedPlatform) {
       state = state.copyWith(installStatus: InstallUiStatus.unsupported);
+    } else if (result.status == InstallLaunchStatus.signatureUntrusted) {
+      state = state.copyWith(
+        installStatus: InstallUiStatus.failed,
+        installError:
+            'Установщик не подписан издателем Orbits. Скачайте обновление со страницы релиза.',
+      );
     } else {
       state = state.copyWith(
         installStatus: InstallUiStatus.failed,
