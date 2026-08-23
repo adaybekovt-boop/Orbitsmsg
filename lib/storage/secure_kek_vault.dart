@@ -48,6 +48,21 @@ import 'package:local_auth/local_auth.dart';
 
 const String _kekStorageKey = 'orbits.vault.kek.v1';
 
+/// Android Keystore options for the vault KEK. Exposed so tests can assert
+/// the auth binding without a device. Round 2 D.4.
+///
+/// `AndroidOptions.biometric(enforceBiometrics: true)` maps to
+/// `setUserAuthenticationRequired(true)` on the Keystore key. The older
+/// comment that v10 had no biometric constructor was **wrong** for 10.3.1.
+AndroidOptions androidKekVaultOptions() => const AndroidOptions.biometric(
+      enforceBiometrics: true,
+      biometricType: AndroidBiometricType.strongBiometricOnly,
+      biometricPromptTitle: 'Orbits',
+      biometricPromptSubtitle:
+          'Подтвердите личность для доступа к ключам профиля',
+      biometricPromptNegativeButton: 'Отмена',
+    );
+
 /// Outcome of a [SecureKekVault.retrieveKek] call. The caller dispatches on
 /// this enum — `ok` is the only path that yields bytes, everything else
 /// means "drop to master-password entry".
@@ -143,8 +158,9 @@ class SecureKekVault {
     if (!isSupported) {
       return const KekRetrieveResult(status: KekRetrieveStatus.unsupported);
     }
-    // Biometric gate BEFORE touching the stored KEK. flutter_secure_storage
-    // v10 dropped its per-read prompt, so we enforce it here via local_auth.
+    // iOS: local_auth still gates the read (no accessControlFlags wired).
+    // Android: Keystore user-authentication on [androidKekVaultOptions]
+    // is the binding; a second local_auth sheet is not that binding.
     final gate = await _gateBiometric();
     if (gate != null) {
       return KekRetrieveResult(status: gate);
@@ -183,6 +199,9 @@ class SecureKekVault {
   /// this device → degrade gracefully to no gate), or a terminal
   /// [KekRetrieveStatus] the caller should return immediately.
   Future<KekRetrieveStatus?> _gateBiometric() async {
+    if (!kIsWeb && Platform.isAndroid) {
+      return null;
+    }
     final auth = LocalAuthentication();
     bool available;
     try {
@@ -253,29 +272,12 @@ class SecureKekVault {
 
   // ─── Platform option builders ────────────────────────────────────
 
-  // flutter_secure_storage 10.0.0-beta.4 ships a slimmed-down options
-  // surface compared to what the original draft of this file targeted:
-  //   • IOSOptions has no typed `accessControlFlags` list — the v10 API
-  //     exposes `accessControlSettings` as a raw String? that maps onto
-  //     SecAccessControlCreateFlags at the platform layer. There's no
-  //     enum helper yet, so we leave it null and rely on
-  //     `accessibility` alone for now.
-  //   • AndroidOptions has no `.biometric()` named constructor, no
-  //     `enforceBiometrics`, no `biometricPromptTitle/Subtitle`. The
-  //     biometric prompt API was deferred out of the v10 beta and isn't
-  //     reachable through Options.
-  //
-  // Net effect: data is still hardware-backed (iOS keychain + Android
-  // Keystore via EncryptedSharedPreferences), but the per-read biometric
-  // gate has to be reintroduced via `local_auth` once we wire it in. Tracked
-  // as a follow-up — for the web/desktop-first launch this code path
-  // returns `unsupported` early anyway (see [isSupported]).
   IOSOptions _iosOptions() => const IOSOptions(
         // Blocks iCloud backup + restore-to-another-device.
         accessibility: KeychainAccessibility.unlocked_this_device,
       );
 
-  AndroidOptions _androidOptions() => const AndroidOptions();
+  AndroidOptions _androidOptions() => androidKekVaultOptions();
 
   KekRetrieveResult _mapPlatformException(PlatformException e) {
     final msg = e.message ?? '';
