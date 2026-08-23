@@ -80,9 +80,10 @@ jobs:
   # those files. Icon generation still runs so the APK never ships the
   # stock Flutter logo.
   #
-  # Release signing still uses the debug keystore (GH-C01 / U-5) until
-  # Phase 1 lands a production upload key from CI secrets. The debug
-  # keystore is cached so the signature stays stable across runs.
+  # Release signing (GH-C01 / U-5): never the Android debug keystore.
+  # Tags and main decode secrets.ANDROID_UPLOAD_KEYSTORE_BASE64.
+  # PRs get a cached CI sideload key (CN=Orbits,OU=CI) so artifacts stay
+  # installable without being universally forgeable from an SDK debug key.
   # ────────────────────────────────────────────────────────────────────
   build-android:
     name: Build Android (APK)
@@ -109,24 +110,22 @@ jobs:
           channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
 
-      - name: Cache debug keystore
+      - name: Cache CI sideload upload keystore
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
-          path: ~/.android
-          key: android-debug-keystore-v1
+          path: |
+            ${{ runner.temp }}/orbits-keystore/orbits-ci-upload.keystore
+            ${{ runner.temp }}/orbits-keystore/orbits-ci-upload.keystore.pass
+          key: android-upload-keystore-ci-v1
 
-      - name: Ensure debug keystore exists
-        run: |
-          mkdir -p ~/.android
-          if [ ! -f ~/.android/debug.keystore ]; then
-            keytool -genkeypair -v \
-              -keystore ~/.android/debug.keystore \
-              -storetype PKCS12 \
-              -storepass android -keypass android \
-              -alias androiddebugkey \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=Android Debug,O=Android,C=US"
-          fi
+      - name: Prepare upload keystore (GH-C01 / U-5)
+        env:
+          ANDROID_UPLOAD_KEYSTORE_BASE64: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_BASE64 }}
+          ANDROID_UPLOAD_STORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_STORE_PASSWORD }}
+          ANDROID_UPLOAD_KEY_ALIAS: ${{ secrets.ANDROID_UPLOAD_KEY_ALIAS }}
+          ANDROID_UPLOAD_KEY_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEY_PASSWORD }}
+          ORBITS_KEYSTORE_DIR: ${{ runner.temp }}/orbits-keystore
+        run: bash tool/ci/prepare_upload_keystore.sh
 
       - name: flutter pub get
         run: flutter pub get
@@ -221,6 +220,17 @@ jobs:
           cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/orbits-android-arm32.apk    || true
           cp build/app/outputs/flutter-apk/app-x86_64-release.apk     dist/orbits-android-x86_64.apk    || true
           ls -lah dist/
+
+      - name: Verify APKs are not debug-signed (GH-C01 / U-5)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(dist/*.apk)
+          if [ ${#apks[@]} -eq 0 ]; then
+            echo "::error::no APKs in dist/ to verify"
+            exit 1
+          fi
+          bash tool/ci/verify_apk_not_debug_signed.sh "${apks[@]}"
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

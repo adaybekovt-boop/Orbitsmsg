@@ -64,6 +64,8 @@ test/.test_coverage.dart
 *.pem
 *.jks
 *.keystore
+*.keystore.pass
+*.p12
 key.properties
 
 # CI release staging output (artifacts are uploaded, never committed)

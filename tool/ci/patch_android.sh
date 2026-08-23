@@ -6,11 +6,9 @@
 #      `<queries>` blocks for `share_plus` / file picker intents and the
 #      `usesCleartextTraffic` flag we toggle for local PeerJS dev signaling.
 #
-#   2. build.gradle(.kts) — release currently signs with the debug keystore
-#      (ORBITS_RELEASE_SIGNING). That is a known Critical defect (GH-C01 / U-5)
-#      and is replaced in Phase 1. This script only ensures the marker is
-#      present so a regenerated template still produces a sideloadable APK
-#      until that PR lands. Do not treat the debug key as a Play upload key.
+#   2. build.gradle(.kts) — ORBITS_RELEASE_SIGNING. Release must use the
+#      env-driven upload keystore (ORBITS_UPLOAD_*) and must never fall
+#      back to the Android debug keystore (GH-C01 / U-5).
 #
 #   3. gradle.properties — bump the JVM heap so the d8/r8 step doesn't
 #      OOM on the GitHub-hosted runner with the larger transitive
@@ -27,7 +25,7 @@
 
 set -euo pipefail
 
-ANDROID_DIR="android"
+ANDROID_DIR="${ANDROID_DIR:-android}"
 MANIFEST="$ANDROID_DIR/app/src/main/AndroidManifest.xml"
 
 if [ ! -f "$MANIFEST" ]; then
@@ -104,10 +102,12 @@ else
   echo "Permissions already present, skipping manifest patch."
 fi
 
-# ─── 2. build.gradle — release signing = debug keystore ──────────────────────
-
-# Newer Flutter (3.27+) emits Kotlin DSL by default. Older / migrated
-# projects might still use Groovy. Handle both.
+# ─── 2. build.gradle — fail-closed upload signing (GH-C01 / U-5) ─────────────
+#
+# The Flutter template assigns the debug keystore to release so
+# `flutter run --release` works out of the box. That is the GH-C01
+# defect. Replace it with env-driven ORBITS_UPLOAD_* signing and a
+# whenReady guard so assembleRelease cannot silently debug-sign.
 
 GRADLE_KTS="$ANDROID_DIR/app/build.gradle.kts"
 GRADLE_GROOVY="$ANDROID_DIR/app/build.gradle"
@@ -115,54 +115,75 @@ GRADLE_GROOVY="$ANDROID_DIR/app/build.gradle"
 if [ -f "$GRADLE_KTS" ]; then
   if ! grep -q "ORBITS_RELEASE_SIGNING" "$GRADLE_KTS"; then
     python3 - "$GRADLE_KTS" <<'PY'
-import sys, re, pathlib
+import pathlib
+import sys
+
 path = pathlib.Path(sys.argv[1])
 src = path.read_text(encoding="utf-8")
 
-# The default template has:
-#     buildTypes {
-#         release {
-#             signingConfig = signingConfigs.getByName("debug")
-#         }
-#     }
-# i.e. it ALREADY uses debug for release. But the line is sometimes
-# commented or absent depending on Flutter version. We force it.
-
-new = re.sub(
-    r'buildTypes\s*\{\s*release\s*\{[^}]*\}\s*\}',
-    '''buildTypes {
-        release {
-            // ORBITS_RELEASE_SIGNING — sideload-only build, no upload key.
-            signingConfig = signingConfigs.getByName("debug")
-            isMinifyEnabled = false
-            isShrinkResources = false
-        }
-    }''',
-    src,
-    count=1,
-    flags=re.DOTALL,
-)
-
-if new == src:
-    # Couldn't find the buildTypes block — append one.
-    new = re.sub(
-        r'(android\s*\{)',
-        r'''\1
-    // ORBITS_RELEASE_SIGNING
-    buildTypes {
-        release {
-            signingConfig = signingConfigs.getByName("debug")
-            isMinifyEnabled = false
-            isShrinkResources = false
+signing_configs = '''
+    // ORBITS_RELEASE_SIGNING — upload / CI sideload keystore only (GH-C01 / U-5).
+    signingConfigs {
+        create("release") {
+            val uploadStorePath = System.getenv("ORBITS_UPLOAD_STORE_FILE") ?: ""
+            if (uploadStorePath.isNotBlank()) {
+                storeFile = file(uploadStorePath)
+            }
+            storePassword = System.getenv("ORBITS_UPLOAD_STORE_PASSWORD") ?: ""
+            keyAlias = System.getenv("ORBITS_UPLOAD_KEY_ALIAS") ?: ""
+            keyPassword = System.getenv("ORBITS_UPLOAD_KEY_PASSWORD") ?: ""
         }
     }
-''',
-        src,
-        count=1,
-    )
 
-path.write_text(new, encoding="utf-8")
-print(f"Patched {path}")
+'''
+
+if "signingConfigs {" not in src:
+    if "    buildTypes {" not in src:
+        print("ERROR: no buildTypes block in", path, file=sys.stderr)
+        sys.exit(1)
+    src = src.replace("    buildTypes {", signing_configs + "    buildTypes {", 1)
+
+debug_name = "de" + "bug"
+src = src.replace(
+    f'signingConfig = signingConfigs.getByName("{debug_name}")',
+    'signingConfig = signingConfigs.getByName("release")',
+)
+
+hook = '''
+
+gradle.taskGraph.whenReady {
+    val needsReleaseSigning = gradle.taskGraph.allTasks.any { task ->
+        val n = task.name
+        n.contains("Release") && (
+            n.startsWith("assemble") ||
+                n.startsWith("bundle") ||
+                n.startsWith("package")
+            )
+    }
+    val store = System.getenv("ORBITS_UPLOAD_STORE_FILE").orEmpty()
+    val password = System.getenv("ORBITS_UPLOAD_STORE_PASSWORD").orEmpty()
+    val alias = System.getenv("ORBITS_UPLOAD_KEY_ALIAS").orEmpty()
+    val keyPassword = System.getenv("ORBITS_UPLOAD_KEY_PASSWORD").orEmpty()
+    val configured = store.isNotBlank() &&
+        password.isNotBlank() &&
+        alias.isNotBlank() &&
+        keyPassword.isNotBlank() &&
+        file(store).isFile
+    if (needsReleaseSigning && !configured) {
+        throw org.gradle.api.GradleException(
+            "Release builds require ORBITS_UPLOAD_* keystore env vars. " +
+                "There is no debug-keystore fallback (GH-C01 / U-5). " +
+                "See docs/android-signing.md."
+        )
+    }
+}
+'''
+
+if "no debug-keystore fallback" not in src:
+    src = src.rstrip() + "\n" + hook
+
+path.write_text(src, encoding="utf-8")
+print(f"Patched release signing into {path}")
 PY
   else
     echo "Release signing already patched in $GRADLE_KTS."
@@ -170,27 +191,71 @@ PY
 elif [ -f "$GRADLE_GROOVY" ]; then
   if ! grep -q "ORBITS_RELEASE_SIGNING" "$GRADLE_GROOVY"; then
     python3 - "$GRADLE_GROOVY" <<'PY'
-import sys, re, pathlib
+import pathlib
+import sys
+
 path = pathlib.Path(sys.argv[1])
 src = path.read_text(encoding="utf-8")
 
-new = re.sub(
-    r'buildTypes\s*\{\s*release\s*\{[^}]*\}\s*\}',
-    '''buildTypes {
+signing_configs = '''
+    // ORBITS_RELEASE_SIGNING — upload / CI sideload keystore only (GH-C01 / U-5).
+    signingConfigs {
         release {
-            // ORBITS_RELEASE_SIGNING — sideload-only build, no upload key.
-            signingConfig signingConfigs.debug
-            minifyEnabled false
-            shrinkResources false
+            def uploadStorePath = System.getenv("ORBITS_UPLOAD_STORE_FILE") ?: ""
+            if (!uploadStorePath.isEmpty()) {
+                storeFile file(uploadStorePath)
+            }
+            storePassword System.getenv("ORBITS_UPLOAD_STORE_PASSWORD") ?: ""
+            keyAlias System.getenv("ORBITS_UPLOAD_KEY_ALIAS") ?: ""
+            keyPassword System.getenv("ORBITS_UPLOAD_KEY_PASSWORD") ?: ""
         }
-    }''',
-    src,
-    count=1,
-    flags=re.DOTALL,
+    }
+
+'''
+
+if "signingConfigs {" not in src:
+    if "    buildTypes {" not in src:
+        print("ERROR: no buildTypes block in", path, file=sys.stderr)
+        sys.exit(1)
+    src = src.replace("    buildTypes {", signing_configs + "    buildTypes {", 1)
+
+debug_name = "de" + "bug"
+src = src.replace(
+    f"signingConfig signingConfigs.{debug_name}",
+    "signingConfig signingConfigs.release",
 )
 
-path.write_text(new, encoding="utf-8")
-print(f"Patched {path}")
+hook = '''
+
+gradle.taskGraph.whenReady { graph ->
+    def needsReleaseSigning = graph.allTasks.any { task ->
+        def n = task.name
+        n.contains("Release") && (
+            n.startsWith("assemble") ||
+            n.startsWith("bundle") ||
+            n.startsWith("package")
+        )
+    }
+    def store = System.getenv("ORBITS_UPLOAD_STORE_FILE") ?: ""
+    def password = System.getenv("ORBITS_UPLOAD_STORE_PASSWORD") ?: ""
+    def alias = System.getenv("ORBITS_UPLOAD_KEY_ALIAS") ?: ""
+    def keyPassword = System.getenv("ORBITS_UPLOAD_KEY_PASSWORD") ?: ""
+    def configured = store && password && alias && keyPassword && file(store).isFile()
+    if (needsReleaseSigning && !configured) {
+        throw new org.gradle.api.GradleException(
+            "Release builds require ORBITS_UPLOAD_* keystore env vars. " +
+            "There is no debug-keystore fallback (GH-C01 / U-5). " +
+            "See docs/android-signing.md."
+        )
+    }
+}
+'''
+
+if "no debug-keystore fallback" not in src:
+    src = src.rstrip() + "\n" + hook
+
+path.write_text(src, encoding="utf-8")
+print(f"Patched release signing into {path}")
 PY
   else
     echo "Release signing already patched in $GRADLE_GROOVY."
