@@ -242,10 +242,10 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
             child: OrbitsGlassListTile(
               leading:
                   Icon(Icons.qr_code_scanner_rounded, color: tokens.text),
-              title: const Text('Войти на ПК'),
+              title: const Text('Связать с ПК'),
               subtitle: const Text(
-                'Отсканируйте QR-код на компьютере, чтобы войти в свой профиль '
-                'там. Вход подтверждается вашим личным ключом.',
+                'Подписать одноразовый QR-токен ключом телефона. Это не вход '
+                'в профиль и не копирование сейфа на компьютер.',
               ),
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const QrScanPage()),
@@ -256,10 +256,10 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: OrbitsGlassListTile(
               leading: Icon(Icons.qr_code_2_rounded, color: tokens.text),
-              title: const Text('Показать QR для входа'),
+              title: const Text('Показать QR для связки'),
               subtitle: const Text(
-                'Покажите этот код, чтобы войти с компьютера, отсканировав '
-                'его телефоном.',
+                'Одноразовый токен. Подпись телефона не открывает сейф и не '
+                'копирует профиль на этот компьютер.',
               ),
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const QrPairingPage()),
