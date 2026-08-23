@@ -4,6 +4,7 @@
 //
 // Runs against the committed web/index.html (flutter test cwd = package root).
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -33,5 +34,11 @@ void main() {
     expect(html.contains('Доступ с мобильных устройств запрещён'), isFalse);
     expect(html.contains('откройте'), isFalse,
         reason: 'the "open from a computer" block copy is back');
+  });
+
+  test('PWA manifest does not lock orientation (mobile web is allowed)', () {
+    final raw = File('web/manifest.json').readAsStringSync();
+    final json = jsonDecode(raw) as Map<String, Object?>;
+    expect(json['orientation'], 'any');
   });
 }
