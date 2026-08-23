@@ -192,14 +192,11 @@ jobs:
       - name: Generate code (drift / build_runner)
         run: dart run build_runner build --delete-conflicting-outputs
 
-      # TURN/PeerJS config from repo secrets + variables. All empty-safe:
-      # an unset secret/var becomes "" → the app reads it as null (see
-      # peer_connection_provider.dart) and falls back to public PeerJS + STUN.
-      - name: Compose --dart-define flags (TURN / PeerJS)
+      # TURN URL (not a secret) + PeerJS config. Username/credential are
+      # loaded at runtime — never baked via --dart-define into the APK.
+      - name: Compose --dart-define flags (TURN URL / PeerJS)
         env:
           TURN_URL: ${{ secrets.TURN_URL }}
-          TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
-          TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
           RELAY_ONLY: ${{ vars.RELAY_ONLY }}
           PEER_SERVER: ${{ vars.PEER_SERVER }}
           PEER_HOST: ${{ vars.PEER_HOST }}
@@ -207,7 +204,7 @@ jobs:
           PEER_PORT: ${{ vars.PEER_PORT }}
           PEER_SECURE: ${{ vars.PEER_SECURE }}
         run: |
-          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=TURN_USERNAME=${TURN_USERNAME} --dart-define=TURN_CREDENTIAL=${TURN_CREDENTIAL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
+          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
 
       - name: flutter build apk (split per ABI)
         run: flutter build apk --release --split-per-abi $DART_DEFINES
@@ -290,11 +287,9 @@ jobs:
       #     Flutter team's own `flutter_tools/build/web` example uses.
       #
       #   • Pages (/tkmessenger/) — built directly, no rewriting needed.
-      - name: Compose --dart-define flags (TURN / PeerJS)
+      - name: Compose --dart-define flags (TURN URL / PeerJS)
         env:
           TURN_URL: ${{ secrets.TURN_URL }}
-          TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
-          TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
           RELAY_ONLY: ${{ vars.RELAY_ONLY }}
           PEER_SERVER: ${{ vars.PEER_SERVER }}
           PEER_HOST: ${{ vars.PEER_HOST }}
@@ -302,7 +297,7 @@ jobs:
           PEER_PORT: ${{ vars.PEER_PORT }}
           PEER_SECURE: ${{ vars.PEER_SECURE }}
         run: |
-          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=TURN_USERNAME=${TURN_USERNAME} --dart-define=TURN_CREDENTIAL=${TURN_CREDENTIAL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
+          echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
 
       - name: flutter build web (relative base-href)
         run: |
@@ -424,8 +419,6 @@ jobs:
       - name: flutter build windows (release)
         env:
           TURN_URL: ${{ secrets.TURN_URL }}
-          TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
-          TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
           RELAY_ONLY: ${{ vars.RELAY_ONLY }}
           PEER_SERVER: ${{ vars.PEER_SERVER }}
           PEER_HOST: ${{ vars.PEER_HOST }}
@@ -435,10 +428,9 @@ jobs:
         shell: pwsh
         run: |
           # Empty env → empty --dart-define value → app reads null (public PeerJS).
+          # TURN username/credential are runtime-only — never baked into the EXE.
           $defines = @(
             "--dart-define=TURN_URL=$env:TURN_URL",
-            "--dart-define=TURN_USERNAME=$env:TURN_USERNAME",
-            "--dart-define=TURN_CREDENTIAL=$env:TURN_CREDENTIAL",
             "--dart-define=RELAY_ONLY=$(if ($env:RELAY_ONLY) { $env:RELAY_ONLY } else { 'false' })",
             "--dart-define=PEER_SERVER=$env:PEER_SERVER",
             "--dart-define=PEER_HOST=$env:PEER_HOST",

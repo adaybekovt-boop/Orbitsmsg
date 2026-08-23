@@ -24,8 +24,11 @@ while unlocked (`lib/core/vault_kek.dart`). It is never written to disk.
 | Path | Protection |
 |------|------------|
 | 1:1 chat (X3DH + Double Ratchet) | E2E between the two devices. |
-| Rooms / group chat | **Not** the same E2E as 1:1. Do not assume room messages are pairwise-encrypted until Phase 2 lands a real group protocol (or the UI stops claiming that). |
-| Voice/video calls | WebRTC DTLS-SRTP to the peer. Signalling is a separate trust problem (Phase 3). |
+| Rooms / group chat | **Not** E2E. The room host sees member messages in plaintext. See `docs/rooms.md`. |
+| File transfer (Drop) | Raw DataChannel frames, only after a **verified** wire handshake. Size / concurrency caps apply. |
+| Voice/video calls | WebRTC DTLS-SRTP to the peer. ICE may use STUN/TURN. |
+| TURN credentials | Username/credential are loaded at runtime (`orbits_turn_username` / `orbits_turn_credential`). CI does **not** pass them as `--dart-define`. `TURN_URL` may still be compile-time (it is not a secret). |
+| UPnP IGD mapping | HTTP(S) to RFC1918 IPv4 only; no redirects. Hostile SSDP `LOCATION` / `controlURL` is ignored. |
 | Windows auto-update | GitHub TLS plus **pinned Authenticode** before launch (`docs/windows-signing.md`). |
 | Android release APK | Upload / CI sideload keystore, never the SDK debug key (`docs/android-signing.md`). |
 

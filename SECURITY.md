@@ -51,7 +51,8 @@ reported to their operators.
 
 Please see [`docs/rooms.md`](docs/rooms.md) for room (group) crypto: rooms are
 **not** end-to-end encrypted. See [`docs/security.md`](docs/security.md) for
-the 1:1 / at-rest encryption map.
+the 1:1 / at-rest encryption map, Drop-before-Wire, UPnP SSRF limits, and
+runtime TURN credentials.
 
 ## Windows auto-update
 

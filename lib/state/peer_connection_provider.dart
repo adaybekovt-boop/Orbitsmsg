@@ -24,6 +24,7 @@ import '../peer/connectivity_watch_stub.dart'
 import '../peer/peer_connection_manager.dart';
 import '../peer/peerjs_client.dart';
 import '../peer/signaling.dart';
+import '../peer/turn_runtime.dart';
 import 'auth_notifier.dart';
 
 /// Snapshot of the peer subsystem. Mirrors the flat-ish object the JS
@@ -134,9 +135,16 @@ class PeerConnectionNotifier extends StateNotifier<PeerConnectionState> {
     if (existing != null && existing.desiredPeerId == peerId) return;
     if (existing != null) await _teardown();
 
+    var resolvedEnv = env;
+    try {
+      resolvedEnv = applyTurnRuntime(env, await loadTurnRuntimeCreds());
+    } catch (_) {
+      // Prefs unavailable — keep compile-time env (secrets already stripped).
+    }
+
     final manager = PeerConnectionManager(
       desiredPeerId: peerId,
-      env: env,
+      env: resolvedEnv,
       cb: PeerManagerCallbacks(
         setStatus: (s) {
           if (!_disposed) state = state.copyWith(status: s);
@@ -246,7 +254,9 @@ class _ResumeObserver extends WidgetsBindingObserver {
 
 /// Env knobs come from `--dart-define` at build time. All fields are
 /// optional — the manager falls back to public PeerJS hosts if nothing is
-/// provided. Overriding only the TURN credentials is a common prod setup.
+/// provided. TURN *URL* may be compile-time; TURN username/credential are
+/// ignored unless `ALLOW_COMPILE_TIME_TURN_SECRETS` is true, then merged
+/// with SharedPreferences at [PeerConnectionNotifier.start].
 ///
 /// We avoid `bool.hasEnvironment` entirely: DDC (the web dev compiler) only
 /// tolerates it inside a const expression, and wrapping these in a ternary
@@ -264,6 +274,8 @@ const _peerSecureRaw = bool.fromEnvironment('PEER_SECURE');
 const _turnUrlRaw = String.fromEnvironment('TURN_URL');
 const _turnUserRaw = String.fromEnvironment('TURN_USERNAME');
 const _turnCredRaw = String.fromEnvironment('TURN_CREDENTIAL');
+const _allowCompileTimeTurnSecrets =
+    bool.fromEnvironment('ALLOW_COMPILE_TIME_TURN_SECRETS');
 
 final _env = PeerEnv(
   peerServer: _envString(_peerServerRaw),
@@ -274,8 +286,14 @@ final _env = PeerEnv(
   // force it off pass `--dart-define=PEER_SECURE_SET=true --dart-define=PEER_SECURE=false`.
   peerSecure: _peerSecureSet ? _peerSecureRaw : null,
   turnUrl: _envString(_turnUrlRaw),
-  turnUsername: _envString(_turnUserRaw),
-  turnCredential: _envString(_turnCredRaw),
+  turnUsername: compileTimeTurnSecret(
+    _turnUserRaw,
+    allowCompileTimeSecrets: _allowCompileTimeTurnSecrets,
+  ),
+  turnCredential: compileTimeTurnSecret(
+    _turnCredRaw,
+    allowCompileTimeSecrets: _allowCompileTimeTurnSecrets,
+  ),
   relayOnly: const bool.fromEnvironment('RELAY_ONLY', defaultValue: false),
 );
 
