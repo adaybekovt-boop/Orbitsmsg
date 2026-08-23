@@ -91,7 +91,7 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
 
-    expect(find.text('QR не похож на контакт TK Messenger'), findsOneWidget);
+    expect(find.text('QR не похож на контакт Orbits'), findsOneWidget);
     expect(await db.getAllPeers(), isEmpty);
   });
 

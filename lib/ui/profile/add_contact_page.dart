@@ -88,7 +88,7 @@ class _AddContactPageState extends ConsumerState<AddContactPage>
   Future<bool> _accept(String raw) async {
     final pid = parseContactQrPayload(raw);
     if (pid == null) {
-      _toast('QR не похож на контакт TK Messenger');
+      _toast('QR не похож на контакт Orbits');
       return false;
     }
     final selfId = normalizePeerId(ref.read(currentPeerIdProvider) ?? '');
