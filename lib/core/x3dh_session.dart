@@ -148,7 +148,7 @@ Future<ResponderBootstrap> deriveResponderBootstrap({
 
   EcKeyPair? opkPriv;
   if (opkId != null && opkId.isNotEmpty) {
-    final opk = await consumeOPK(opkId);
+    final opk = await peekFreshOPK(opkId);
     if (opk == null) {
       return ResponderBootstrap(
         ok: false,
@@ -159,12 +159,28 @@ Future<ResponderBootstrap> deriveResponderBootstrap({
   }
 
   final myIdentity = await identity_key.getOrCreateX3DHIdentity();
-  final result = await responderX3DH(
-    spkBPriv: spk.privateKey,
-    ikBPriv: myIdentity.keyPair,
-    opkBPriv: opkPriv,
-    ikASpki: senderX3dhIkSpki,
-    ekASpki: ekSpki,
-  );
+  final X3dhResult result;
+  try {
+    result = await responderX3DH(
+      spkBPriv: spk.privateKey,
+      ikBPriv: myIdentity.keyPair,
+      opkBPriv: opkPriv,
+      ikASpki: senderX3dhIkSpki,
+      ekASpki: ekSpki,
+    );
+  } catch (_) {
+    return const ResponderBootstrap(ok: false, reason: 'x3dh: dh failed');
+  }
+
+  // Consume only after the DHs succeed. A bad EK / binding must not burn OPKs.
+  if (opkId != null && opkId.isNotEmpty) {
+    final marked = await consumeOPK(opkId);
+    if (marked == null) {
+      return ResponderBootstrap(
+        ok: false,
+        reason: 'x3dh: opk consumed concurrently $opkId',
+      );
+    }
+  }
   return ResponderBootstrap(ok: true, sk: result.sk);
 }
