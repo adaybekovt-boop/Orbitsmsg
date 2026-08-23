@@ -80,7 +80,7 @@ dependencies:
   # from filename when the picker doesn't give one. `image` resizes
   # full-res photos down to the ≤48 KiB JPEG thumbnail.
   just_audio: ^0.9.42
-  file_picker: ^8.1.4
+  file_picker: ^11.0.3
   mime: ^2.0.0
   image: ^4.3.0
 
