@@ -7,9 +7,10 @@
 //      and sends a `qr_auth_response` { peerId, pubSpki, sig } back to the PC
 //      over the reliable WebRTC channel.
 //   3. The PC verifies the signature against the supplied public key over the
-//      token IT issued. A valid signature proves the phone holds the private
-//      key (authenticity) AND scanned THIS PC's live QR (freshness / anti-MITM),
-//      so the PC adopts the phone's profile.
+//      token IT issued. A valid signature proves the phone holds that
+//      identity key and saw this one-time token. It does NOT unlock the
+//      PC vault, copy the profile, or prove the DataChannel peer is the
+//      same device that displayed the QR (PeerJS id + signalling MITM).
 //
 // This module is the pure protocol core (token gen, URI build/parse, response
 // build + verify). The transport + UI live in qr_pairing_page.dart. Signing /

@@ -86,7 +86,7 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
     }
     final vp = validatePassword(_passwordCtrl.text);
     if (!vp.ok) {
-      setState(() => _error = 'Пароль: минимум 8 символов');
+      setState(() => _error = passwordPolicyHint());
       return false;
     }
     final vc = validatePasswordConfirm(_passwordCtrl.text, _confirmCtrl.text);
@@ -501,7 +501,7 @@ class _StepCreds extends StatelessWidget {
                 _FormField(
                   controller: passwordCtrl,
                   label: 'Пароль',
-                  hint: 'Минимум 8 символов',
+                  hint: 'Минимум 12 символов, буквы и цифры или символ',
                   obscure: !showPass,
                   suffix: IconButton(
                     icon: Icon(showPass

@@ -1,10 +1,9 @@
-// QR pairing (Phase 5) — "log in to the PC from your phone", WhatsApp-style.
+// QR device linking — phone signs a one-time token shown on the PC.
 //
-//   • [QrPairingPage]  (PC/desktop): generates a one-time session token, shows
-//     the `orbits_pairing:<pcPeerId>:<token>` QR, and waits for the phone to
-//     send back a signed `qr_auth_response`. A valid signature → authorised.
-//   • [QrScanPage]     (phone): scans the QR (mobile_scanner), signs the token
-//     with the local identity key, and sends the response to the PC.
+//   • [QrPairingPage]  (PC): shows `orbits_pairing:<pcPeerId>:<token>` and
+//     waits for a signed `qr_auth_response`. A valid signature proves the
+//     phone holds that identity key. It does not unlock the PC vault.
+//   • [QrScanPage]     (phone): scans the QR, signs the token, sends it.
 //
 // The cryptographic core is in `core/qr_pairing.dart`; the reliable transport
 // reuses RoomManager's plaintext channel (sendQrAuthResponse / qr listener).
@@ -82,7 +81,7 @@ class _QrPairingPageState extends ConsumerState<QrPairingPage> {
       appBar: OrbitsGlassAppBar(
         iconTheme: IconThemeData(color: tokens.text),
         title: Text(
-          'Вход по QR-коду',
+          'QR-связка устройств',
           style: TextStyle(
             fontFamily: tokens.fontHeading,
             fontWeight: FontWeight.w600,
@@ -125,8 +124,9 @@ class _QrPairingPageState extends ConsumerState<QrPairingPage> {
             ),
             const SizedBox(height: 6),
             Text(
-              'Откройте Orbits на телефоне → «Войти на ПК» и наведите камеру '
-              'на этот код. Вход подтверждается вашим личным ключом.',
+              'Откройте Orbits на телефоне → «Связать с ПК» и наведите камеру '
+              'на этот код. Телефон подпишет одноразовый токен своим ключом — '
+              'это не вход в профиль и не разблокировка сейфа на компьютере.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontFamily: tokens.fontBody,
@@ -220,7 +220,7 @@ class _QrPairingPageState extends ConsumerState<QrPairingPage> {
             Icon(Icons.verified_user_rounded, size: 56, color: tokens.success),
             const SizedBox(height: 16),
             Text(
-              'Сессия авторизована',
+              'Подпись телефона принята',
               style: TextStyle(
                 fontFamily: tokens.fontHeading,
                 fontSize: 20,
@@ -231,9 +231,10 @@ class _QrPairingPageState extends ConsumerState<QrPairingPage> {
             const SizedBox(height: 8),
             Text(
               _pairedPeerId == null
-                  ? 'Вход подтверждён.'
-                  : 'Вход подтверждён устройством •'
-                      '${_pairedPeerId!.length >= 4 ? _pairedPeerId!.substring(_pairedPeerId!.length - 4) : _pairedPeerId}.',
+                  ? 'Ключ телефона проверен. Сейф компьютера не открывался.'
+                  : 'Проверен ключ •'
+                      '${_pairedPeerId!.length >= 4 ? _pairedPeerId!.substring(_pairedPeerId!.length - 4) : _pairedPeerId}. '
+                      'Это не вход в профиль на этом ПК.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontFamily: tokens.fontBody,
@@ -319,7 +320,7 @@ class _QrScanPageState extends ConsumerState<QrScanPage> {
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         iconTheme: const IconThemeData(color: Colors.white),
-        title: const Text('Войти на ПК', style: TextStyle(color: Colors.white)),
+        title: const Text('Связать с ПК', style: TextStyle(color: Colors.white)),
       ),
       extendBodyBehindAppBar: true,
       body: Stack(

@@ -46,12 +46,24 @@ int passwordStrength(String? password) {
   return score;
 }
 
+/// New-account password policy: 12+ characters and at least two of
+/// lower / upper / digit / special. Unlock of existing profiles does not
+/// go through this — only onboarding / change-password.
 ValidationResult validatePassword(String? password) {
   final p = password ?? '';
   if (p.isEmpty) return const ValidationResult.fail('required');
-  if (p.length < 8) return const ValidationResult.fail('min_len');
+  if (p.length < 12) return const ValidationResult.fail('min_len');
+  var classes = 0;
+  if (_hasLower.hasMatch(p)) classes++;
+  if (_hasUpper.hasMatch(p)) classes++;
+  if (_hasDigit.hasMatch(p)) classes++;
+  if (_hasSpecial.hasMatch(p)) classes++;
+  if (classes < 2) return const ValidationResult.fail('weak');
   return ValidationResult.pass(p);
 }
+
+String passwordPolicyHint() =>
+    'Пароль: минимум 12 символов и два типа знаков (буквы, цифры, символы)';
 
 ValidationResult validatePasswordConfirm(String? password, String? confirm) {
   if ((password ?? '') != (confirm ?? '')) {

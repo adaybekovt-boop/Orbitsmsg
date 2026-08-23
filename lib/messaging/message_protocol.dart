@@ -37,6 +37,7 @@ import '../core/wire_crypto.dart';
 import '../peer/helpers.dart';
 import '../storage/db.dart' as db;
 import '../utils/common.dart';
+import 'message_auth.dart';
 
 // ─── Type aliases ─────────────────────────────────────────────────
 
@@ -242,7 +243,7 @@ Future<bool> dispatchReliableInbound(
       return false;
     }
     if (plaintext is! Map) return false;
-    return dispatchReliablePlaintext(
+    return await dispatchReliablePlaintext(
       Map<String, Object?>.from(plaintext),
       connSend,
       remoteId,
@@ -260,12 +261,12 @@ Future<bool> dispatchReliableInbound(
 /// Dispatch a decrypted application-level object. This only runs on
 /// trusted input that's already been authenticated by the Double Ratchet
 /// (or plaintext control frames for handshake/rekey).
-bool dispatchReliablePlaintext(
+Future<bool> dispatchReliablePlaintext(
   JsonMap data,
   ConnSend connSend,
   String remoteId,
   ReliableInboundCtx ctx,
-) {
+) async {
   void sendReply(JsonMap msg) {
     try {
       ctx.sendEncrypted(msg);
@@ -385,6 +386,8 @@ bool dispatchReliablePlaintext(
   if (type == 'ack') {
     final ackId = data['id'];
     if (ackId is! String || ackId.isEmpty) return true;
+    final row = await db.getMessageById(ackId);
+    if (!remoteCanAckOutbound(remoteId, row)) return true;
     ctx.updateMessage(remoteId, ackId, <String, Object?>{
       'delivery': 'delivered',
     });
@@ -404,6 +407,8 @@ bool dispatchReliablePlaintext(
   if (type == 'edit') {
     final id = data['id'];
     if (id is! String || id.isEmpty) return true;
+    final existing = await db.getMessageById(id);
+    if (!remoteOwnsInboundMessage(remoteId, existing)) return true;
     final newText = data['text'] is String ? data['text'] as String : '';
     final editedAt = (data['editedAt'] is num)
         ? (data['editedAt'] as num).toInt()
@@ -435,6 +440,8 @@ bool dispatchReliablePlaintext(
   if (type == 'delete') {
     final id = data['id'];
     if (id is! String || id.isEmpty) return true;
+    final existing = await db.getMessageById(id);
+    if (!remoteOwnsInboundMessage(remoteId, existing)) return true;
     final forEveryone = data['forEveryone'] == true;
     if (forEveryone) {
       ctx.setMessagesByPeer((prev) {

@@ -6,27 +6,29 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/scrypt_kdf.dart';
 
 void main() {
-  // Low N keeps CI fast; deriveScryptRecord clamps N to >= 8192.
-  const fast = ScryptParams(n: 8192);
+  // Low N keeps CI fast; deriveScryptRecord clamps N to >= scryptMinN.
+  const fast = ScryptParams(n: scryptMinN);
 
-  test('derive then verify succeeds for the right password (via Isolate.run)',
-      () async {
-    final rec = await deriveScryptRecord(
-      username: 'alice',
-      password: 'correct horse battery staple',
-      params: fast,
-    );
-    expect(rec.dkBytes.length, greaterThanOrEqualTo(32));
+  test(
+    'derive then verify succeeds for the right password (via Isolate.run)',
+    () async {
+      final rec = await deriveScryptRecord(
+        username: 'alice',
+        password: 'correct horse battery staple',
+        params: fast,
+      );
+      expect(rec.dkBytes.length, greaterThanOrEqualTo(32));
 
-    final stored = ScryptStoredRecord.fromJson(rec.toJson())!;
-    final ok = await verifyScryptRecordEx(
-      username: 'alice',
-      password: 'correct horse battery staple',
-      record: stored,
-    );
-    expect(ok.ok, isTrue);
-    expect(ok.dkBytes, equals(rec.dkBytes));
-  });
+      final stored = ScryptStoredRecord.fromJson(rec.toJson())!;
+      final ok = await verifyScryptRecordEx(
+        username: 'alice',
+        password: 'correct horse battery staple',
+        record: stored,
+      );
+      expect(ok.ok, isTrue);
+      expect(ok.dkBytes, equals(rec.dkBytes));
+    },
+  );
 
   test('verify rejects the wrong password', () async {
     final rec = await deriveScryptRecord(
@@ -42,5 +44,27 @@ void main() {
     );
     expect(bad.ok, isFalse);
     expect(bad.dkBytes, isNull);
+  });
+
+  test('verify rejects records below scryptMinN', () async {
+    final rec = await deriveScryptRecord(
+      username: 'alice',
+      password: 'right-password',
+      params: fast,
+    );
+    final stored = ScryptStoredRecord(
+      saltB64: rec.toJson()['saltB64'] as String,
+      n: 4096,
+      r: rec.toJson()['r'] as int,
+      p: rec.toJson()['p'] as int,
+      dkLen: rec.toJson()['dkLen'] as int,
+      verifierB64: rec.toJson()['verifierB64'] as String?,
+    );
+    final bad = await verifyScryptRecordEx(
+      username: 'alice',
+      password: 'right-password',
+      record: stored,
+    );
+    expect(bad.ok, isFalse);
   });
 }

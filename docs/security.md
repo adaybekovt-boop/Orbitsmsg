@@ -43,3 +43,21 @@ Anyone with the SQLite file and no KEK can still see:
 They cannot read message text, voice PCM, file bytes, or avatars written after
 this fail-closed change, unless they also have the password (or a captured
 unlocked process).
+
+## Integrity notes (Phase 4)
+
+- Inbound `ack` / `edit` / `delete` apply only when the stored row belongs to
+  that conversation and the right direction (you cannot ACK or rewrite someone
+  else's message).
+- X3DH one-time prekeys are consumed only after the DHs succeed.
+- `bootstrapSk` is one-shot and is cleared on reconnect / rekey.
+- Biometric auto-unlock fails closed if the sensor is missing or unenrolled
+  (password path). The stored KEK is not returned without a prompt.
+- Drop file names are sanitized (no path segments).
+- New passwords: 12+ characters and at least two character classes.
+- scrypt records with N below 2^14 or a non-power-of-two N are rejected.
+- QR device linking proves the phone signed a one-time token. It does **not**
+  unlock the PC vault or copy the profile.
+- Native / background notifications are still not implemented (`docs` + settings
+  page already say so).
+- Chat attachments are still fully buffered in memory (not streamed).

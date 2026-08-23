@@ -673,6 +673,9 @@ Future<AcceptHelloResult> acceptHello({
   final helloType = hello['type'];
   if (session.state != null && (helloType == 'wireRekey' || session.ready)) {
     session.state = null;
+    // Stale X3DH seed must not survive a reconnect / rekey — otherwise both
+    // sides keep the old root while believing they rotated DH keys.
+    session.bootstrapSk = null;
     _resetPendingReady(session);
   }
 
@@ -701,6 +704,9 @@ Future<AcceptHelloResult> acceptHello({
         myPeerId: myPeerId,
         peerId: peerId,
       );
+  // One-shot: the seed is now in the ratchet. Reuse on the next hello
+  // would skip a fresh DH and break rekey.
+  session.bootstrapSk = null;
 
   // Invariant guard (C1): a v3+ handshake must have set `verified` before we
   // expose the session for traffic. v3+ verification throws on failure above,

@@ -300,6 +300,16 @@ Future<List<OneTimePrekey>> listFreshOPKs([int n = 20]) async {
   return out;
 }
 
+/// Load a fresh OPK **without** marking it used. The responder must run
+/// X3DH (and any other hello checks) first; [consumeOPK] runs only after
+/// that succeeds so a failed handshake cannot burn the pool.
+Future<OneTimePrekeyRecord?> peekFreshOPK(String id) async {
+  final row = await keyStore().get(_prekeysTable, id);
+  if (row == null || row['kind'] != 'opk') return null;
+  if ((row['used'] as num?)?.toInt() != 0) return null;
+  return _rowToOpk(row);
+}
+
 /// Fetch an OPK and mark it used in one step. Returns null if missing or
 /// already consumed — a second consume of the same id is a no-op so replays
 /// cannot force key reuse.
