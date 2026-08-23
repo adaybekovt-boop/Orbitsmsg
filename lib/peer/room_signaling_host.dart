@@ -15,8 +15,7 @@ import 'signaling.dart';
 // dart:io impls on desktop/mobile; no-op stubs on web.
 import 'embedded_signaling_server.dart'
     if (dart.library.html) 'embedded_signaling_server_stub.dart';
-import 'upnp_port_mapper.dart'
-    if (dart.library.html) 'upnp_port_mapper_stub.dart';
+import 'peer_server_core.dart';
 
 /// Whether this platform can run the embedded signaling server (i.e. *host* a
 /// room). Desktop only:
@@ -113,8 +112,6 @@ PeerJsClient buildRoomScopedClient({
 /// Owns the embedded server + optional UPnP mapping for one hosted session.
 class RoomSignalingHost {
   EmbeddedSignalingServer? _server;
-  UpnpPortMapper? _mapper;
-  UpnpMapping? _mapping;
 
   int get port => _server?.port ?? 0;
   bool get running => _server?.running ?? false;
@@ -127,7 +124,10 @@ class RoomSignalingHost {
     if (!canHostSignalingServer) {
       throw SelfHostException(SelfHostFailure.unsupported);
     }
-    final server = EmbeddedSignalingServer(key: key);
+    final roomKey = isForbiddenEmbeddedSignalingKey(key)
+        ? generateRoomSignalingKey()
+        : key;
+    final server = EmbeddedSignalingServer(key: roomKey);
     try {
       await server.start(host: '0.0.0.0', port: 0);
     } catch (e) {
@@ -155,7 +155,7 @@ class RoomSignalingHost {
       roomId: roomId,
       lanHosts: lan,
       port: server.port,
-      key: key == 'peerjs' ? null : key,
+      key: roomKey,
     );
   }
 
@@ -164,34 +164,13 @@ class RoomSignalingHost {
   /// or null when unavailable (router has no UPnP / it's disabled / timeout) —
   /// in which case the room stays LAN-only. Never throws.
   Future<String?> tryOpenInternet() async {
-    final server = _server;
-    if (server == null || !canHostSignalingServer) return null;
-    try {
-      final lan = await EmbeddedSignalingServer.localIpv4Addresses();
-      if (lan.isEmpty) return null;
-      final mapper = UpnpPortMapper();
-      final mapping = await mapper.mapPort(
-        internalPort: server.port,
-        internalHost: lan.first,
-      );
-      if (mapping == null) return null;
-      _mapper = mapper;
-      _mapping = mapping;
-      return mapping.publicHostPort;
-    } catch (_) {
-      return null;
-    }
+    // WAN UPnP disabled until signaling is WSS. Punching plaintext `ws`
+    // onto the public internet was the leftover from Round 1 3.3.
+    return null;
   }
 
-  /// Stop everything: remove the UPnP mapping (best-effort) and close the server.
+  /// Stop the embedded server.
   Future<void> stop() async {
-    final mapping = _mapping;
-    final mapper = _mapper;
-    if (mapping != null && mapper != null) {
-      await mapper.unmap(mapping);
-    }
-    _mapping = null;
-    _mapper = null;
     await _server?.stop();
     _server = null;
   }

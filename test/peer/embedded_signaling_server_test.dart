@@ -21,12 +21,12 @@ import 'package:orbits_flutter/peer/peer_server_core.dart';
 void main() {
   group('PeerServerCore (pure routing)', () {
     test('valid connect → OPEN and registration', () {
-      final core = PeerServerCore();
+      final core = PeerServerCore(key: 'orbits-test-room-key');
       final frames = <Map<String, Object?>>[];
       final reject = core.connect(
         id: 'A',
         token: 't1',
-        clientKey: 'peerjs',
+        clientKey: 'orbits-test-room-key',
         send: frames.add,
       );
       expect(reject, isNull);
@@ -50,13 +50,13 @@ void main() {
     });
 
     test('same id + different token → ID-TAKEN', () {
-      final core = PeerServerCore();
-      core.connect(id: 'A', token: 't1', clientKey: 'peerjs', send: (_) {});
+      final core = PeerServerCore(key: 'orbits-test-room-key');
+      core.connect(id: 'A', token: 't1', clientKey: 'orbits-test-room-key', send: (_) {});
       final frames = <Map<String, Object?>>[];
       final reject = core.connect(
         id: 'A',
         token: 't2',
-        clientKey: 'peerjs',
+        clientKey: 'orbits-test-room-key',
         send: frames.add,
       );
       expect(reject, PeerServerReject.idTaken);
@@ -64,13 +64,13 @@ void main() {
     });
 
     test('same id + same token → reconnect rebinds sink, stays one client', () {
-      final core = PeerServerCore();
-      core.connect(id: 'A', token: 't1', clientKey: 'peerjs', send: (_) {});
+      final core = PeerServerCore(key: 'orbits-test-room-key');
+      core.connect(id: 'A', token: 't1', clientKey: 'orbits-test-room-key', send: (_) {});
       final frames = <Map<String, Object?>>[];
       final reject = core.connect(
         id: 'A',
         token: 't1',
-        clientKey: 'peerjs',
+        clientKey: 'orbits-test-room-key',
         send: frames.add,
       );
       expect(reject, isNull);
@@ -79,10 +79,10 @@ void main() {
     });
 
     test('OFFER is relayed to dst with authenticated src stamped', () {
-      final core = PeerServerCore();
+      final core = PeerServerCore(key: 'orbits-test-room-key');
       final toB = <Map<String, Object?>>[];
-      core.connect(id: 'A', token: 'ta', clientKey: 'peerjs', send: (_) {});
-      core.connect(id: 'B', token: 'tb', clientKey: 'peerjs', send: toB.add);
+      core.connect(id: 'A', token: 'ta', clientKey: 'orbits-test-room-key', send: (_) {});
+      core.connect(id: 'B', token: 'tb', clientKey: 'orbits-test-room-key', send: toB.add);
       toB.clear(); // drop B's OPEN
 
       core.frame(fromId: 'A', frame: {
@@ -100,9 +100,9 @@ void main() {
     });
 
     test('frame to an offline dst → EXPIRE back to sender', () {
-      final core = PeerServerCore();
+      final core = PeerServerCore(key: 'orbits-test-room-key');
       final toA = <Map<String, Object?>>[];
-      core.connect(id: 'A', token: 'ta', clientKey: 'peerjs', send: toA.add);
+      core.connect(id: 'A', token: 'ta', clientKey: 'orbits-test-room-key', send: toA.add);
       toA.clear();
 
       core.frame(fromId: 'A', frame: {
@@ -117,41 +117,41 @@ void main() {
     });
 
     test('HEARTBEAT is echoed when echoHeartbeat=true', () {
-      final core = PeerServerCore(echoHeartbeat: true);
+      final core = PeerServerCore(key: 'orbits-test-room-key', echoHeartbeat: true);
       final toA = <Map<String, Object?>>[];
-      core.connect(id: 'A', token: 'ta', clientKey: 'peerjs', send: toA.add);
+      core.connect(id: 'A', token: 'ta', clientKey: 'orbits-test-room-key', send: toA.add);
       toA.clear();
       core.frame(fromId: 'A', frame: {'type': PeerServerFrame.heartbeat});
       expect(toA.single['type'], PeerServerFrame.heartbeat);
     });
 
     test('HEARTBEAT is swallowed when echoHeartbeat=false', () {
-      final core = PeerServerCore(echoHeartbeat: false);
+      final core = PeerServerCore(key: 'orbits-test-room-key', echoHeartbeat: false);
       final toA = <Map<String, Object?>>[];
-      core.connect(id: 'A', token: 'ta', clientKey: 'peerjs', send: toA.add);
+      core.connect(id: 'A', token: 'ta', clientKey: 'orbits-test-room-key', send: toA.add);
       toA.clear();
       core.frame(fromId: 'A', frame: {'type': PeerServerFrame.heartbeat});
       expect(toA, isEmpty);
     });
 
     test('disconnect with stale token does not evict a fresh reconnect', () {
-      final core = PeerServerCore();
-      core.connect(id: 'A', token: 'old', clientKey: 'peerjs', send: (_) {});
+      final core = PeerServerCore(key: 'orbits-test-room-key');
+      core.connect(id: 'A', token: 'old', clientKey: 'orbits-test-room-key', send: (_) {});
       core.disconnect('A', token: 'old'); // genuine close of the old session
       expect(core.has('A'), isFalse);
 
-      core.connect(id: 'A', token: 'new', clientKey: 'peerjs', send: (_) {});
+      core.connect(id: 'A', token: 'new', clientKey: 'orbits-test-room-key', send: (_) {});
       // A late close from the OLD socket arrives now — must be a no-op.
       core.disconnect('A', token: 'old');
       expect(core.has('A'), isTrue);
     });
 
     test('maxClients caps registrations', () {
-      final core = PeerServerCore(maxClients: 2);
-      expect(core.connect(id: 'A', token: 'a', clientKey: 'peerjs', send: (_) {}), isNull);
-      expect(core.connect(id: 'B', token: 'b', clientKey: 'peerjs', send: (_) {}), isNull);
+      final core = PeerServerCore(key: 'orbits-test-room-key', maxClients: 2);
+      expect(core.connect(id: 'A', token: 'a', clientKey: 'orbits-test-room-key', send: (_) {}), isNull);
+      expect(core.connect(id: 'B', token: 'b', clientKey: 'orbits-test-room-key', send: (_) {}), isNull);
       final frames = <Map<String, Object?>>[];
-      final reject = core.connect(id: 'C', token: 'c', clientKey: 'peerjs', send: frames.add);
+      final reject = core.connect(id: 'C', token: 'c', clientKey: 'orbits-test-room-key', send: frames.add);
       expect(reject, isNotNull);
       expect(core.has('C'), isFalse);
     });
@@ -161,7 +161,7 @@ void main() {
     late EmbeddedSignalingServer server;
 
     setUp(() async {
-      server = EmbeddedSignalingServer();
+      server = EmbeddedSignalingServer(key: 'orbits-test-room-key');
       await server.start(host: '127.0.0.1', port: 0);
     });
 
@@ -169,7 +169,7 @@ void main() {
       await server.stop();
     });
 
-    Uri wsUri(String id, String token, {String key = 'peerjs'}) => Uri(
+    Uri wsUri(String id, String token, {String key = 'orbits-test-room-key'}) => Uri(
           scheme: 'ws',
           host: '127.0.0.1',
           port: server.port,
