@@ -19,6 +19,7 @@ import 'package:mime/mime.dart';
 
 import '../peer/room_disclaimer.dart';
 import '../peer/room_manager.dart';
+import '../peer/room_plaintext_gate.dart';
 import '../peer/room_signaling_host.dart'
     show canHostSignalingServer, kServerHostDesktopOnlyMessage;
 import '../peer/security_monitor.dart';
@@ -35,6 +36,7 @@ import '../ui/primitives/orbits_glass_button.dart';
 import '../ui/primitives/orbits_glass_app_bar.dart';
 import '../ui/primitives/orbits_glass_surface.dart';
 import '../ui/primitives/orbits_glass_switch.dart';
+import '../ui/room/create_join_room_sheet.dart';
 import '../ui/room/room_not_e2e_banner.dart';
 import '../ui/room/spatial_audio_canvas.dart';
 import '../ui/room/voice_channel_panel.dart';
@@ -61,6 +63,10 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
   /// voice connection lives in RoomManager and is unaffected by this flag.
   bool _radarOpen = false;
   String _radarChannelName = '';
+
+  /// Host-plaintext ack for this page session. Create/join sets it; opening
+  /// an existing room from the rail requires the in-chat checkbox first.
+  bool _hostPlaintextAcked = false;
 
   RoomManager get _rooms => ref.read(roomManagerProvider.notifier);
 
@@ -530,7 +536,10 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
           children: [
             if (showHeader && effectiveChannelId != null)
               _channelHeader(channelName),
-            const RoomNotE2eBanner(),
+            RoomNotE2eBanner(
+              acknowledged: _hostPlaintextAcked,
+              onAcknowledged: (v) => setState(() => _hostPlaintextAcked = v),
+            ),
             Expanded(
               child: effectiveChannelId == null
                   ? Center(
@@ -552,15 +561,30 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
                   ? ChatComposer(
                       actions: ComposerActions(
                         onSend: (text) async {
+                          if (!roomPlaintextActionAllowed(
+                              acknowledgedHostCanRead: _hostPlaintextAcked)) {
+                            return false;
+                          }
                           await _rooms.sendRoomMessage(
                               viewRoomId, effectiveChannelId, text);
                           return true;
                         },
                         onTypingChanged: (_) {},
-                        onOpenStickerPicker: () => _openRoomStickerPicker(
-                            viewRoomId, effectiveChannelId),
-                        onPickAttachment: () =>
-                            _pickRoomAttachment(viewRoomId, effectiveChannelId),
+                        onOpenStickerPicker: () {
+                          if (!roomPlaintextActionAllowed(
+                              acknowledgedHostCanRead: _hostPlaintextAcked)) {
+                            return;
+                          }
+                          _openRoomStickerPicker(
+                              viewRoomId, effectiveChannelId);
+                        },
+                        onPickAttachment: () {
+                          if (!roomPlaintextActionAllowed(
+                              acknowledgedHostCanRead: _hostPlaintextAcked)) {
+                            return;
+                          }
+                          _pickRoomAttachment(viewRoomId, effectiveChannelId);
+                        },
                       ),
                     )
                   : _inactiveComposerBanner(),
@@ -679,19 +703,20 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
 
   Future<void> _openCreateJoin() async {
     final myName = ref.read(localProfileProvider)?.displayName ?? '';
-    final result = await showModalBottomSheet<_JoinOrCreate>(
+    final result = await showModalBottomSheet<JoinOrCreateResult>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
       // The sheet hides "create" off desktop (servers are hosted on a PC only);
       // joining stays available everywhere.
-      builder: (_) => _CreateJoinSheet(
+      builder: (_) => CreateJoinRoomSheet(
         defaultName: myName,
         canCreate: canHostSignalingServer,
       ),
     );
     if (result == null) return;
+    _hostPlaintextAcked = true;
     if (result.isCreate) {
       // Defense in depth: even if a create result somehow arrives off desktop,
       // never fall back to a cloud room — block with the clear message instead.
@@ -1305,199 +1330,4 @@ class _SecurityBanner extends StatelessWidget {
   }
 }
 
-// ─── Create / join sheet ──────────────────────────────────────────────
-
-/// Result of the create/join sheet. [isCreate] ? room name : invite code.
-class _JoinOrCreate {
-  const _JoinOrCreate(this.isCreate, this.value);
-  final bool isCreate;
-  final String value;
-}
-
-class _CreateJoinSheet extends StatefulWidget {
-  const _CreateJoinSheet({required this.defaultName, required this.canCreate});
-  final String defaultName;
-
-  /// Whether this platform can host (desktop). When false the create form is
-  /// replaced by a short "servers are created on a PC" note; join stays usable.
-  final bool canCreate;
-
-  @override
-  State<_CreateJoinSheet> createState() => _CreateJoinSheetState();
-}
-
-class _CreateJoinSheetState extends State<_CreateJoinSheet> {
-  late final TextEditingController _nameCtl;
-  final TextEditingController _codeCtl = TextEditingController();
-
-  @override
-  void initState() {
-    super.initState();
-    _nameCtl = TextEditingController(
-      text: widget.defaultName.isNotEmpty
-          ? '${widget.defaultName}: сервер'
-          : '',
-    );
-  }
-
-  @override
-  void dispose() {
-    _nameCtl.dispose();
-    _codeCtl.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = OrbitsTokens.of(context);
-    return OrbitsGlassSurface(
-      role: OrbitsGlassRole.sheet,
-      borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
-      child: SafeArea(
-        top: false,
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(
-              24, 16, 24, 16 + MediaQuery.of(context).viewInsets.bottom),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Center(
-                child: Container(
-                  width: 38,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: tokens.muted.withValues(alpha: 0.4),
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 18),
-              _label('Создать сервер', tokens),
-              const SizedBox(height: 8),
-              if (widget.canCreate) ...[
-                TextField(
-                  controller: _nameCtl,
-                  decoration: const InputDecoration(
-                    hintText: 'Название сервера',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                OrbitsGlassButton(
-                  label: 'Создать',
-                  icon: Icons.add,
-                  variant: OrbitsGlassVariant.primary,
-                  expand: true,
-                  onPressed: () {
-                    final v = _nameCtl.text.trim();
-                    if (v.isEmpty) return;
-                    Navigator.of(context).pop(_JoinOrCreate(true, v));
-                  },
-                ),
-              ] else
-                _DesktopOnlyServerNote(tokens: tokens),
-              const SizedBox(height: 22),
-              Row(
-                children: [
-                  Expanded(child: Divider(color: tokens.muted.withValues(alpha: 0.3))),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 10),
-                    child: Text('или',
-                        style: TextStyle(
-                            color: tokens.muted, fontFamily: tokens.fontBody)),
-                  ),
-                  Expanded(child: Divider(color: tokens.muted.withValues(alpha: 0.3))),
-                ],
-              ),
-              const SizedBox(height: 16),
-              _label('Подключиться по коду', tokens),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _codeCtl,
-                textCapitalization: TextCapitalization.characters,
-                style: TextStyle(fontFamily: tokens.fontMono, color: tokens.text),
-                decoration: const InputDecoration(
-                  hintText: 'ORBIT-XXXXXX',
-                  border: OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 10),
-              OrbitsGlassButton(
-                label: 'Подключиться',
-                icon: Icons.login,
-                variant: OrbitsGlassVariant.secondary,
-                expand: true,
-                onPressed: () {
-                  final v = _codeCtl.text.trim();
-                  if (v.isEmpty) return;
-                  Navigator.of(context).pop(_JoinOrCreate(false, v));
-                },
-              ),
-              const SizedBox(height: 14),
-              Text(
-                kRoomNotE2eBannerRu,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: tokens.muted,
-                  fontSize: 12,
-                  height: 1.35,
-                  fontFamily: tokens.fontBody,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _label(String text, OrbitsTokens tokens) => Text(
-        text.toUpperCase(),
-        style: TextStyle(
-          fontFamily: tokens.fontHeading,
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.8,
-          color: tokens.muted,
-        ),
-      );
-}
-
-/// Shown in place of the create form on web/mobile: a calm note that servers
-/// are hosted on a desktop, so the user isn't left wondering why they can't
-/// create one here. Joining (below it in the sheet) still works.
-class _DesktopOnlyServerNote extends StatelessWidget {
-  const _DesktopOnlyServerNote({required this.tokens});
-  final OrbitsTokens tokens;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: tokens.muted.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: tokens.muted.withValues(alpha: 0.25)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(Icons.desktop_windows_rounded, size: 18, color: tokens.muted),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Text(
-              kServerHostDesktopOnlyMessage,
-              style: TextStyle(
-                color: tokens.muted,
-                fontSize: 12.5,
-                height: 1.4,
-                fontFamily: tokens.fontBody,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
+// Create/join UI lives in create_join_room_sheet.dart.

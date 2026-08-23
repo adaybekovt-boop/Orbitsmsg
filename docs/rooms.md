@@ -24,6 +24,13 @@ At rest, room message bodies may still be wrapped under the vault KEK on each
 device. That protects a stolen database on disk. It does **not** make the
 network path E2E.
 
+## Acknowledgement (A.2)
+
+Rooms stay host-plaintext. Create, join, and the first send are blocked
+until the user ticks **«Я понимаю: организатор видит все сообщения и файлы»**
+on the create/join sheet or the in-chat banner. The banner is not a
+substitute for a group ratchet.
+
 ## What we will not do
 
 We will not ship a `room_crypto.dart` that claims epoch / sender keys / kick
