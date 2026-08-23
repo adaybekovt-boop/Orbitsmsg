@@ -10,6 +10,14 @@ import 'package:orbits_flutter/core/authenticode.dart';
 import 'package:orbits_flutter/core/update_installer.dart';
 import 'package:orbits_flutter/core/update_installer_io.dart';
 
+const _testThumb =
+    'CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC';
+const _testPolicy = AuthenticodePolicy(
+  requiredCn: 'Orbits',
+  requiredO: 'Orbits',
+  allowedThumbprints: [_testThumb],
+);
+
 void main() {
   late Directory tempDir;
 
@@ -49,6 +57,7 @@ void main() {
       _StubVerifier(AuthenticodeResult(
         AuthenticodeStatus.valid,
         subject: subject,
+        thumbprint: _testThumb,
       ));
 
   group('platform guard', () {
@@ -112,6 +121,7 @@ void main() {
         isWindows: true,
         launcher: rec.fn,
         verifier: trustedVerifier(),
+        policy: _testPolicy,
       );
       final exe = writeFile('orbits-windows-x64.exe', content: 'MZ-fake');
 
@@ -131,6 +141,7 @@ void main() {
         launcher: rec.fn,
         config: const InstallerConfig(silent: true),
         verifier: trustedVerifier(),
+        policy: _testPolicy,
       );
       final exe = writeFile('orbits-windows-x64.exe', content: 'MZ-fake');
 
@@ -147,6 +158,7 @@ void main() {
         isWindows: true,
         launcher: rec.fn,
         verifier: trustedVerifier(),
+        policy: _testPolicy,
       );
       final exe = writeFile('orbits-windows-x64.exe', content: 'MZ-fake');
 
@@ -165,6 +177,7 @@ void main() {
         isWindows: true,
         launcher: throwing,
         verifier: trustedVerifier(),
+        policy: _testPolicy,
       );
       final exe = writeFile('orbits-windows-x64.exe', content: 'MZ-fake');
 

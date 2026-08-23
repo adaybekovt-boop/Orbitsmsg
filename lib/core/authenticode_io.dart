@@ -24,10 +24,17 @@ class PowershellAuthenticodeVerifier implements AuthenticodeVerifier {
       final escaped = path.replaceAll("'", "''");
       final script = '''
 \$s = Get-AuthenticodeSignature -LiteralPath '$escaped'
+\$sha256 = ''
+if (\$s.SignerCertificate) {
+  \$sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    \$sha256 = [BitConverter]::ToString(\$sha.ComputeHash(\$s.SignerCertificate.RawData)) -replace '-',''
+  } finally { \$sha.Dispose() }
+}
 [pscustomobject]@{
   Status = [string]\$s.Status
   Subject = [string]\$s.SignerCertificate.Subject
-  Thumbprint = [string]\$s.SignerCertificate.Thumbprint
+  Sha256Thumbprint = \$sha256
 } | ConvertTo-Json -Compress
 ''';
       final run = runner ??
@@ -68,7 +75,9 @@ AuthenticodeResult parseAuthenticodeJson(String raw) {
     }
     final status = parseAuthenticodeStatus('${decoded['Status'] ?? ''}');
     final subject = decoded['Subject'] as String?;
-    final thumbprint = decoded['Thumbprint'] as String?;
+    // Pin is SHA-256 of the cert DER. Ignore the Windows SHA-1 Thumbprint
+    // field so a SHA-1-only payload cannot satisfy the pin.
+    final thumbprint = decoded['Sha256Thumbprint'] as String?;
     return AuthenticodeResult(
       status,
       subject: (subject == null || subject.isEmpty) ? null : subject,
