@@ -584,3 +584,20 @@ jobs:
             - Flutter Web: https://adaybekovt-boop.github.io/tkmessenger/
           draft: false
           prerelease: false
+
+      - name: Smoke-check releases/latest points at this tag
+        run: |
+          set -euo pipefail
+          repo="${{ github.repository }}"
+          tag="${{ github.ref_name }}"
+          url="https://github.com/${repo}/releases/latest"
+          for i in 1 2 3 4 5 6; do
+            loc="$(curl -fsSI -o /dev/null -w '%{redirect_url}' "$url" || true)"
+            echo "latest -> ${loc:-<empty>}"
+            if [[ "$loc" == *"/releases/tag/${tag}" ]]; then
+              exit 0
+            fi
+            sleep $((i * 2))
+          done
+          echo "::error::releases/latest did not resolve to tag ${tag}"
+          exit 1
