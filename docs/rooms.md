@@ -37,6 +37,40 @@ We will not ship a `room_crypto.dart` that claims epoch / sender keys / kick
 rekey until a real group protocol exists. A half protocol would be a worse lie
 than this document.
 
+## Open item: application-layer group E2E
+
+UI honesty (disclaimer banner, session send-gate, non-green "Rooms" row) is
+**not** this item. This is the protocol: per-sender keys or **MLS** so the
+host is no longer a plaintext relay.
+
+### Why this is a large change
+
+- New wire types. Today's `room_msg` is a JSON map on the DataChannel that
+  **bypasses** the 1:1 Double Ratchet. A group ratchet cannot be bolted on
+  as a helper next to `sendRoomPacket`.
+- Membership changes need **rekey on kick** / leave. Today a kicked guest
+  who kept earlier packets still has them; new packets stay host-plaintext.
+- Existing rooms **cannot silently upgrade**. Every member's client must
+  speak the new protocol or the room stays host-plaintext. Invites, join,
+  and persistence all change.
+- The host must stop reading bodies. That is a product change, not a
+  flag: file/sticker relay, moderation, and "host sees everything" copy
+  all invert.
+
+### What is needed to start
+
+1. Pick MLS vs a simpler sender-keys/epoch design and write the packet
+   grammar.
+2. Change `room_manager` / `connections_notifier` / packet router so
+   `room_msg` is ciphertext to everyone except the intended recipients
+   (host included, unless the host is a member of the epoch).
+3. Rekey path on kick/leave + test vectors.
+4. Migration: old rooms stay host-plaintext until every member upgrades;
+   do not flip `kRoomsApplicationE2eImplemented` until then.
+
+Round 3 does **not** implement this. `kRoomsApplicationE2eImplemented`
+stays `false`.
+
 ## Related
 
 - 1:1 wire path: `lib/core/double_ratchet.dart`, `lib/core/wire_session.dart`
