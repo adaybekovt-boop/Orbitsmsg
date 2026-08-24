@@ -28,6 +28,8 @@ jobs:
           fetch-depth: 0
 
       # Official action; public repos do not need GITLEAKS_LICENSE.
+      # Config: repo-root .gitleaks.toml (extends default). Scheduled
+      # runs scan full history; local preference key names are allowlisted.
       - name: Run Gitleaks
         uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:

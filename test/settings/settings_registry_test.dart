@@ -27,6 +27,20 @@ void main() {
           reason: 'two settings share a SharedPreferences key');
     });
 
+    test('persist keys are local orbits identifiers, not credentials', () {
+      // Contract for .gitleaks.toml: generic-api-key allowlists
+      // `^orbits[._][A-Za-z0-9._:-]+$` because persistKey names look like
+      // API keys to the default rule. A real token must not live here.
+      final pattern = RegExp(r'^orbits[._][A-Za-z0-9._:-]+$');
+      for (final s in kSettingsRegistry) {
+        final key = s.persistKey;
+        if (key == null) continue;
+        expect(pattern.hasMatch(key), isTrue,
+            reason: '${s.id} persistKey "$key" must be an orbits.* / '
+                'orbits_* local identifier');
+      }
+    });
+
     test('persisted working/platform-limited settings name a consumer', () {
       for (final s in kSettingsRegistry) {
         final isLive = s.status == SettingStatus.working ||
