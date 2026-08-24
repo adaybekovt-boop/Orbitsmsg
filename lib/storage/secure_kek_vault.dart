@@ -190,8 +190,9 @@ class SecureKekVault {
       return KekRetrieveResult(status: gate);
     }
     try {
-      final encoded = _readOverride != null
-          ? await _readOverride!()
+      final readOverride = _readOverride;
+      final encoded = readOverride != null
+          ? await readOverride()
           : await _storage.read(
               key: _kekStorageKey,
               iOptions: _iosOptions(),
@@ -221,7 +222,8 @@ class SecureKekVault {
   }
 
   Future<bool> _probeBiometricUsable() async {
-    if (_biometricUsable != null) return _biometricUsable!();
+    final probe = _biometricUsable;
+    if (probe != null) return probe();
     try {
       final auth = LocalAuthentication();
       return await auth.isDeviceSupported() && await auth.canCheckBiometrics;
