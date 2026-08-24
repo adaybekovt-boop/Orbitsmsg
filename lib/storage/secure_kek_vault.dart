@@ -114,14 +114,36 @@ class KekRetrieveResult {
 /// Secure KEK persistence. Instances are cheap to construct — the
 /// underlying `FlutterSecureStorage` handle holds no state.
 class SecureKekVault {
-  SecureKekVault({FlutterSecureStorage? storage})
-      : _storage = storage ?? _defaultStorage();
+  SecureKekVault({
+    FlutterSecureStorage? storage,
+    bool? supportedOverride,
+    bool? skipLocalAuthPrompt,
+    Future<bool> Function()? biometricUsable,
+    Future<String?> Function()? readOverride,
+  })  : _storage = storage ?? _defaultStorage(),
+        _supportedOverride = supportedOverride,
+        _skipLocalAuthPrompt = skipLocalAuthPrompt ?? _defaultSkipLocalAuth(),
+        _biometricUsable = biometricUsable,
+        _readOverride = readOverride;
 
   final FlutterSecureStorage _storage;
+  final bool? _supportedOverride;
+  final bool _skipLocalAuthPrompt;
+  final Future<bool> Function()? _biometricUsable;
+  final Future<String?> Function()? _readOverride;
+
+  static bool _defaultSkipLocalAuth() {
+    try {
+      return !kIsWeb && Platform.isAndroid;
+    } on UnsupportedError {
+      return false;
+    }
+  }
 
   /// Probe for hardware-backed biometric support. Desktop / web always
   /// return false; mobile returns true when the platform plugin is loaded
   /// and the secure storage backend is available.
+  /// Platform capability (no constructor). Used by [AutoUnlockService].
   static bool get isSupported {
     if (kIsWeb) return false;
     try {
@@ -131,6 +153,8 @@ class SecureKekVault {
     }
   }
 
+  bool get _effectiveSupported => _supportedOverride ?? isSupported;
+
   /// Persist a freshly-derived 32-byte KEK under biometric protection.
   /// Overwrites any previous value — call this right after successful
   /// master-password validation.
@@ -138,7 +162,7 @@ class SecureKekVault {
     if (kekBytes.length != 32) {
       throw ArgumentError('SecureKekVault: KEK must be exactly 32 bytes');
     }
-    if (!isSupported) {
+    if (!_effectiveSupported) {
       throw StateError(
           'SecureKekVault: hardware-backed storage unavailable on this platform');
     }
@@ -155,7 +179,7 @@ class SecureKekVault {
   /// the first time in a session (and every time on Android once the key
   /// requires re-auth). Callers must dispatch on the returned status.
   Future<KekRetrieveResult> retrieveKek() async {
-    if (!isSupported) {
+    if (!_effectiveSupported) {
       return const KekRetrieveResult(status: KekRetrieveStatus.unsupported);
     }
     // iOS: local_auth still gates the read (no accessControlFlags wired).
@@ -166,11 +190,13 @@ class SecureKekVault {
       return KekRetrieveResult(status: gate);
     }
     try {
-      final encoded = await _storage.read(
-        key: _kekStorageKey,
-        iOptions: _iosOptions(),
-        aOptions: _androidOptions(),
-      );
+      final encoded = _readOverride != null
+          ? await _readOverride!()
+          : await _storage.read(
+              key: _kekStorageKey,
+              iOptions: _iosOptions(),
+              aOptions: _androidOptions(),
+            );
       if (encoded == null || encoded.isEmpty) {
         return const KekRetrieveResult(status: KekRetrieveStatus.notStored);
       }
@@ -194,27 +220,36 @@ class SecureKekVault {
     }
   }
 
-  /// Prompt the system biometric (Face ID / Touch ID / fingerprint) before a
-  /// KEK read. Returns `null` to proceed (auth ok, or no usable biometric on
-  /// this device → degrade gracefully to no gate), or a terminal
-  /// [KekRetrieveStatus] the caller should return immediately.
-  Future<KekRetrieveStatus?> _gateBiometric() async {
-    if (!kIsWeb && Platform.isAndroid) {
-      return null;
-    }
-    final auth = LocalAuthentication();
-    bool available;
+  Future<bool> _probeBiometricUsable() async {
+    if (_biometricUsable != null) return _biometricUsable!();
     try {
-      available =
-          await auth.isDeviceSupported() && await auth.canCheckBiometrics;
+      final auth = LocalAuthentication();
+      return await auth.isDeviceSupported() && await auth.canCheckBiometrics;
     } catch (_) {
-      available = false;
+      return false;
     }
+  }
+
+  /// Prompt the system biometric (Face ID / Touch ID / fingerprint) before a
+  /// KEK read. Returns `null` to proceed to the Keystore/Keychain read, or a
+  /// terminal [KekRetrieveStatus] the caller should return immediately.
+  Future<KekRetrieveStatus?> _gateBiometric() async {
+    // Android (and tests that simulate it): Keystore user-auth on
+    // [androidKekVaultOptions] is the binding. A local_auth *success*
+    // is never enough to return the KEK. A local_auth *unavailable*
+    // result is enough to refuse the read — otherwise a no-op plugin
+    // would hand the ciphertext back with no prompt.
+    if (_skipLocalAuthPrompt) {
+      final usable = await _probeBiometricUsable();
+      return biometricAvailabilityGate(usable);
+    }
+    final available = await _probeBiometricUsable();
     // Fail closed: a stored KEK is never returned without a successful
     // biometric prompt. Missing hardware/enrollment → password path.
     if (!available) return biometricAvailabilityGate(false);
 
     try {
+      final auth = LocalAuthentication();
       final ok = await auth.authenticate(
         localizedReason: 'Подтвердите личность для доступа к ключам профиля',
         options: const AuthenticationOptions(
@@ -243,7 +278,7 @@ class SecureKekVault {
   /// Hard-delete the stored KEK. Called on logout, password rotation, and
   /// after a [KekRetrieveStatus.biometricInvalidated] event.
   Future<void> deleteKek() async {
-    if (!isSupported) return;
+    if (!_effectiveSupported) return;
     try {
       await _storage.delete(
         key: _kekStorageKey,
@@ -258,7 +293,7 @@ class SecureKekVault {
   /// Fast yes/no check without a biometric prompt. Uses the plugin's
   /// `containsKey`, which reads only metadata, so no user interaction.
   Future<bool> hasStoredKek() async {
-    if (!isSupported) return false;
+    if (!_effectiveSupported) return false;
     try {
       return await _storage.containsKey(
         key: _kekStorageKey,
