@@ -7,7 +7,7 @@
 // false there so they're never invoked.
 
 import 'package:flutter/foundation.dart'
-    show TargetPlatform, defaultTargetPlatform, kIsWeb;
+    show Key, TargetPlatform, defaultTargetPlatform, kIsWeb;
 
 import 'peerjs_client.dart';
 import 'room_invite.dart';
@@ -110,6 +110,36 @@ PeerJsClient buildRoomScopedClient({
 }
 
 /// Owns the embedded server + optional UPnP mapping for one hosted session.
+/// Shown when WAN exposure is not available. The create-room UI must
+/// render this **before** the host can copy/share an invite.
+const String kRoomLanOnlyInternetMessageRu =
+    'Комната доступна только в локальной сети. Гости из интернета не смогут '
+    'подключиться.';
+
+const Key kRoomLanOnlyInternetKey = Key('room-lan-only-internet');
+
+/// Result of [RoomSignalingHost.tryOpenInternet]. Not a nullable string —
+/// callers must read [userMessage] and show it.
+class RoomInternetOpenResult {
+  const RoomInternetOpenResult({
+    this.publicHostPort,
+    required this.userMessage,
+  });
+
+  const RoomInternetOpenResult.lanOnly()
+      : publicHostPort = null,
+        userMessage = kRoomLanOnlyInternetMessageRu;
+
+  /// `ip:port` when WAN exposure succeeded. Null means LAN-only.
+  final String? publicHostPort;
+
+  /// Mandatory user-visible explanation.
+  final String userMessage;
+
+  bool get opened =>
+      publicHostPort != null && publicHostPort!.trim().isNotEmpty;
+}
+
 class RoomSignalingHost {
   EmbeddedSignalingServer? _server;
 
@@ -159,14 +189,11 @@ class RoomSignalingHost {
     );
   }
 
-  /// Best-effort: open the server's port on the router via UPnP so internet
-  /// guests can reach it. Returns a public `ip:port` to fold into the invite,
-  /// or null when unavailable (router has no UPnP / it's disabled / timeout) —
-  /// in which case the room stays LAN-only. Never throws.
-  Future<String?> tryOpenInternet() async {
-    // WAN UPnP disabled until signaling is WSS. Punching plaintext `ws`
-    // onto the public internet was the leftover from Round 1 3.3.
-    return null;
+  /// Attempt to expose the room beyond LAN. Always returns a structured
+  /// result — never `null` and never silent. WAN UPnP stays off until
+  /// signaling is WSS (plaintext `ws` on the public internet is not offered).
+  Future<RoomInternetOpenResult> tryOpenInternet() async {
+    return const RoomInternetOpenResult.lanOnly();
   }
 
   /// Stop the embedded server.

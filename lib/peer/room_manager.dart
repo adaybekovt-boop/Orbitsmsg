@@ -140,6 +140,7 @@ class RoomState {
     this.micEnabled = true,
     this.micAvailable = false,
     this.selfHostInvite,
+    this.internetAccessMessage,
   });
 
   /// Current role.
@@ -195,6 +196,10 @@ class RoomState {
   /// [RoomInvite.tryParse] to render LAN/public reach in the UI.
   final String? selfHostInvite;
 
+  /// From [RoomSignalingHost.tryOpenInternet]. Hosts must see this before
+  /// sharing the invite. Null for guests / cloud rooms.
+  final String? internetAccessMessage;
+
   /// True when this session runs its own embedded signaling server.
   bool get isSelfHosted => selfHostInvite != null;
 
@@ -216,6 +221,7 @@ class RoomState {
     bool? micEnabled,
     bool? micAvailable,
     Object? selfHostInvite = _unset,
+    Object? internetAccessMessage = _unset,
   }) =>
       RoomState(
         role: role ?? this.role,
@@ -243,6 +249,9 @@ class RoomState {
         selfHostInvite: identical(selfHostInvite, _unset)
             ? this.selfHostInvite
             : selfHostInvite as String?,
+        internetAccessMessage: identical(internetAccessMessage, _unset)
+            ? this.internetAccessMessage
+            : internetAccessMessage as String?,
       );
 }
 
@@ -453,10 +462,12 @@ class RoomManager extends StateNotifier<RoomState> {
       activeChannelId: general['id'] as String?,
       serverActive: true,
       selfHostInvite: invite,
+      internetAccessMessage:
+          selfHosted ? kRoomLanOnlyInternetMessageRu : null,
     );
 
-    // Best-effort internet exposure runs in the background so room creation is
-    // instant and LAN-usable immediately; if UPnP succeeds the invite upgrades.
+    // Resolve WAN exposure (today: structured LAN-only). The message is
+    // already on state so the host sees it before sharing the invite.
     if (selfHosted) unawaited(_upgradeToInternet(roomId));
   }
 
@@ -517,21 +528,24 @@ class RoomManager extends StateNotifier<RoomState> {
     return invite.encode();
   }
 
-  /// Background best-effort: open the router port via UPnP and, on success,
-  /// re-issue the invite with the public `ip:port` folded in.
+  /// Apply [RoomSignalingHost.tryOpenInternet]. Always writes
+  /// [RoomState.internetAccessMessage]. Only upgrades the invite when WAN
+  /// actually opened.
   Future<void> _upgradeToInternet(String roomId) async {
     final host = _selfHost;
     if (host == null) return;
-    final pub = await host.tryOpenInternet();
-    if (pub == null || !mounted) return;
+    final result = await host.tryOpenInternet();
+    if (!mounted) return;
+    if (state.roomId != roomId || state.role != RoomRole.host) return;
+    state = state.copyWith(internetAccessMessage: result.userMessage);
+    if (!result.opened) return;
     final current = RoomInvite.tryParse(state.selfHostInvite ?? '');
     if (current == null) return;
-    if (state.roomId != roomId || state.role != RoomRole.host) return;
     final upgraded = RoomInvite(
       roomId: current.roomId,
       lanHosts: current.lanHosts,
       port: current.port,
-      publicHostPort: pub,
+      publicHostPort: result.publicHostPort,
       key: current.key,
     );
     state = state.copyWith(selfHostInvite: upgraded.encode());
