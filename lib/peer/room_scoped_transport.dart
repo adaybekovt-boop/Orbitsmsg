@@ -20,6 +20,7 @@ import '../state/connections_notifier.dart' show RoomBridge;
 import 'helpers.dart' show isValidPeerId, normalizePeerId;
 import 'peerjs_client.dart';
 import 'room_manager.dart' show RoomTransport;
+import 'room_plaintext_gate.dart';
 
 class RoomScopedTransport implements RoomTransport {
   RoomScopedTransport(this._client);
@@ -96,9 +97,11 @@ class RoomScopedTransport implements RoomTransport {
   @override
   bool sendRoomPacket(String peerId, Map<String, Object?> packet) {
     final c = _reliable[normalizePeerId(peerId)];
-    if (c == null || !c.open) return false;
-    c.send(packet);
-    return true;
+    return sendGuardedRoomPacket(
+      packet,
+      connected: c != null && c.open,
+      send: (p) => c!.send(p),
+    );
   }
 
   @override

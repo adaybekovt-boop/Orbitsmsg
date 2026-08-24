@@ -133,6 +133,7 @@ class _CreateJoinRoomSheetState extends State<CreateJoinRoomSheet> {
                     )) {
                       return;
                     }
+                    kRoomPlaintextSessionAck.setAcknowledged(true);
                     Navigator.of(context).pop(JoinOrCreateResult(true, v));
                   },
                 ),
@@ -188,6 +189,7 @@ class _CreateJoinRoomSheetState extends State<CreateJoinRoomSheet> {
                   )) {
                     return;
                   }
+                  kRoomPlaintextSessionAck.setAcknowledged(true);
                   Navigator.of(context).pop(JoinOrCreateResult(false, v));
                 },
               ),
