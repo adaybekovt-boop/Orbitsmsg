@@ -28,7 +28,7 @@ while unlocked (`lib/core/vault_kek.dart`). It is never written to disk.
 | File transfer (Drop) | Raw DataChannel frames, only after a **verified** wire handshake. Size / concurrency caps apply. |
 | Voice/video calls | WebRTC DTLS-SRTP to the peer. Default ICE uses public Google/Mozilla/Twilio STUN (IP leak to those operators). See `docs/privacy.md`. |
 | TURN credentials | Username/credential are loaded at runtime (`orbits_turn_username` / `orbits_turn_credential`). CI does **not** pass them as `--dart-define`. `TURN_URL` may still be compile-time (it is not a secret). |
-| UPnP IGD mapping | **WAN punch for embedded signaling is off** until WSS exists. LAN signaling is still plaintext `ws`, but the room key is random (not `peerjs`) and empty tokens are rejected. Per-IP connect quotas apply. |
+| UPnP IGD mapping | **WAN punch for embedded signaling is off** until WSS exists. `tryOpenInternet()` returns a structured LAN-only result (never silent `null`); the create-room UI shows that guests from the internet cannot join **before** the host shares an invite. LAN signaling is still plaintext `ws`, but the room key is random (not `peerjs`) and empty tokens are rejected. Per-IP connect quotas apply. |
 | Windows auto-update | GitHub TLS plus **pinned Authenticode** before launch (`docs/windows-signing.md`). |
 | Android release APK | Upload / CI sideload keystore, never the SDK debug key (`docs/android-signing.md`). |
 
