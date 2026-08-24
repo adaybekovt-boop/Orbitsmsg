@@ -128,6 +128,32 @@ void main() {
     expect(find.text('Открыть страницу релиза'), findsOneWidget);
   });
 
+  testWidgets(
+      'Windows update available with empty Authenticode pin shows manual download, not Install',
+      (tester) async {
+    final c = makeContainer(
+      client: release(tag: 'v9.0.2', windows: true),
+      installed: '9.0.1',
+      installSupported: true,
+    );
+    await tester.pumpWidget(UncontrolledProviderScope(
+      container: c,
+      child: MaterialApp(theme: testOrbitsTheme(), home: const UpdatesPage()),
+    ));
+    await settle(tester);
+
+    // Empty production pin: Install is guaranteed to fail-closed. Do not
+    // offer a button that always ends as signatureUntrusted.
+    expect(
+      find.textContaining('Автообновление временно недоступно'),
+      findsOneWidget,
+    );
+    expect(find.textContaining('GitHub Releases'), findsWidgets);
+    expect(find.text('Установить и перезапустить'), findsNothing);
+    expect(find.text('Установить'), findsNothing);
+    expect(find.text('Скачать обновление'), findsNothing);
+  });
+
   testWidgets('Updates page shows up-to-date when installed == latest',
       (tester) async {
     final c = makeContainer(

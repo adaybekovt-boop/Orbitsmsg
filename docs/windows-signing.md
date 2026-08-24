@@ -24,12 +24,23 @@ An adjacent `*.sha256` file is **ignored**.
 `kOrbitsAuthenticodeSha256Thumbprints` is **empty**. No code-signing
 certificate has been purchased or uploaded to CI. Therefore:
 
-- The in-app **Install** button **refuses every EXE** (including a real
-  GitHub Release). It is not "pinned Authenticode" in production; it is
-  "do not run downloaded installers until a cert SHA-256 is provisioned".
-- Users can still download the EXE from the release page and run it
-  themselves (SmartScreen applies). That path is outside the in-app
-  updater.
+- The in-app updater **does not offer Install**. The Updates page says
+  «Автообновление временно недоступно, скачайте вручную с GitHub
+  Releases» and links
+  `…/releases/latest/download/orbits-windows-x64.exe`.
+- A leftover launch still returns `autoUpdateUnprovisioned`, not
+  `signatureUntrusted` (that string means a bad file, not "no cert yet").
+- Users can download the EXE from GitHub and run it themselves
+  (SmartScreen applies). That path is outside the in-app updater.
+
+**Blocker:** a production Authenticode certificate must be **purchased
+from a public CA** (DigiCert / Sectigo / SSL.com, etc.). A self-signed
+cert is not acceptable for production. After purchase:
+
+1. Store `WINDOWS_CERT_PFX_BASE64` (+ password) in GitHub Actions.
+2. Put the SHA-256 of the certificate DER into
+   `kOrbitsAuthenticodeSha256Thumbprints`.
+3. Tag a release so `tool/ci/sign_windows_exe.sh` runs `signtool sign`.
 
 Shipping an updater that runs unsigned (or substring-matched) EXEs is
 worse than an updater that waits.

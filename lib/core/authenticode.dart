@@ -73,8 +73,26 @@ class AuthenticodePolicy {
 }
 
 /// SHA-256 fingerprints of production Authenticode certificates.
-/// Empty on purpose: no cert is in CI yet. Do not put a dummy value here.
+/// Empty on purpose: no cert is purchased / in CI yet. Do not invent a
+/// self-signed production pin. Empty = fail-closed AND in-app Install is
+/// hidden (see [isAuthenticodePinProvisioned]).
 const List<String> kOrbitsAuthenticodeSha256Thumbprints = <String>[];
+
+/// True only when at least one SHA-256 (64 hex chars) is pinned.
+bool isAuthenticodePinProvisioned([List<String>? thumbs]) {
+  final list = thumbs ?? kOrbitsAuthenticodeSha256Thumbprints;
+  return list
+      .map(AuthenticodePolicy.normalizeThumbprint)
+      .any((t) => t.length == 64);
+}
+
+/// Shown when the pin list is empty. Not [signatureUntrusted] — that
+/// string implies a bad file, not "we have no cert yet".
+const String kUpdateAutoUpdateUnavailableMessage =
+    'Автообновление временно недоступно, скачайте вручную с GitHub Releases';
+
+const String kLatestWindowsInstallerUrl =
+    'https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-windows-x64.exe';
 
 const AuthenticodePolicy kDefaultAuthenticodePolicy = AuthenticodePolicy(
   requiredCn: 'Orbits',

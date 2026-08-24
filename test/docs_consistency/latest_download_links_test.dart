@@ -24,4 +24,14 @@ void main() {
     expect(readme.contains('releases/download/v8.'), isFalse);
     expect(readme.contains('/download/v8.0.2/'), isFalse);
   });
+
+  test('in-app unavailable updater uses the same latest Windows URL', () {
+    final src = File('lib/core/authenticode.dart').readAsStringSync();
+    expect(
+      src,
+      contains(
+        'https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-windows-x64.exe',
+      ),
+    );
+  });
 }

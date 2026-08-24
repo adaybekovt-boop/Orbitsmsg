@@ -79,6 +79,15 @@ class IoUpdateInstaller implements UpdateInstaller {
       );
     }
 
+    // Empty pin: do not pretend the file is untrusted. Install is off
+    // until a real cert SHA-256 is provisioned.
+    if (!isAuthenticodePinProvisioned(_policy.allowedThumbprints)) {
+      return const InstallLaunchResult(
+        InstallLaunchStatus.autoUpdateUnprovisioned,
+        message: kUpdateAutoUpdateUnavailableMessage,
+      );
+    }
+
     // U-1: never launch until Authenticode is valid AND the publisher pin
     // matches. An adjacent `.sha256` file is ignored — hashes without a
     // publisher signature are not a trust boundary.
