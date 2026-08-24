@@ -61,3 +61,22 @@ unlocked process).
 - Native / background notifications are still not implemented (`docs` + settings
   page already say so).
 - Chat attachments are still fully buffered in memory (not streamed).
+
+## Secret scanning (Gitleaks)
+
+The Security scans workflow runs Gitleaks on every push/PR to `main` and
+weekly over **full git history**. `.gitleaks.toml` extends the default
+ruleset (`useDefault = true`) and does **not** turn off `generic-api-key`.
+
+Allowlisted on purpose (these are not credentials):
+
+- Local preference / vault key **names** matching
+  `orbits_*` / `orbits.*` (`persistKey`, SharedPreferences,
+  `flutter_secure_storage`). Example: `orbits_strict_verify_v1`.
+- Published AES/HKDF test vectors in `test/fixtures/crypto-fixtures.json`.
+- Historical copies of those names in deleted React files and an old
+  `lib/lib/pages/...` notifications path.
+
+A token that is not an `orbits.*` / `orbits_*` identifier is still a
+finding. Do not store live API keys, PFX material, or GitHub tokens in
+the tree.

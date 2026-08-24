@@ -25,5 +25,9 @@ source still mentions a string. They do **not** close a vulnerability.
 **After:** `test/security/` keeps **1 file / 10 tests** (Android signing scripts).
 **Moved:** **8 files / 41 tests** labeled docs-check.
 
+`gitleaks_allowlist_test.dart` is a later docs-check: it only asserts
+`.gitleaks.toml` still extends the default ruleset. It does not run
+Gitleaks.
+
 Grep is still useful to stop a deprecated API string from returning. It is
 not a proof that an attacker is rejected.

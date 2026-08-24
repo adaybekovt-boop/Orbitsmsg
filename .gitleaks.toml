@@ -1,0 +1,38 @@
+# Orbits Gitleaks config.
+#
+# Extends the default ruleset. Does NOT disable generic-api-key.
+# The weekly scheduled Security scans job runs `gitleaks detect` over
+# full git history (fetch-depth: 0). That job failed on 2026-08-24
+# with 12 generic-api-key hits. All 12 were:
+#
+#   1. Local preference / vault key NAMES (SharedPreferences,
+#      flutter_secure_storage, leftover localStorage). Values look
+#      like `orbits_strict_verify_v1` / `orbits.vault.kek.v1`.
+#      They are identifiers, not credentials.
+#   2. A published AES-256 test vector in
+#      test/fixtures/crypto-fixtures.json (`key` = repeating
+#      1234567890abcdef…). Used by crypto unit tests.
+#   3. Historical copies of (1) in deleted React files
+#      (AuthFlow.jsx, Blackjack21.jsx) and an old notifications page
+#      path (`lib/lib/pages/...`).
+#
+# Residual risk: a real secret that is itself an `orbits.*` /
+# `orbits_*` identifier would be ignored. Do not name tokens that way.
+# A canary `sk_live_…` still fails under this config.
+
+title = "Orbits gitleaks allowlist"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Local orbits.* / orbits_* storage key names, plus published crypto test vectors and deleted historical UI files"
+paths = [
+    '''test/fixtures/crypto-fixtures\.json''',
+    '''src/games/blackjack21/Blackjack21\.jsx''',
+    '''src/components/AuthFlow\.jsx''',
+    '''lib/lib/pages/settings/notifications_page\.dart''',
+]
+regexes = [
+    '''^orbits[._][A-Za-z0-9._:-]+$''',
+]
