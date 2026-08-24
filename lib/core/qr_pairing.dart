@@ -12,9 +12,10 @@
 //      PC vault, copy the profile, or prove the DataChannel peer is the
 //      same device that displayed the QR (PeerJS id + signalling MITM).
 //
-// This module is the pure protocol core (token gen, URI build/parse, response
-// build + verify). The transport + UI live in qr_pairing_page.dart. Signing /
-// verification reuse the ECDSA-P256 identity in `identity_key.dart`.
+// This module is the protocol core (token gen, URI build/parse, response
+// build + verify). There is no UI that "adopts a session" after a
+// signature — that path was deleted (Round 3 A.6). Signing / verification
+// reuse the ECDSA-P256 identity in `identity_key.dart`.
 
 import 'dart:convert';
 import 'dart:math';
@@ -24,16 +25,6 @@ import 'identity_key.dart';
 
 const String kPairingScheme = 'orbits_pairing';
 const String kQrAuthResponseType = 'qr_auth_response';
-
-/// QR device linking signs a one-time token. It does **not** copy the vault
-/// or open a session on the other device. Hidden until that transfer exists
-/// (Round 2 C.3, variant B). False success ("Вход подтверждён") is worse
-/// than no button. Flip this only after a real key-transfer protocol lands.
-const bool kQrDeviceLinkingEnabled = false;
-
-/// Copy after the phone signs a token. Must not claim the PC logged in.
-const String kQrScanSentUserMessage =
-    'Токен подписан. Ключи и сейф на компьютер не перенесены.';
 
 /// Fresh 32-byte one-time session token (base64url, no padding) from a CSPRNG.
 String generateSessionToken() {

@@ -56,8 +56,8 @@ unlocked process).
 - Drop file names are sanitized (no path segments).
 - New passwords: 12+ characters and at least two character classes.
 - scrypt records with N below 2^14 or a non-power-of-two N are rejected.
-- QR device linking proves the phone signed a one-time token. It does **not**
-  unlock the PC vault or copy the profile.
+- QR “login to PC” UI was deleted. Token sign/verify helpers remain in
+  `lib/core/qr_pairing.dart` with no adopt-session path.
 - Native / background notifications are still not implemented (`docs` + settings
   page already say so).
 - Chat attachments are still fully buffered in memory (not streamed).
