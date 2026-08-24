@@ -20,7 +20,8 @@ import '../primitives/orbits_glass_surface.dart';
 import 'crypto_busy_view.dart';
 import 'keygen_overlay_stub.dart'
     if (dart.library.html) 'keygen_overlay_web.dart' as crypto_overlay;
-import 'terms_text.dart';
+import '../../legal/legal_placeholders.dart';
+import 'onboarding_agreement_step.dart';
 
 class OnboardingPage extends ConsumerStatefulWidget {
   const OnboardingPage({super.key});
@@ -42,8 +43,10 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
   bool _revealPeerId = false;
 
   /// Terms acceptance — flips to true when the user ticks the checkbox
-  /// on step 3. The «Принять и завершить» button stays disabled until.
+  /// on step 3. The «Принять и завершить» button stays disabled until
+  /// both this and [_ageConfirmed] are true.
   bool _termsAccepted = false;
+  bool _ageConfirmed = false;
 
   /// "Remember me" — offered on the final step only where secure persistence
   /// exists: desktop (OS-backed secure storage) or web with a secure context.
@@ -100,8 +103,11 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
   Future<void> _submit() async {
     if (_busy) return;
     if (!_validateCreds()) return;
-    if (!_termsAccepted) {
-      setState(() => _error = 'Нужно принять Соглашение, чтобы продолжить');
+    if (!canCompleteOnboarding(
+      termsAccepted: _termsAccepted,
+      ageConfirmed: _ageConfirmed,
+    )) {
+      setState(() => _error = 'Нужно принять Соглашение и подтвердить возраст');
       return;
     }
     setState(() {
@@ -273,13 +279,21 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
           },
         );
       default:
-        return _StepTerms(
+        return OnboardingAgreementStep(
           key: const ValueKey('s3'),
-          accepted: _termsAccepted,
-          onToggleAccepted: (v) {
+          termsAccepted: _termsAccepted,
+          ageConfirmed: _ageConfirmed,
+          onToggleTerms: (v) {
             hapticTap();
             setState(() {
               _termsAccepted = v;
+              if (v) _error = null;
+            });
+          },
+          onToggleAge: (v) {
+            hapticTap();
+            setState(() {
+              _ageConfirmed = v;
               if (v) _error = null;
             });
           },
@@ -668,203 +682,6 @@ class _StepPeerId extends StatelessWidget {
           onPressed: onNext,
         ),
       ],
-    );
-  }
-}
-
-// ─── Step 3: Terms acceptance ─────────────────────────────────
-
-class _StepTerms extends StatelessWidget {
-  const _StepTerms({
-    super.key,
-    required this.accepted,
-    required this.onToggleAccepted,
-    required this.rememberSupported,
-    required this.remember,
-    required this.onToggleRemember,
-    required this.busy,
-    required this.error,
-    required this.onFinish,
-  });
-
-  final bool accepted;
-  final ValueChanged<bool> onToggleAccepted;
-  final bool rememberSupported;
-  final bool remember;
-  final ValueChanged<bool> onToggleRemember;
-  final bool busy;
-  final String? error;
-  final VoidCallback onFinish;
-
-  @override
-  Widget build(BuildContext context) {
-    final tokens = OrbitsTokens.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        Text(
-          'Соглашение',
-          style: TextStyle(
-            fontFamily: tokens.fontHeading,
-            fontSize: 17,
-            fontWeight: FontWeight.w600,
-            color: tokens.text,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'Прочитай документ и подтверди, что согласен с условиями.',
-          style: TextStyle(
-            fontFamily: tokens.fontBody,
-            fontSize: 13,
-            color: tokens.muted,
-          ),
-        ),
-        const SizedBox(height: 14),
-
-        // Scrollable card with the policy text. Fixed height so the
-        // user clearly sees this is an embedded scroll region — the
-        // outer page doesn't scroll past it. The border + tinted bg
-        // mark it visually as a separate surface.
-        Expanded(
-          child: Container(
-            decoration: BoxDecoration(
-              color: tokens.bg.withValues(alpha: 0.45),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: tokens.border),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: const TermsView(),
-          ),
-        ),
-
-        const SizedBox(height: 14),
-
-        // Acceptance row — checkbox + label, tapping the row toggles.
-        InkWell(
-          onTap: () => onToggleAccepted(!accepted),
-          borderRadius: BorderRadius.circular(tokens.radiusButton),
-          child: Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 10,
-            ),
-            decoration: BoxDecoration(
-              color: accepted
-                  ? tokens.accentAlpha(0.10)
-                  : tokens.surface.withValues(alpha: 0.4),
-              borderRadius: BorderRadius.circular(tokens.radiusButton),
-              border: Border.all(
-                color: accepted ? tokens.accent : tokens.border,
-                width: accepted ? 1.4 : 1,
-              ),
-            ),
-            child: Row(
-              children: [
-                _Checkbox(checked: accepted, tokens: tokens),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    'Я ознакомился и принимаю условия Соглашения и '
-                    'Политики конфиденциальности',
-                    style: TextStyle(
-                      fontFamily: tokens.fontBody,
-                      fontSize: 13,
-                      height: 1.4,
-                      color: tokens.text,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-
-        if (rememberSupported) ...[
-          const SizedBox(height: 10),
-          InkWell(
-            onTap: () => onToggleRemember(!remember),
-            borderRadius: BorderRadius.circular(tokens.radiusButton),
-            child: Container(
-              padding: const EdgeInsets.symmetric(
-                horizontal: 12,
-                vertical: 10,
-              ),
-              decoration: BoxDecoration(
-                color: remember
-                    ? tokens.accentAlpha(0.10)
-                    : tokens.surface.withValues(alpha: 0.4),
-                borderRadius: BorderRadius.circular(tokens.radiusButton),
-                border: Border.all(
-                  color: remember ? tokens.accent : tokens.border,
-                  width: remember ? 1.4 : 1,
-                ),
-              ),
-              child: Row(
-                children: [
-                  _Checkbox(checked: remember, tokens: tokens),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'Запомнить меня на этом устройстве',
-                      style: TextStyle(
-                        fontFamily: tokens.fontBody,
-                        fontSize: 13,
-                        height: 1.4,
-                        color: tokens.text,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-
-        if (error != null) ...[
-          const SizedBox(height: 12),
-          _ErrorBanner(error!),
-        ],
-        const SizedBox(height: 14),
-
-        _BigButton(
-          // Busy state is handled by the full-screen CryptoBusyView, so the
-          // button itself only ever shows its resting label here.
-          label: 'Принять и продолжить',
-          icon: Icons.login,
-          onPressed: (busy || !accepted) ? null : onFinish,
-        ),
-      ],
-    );
-  }
-}
-
-/// Custom rounded square checkbox tinted to the active theme. Material's
-/// stock `Checkbox` looks foreign here — too small + too platform-y.
-class _Checkbox extends StatelessWidget {
-  const _Checkbox({required this.checked, required this.tokens});
-  final bool checked;
-  final OrbitsTokens tokens;
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedContainer(
-      duration: tokens.durationShort,
-      curve: tokens.easing,
-      width: 22,
-      height: 22,
-      decoration: BoxDecoration(
-        color: checked ? tokens.accent : Colors.transparent,
-        borderRadius: BorderRadius.circular(6),
-        border: Border.all(
-          color: checked ? tokens.accent : tokens.muted,
-          width: 1.6,
-        ),
-      ),
-      alignment: Alignment.center,
-      child: checked
-          ? Icon(Icons.check, size: 16, color: tokens.bg)
-          : const SizedBox.shrink(),
     );
   }
 }

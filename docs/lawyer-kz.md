@@ -45,4 +45,8 @@
 - Готового текста оферты, политики, дисклеймеров.
 - Изменения LICENSE / решения «open source vs proprietary» (это отдельное
   решение владельца + юриста; см. `docs/landing-honesty.md`).
-- Реализации экранов в этом PR.
+- Готового текста оферты (экраны в приложении — заглушки с
+  `[TEXT PENDING LEGAL REVIEW]`, см. Round 3 C).
+
+Технический бриф для юриста (факты + чеклист из 6 пунктов):
+[`legal-requirements-for-lawyer.md`](legal-requirements-for-lawyer.md).

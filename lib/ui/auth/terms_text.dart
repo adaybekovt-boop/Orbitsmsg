@@ -22,6 +22,7 @@
 
 import 'package:flutter/material.dart';
 
+import '../../legal/legal_placeholders.dart';
 import '../../themes/orbits_tokens.dart';
 
 /// One unit of the policy. Use [TermsBlock.h1] for top-level section
@@ -246,9 +247,23 @@ class TermsView extends StatelessWidget {
     final tokens = OrbitsTokens.of(context);
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-      itemCount: blocks.length,
+      itemCount: blocks.length + 1,
       itemBuilder: (context, i) {
-        final block = blocks[i];
+        if (i == 0) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 16),
+            child: Text(
+              kLegalPendingPlaceholder,
+              style: TextStyle(
+                fontFamily: tokens.fontMono,
+                fontSize: 13,
+                height: 1.4,
+                color: tokens.danger,
+              ),
+            ),
+          );
+        }
+        final block = blocks[i - 1];
         if (block is TermsHeading) {
           return Padding(
             padding: EdgeInsets.only(top: i == 0 ? 0 : 18, bottom: 8),
