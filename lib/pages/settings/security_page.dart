@@ -16,7 +16,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../core/qr_pairing.dart';
 import '../../peer/helpers.dart';
 import '../../state/auth_notifier.dart';
 import '../../state/auto_lock_provider.dart';
@@ -25,12 +24,14 @@ import '../../state/remembered_session_io.dart'
     as remembered;
 import '../../state/strict_verify_provider.dart';
 import '../../themes/orbits_tokens.dart';
-import '../qr_pairing_page.dart';
 import '../../ui/primitives/orbits_glass_list_tile.dart';
 import '../../ui/primitives/adaptive_page_frame.dart';
 import '../../ui/primitives/orbits_glass_app_bar.dart';
 import '../../ui/primitives/orbits_glass_switch.dart';
 import '../../ui/primitives/orbs_card.dart';
+
+const Key kCryptoE2eOnBadgeKey = Key('crypto-e2e-on');
+const Key kCryptoRoomsOffBadgeKey = Key('crypto-rooms-off');
 
 class SecurityPage extends ConsumerStatefulWidget {
   const SecurityPage({super.key});
@@ -236,42 +237,6 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
             ),
           ),
 
-          // QR device linking is hidden until vault/session transfer exists.
-          // Round 1 only rewrote the subtitle; the phone still said
-          // «Вход подтверждён на компьютере» after a token signature.
-          if (kQrDeviceLinkingEnabled) ...[
-            const OrbsSectionTitle('Связь устройств'),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: OrbitsGlassListTile(
-                leading:
-                    Icon(Icons.qr_code_scanner_rounded, color: tokens.text),
-                title: const Text('Связать с ПК'),
-                subtitle: const Text(
-                  'Подписать одноразовый QR-токен ключом телефона. Это не вход '
-                  'в профиль и не копирование сейфа на компьютер.',
-                ),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const QrScanPage()),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: OrbitsGlassListTile(
-                leading: Icon(Icons.qr_code_2_rounded, color: tokens.text),
-                title: const Text('Показать QR для связки'),
-                subtitle: const Text(
-                  'Одноразовый токен. Подпись телефона не открывает сейф и не '
-                  'копирует профиль на этот компьютер.',
-                ),
-                onTap: () => Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const QrPairingPage()),
-                ),
-              ),
-            ),
-          ],
-
           // ── Coming soon stubs ───────────────────────────────
           const OrbsSectionTitle('В разработке'),
           const _ComingSoonRow(
@@ -303,7 +268,8 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
           const _CryptoRow(
             title: 'Комнаты',
             subtitle:
-                'Без сквозного шифрования: организатор видит текст и файлы',
+                'Без сквозного шифрования — хост видит содержимое',
+            e2eOn: false,
           ),
           const SizedBox(height: 24),
         ],
@@ -317,14 +283,17 @@ class _CryptoRow extends StatelessWidget {
   const _CryptoRow({
     required this.title,
     required this.subtitle,
+    this.e2eOn = true,
   });
 
   final String title;
   final String subtitle;
+  final bool e2eOn;
 
   @override
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
+    final badgeColor = e2eOn ? tokens.success : tokens.danger;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: OrbitsGlassListTile(
@@ -338,18 +307,19 @@ class _CryptoRow extends StatelessWidget {
         ),
         subtitle: Text(subtitle),
         trailing: Container(
+          key: e2eOn ? kCryptoE2eOnBadgeKey : kCryptoRoomsOffBadgeKey,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
           decoration: BoxDecoration(
-            color: tokens.success.withValues(alpha: 0.16),
+            color: badgeColor.withValues(alpha: 0.16),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Text(
-            'ВКЛ',
+            e2eOn ? 'ВКЛ' : 'НЕТ E2E',
             style: TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w700,
               fontFamily: tokens.fontMono,
-              color: tokens.success,
+              color: badgeColor,
               letterSpacing: 1.0,
             ),
           ),

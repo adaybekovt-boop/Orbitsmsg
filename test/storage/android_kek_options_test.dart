@@ -12,5 +12,6 @@ void main() {
     expect(map['enforceBiometrics'], 'true');
     expect(map['keyCipherAlgorithm'], 'AES_GCM_NoPadding');
     expect(map['storageCipherAlgorithm'], 'AES_GCM_NoPadding');
+    expect(map['biometricType'], isNot(isEmpty));
   });
 }

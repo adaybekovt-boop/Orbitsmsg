@@ -1,0 +1,60 @@
+// A.4 — sendRoomPacket must honor the host-plaintext session ack.
+// The UI banner is not a security boundary if the wire send ignores it.
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
+
+void main() {
+  setUp(kRoomPlaintextSessionAck.reset);
+  tearDown(kRoomPlaintextSessionAck.reset);
+
+  test('sendRoomPacket blocks room_msg without session ack', () {
+    expect(kRoomPlaintextSessionAck.isAcknowledged, isFalse);
+    final sent = <Map<String, Object?>>[];
+    final ok = sendGuardedRoomPacket(
+      {'type': 'room_msg', 'text': 'hello from bypass'},
+      connected: true,
+      send: sent.add,
+    );
+    expect(ok, isFalse, reason: 'wire send must refuse un-acked room_msg');
+    expect(sent, isEmpty);
+  });
+
+  test('sendRoomPacket allows room_msg after ack', () {
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    final sent = <Map<String, Object?>>[];
+    final packet = {'type': 'room_msg', 'text': 'ok'};
+    final ok = sendGuardedRoomPacket(
+      packet,
+      connected: true,
+      send: sent.add,
+    );
+    expect(ok, isTrue);
+    expect(sent, [packet]);
+  });
+
+  test('control packets still send without ack', () {
+    final sent = <Map<String, Object?>>[];
+    final ok = sendGuardedRoomPacket(
+      {'type': 'room_join', 'roomId': 'r'},
+      connected: true,
+      send: sent.add,
+    );
+    expect(ok, isTrue);
+    expect(sent.single['type'], 'room_join');
+  });
+
+  test('disconnected peer is not a silent ack bypass', () {
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    final sent = <Map<String, Object?>>[];
+    expect(
+      sendGuardedRoomPacket(
+        {'type': 'room_msg', 'text': 'x'},
+        connected: false,
+        send: sent.add,
+      ),
+      isFalse,
+    );
+    expect(sent, isEmpty);
+  });
+}

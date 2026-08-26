@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Orbits — P2P-мессенджер</title>
+  <meta name="description" content="Orbits: личные чаты со сквозным шифрованием. Комнаты видит организатор. Нет хранения переписки на наших серверах.">
+  <style>
+    :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
+    body { margin: 0; background: #0c0d10; color: #f2f3f5; line-height: 1.5; }
+    main { max-width: 720px; margin: 0 auto; padding: 48px 20px 80px; }
+    h1 { font-size: 2rem; letter-spacing: -0.03em; }
+    p, li { color: #c5c8d0; }
+    a { color: #5b9dff; }
+    .tag { color: #9ba1ac; font-size: 0.95rem; }
+    .card { border: 1px solid #2a2d35; border-radius: 16px; padding: 16px 18px; margin: 12px 0; background: #16181d; }
+    .warn { color: #ffb020; }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="tag">P2P · без хранения переписки на наших серверах</p>
+    <h1>Orbits</h1>
+    <p>
+      Личные чаты идут напрямую между устройствами и закрыты X3DH + Double Ratchet.
+      Чтобы устройства нашли друг друга, клиент использует сигналинг
+      <strong>PeerJS</strong> (<code>*.peerjs.com</code>) и публичный STUN
+      (Google / Mozilla / Twilio). Это не «мессенджер без серверов».
+    </p>
+    <p class="warn">
+      Комнаты без сквозного шифрования: организатор видит текст, файлы и стикеры.
+      DTLS защищает только hop до хоста.
+    </p>
+
+    <h2>Скачать</h2>
+    <p>Ссылки ведут на актуальный GitHub Release (<code>/releases/latest/download/</code>), не на закреплённый тег.</p>
+    <div class="card">
+      <strong>Windows</strong><br>
+      <a href="https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-windows-x64.exe">orbits-windows-x64.exe</a>
+    </div>
+    <div class="card">
+      <strong>Android</strong><br>
+      <a href="https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-android-universal.apk">orbits-android-universal.apk</a>
+    </div>
+    <div class="card">
+      <strong>Веб</strong><br>
+      <a href="https://adaybekovt-boop.github.io/tkmessenger/">Открыть PWA</a>
+      <p>Веб открывается и на телефоне. Создать сервер можно только с компьютера.</p>
+    </div>
+    <p><a href="https://github.com/adaybekovt-boop/tkmessenger/releases/latest">Все файлы последнего релиза</a></p>
+    <p>Проприетарное ПО. Копирование исходного кода без разрешения запрещено.</p>
+  </main>
+</body>
+</html>

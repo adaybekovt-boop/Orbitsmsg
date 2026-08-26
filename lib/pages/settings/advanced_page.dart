@@ -9,7 +9,9 @@ import '../../themes/orbits_tokens.dart';
 import '../../ui/primitives/adaptive_page_frame.dart';
 import '../../ui/primitives/orbits_glass_list_tile.dart';
 import '../../ui/primitives/orbits_glass_app_bar.dart';
+import 'complaint_page.dart';
 import 'diagnostics_page.dart';
+import 'legal_offer_page.dart';
 import 'mic_page.dart';
 import 'network_page.dart';
 import 'power_saver_page.dart';
@@ -76,9 +78,21 @@ class AdvancedPage extends StatelessWidget {
             ),
             const _AdvancedRow(
               icon: Icons.gavel,
-              title: 'Соглашение',
-              subtitle: 'Политика конфиденциальности и условия',
+              title: 'Соглашение (черновик)',
+              subtitle: 'Непроверенный текст — не оферта юриста',
               page: TermsPage(),
+            ),
+            const _AdvancedRow(
+              icon: Icons.article_outlined,
+              title: 'Оферта',
+              subtitle: '[TEXT PENDING LEGAL REVIEW]',
+              page: LegalOfferPage(),
+            ),
+            const _AdvancedRow(
+              icon: Icons.report_gmailerrorred_outlined,
+              title: 'Жалоба',
+              subtitle: 'Форма и внешний канал (пока GitHub Issues)',
+              page: ComplaintPage(),
             ),
           ],
         ),

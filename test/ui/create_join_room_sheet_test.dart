@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
+import 'package:orbits_flutter/peer/room_signaling_host.dart';
 import 'package:orbits_flutter/ui/room/create_join_room_sheet.dart';
 
 import '../helpers/test_theme.dart';
@@ -63,6 +64,46 @@ void main() {
       expect(result, isNotNull);
       expect(result!.isCreate, isTrue);
       expect(result!.value, 'Test Room');
+    },
+  );
+
+  testWidgets(
+    'LAN-only internet warning is visible before any invite can be shared',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          theme: testOrbitsTheme(),
+          home: Builder(
+            builder: (ctx) => Scaffold(
+              body: TextButton(
+                onPressed: () {
+                  showModalBottomSheet<void>(
+                    context: ctx,
+                    isScrollControlled: true,
+                    builder: (_) => const CreateJoinRoomSheet(
+                      defaultName: 'Me',
+                      canCreate: true,
+                    ),
+                  );
+                },
+                child: const Text('open-sheet'),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      await tester.tap(find.text('open-sheet'));
+      await tester.pumpAndSettle();
+
+      final open = await RoomSignalingHost().tryOpenInternet();
+      expect(open.opened, isFalse);
+      expect(open.userMessage, kRoomLanOnlyInternetMessageRu);
+
+      expect(find.text(open.userMessage), findsOneWidget);
+      expect(find.byKey(kRoomLanOnlyInternetKey), findsOneWidget);
+      expect(find.text('Копировать'), findsNothing);
+      expect(find.textContaining('orbits-room:'), findsNothing);
     },
   );
 

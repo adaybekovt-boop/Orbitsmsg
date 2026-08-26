@@ -265,12 +265,9 @@ PacketHandler createPacketHandler(
       }
       return;
     }
-    // Room-protocol control maps + QR-pairing auth responses (both plaintext,
-    // reliable) → RoomManager bridge. Checked before the generic dispatcher so
-    // they don't fall through to the chat/wire handler (which would drop them
-    // as unknown types).
-    if (data is Map &&
-        (isRoomPacket(data) || data['type'] == 'qr_auth_response')) {
+    // Room-protocol control maps → RoomManager. Checked before the generic
+    // dispatcher so they don't fall through to the chat/wire handler.
+    if (data is Map && isRoomPacket(data)) {
       ctx.roomInbound?.call(remoteId, Map<String, Object?>.from(data));
       return;
     }

@@ -16,8 +16,30 @@ while unlocked (`lib/core/vault_kek.dart`). It is never written to disk.
 | Contact / peer rows | Same `OB1` blob cipher. |
 | Voice recordings, file attachments, thumbs, avatars | Same `OB1` blob cipher on the byte columns. Legacy unencrypted blobs still read. |
 | Double-ratchet / identity / prekey scalars | Fail-closed `orb-wrap-v1` (`wrapSecret`). Never written while locked. |
-| SQLite file as a whole | **Not** SQLCipher (`kSqlCipherFileEncryptionEnabled == false` in `lib/storage/sqlcipher_status.dart`). Decision: `sqlcipher_flutter_libs` clashes with `sqlite3_flutter_libs` on Windows CMake (`sqlite3` target). A stolen DB file is ciphertext at the row/blob layer but table names, peer IDs, timestamps, message status, file names, MIME types, and sizes are readable. This is **not** the same control as fail-closed blob writes. |
+| SQLite file as a whole | **Not** SQLCipher. See **Known limitation: SQLCipher** below (`kSqlCipherFileEncryptionEnabled == false`). |
 | Stickers, room membership lists, channel names | Not covered by the blob cipher. Treat as metadata. |
+
+## Known limitation: SQLCipher
+
+**Known limitation: SQLCipher full-file encryption is off.** This is the
+official product decision for this tree, not an undocumented leftover.
+
+- Flag: `kSqlCipherFileEncryptionEnabled == false` in
+  `lib/storage/sqlcipher_status.dart`. `openCipherExecutor()` returns
+  `null`; `_open()` uses ordinary Drift/SQLite.
+- Why: `sqlcipher_flutter_libs` and `sqlite3_flutter_libs` both register a
+  CMake target named `sqlite3` on **Windows**. Turning the flag on without
+  a per-platform opener split breaks the Windows desktop build.
+- What is still protected: selected row/blob payloads under the vault KEK
+  (`OB1` / `wrapSecret`). That is a different layer.
+- What a stolen `.sqlite` file still reveals without the password: table
+  names, peer IDs, timestamps, message status, file names, MIME types,
+  sizes, room/channel/member rows.
+- **Next engineering step:** split native openers so Windows can keep
+  `sqlite3_flutter_libs` while Android/iOS/Linux use SQLCipher; then make
+  `openCipherExecutor()` return a real executor and flip the flag only
+  after CI builds Windows. No ship date is attached — the blocker is the
+  CMake clash, not staffing.
 
 ## On the wire
 
@@ -28,7 +50,7 @@ while unlocked (`lib/core/vault_kek.dart`). It is never written to disk.
 | File transfer (Drop) | Raw DataChannel frames, only after a **verified** wire handshake. Size / concurrency caps apply. |
 | Voice/video calls | WebRTC DTLS-SRTP to the peer. Default ICE uses public Google/Mozilla/Twilio STUN (IP leak to those operators). See `docs/privacy.md`. |
 | TURN credentials | Username/credential are loaded at runtime (`orbits_turn_username` / `orbits_turn_credential`). CI does **not** pass them as `--dart-define`. `TURN_URL` may still be compile-time (it is not a secret). |
-| UPnP IGD mapping | **WAN punch for embedded signaling is off** until WSS exists. LAN signaling is still plaintext `ws`, but the room key is random (not `peerjs`) and empty tokens are rejected. Per-IP connect quotas apply. |
+| UPnP IGD mapping | **WAN punch for embedded signaling is off** until WSS exists. `tryOpenInternet()` returns a structured LAN-only result (never silent `null`); the create-room UI shows that guests from the internet cannot join **before** the host shares an invite. LAN signaling is still plaintext `ws`, but the room key is random (not `peerjs`) and empty tokens are rejected. Per-IP connect quotas apply. |
 | Windows auto-update | GitHub TLS plus **pinned Authenticode** before launch (`docs/windows-signing.md`). |
 | Android release APK | Upload / CI sideload keystore, never the SDK debug key (`docs/android-signing.md`). |
 
@@ -56,8 +78,8 @@ unlocked process).
 - Drop file names are sanitized (no path segments).
 - New passwords: 12+ characters and at least two character classes.
 - scrypt records with N below 2^14 or a non-power-of-two N are rejected.
-- QR device linking proves the phone signed a one-time token. It does **not**
-  unlock the PC vault or copy the profile.
+- QR “login to PC” UI was deleted. Token sign/verify helpers remain in
+  `lib/core/qr_pairing.dart` with no adopt-session path.
 - Native / background notifications are still not implemented (`docs` + settings
   page already say so).
 - Chat attachments are still fully buffered in memory (not streamed).

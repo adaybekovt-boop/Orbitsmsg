@@ -138,7 +138,10 @@ String _ratchetRowKey(String peerId) => '$_ratchetRowPrefix$peerId';
 
 Future<Object?> _maybeWrap(Object? value) async {
   if (value == null) return null;
-  return hasVaultKek() ? await wrapBytes(value) : value;
+  if (!hasVaultKek()) {
+    throw StateError('vault: locked — cannot wrap a ratchet field');
+  }
+  return wrapBytes(value);
 }
 
 Future<Uint8List?> _maybeUnwrap(Object? value) async {
@@ -152,10 +155,12 @@ Future<Uint8List?> _maybeUnwrap(Object? value) async {
 
 Future<Map<String, Object?>> _serializeSkipped(
     Map<String, Uint8List> skipped) async {
-  final shouldWrap = hasVaultKek();
+  if (!hasVaultKek()) {
+    throw StateError('vault: locked — cannot wrap skipped message keys');
+  }
   final out = <String, Object?>{};
   for (final entry in skipped.entries) {
-    out[entry.key] = shouldWrap ? await wrapBytes(entry.value) : entry.value;
+    out[entry.key] = await wrapBytes(entry.value);
   }
   return out;
 }

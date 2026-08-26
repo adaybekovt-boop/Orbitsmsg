@@ -61,7 +61,8 @@ default PeerJS / public STUN / GitHub update endpoints and bundled fonts
 The in-app updater must not launch an installer unless Authenticode is
 Valid, Subject CN/O equal `Orbits` exactly, and the certificate SHA-256
 is in `kOrbitsAuthenticodeSha256Thumbprints`. That list is empty until a
-code-signing cert is provisioned — the updater then refuses every EXE.
+code-signing cert is **purchased from a public CA** — in-app Install is
+hidden and the page tells the user to download from GitHub Releases.
 See `docs/windows-signing.md`. CI calls `signtool sign` when
 `WINDOWS_CERT_PFX_BASE64` is set; `v*` tags without that secret fail.
 

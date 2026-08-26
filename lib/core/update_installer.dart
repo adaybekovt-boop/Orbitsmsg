@@ -18,6 +18,8 @@ enum InstallLaunchStatus {
   invalidFile,
   /// Authenticode missing, untrusted, or publisher pin mismatch (U-1).
   signatureUntrusted,
+  /// No production SHA-256 pin is configured. In-app install is off.
+  autoUpdateUnprovisioned,
   launchFailed,
   error,
 }

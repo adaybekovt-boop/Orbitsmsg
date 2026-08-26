@@ -6,6 +6,11 @@
 // rekey-on-kick. Do not add `room_crypto.dart` until a real group protocol
 // exists — a half protocol is worse than an honest banner.
 
+/// Application-layer group E2E (MLS or per-sender keys) is **not**
+/// implemented. UI banners / session ack are honesty, not a protocol.
+/// See `docs/rooms.md` § Open item.
+const bool kRoomsApplicationE2eImplemented = false;
+
 /// Short in-app banner (Russian UI).
 const String kRoomNotE2eBannerRu =
     'Организатор видит все сообщения и файлы. Комнаты без сквозного '

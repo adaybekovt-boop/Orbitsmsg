@@ -39,6 +39,7 @@ import '../messaging/message_protocol.dart';
 import '../core/orbits_drop.dart' show dropMaxBufferSize;
 import '../peer/helpers.dart';
 import '../peer/packet_router.dart';
+import '../peer/room_plaintext_gate.dart';
 import '../peer/peerjs_client.dart';
 import '../peer/wire_transport.dart';
 import '../storage/db.dart' as db;
@@ -257,9 +258,11 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// no open reliable connection exists.
   bool sendRoomPacket(String remoteId, Map<String, Object?> packet) {
     final conn = getConn(remoteId, 'reliable');
-    if (conn == null || !conn.open) return false;
-    conn.send(packet);
-    return true;
+    return sendGuardedRoomPacket(
+      packet,
+      connected: conn != null && conn.open,
+      send: (p) => conn!.send(p),
+    );
   }
 
   /// Backpressure for Drop: resolve once the reliable channel's send buffer

@@ -72,6 +72,11 @@ void main() {
           launched.add(path);
           return true;
         },
+        policy: const AuthenticodePolicy(
+          requiredCn: 'Orbits',
+          requiredO: 'Orbits',
+          allowedThumbprints: [attackerThumb],
+        ),
         verifier: _Stub(
           AuthenticodeResult(
             AuthenticodeStatus.valid,
@@ -83,6 +88,34 @@ void main() {
 
       final result = await installer.launch(exe.path);
       expect(result.status, InstallLaunchStatus.signatureUntrusted);
+      expect(result.launched, isFalse);
+      expect(launched, isEmpty);
+    });
+
+    test('empty pin + Valid exact Orbits cert is unprovisioned, not launched',
+        () async {
+      final exe = File(
+        '${tempDir.path}${Platform.pathSeparator}orbits-windows-x64.exe',
+      )..writeAsStringSync('MZ-fake');
+      final launched = <String>[];
+      final installer = IoUpdateInstaller(
+        isWindows: true,
+        launcher: (path, _) async {
+          launched.add(path);
+          return true;
+        },
+        verifier: _Stub(
+          AuthenticodeResult(
+            AuthenticodeStatus.valid,
+            subject: exactSubject,
+            thumbprint: attackerThumb,
+          ),
+        ),
+      );
+
+      final result = await installer.launch(exe.path);
+      expect(result.status, InstallLaunchStatus.autoUpdateUnprovisioned);
+      expect(result.message, kUpdateAutoUpdateUnavailableMessage);
       expect(result.launched, isFalse);
       expect(launched, isEmpty);
     });

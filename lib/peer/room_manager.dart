@@ -46,6 +46,7 @@ import 'helpers.dart';
 import 'peerjs_client.dart';
 import 'peer_server_core.dart';
 import 'room_invite.dart';
+import 'room_plaintext_gate.dart';
 import 'room_scoped_transport.dart';
 import 'room_signaling_host.dart';
 import 'security_monitor.dart';
@@ -140,6 +141,7 @@ class RoomState {
     this.micEnabled = true,
     this.micAvailable = false,
     this.selfHostInvite,
+    this.internetAccessMessage,
   });
 
   /// Current role.
@@ -195,6 +197,10 @@ class RoomState {
   /// [RoomInvite.tryParse] to render LAN/public reach in the UI.
   final String? selfHostInvite;
 
+  /// From [RoomSignalingHost.tryOpenInternet]. Hosts must see this before
+  /// sharing the invite. Null for guests / cloud rooms.
+  final String? internetAccessMessage;
+
   /// True when this session runs its own embedded signaling server.
   bool get isSelfHosted => selfHostInvite != null;
 
@@ -216,6 +222,7 @@ class RoomState {
     bool? micEnabled,
     bool? micAvailable,
     Object? selfHostInvite = _unset,
+    Object? internetAccessMessage = _unset,
   }) =>
       RoomState(
         role: role ?? this.role,
@@ -243,6 +250,9 @@ class RoomState {
         selfHostInvite: identical(selfHostInvite, _unset)
             ? this.selfHostInvite
             : selfHostInvite as String?,
+        internetAccessMessage: identical(internetAccessMessage, _unset)
+            ? this.internetAccessMessage
+            : internetAccessMessage as String?,
       );
 }
 
@@ -349,11 +359,6 @@ class RoomManager extends StateNotifier<RoomState> {
   /// and was removed so it could not look like live protection.
   final SecurityMonitor _security = SecurityMonitor();
 
-  /// Optional handler for inbound `qr_auth_response` packets, registered by the
-  /// desktop QrPairingPage while it displays a code. Routed through here because
-  /// the connection layer already bridges plaintext control maps to RoomManager.
-  void Function(String remoteId, Map<String, Object?> packet)? _qrAuthListener;
-
   /// Delegates to the (possibly faked) transport. Named `_connections` for
   /// continuity — the method surface (sendRoomPacket/openReliable/hasReliable)
   /// matches the registry it wraps in production.
@@ -453,10 +458,12 @@ class RoomManager extends StateNotifier<RoomState> {
       activeChannelId: general['id'] as String?,
       serverActive: true,
       selfHostInvite: invite,
+      internetAccessMessage:
+          selfHosted ? kRoomLanOnlyInternetMessageRu : null,
     );
 
-    // Best-effort internet exposure runs in the background so room creation is
-    // instant and LAN-usable immediately; if UPnP succeeds the invite upgrades.
+    // Resolve WAN exposure (today: structured LAN-only). The message is
+    // already on state so the host sees it before sharing the invite.
     if (selfHosted) unawaited(_upgradeToInternet(roomId));
   }
 
@@ -517,21 +524,24 @@ class RoomManager extends StateNotifier<RoomState> {
     return invite.encode();
   }
 
-  /// Background best-effort: open the router port via UPnP and, on success,
-  /// re-issue the invite with the public `ip:port` folded in.
+  /// Apply [RoomSignalingHost.tryOpenInternet]. Always writes
+  /// [RoomState.internetAccessMessage]. Only upgrades the invite when WAN
+  /// actually opened.
   Future<void> _upgradeToInternet(String roomId) async {
     final host = _selfHost;
     if (host == null) return;
-    final pub = await host.tryOpenInternet();
-    if (pub == null || !mounted) return;
+    final result = await host.tryOpenInternet();
+    if (!mounted) return;
+    if (state.roomId != roomId || state.role != RoomRole.host) return;
+    state = state.copyWith(internetAccessMessage: result.userMessage);
+    if (!result.opened) return;
     final current = RoomInvite.tryParse(state.selfHostInvite ?? '');
     if (current == null) return;
-    if (state.roomId != roomId || state.role != RoomRole.host) return;
     final upgraded = RoomInvite(
       roomId: current.roomId,
       lanHosts: current.lanHosts,
       port: current.port,
-      publicHostPort: pub,
+      publicHostPort: result.publicHostPort,
       key: current.key,
     );
     state = state.copyWith(selfHostInvite: upgraded.encode());
@@ -1229,6 +1239,7 @@ class RoomManager extends StateNotifier<RoomState> {
     // (voice uses the room-scoped client as rawPeer).
     await _teardownSelfHost();
     _security.reset();
+    kRoomPlaintextSessionAck.reset();
     state = const RoomState();
   }
 
@@ -1286,11 +1297,6 @@ class RoomManager extends StateNotifier<RoomState> {
       String remoteId, Map<String, Object?> packet) async {
     final type = packet['type'];
     if (type is! String) return;
-    // QR pairing rides the same plaintext bridge but isn't a room packet.
-    if (type == 'qr_auth_response') {
-      _qrAuthListener?.call(remoteId, packet);
-      return;
-    }
     // Allow-list: ignore anything that isn't a known room packet (no throw).
     if (!kRoomPacketTypes.contains(type)) return;
     // Active-room gate (audit item 1): every room packet must target the room
@@ -1430,6 +1436,7 @@ class RoomManager extends StateNotifier<RoomState> {
     if (roomId != null) await db.setRoomStatus(roomId, 'offline');
     await _stopVoice();
     _security.reset();
+    kRoomPlaintextSessionAck.reset();
     state = RoomState(
       joinError: _rejectReasonMessage(packet['reason'] as String?),
     );
@@ -1535,23 +1542,6 @@ class RoomManager extends StateNotifier<RoomState> {
     }
   }
 
-  /// Register (or clear, with null) the handler for inbound `qr_auth_response`
-  /// packets — used by the desktop QR-pairing page.
-  void setQrAuthListener(
-          void Function(String remoteId, Map<String, Object?> packet)? cb) =>
-      _qrAuthListener = cb;
-
-  /// Phone side: dial [pcPeerId] and send a signed `qr_auth_response`. Reuses
-  /// the reliable plaintext room channel (DTLS-protected). Best-effort: returns
-  /// false if the reliable channel never opened.
-  Future<bool> sendQrAuthResponse(
-      String pcPeerId, Map<String, Object?> packet) async {
-    if (pcPeerId.isEmpty) return false;
-    _connections.openReliable(pcPeerId);
-    if (!await _waitReliable(pcPeerId)) return false;
-    return _connections.sendRoomPacket(pcPeerId, packet);
-  }
-
   /// Guest: host created/synced a channel — replicate it with the host's id.
   /// Accepted only from the host (audit items 1/2).
   Future<void> _onChannelCreate(
@@ -1577,6 +1567,7 @@ class RoomManager extends StateNotifier<RoomState> {
     // Guest's room-scoped client (if self-hosted) is torn down here too.
     await _teardownSelfHost();
     _security.reset();
+    kRoomPlaintextSessionAck.reset();
     state = const RoomState();
   }
 

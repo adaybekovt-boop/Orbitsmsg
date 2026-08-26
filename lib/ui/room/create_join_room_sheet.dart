@@ -5,7 +5,11 @@ import 'package:flutter/material.dart';
 
 import '../../peer/room_disclaimer.dart';
 import '../../peer/room_plaintext_gate.dart';
-import '../../peer/room_signaling_host.dart' show kServerHostDesktopOnlyMessage;
+import '../../peer/room_signaling_host.dart'
+    show
+        kRoomLanOnlyInternetKey,
+        kRoomLanOnlyInternetMessageRu,
+        kServerHostDesktopOnlyMessage;
 import '../../themes/orbits_tokens.dart';
 import '../primitives/orbits_glass_button.dart';
 import '../primitives/orbits_glass_surface.dart';
@@ -93,6 +97,17 @@ class _CreateJoinRoomSheetState extends State<CreateJoinRoomSheet> {
                 ),
               ),
               const SizedBox(height: 8),
+              Text(
+                kRoomLanOnlyInternetMessageRu,
+                key: kRoomLanOnlyInternetKey,
+                style: TextStyle(
+                  color: tokens.danger,
+                  fontSize: 13,
+                  height: 1.35,
+                  fontFamily: tokens.fontBody,
+                ),
+              ),
+              const SizedBox(height: 8),
               CheckboxListTile(
                 key: kRoomPlaintextAckKey,
                 value: _acked,
@@ -133,6 +148,7 @@ class _CreateJoinRoomSheetState extends State<CreateJoinRoomSheet> {
                     )) {
                       return;
                     }
+                    kRoomPlaintextSessionAck.setAcknowledged(true);
                     Navigator.of(context).pop(JoinOrCreateResult(true, v));
                   },
                 ),
@@ -188,6 +204,7 @@ class _CreateJoinRoomSheetState extends State<CreateJoinRoomSheet> {
                   )) {
                     return;
                   }
+                  kRoomPlaintextSessionAck.setAcknowledged(true);
                   Navigator.of(context).pop(JoinOrCreateResult(false, v));
                 },
               ),

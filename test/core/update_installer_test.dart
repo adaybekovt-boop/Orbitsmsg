@@ -187,11 +187,31 @@ void main() {
       expect(result.message, isNotNull);
     });
 
+    test('empty production pin + Valid signature is unprovisioned, not launched',
+        () async {
+      final rec = recordingLauncher();
+      final installer = IoUpdateInstaller(
+        isWindows: true,
+        launcher: rec.fn,
+        verifier: trustedVerifier(),
+        policy: kDefaultAuthenticodePolicy,
+      );
+      final exe = writeFile('orbits-windows-x64.exe', content: 'MZ-fake');
+
+      final result = await installer.launch(exe);
+
+      expect(result.status, InstallLaunchStatus.autoUpdateUnprovisioned);
+      expect(result.message, kUpdateAutoUpdateUnavailableMessage);
+      expect(result.launched, isFalse);
+      expect(rec.calls, isEmpty);
+    });
+
     test('unsigned exe is not launched (U-1)', () async {
       final rec = recordingLauncher();
       final installer = IoUpdateInstaller(
         isWindows: true,
         launcher: rec.fn,
+        policy: _testPolicy,
         verifier: _StubVerifier(const AuthenticodeResult(
           AuthenticodeStatus.notSigned,
         )),
@@ -212,9 +232,11 @@ void main() {
       final installer = IoUpdateInstaller(
         isWindows: true,
         launcher: rec.fn,
+        policy: _testPolicy,
         verifier: _StubVerifier(const AuthenticodeResult(
           AuthenticodeStatus.valid,
           subject: 'CN=Contoso, O=Contoso, C=US',
+          thumbprint: _testThumb,
         )),
       );
       final exe = writeFile('orbits-windows-x64.exe', content: 'MZ-fake');
@@ -225,15 +247,40 @@ void main() {
       expect(rec.calls, isEmpty);
     });
 
-    test('fail-closed default verifier on non-Windows does not launch',
-        () async {
-      // isWindows:true simulates the product path; the default verifier is
-      // still FailClosedAuthenticodeVerifier because this test host is not
-      // Windows. Unsigned GitHub EXEs must not start.
+    test('Valid signature of a different cert is rejected', () async {
+      const otherThumb =
+          'DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD';
       final rec = recordingLauncher();
       final installer = IoUpdateInstaller(
         isWindows: true,
         launcher: rec.fn,
+        policy: _testPolicy,
+        verifier: _StubVerifier(const AuthenticodeResult(
+          AuthenticodeStatus.valid,
+          subject: 'CN=Orbits, OU=Release, O=Orbits, C=US',
+          thumbprint: otherThumb,
+        )),
+      );
+      final exe = writeFile('orbits-windows-x64.exe', content: 'MZ-fake');
+
+      final result = await installer.launch(exe);
+
+      expect(result.status, InstallLaunchStatus.signatureUntrusted);
+      expect(result.launched, isFalse);
+      expect(rec.calls, isEmpty);
+    });
+
+    test('fail-closed default verifier on non-Windows does not launch',
+        () async {
+      // isWindows:true simulates the product path; the default verifier is
+      // still FailClosedAuthenticodeVerifier because this test host is not
+      // Windows. Unsigned GitHub EXEs must not start. Pin is provisioned
+      // so we reach the verifier instead of autoUpdateUnprovisioned.
+      final rec = recordingLauncher();
+      final installer = IoUpdateInstaller(
+        isWindows: true,
+        launcher: rec.fn,
+        policy: _testPolicy,
       );
       final exe = writeFile('orbits-windows-x64.exe', content: 'MZ-fake');
 

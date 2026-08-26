@@ -14,6 +14,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/authenticode.dart';
 import '../core/installed_version.dart';
 import '../core/update_checker.dart';
 import '../core/update_downloader.dart';
@@ -424,6 +425,11 @@ class UpdateNotifier extends StateNotifier<UpdateState> {
       state = state.copyWith(
         installStatus: InstallUiStatus.failed,
         installError: kUpdateSignatureUntrustedMessage,
+      );
+    } else if (result.status == InstallLaunchStatus.autoUpdateUnprovisioned) {
+      state = state.copyWith(
+        installStatus: InstallUiStatus.failed,
+        installError: kUpdateAutoUpdateUnavailableMessage,
       );
     } else {
       state = state.copyWith(

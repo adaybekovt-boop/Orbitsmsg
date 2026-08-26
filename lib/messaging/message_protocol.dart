@@ -736,11 +736,15 @@ List<double>? _numListToDoubles(Object? v) {
   return out;
 }
 
-/// 64 bits of randomness as 16 hex chars. Only used to break ties on a
-/// missing [msgId], never for crypto, so [Random] (not secure) is fine
-/// and matches JS's `Math.random().toString(16).slice(2)`.
+/// Entropy for fallback [msgId] generation. Message ids are not keys, but
+/// a predictable PRNG lets a peer collide or pre-guess ids. Must be
+/// [Random.secure], not the default [Random].
+Random newMessageIdRng() => Random.secure();
+
+/// 64 bits of randomness as 16 hex chars. Used when inbound `msg`/`text`
+/// has no `id`.
 String _randomHex() {
-  final rng = Random();
+  final rng = newMessageIdRng();
   final lo = rng.nextInt(1 << 32);
   final hi = rng.nextInt(1 << 32);
   return hi.toRadixString(16).padLeft(8, '0') +

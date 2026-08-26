@@ -1,11 +1,5 @@
-// Round 2 C.3 — QR "link to PC" must not be offered until vault/session
-// transfer exists. The phone used to show «Вход подтверждён на компьютере»
-// after only signing a token. Variant B: hide the entry points.
-//
-// This is a UI-honesty test, not a crypto test: it pumps Settings → Security
-// and checks that a user cannot start the fake-login flow.
+// A.5 — Rooms must not share the green "ВКЛ" badge used for real E2E.
 
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -51,7 +45,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
   });
 
-  Future<void> pumpSecurity(WidgetTester tester) async {
+  testWidgets('Rooms row is not the green E2E-on badge', (tester) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [
@@ -66,21 +60,31 @@ void main() {
     );
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 200));
-  }
+    await tester.drag(find.byType(ListView), const Offset(0, -2400));
+    await tester.pumpAndSettle();
 
-  testWidgets('Security page does not offer QR device linking', (tester) async {
-    await pumpSecurity(tester);
+    expect(find.text('Комнаты'), findsOneWidget);
+    expect(find.text('AES-256-GCM'), findsOneWidget);
 
-    expect(find.text('Защита профиля'), findsOneWidget);
-    expect(find.text('Связать с ПК'), findsNothing);
-    expect(find.text('Показать QR для связки'), findsNothing);
-    expect(find.text('Связь устройств'), findsNothing);
-  });
+    expect(find.byKey(kCryptoE2eOnBadgeKey), findsWidgets);
+    expect(find.byKey(kCryptoRoomsOffBadgeKey), findsOneWidget);
 
-  test('QR adopt-session page file is gone', () {
-    expect(
-      File('lib/pages/qr_pairing_page.dart').existsSync(),
-      isFalse,
+    final e2eBadge = tester.widget<Text>(
+      find.descendant(
+        of: find.byKey(kCryptoE2eOnBadgeKey).first,
+        matching: find.byType(Text),
+      ),
     );
+    final roomsBadge = tester.widget<Text>(
+      find.descendant(
+        of: find.byKey(kCryptoRoomsOffBadgeKey),
+        matching: find.byType(Text),
+      ),
+    );
+
+    expect(e2eBadge.data, 'ВКЛ');
+    expect(roomsBadge.data, isNot('ВКЛ'));
+    expect(roomsBadge.data, 'НЕТ E2E');
+    expect(roomsBadge.style?.color, isNot(e2eBadge.style?.color));
   });
 }
