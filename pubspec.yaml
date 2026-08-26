@@ -1,7 +1,7 @@
 name: orbits_flutter
 description: Orbits — Flutter P2P messenger. 1:1 chats use X3DH + Double Ratchet; rooms are host-plaintext. Default signalling and STUN use public third-party servers.
 publish_to: 'none'
-version: 9.0.6+906
+version: 9.0.7+907
 
 environment:
   # Pinned to the Flutter 3.32.x / Dart 3.8.x line declared in
@@ -14,6 +14,14 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+
+  # Direct raw-SQLite access for the startup health check (PRAGMA quick_check
+  # + quarantine of a corrupt DB file, Round 5 B.3). Already a transitive dep
+  # of drift — pinned explicitly so importing it isn't a lint violation.
+  sqlite3: ^2.9.0
+
+  # Path joining for the DB health check (transitive everywhere already).
+  path: ^1.9.0
 
   # Crypto (porting src/core/crypto.js, doubleRatchet.js, x3dh.js, identityKey.js)
   #

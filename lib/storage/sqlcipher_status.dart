@@ -15,6 +15,13 @@
 //
 // Flip [kSqlCipherFileEncryptionEnabled] only after a Windows-safe
 // integration exists and `openCipherExecutor()` returns a real executor.
+//
+// Round 5 update: the residual risk was formally accepted in SECURITY.md
+// ("Database encryption at rest"). Compensating controls now include
+// storage-level sealing of keys/prekeys/ratchets (DriftKeyStore +
+// saveRatchetState wrap every row under the vault KEK), so the crown-jewel
+// tables no longer depend on caller discipline — only metadata columns
+// remain plaintext until SQLCipher lands.
 
 /// Full-file SQLCipher. False until the Windows CMake clash is resolved.
 const bool kSqlCipherFileEncryptionEnabled = false;

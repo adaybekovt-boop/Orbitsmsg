@@ -107,7 +107,9 @@ Future<bool> saveRatchetState(Map<String, Object?> snapshot) async {
         RatchetsTableCompanion.insert(
           id: _ratchetRowKey(peerId),
           peerId: peerId,
-          data: encodeRow(row),
+          // Storage-level encryption (audit Round 5 B.2): ratchet snapshots
+          // hold root/chain keys — never touch disk as plaintext JSON.
+          data: wrapBlobSync(encodeRow(row)),
         ),
       );
   return true;
@@ -119,7 +121,7 @@ Future<Map<String, Object?>?> loadRatchetState(String peerId) async {
   final row = await (db.select(db.ratchetsTable)
         ..where((t) => t.id.equals(_ratchetRowKey(peerId))))
       .getSingleOrNull();
-  return row == null ? null : decodeRow(row.data);
+  return row == null ? null : decodeRow(unwrapBlobSync(row.data));
 }
 
 Future<bool> deleteRatchetState(String peerId) async {
@@ -754,6 +756,33 @@ Future<int> deleteMessagesOlderThan(int cutoffTimestamp) async {
       .go();
 }
 
+/// Default chat-history retention (audit Round 5 B.4). `90 days` matches the
+/// common messenger baseline; there is no UI knob yet — change here to tune.
+const Duration defaultRetentionWindow = Duration(days: 90);
+
+/// Periodic storage maintenance (audit Round 5 B.4). Wires up the previously
+/// dead `deleteMessagesOlderThan`, reaps blobs orphaned by those deletions,
+/// and VACUUMs so the file actually gives the space back.
+///
+/// Called fire-and-forget from main() on startup; never throws.
+Future<void> runRetentionSweep({
+  Duration retention = defaultRetentionWindow,
+}) async {
+  try {
+    final cutoff =
+        DateTime.now().millisecondsSinceEpoch - retention.inMilliseconds;
+    if (cutoff > 0) {
+      await deleteMessagesOlderThan(cutoff);
+    }
+    await sweepOrphanBlobs();
+    // VACUUM must run outside a transaction — drift's customStatement is
+    // autocommit, which is exactly what SQLite requires here.
+    await orbitsDb().customStatement('VACUUM;');
+  } catch (_) {
+    // Maintenance is best-effort; a locked/corrupt DB surfaces elsewhere.
+  }
+}
+
 /// Pending queue. When [peerId] is null, returns up to [limit] oldest
 /// pending messages across all peers; otherwise scoped to one peer.
 Future<List<Map<String, Object?>>> getPendingMessages({
@@ -769,6 +798,26 @@ Future<List<Map<String, Object?>>> getPendingMessages({
     query.where((t) => t.peerId.equals(peerId));
   }
   final rows = await query.get();
+  return rows.map((r) => _secureDecode(r.data)).toList();
+}
+
+/// Pending queue for ROOM messages of [roomId] (audit Round 5 A.3). Room
+/// outbox rows carry roomId/channelId columns; ordering is oldest-first so a
+/// flush replays in original send order.
+Future<List<Map<String, Object?>>> getPendingRoomMessages({
+  required String roomId,
+  int limit = 200,
+}) async {
+  final db = orbitsDb();
+  if (roomId.isEmpty) return const [];
+  final rows = await (db.select(db.messagesTable)
+        ..where((t) =>
+            t.roomId.equals(roomId) &
+            t.status.equals('pending') &
+            t.direction.equals('out'))
+        ..orderBy([(t) => OrderingTerm.asc(t.timestamp)])
+        ..limit(limit))
+      .get();
   return rows.map((r) => _secureDecode(r.data)).toList();
 }
 

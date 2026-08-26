@@ -22,6 +22,7 @@ import 'package:flutter_acrylic/flutter_acrylic.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'storage/db.dart' as db;
+import 'storage/db_health.dart';
 import 'storage/drift_key_store.dart';
 import 'storage/drift_sticker_store.dart';
 import 'themes/theme_data_factory.dart';
@@ -53,6 +54,25 @@ Future<void> main() async {
   // Persist sticker packs + recents to the same DB so they survive a restart
   // (the manager otherwise falls back to an in-memory store).
   installDriftStickerStore();
+
+  // Corruption gate (audit Round 5 B.3): BEFORE Drift touches the file, run
+  // a quick_check and quarantine a damaged database instead of crashing in
+  // every later session. The user gets a fresh profile + a loud error trace
+  // (error_reporter) rather than a silent guest-mode fallthrough.
+  try {
+    final health = await ensureDatabaseHealthy();
+    if (health.status == DbHealthStatus.quarantined) {
+      debugPrint('[orbits] DB quarantined: ${health.detail}');
+    }
+  } catch (_) {
+    // Health check must never block startup; Drift will surface real errors
+    // itself when it opens.
+  }
+
+  // Retention sweep (audit Round 5 B.4): prune messages past the retention
+  // window, reap orphaned blobs, VACUUM — fire-and-forget, never blocks
+  // first paint.
+  unawaited(db.runRetentionSweep());
 
   // Reap orphaned voice/file blobs left behind by past chat/message deletions
   // so the SQLite file doesn't bloat over time. Fire-and-forget — never blocks

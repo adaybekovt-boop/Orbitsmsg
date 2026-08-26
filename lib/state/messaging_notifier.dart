@@ -1,20 +1,20 @@
-// Port of `src/hooks/useMessaging.js` — sendMessage, flushOutbox, typing,
+﻿// Port of `src/hooks/useMessaging.js` вЂ” sendMessage, flushOutbox, typing,
 // plus the handful of small utilities the packet router relies on
 // (pushInbound, patchMessage, queueAckStatus).
 //
 // Key departures from the JS source:
-//   • Message state lives in Drift, not in-memory. React kept a
+//   вЂў Message state lives in Drift, not in-memory. React kept a
 //     `messagesByPeer` map so useState rerendered the chat list on every
 //     insert. Dart reads the chat stream straight from the DB via
 //     `messagesForPeerProvider`, which means mutations here just call
-//     `db.saveMessage` / `db.updateMessage` — the UI auto-updates without
+//     `db.saveMessage` / `db.updateMessage` вЂ” the UI auto-updates without
 //     any local state mirror.
-//   • The only thing we do keep in-notifier state is `typingByPeer`, since
+//   вЂў The only thing we do keep in-notifier state is `typingByPeer`, since
 //     typing indicators are transient, UI-only, and have no persistence
 //     story.
-//   • Text / sticker / voice / file all land through distinct `sendX`
+//   вЂў Text / sticker / voice / file all land through distinct `sendX`
 //     entry points. Inbound for all four dispatches through the packet
-//     router into `pushInbound` — display is the responsibility of the
+//     router into `pushInbound` вЂ” display is the responsibility of the
 //     chat page, not this notifier.
 
 import 'dart:async';
@@ -24,6 +24,11 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/error_reporter.dart';
+import '../utils/heavy_codec.dart';
+
+import '../messaging/lost_inbound_ledger.dart';
+import '../messaging/sent_ack_guard.dart';
 import '../peer/helpers.dart';
 import '../storage/db.dart' as db;
 import 'auth_notifier.dart';
@@ -31,12 +36,16 @@ import 'connections_notifier.dart';
 import 'local_profile_provider.dart';
 import 'peers_provider.dart';
 
-/// Fire a best-effort DB write without awaiting, but surface failures in debug
-/// builds instead of swallowing them (audit M8). A dropped write on the
-/// inbound path means a received message vanishes with no trace; logging at
-/// least makes that diagnosable rather than silent.
+/// Fire a best-effort DB write without awaiting, but surface failures
+/// instead of swallowing them. Release builds get a structured error payload
+/// through `error_reporter` (audit Round 5 B.5) вЂ” debug builds additionally
+/// print.
 void _persistBestEffort(Future<Object?> write, String what) {
   unawaited(write.catchError((Object e, StackTrace st) {
+    reportError(e, <String, Object?>{
+      'source': 'messaging.persist',
+      'what': what,
+    });
     if (kDebugMode) {
       // ignore: avoid_print
       print('[messaging] persist failed ($what): $e');
@@ -45,13 +54,13 @@ void _persistBestEffort(Future<Object?> write, String what) {
   }));
 }
 
-// Hard caps — match JS byte-for-byte so a round-trip between web and native
+// Hard caps вЂ” match JS byte-for-byte so a round-trip between web and native
 // clients never truncates on one side and passes on the other.
 //
 // The voice/file caps come in two flavours:
 //   *RawBytes is the pre-encode cap (what the recorder / picker produced).
 //   *B64Len  is the post-encode cap (the base64 string on the wire).
-// We check both — raw at the caller so we can fail fast before paying the
+// We check both вЂ” raw at the caller so we can fail fast before paying the
 // base64 encode, b64 on the wire envelope so a pathological compressor
 // can't slip past the raw check and still blow out the receiver's clamp.
 const int _maxTextLen = 32 * 1024;
@@ -63,22 +72,37 @@ const int _maxFileB64Len = 16 * 1024 * 1024;
 const int _maxFileThumbLen = 48 * 1024;
 const int _maxFileNameLen = 200; // JS: messageProtocol.js:347
 
-// ─── State ────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђ State в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 class MessagingState {
-  const MessagingState({this.typingByPeer = const <String, bool>{}});
+  const MessagingState({
+    this.typingByPeer = const <String, bool>{},
+    this.lostInboundCount = 0,
+  });
 
-  /// Peer → isTyping. Entries are added when a typing packet arrives and
+  /// Peer в†’ isTyping. Entries are added when a typing packet arrives and
   /// removed when the peer sends `{isTyping: false}` or a message. The map
-  /// is intentionally tiny — typing indicators expire on their own, we
+  /// is intentionally tiny вЂ” typing indicators expire on their own, we
   /// don't keep history.
   final Map<String, bool> typingByPeer;
 
-  MessagingState copyWith({Map<String, bool>? typingByPeer}) =>
-      MessagingState(typingByPeer: typingByPeer ?? this.typingByPeer);
+  /// Inbound messages dropped because persisting them failed (typically the
+  /// vault being locked вЂ” audit Round 5 B.5). The UI can surface this as
+  /// "СЃРѕРѕР±С‰РµРЅРёСЏ РјРѕРіР»Рё РїСЂРёР№С‚Рё, РїРѕРєР° РїСЂРёР»РѕР¶РµРЅРёРµ Р±С‹Р»Рѕ Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅРѕ" instead of
+  /// a silently empty chat.
+  final int lostInboundCount;
+
+  MessagingState copyWith({
+    Map<String, bool>? typingByPeer,
+    int? lostInboundCount,
+  }) =>
+      MessagingState(
+        typingByPeer: typingByPeer ?? this.typingByPeer,
+        lostInboundCount: lostInboundCount ?? this.lostInboundCount,
+      );
 }
 
-// ─── Notifier ─────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђ Notifier в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 class MessagingNotifier extends StateNotifier<MessagingState> {
   MessagingNotifier(this._ref) : super(const MessagingState()) {
@@ -99,16 +123,16 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     // Keep a tight in-memory mirror of the `blocked` column so the hot-path
     // packet-router check (`_isPeerBlocked`) is synchronous. Reading off
     // `peersProvider.asData?.value` every call worked too, but it lagged
-    // the Drift emit by a microtask — a malicious peer could squeeze a
+    // the Drift emit by a microtask вЂ” a malicious peer could squeeze a
     // single packet through the gap between the user tapping "block" and
     // the stream re-emitting. This listener closes that race: the moment
     // `setPeerBlocked(true)` runs a write, the stream wakes, this callback
     // fires, and the id lands in `_blockedIds` *before* the next inbound
     // packet can be dispatched to us.
     //
-    // Bonus: we also use the transition (peer flipped `false → true`) to
+    // Bonus: we also use the transition (peer flipped `false в†’ true`) to
     // clear any lingering typing bubble + idle timer for that peer so the
-    // "печатает…" indicator doesn't float above the block banner for the
+    // "РїРµС‡Р°С‚Р°РµС‚вЂ¦" indicator doesn't float above the block banner for the
     // full 8 s safety window.
     _peersSub = _ref.listen<AsyncValue<List<Map<String, Object?>>>>(
       peersProvider,
@@ -144,7 +168,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     // Sign-out hygiene: drop volatile session state so it can't bleed into the
     // next account (audit H4). The persisted blocked column is mirrored back
     // off `peersProvider`, but typing bubbles + their idle timers live only in
-    // memory and would otherwise survive a logout→login.
+    // memory and would otherwise survive a logoutв†’login.
     _ref.listen<AuthState>(
       authNotifierProvider,
       (prev, next) {
@@ -154,6 +178,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
           }
           _typingIdleTimers.clear();
           _blockedIds.clear();
+          _lostInbound.reset();
           if (mounted) state = const MessagingState();
         }
       },
@@ -162,6 +187,11 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
 
   final Ref _ref;
   final Random _rand = Random.secure();
+
+  /// Accounts every inbound message lost to a failed persist (locked vault,
+  /// DB error) and reports it through error_reporter вЂ” release included
+  /// (audit Round 5 B.5).
+  final LostInboundLedger _lostInbound = LostInboundLedger();
 
   /// Current local peer id, or `''` when the session hasn't initialised
   /// yet. Exposed as a synchronous getter so widgets that decide "is this
@@ -178,31 +208,62 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
 
   /// Handle on the `peersProvider` listener so we can detach in `dispose`.
   /// Riverpod's `ref.listen` returns a `ProviderSubscription` that must be
-  /// closed explicitly — leaving it alive would leak the notifier's state
+  /// closed explicitly вЂ” leaving it alive would leak the notifier's state
   /// into the next login cycle after logout / hot reload.
   late final ProviderSubscription _peersSub;
 
   /// Per-peer "typing stuck" safety timer. Without this a lost `typing=false`
   /// packet (remote crashed mid-type, ephemeral channel died, app went to
-  /// background) would pin the «печатает…» bubble forever. 8 s is just over
-  /// the composer's own 3 s idle — a peer that keeps typing past their own
+  /// background) would pin the В«РїРµС‡Р°С‚Р°РµС‚вЂ¦В» bubble forever. 8 s is just over
+  /// the composer's own 3 s idle вЂ” a peer that keeps typing past their own
   /// stop-sentinel keeps re-arming this timer with each fresh `true`, so we
   /// only ever auto-clear truly silent peers.
   final Map<String, Timer> _typingIdleTimers = <String, Timer>{};
 
-  // ─── Ack queue ───────────────────────────────────────────────
+  // в”Ђв”Ђв”Ђ Ack queue в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
   /// Batched ack persistence. When a peer dumps 30 msgs on reconnect we
-  /// don't want 30 separate DB writes — collect id→status pairs for up to
+  /// don't want 30 separate DB writes вЂ” collect idв†’status pairs for up to
   /// 450 ms, then fire one bulk update per status class.
   final Map<String, String> _ackBuffer = {};
   Timer? _ackTimer;
+
+  /// Ack-timeout guard for outbound rows we just flipped to `'sent'`
+  /// (audit Round 5 A.2). `dc.send()` only means "buffered on the wire" вЂ”
+  /// if the receiver's ack never lands before the deadline, the row is
+  /// demoted back to `'pending'` so the outbox re-sends it instead of
+  /// stranding it in `'sent'` forever.
+  late final SentAckGuard _sentAckGuard = SentAckGuard(
+    timeout: sentAckTimeout,
+    onDemote: (msgId) async {
+      if (!mounted) return;
+      try {
+        final row = await db.getMessageById(msgId);
+        // Only demote rows that are STILL un-acked `'sent'`. Anything else
+        // ('pending' from a concurrent path, 'delivered'/'read' from a late
+        // ack) is left untouched.
+        if (row != null && row['status'] == 'sent') {
+          await db.updateMessageStatus(msgId, 'pending');
+        }
+      } catch (_) {
+        // DB unavailable вЂ” nothing smarter to do; the next flush trigger
+        // re-reads pending state anyway.
+      }
+    },
+  );
+
+  /// Deadline between "we handed the envelope to the transport" and
+  /// "receiver must have acked". Exposed so tests can shorten it.
+  Duration sentAckTimeout = const Duration(seconds: 30);
 
   /// Enqueue a delivery/sent ack for [msgId]. [status] is either
   /// `'delivered'` or `'sent'`.
   void queueAckStatus(String msgId, String status) {
     if (msgId.isEmpty) return;
     final norm = status.isEmpty ? 'delivered' : status;
+    // Any receiver ack confirms transport-level delivery вЂ” cancel the
+    // demotion deadline for this outbound row (audit Round 5 A.2).
+    _sentAckGuard.confirm(msgId);
     _ackBuffer[msgId] = norm;
     _ackTimer ??= Timer(const Duration(milliseconds: 450), _flushAckBuffer);
   }
@@ -230,18 +291,18 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
         await db.updateMessageStatusesBatch(sent, 'sent');
       }
     } catch (_) {
-      // Failure is survivable — worst case, UI shows stale "sending" dots
+      // Failure is survivable вЂ” worst case, UI shows stale "sending" dots
       // until the peer repeats an ack or we restart.
     }
   }
 
-  // ─── Inbound side ────────────────────────────────────────────
+  // в”Ђв”Ђв”Ђ Inbound side в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
   /// Persist a freshly-arrived message and bump the peer's lastSeenAt.
   /// The chat page's message stream picks up the Drift insert on the next
   /// tick, so there's no explicit UI notify here.
   ///
-  /// Blocked peers: packet is silently dropped — no DB write, no
+  /// Blocked peers: packet is silently dropped вЂ” no DB write, no
   /// lastSeenAt bump, no typing state leaks. The remote can't distinguish
   /// "blocked" from "offline" which is the intended UX. If the user later
   /// unblocks, messages arriving after that point come through normally;
@@ -255,7 +316,11 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final ts = (safe['ts'] as num?)?.toInt() ?? now();
     final msgId = (safe['id'] as String?) ?? '$normalized:$ts:${_shortId()}';
 
-    _persistBestEffort(
+    // Inbound persist is NOT best-effort-silent anymore (audit Round 5 B.5):
+    // a locked vault / failed write loses the message forever вЂ” the sender
+    // thinks it was delivered. Count it, report it (release included), let
+    // the UI show the loss.
+    unawaited(
       db.saveMessage({
         'id': msgId,
         'peerId': normalized,
@@ -263,11 +328,18 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
         'direction': 'in',
         'status': 'delivered',
         'payload': safe,
+      }).catchError((Object e, StackTrace st) async {
+        _lostInbound.recordDrop(msgId: msgId, fromPeer: normalized, error: e);
+        if (mounted) {
+          state = state.copyWith(
+            lostInboundCount: state.lostInboundCount + 1,
+          );
+        }
+        return false;
       }),
-      'inbound saveMessage $msgId',
     );
 
-    // Peer row refresh — keeps chat list sorted by recency without relying
+    // Peer row refresh вЂ” keeps chat list sorted by recency without relying
     // on explicit profile packets.
     _persistBestEffort(
       db.savePeer({'id': normalized, 'lastSeenAt': now()}),
@@ -303,22 +375,22 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     unawaited(db.updateMessage(msgId, mapped));
   }
 
-  // ─── Typing ──────────────────────────────────────────────────
+  // в”Ђв”Ђв”Ђ Typing в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
   void applyTyping(String remoteId, bool isTyping) {
     // Packets in flight when the notifier is torn down (logout, hot
-    // reload) must not reach `state=` — that throws after dispose. The
+    // reload) must not reach `state=` вЂ” that throws after dispose. The
     // bridge reset in `dispose()` covers the common path; this is a
     // belt-and-suspenders guard for in-flight callbacks.
     if (!mounted) return;
     final normalized = normalizePeerId(remoteId);
     if (normalized.isEmpty) return;
-    // Blocked peers shouldn't surface a typing bubble either — the chat
-    // view is hidden behind the block banner, but a stale «печатает…»
+    // Blocked peers shouldn't surface a typing bubble either вЂ” the chat
+    // view is hidden behind the block banner, but a stale В«РїРµС‡Р°С‚Р°РµС‚вЂ¦В»
     // floating above it would be confusing.
     if (_isPeerBlocked(normalized)) return;
 
-    // Any new packet for this peer retires the previous safety timer — a
+    // Any new packet for this peer retires the previous safety timer вЂ” a
     // `false` came through (happy path) or a fresh `true` resets the 8 s
     // deadline (still actively typing).
     _typingIdleTimers.remove(normalized)?.cancel();
@@ -340,7 +412,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
   /// real `typing=false` arrived. Rechecks current state first so a just-
   /// landed clear (via a fresh packet or `applyTyping(false)`) doesn't get
   /// clobbered by a stale timer callback. Also bails if the notifier was
-  /// disposed between scheduling and firing — `Timer.cancel()` races with
+  /// disposed between scheduling and firing вЂ” `Timer.cancel()` races with
   /// already-queued callbacks, so we can't rely on dispose alone.
   void _expireTyping(String normalized) {
     _typingIdleTimers.remove(normalized);
@@ -352,7 +424,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
   }
 
   /// Send an ephemeral typing packet to [remoteId]. No-op if there's no
-  /// ephemeral channel open — typing indicators are best-effort.
+  /// ephemeral channel open вЂ” typing indicators are best-effort.
   /// Skips blocked peers on both directions (nothing in, nothing out).
   Future<void> sendTyping(String remoteId, bool isTyping) async {
     final normalized = normalizePeerId(remoteId);
@@ -364,7 +436,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     );
   }
 
-  // ─── Outbox ──────────────────────────────────────────────────
+  // в”Ђв”Ђв”Ђ Outbox в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
   /// Pull the persisted pending rows for [remoteId]. The JS version kept
   /// an in-memory mirror (`outboxByPeer`) for the UI; Dart reads the
@@ -378,7 +450,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
 
   /// Drain the pending queue for a single peer. Called on reliable-open and
   /// when the user taps "retry" on a stuck message.
-  /// Blocked peers: skip entirely — user flipped the block toggle, their
+  /// Blocked peers: skip entirely вЂ” user flipped the block toggle, their
   /// pending queue stays on disk but we don't fire it. A future unblock
   /// will let the next trigger drain it.
   ///
@@ -388,7 +460,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
   /// asking the recorder / picker to keep state across the reconnect
   /// window. Sticker payloads live inline in `payload.sticker` and need
   /// no re-encode. If a blob has been evicted (e.g. user cleared chat
-  /// storage), the row stays `pending` forever — we skip it rather than
+  /// storage), the row stays `pending` forever вЂ” we skip it rather than
   /// ship a broken envelope with a missing `b64`.
   Future<void> flushOutboxForPeer(String remoteId) async {
     final normalized = normalizePeerId(remoteId);
@@ -417,7 +489,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
 
       final envelope = await _buildOutboxEnvelope(id, payload, type);
       if (envelope == null) {
-        // Row isn't recoverable — the underlying blob went missing
+        // Row isn't recoverable вЂ” the underlying blob went missing
         // (chat storage cleared, DB migrated), b64 overshoots the wire
         // cap, or the payload is too corrupt to reassemble. Dead-letter
         // the row so the bubble stops showing the clock-icon forever:
@@ -425,7 +497,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
         // missing-attachment state, and the notifier will stop
         // re-flushing it on every reconnect.
         //
-        // We don't delete the DB row — keeping it lets the user
+        // We don't delete the DB row вЂ” keeping it lets the user
         // long-press-delete in the UI, and lets a later "retry all"
         // flow pick it back up if the blob is somehow recovered.
         unawaited(db.updateMessageStatus(id, 'failed'));
@@ -434,6 +506,8 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       final ok = await conns.sendEncrypted(normalized, envelope);
       if (!ok) break;
       unawaited(db.updateMessageStatus(id, 'sent'));
+      // Outbox re-send вЂ” arm the same ack deadline as the live path.
+      _sentAckGuard.arm(id);
     }
   }
 
@@ -441,7 +515,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
   /// null if the row is unrecoverable (missing blob, malformed payload).
   ///
   /// This re-reads the persisted blob rather than trusting the payload
-  /// to carry `b64` — the send path deliberately strips `b64` from the
+  /// to carry `b64` вЂ” the send path deliberately strips `b64` from the
   /// stored `payload.voice` / `payload.attachment` to keep the messages-
   /// table lean (voice_blobs / file_blobs hold the bytes, indexed by id).
   Future<Map<String, Object?>?> _buildOutboxEnvelope(
@@ -479,7 +553,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
         if (blob == null) return null;
         final bytes = blob['blob'];
         if (bytes is! Uint8List || bytes.isEmpty) return null;
-        final b64 = base64Encode(bytes);
+        final b64 = await b64EncodeHeavy(bytes);
         if (b64.length > _maxVoiceB64Len) return null;
         final voiceMap = Map<String, Object?>.from(voice);
         return <String, Object?>{
@@ -501,7 +575,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
         if (blob == null) return null;
         final bytes = blob['blob'];
         if (bytes is! Uint8List || bytes.isEmpty) return null;
-        final b64 = base64Encode(bytes);
+        final b64 = await b64EncodeHeavy(bytes);
         if (b64.length > _maxFileB64Len) return null;
 
         // Prefer the thumb data URL we persisted in the payload (cheap);
@@ -546,18 +620,18 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     return null;
   }
 
-  // ─── sendText (MVP path) ─────────────────────────────────────
+  // в”Ђв”Ђв”Ђ sendText (MVP path) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
   /// Send a plain text message to [targetId]. Returns the generated message
   /// id on success, null on validation failure. Does NOT wait for delivery;
   /// the ack will flip the DB row's status asynchronously.
-  /// Refuses to send to blocked peers — the composer is hidden in the UI
+  /// Refuses to send to blocked peers вЂ” the composer is hidden in the UI
   /// when blocked, but this is the defence-in-depth check so a programmatic
   /// call path can't bypass it.
   ///
   /// [replyTo] is the quoted-message metadata the UI attaches when the user
-  /// taps "Ответить" on a peer's bubble. It's a free-form map mirroring the
-  /// JS shape (`{id, from, fromName, type, text, stickerEmoji, ...}`) — we
+  /// taps "РћС‚РІРµС‚РёС‚СЊ" on a peer's bubble. It's a free-form map mirroring the
+  /// JS shape (`{id, from, fromName, type, text, stickerEmoji, ...}`) вЂ” we
   /// clamp only the free-text fields so a pathological reply blob can't
   /// bloat the persisted payload, and pass everything else through. The
   /// protocol side just echoes it back on the wire; the bubble reads it
@@ -585,7 +659,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
 
     final sanitizedReply = _sanitizeReplyTo(replyTo);
 
-    // Persist the outbound row first — pending status if the channel's
+    // Persist the outbound row first вЂ” pending status if the channel's
     // offline, sent otherwise. On refresh/app-restart the outbox picks up
     // pending rows from here.
     //
@@ -619,7 +693,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     unawaited(db.savePeer({'id': normalized, 'lastSeenAt': now()}));
 
     if (!open) {
-      // Nothing to ship right now — the flusher will pick this up when the
+      // Nothing to ship right now вЂ” the flusher will pick this up when the
       // reliable channel opens.
       return msgId;
     }
@@ -634,14 +708,19 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     });
     if (!ok) {
       // Demote to pending so the next flush picks it up. We only touch the
-      // `status` column — the payload itself is content-only, no delivery
+      // `status` column вЂ” the payload itself is content-only, no delivery
       // mirror (see note above).
+      _sentAckGuard.disarm(msgId);
       unawaited(db.updateMessageStatus(msgId, 'pending'));
+    } else {
+      // The row reads 'sent' but is only SCTP-buffered until the receiver's
+      // ack lands вЂ” arm the demotion deadline (audit Round 5 A.2).
+      _sentAckGuard.arm(msgId);
     }
     return msgId;
   }
 
-  // ─── sendSticker ─────────────────────────────────────────────
+  // в”Ђв”Ђв”Ђ sendSticker в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
   /// Send a sticker to [targetId]. [sticker] mirrors the shape the JS
   /// sticker picker produces: `{packId, packName, stickerId, url, emoji}`.
@@ -649,7 +728,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
   /// failure.
   ///
   /// The wire + persistence path piggybacks on the regular chat-message
-  /// envelope — `msgType='sticker'`, `text=''`, and the sticker blob rides
+  /// envelope вЂ” `msgType='sticker'`, `text=''`, and the sticker blob rides
   /// in `payload.sticker`. This matches `message_protocol.dart`'s inbound
   /// path so a sticker we send round-trips identically to one the peer
   /// sends us. Outbox currently only retries text; if the reliable channel
@@ -666,7 +745,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     if (!isValidPeerId(normalized)) return null;
     if (_isPeerBlocked(normalized)) return null;
 
-    // Minimal shape validation — a malformed sticker (missing url or
+    // Minimal shape validation вЂ” a malformed sticker (missing url or
     // stickerId) would render as a blank bubble on the receiver.
     final url = sticker['url'];
     final stickerId = sticker['stickerId'];
@@ -731,12 +810,15 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       if (sanitizedReply != null) 'replyTo': sanitizedReply,
     });
     if (!ok) {
+      _sentAckGuard.disarm(msgId);
       unawaited(db.updateMessageStatus(msgId, 'pending'));
+    } else {
+      _sentAckGuard.arm(msgId);
     }
     return msgId;
   }
 
-  // ─── sendVoice ───────────────────────────────────────────────
+  // в”Ђв”Ђв”Ђ sendVoice в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
   /// Send a voice message to [targetId]. Mirrors `sendSticker` / `sendText`
   /// for the persist-first + ship-if-open pattern; the raw audio bytes go
@@ -750,7 +832,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
   /// before we pay base64), and a b64 cap on the wire envelope just
   /// before send (the receiver's `_clampChatMessage` also rechecks it).
   ///
-  /// [waveform] is ≤48 normalized doubles in 0..1. The recorder should
+  /// [waveform] is в‰¤48 normalized doubles in 0..1. The recorder should
   /// already have compressed to that shape (`compressSamples` in the JS
   /// version). We don't re-compress here, but we do clamp values
   /// defensively so a pathological recorder can't coax a 1000-unit-tall
@@ -781,7 +863,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final conn = conns.getConn(normalized, 'reliable');
     final open = conn?.open == true;
 
-    // Defensive clamp — recorder should produce values in 0..1 already,
+    // Defensive clamp вЂ” recorder should produce values in 0..1 already,
     // but a broken input doesn't get to push the UI past that range.
     final safeWaveform = <double>[
       for (final v in waveform) v.isNaN ? 0.0 : v.clamp(0.0, 1.0).toDouble(),
@@ -801,12 +883,12 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       waveform: safeWaveform,
     );
 
-    // Inline voice ref on the message payload — no b64 here, the bubble
+    // Inline voice ref on the message payload вЂ” no b64 here, the bubble
     // reads the bytes from voice_blobs on play. Matches the inbound
     // decoder's `voiceRef` at message_protocol.dart:533-538.
     //
     // `duration` stays a double (seconds, 1-decimal precision) to match
-    // the JS wire convention. Rounding to int here — as we used to do —
+    // the JS wire convention. Rounding to int here вЂ” as we used to do вЂ”
     // collapsed 0.3 s messages to 0 s and silently demoted the second
     // send of the same msgId (the outbox retry) to a different field
     // type than the first send, since the flusher re-reads this map.
@@ -839,7 +921,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
 
     if (!open) return msgId;
 
-    final b64 = base64Encode(bytes);
+    final b64 = await b64EncodeHeavy(bytes);
     if (b64.length > _maxVoiceB64Len) {
       // Raw check passed but base64 expansion blew the wire cap. Leave
       // the row as pending so the user can decide whether to re-record.
@@ -864,29 +946,32 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       if (sanitizedReply != null) 'replyTo': sanitizedReply,
     });
     if (!ok) {
+      _sentAckGuard.disarm(msgId);
       unawaited(db.updateMessageStatus(msgId, 'pending'));
+    } else {
+      _sentAckGuard.arm(msgId);
     }
     return msgId;
   }
 
-  // ─── sendFile ────────────────────────────────────────────────
+  // в”Ђв”Ђв”Ђ sendFile в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
-  /// Send a file attachment to [targetId]. Mirrors the voice path — blob
+  /// Send a file attachment to [targetId]. Mirrors the voice path вЂ” blob
   /// in `file_blobs`, metadata in `payload.attachment`, full b64 on the
   /// wire. Returns the generated message id on success, `null` on
   /// validation failure.
   ///
   /// [kind] is `'image' | 'video' | 'audio' | 'file'`. The receiver
   /// trusts this verbatim (see `messageProtocol.js:345`), so classify
-  /// honestly — a `kind:'image'` with `mime:'application/pdf'` renders
+  /// honestly вЂ” a `kind:'image'` with `mime:'application/pdf'` renders
   /// as a broken `<img>` on the peer.
   ///
   /// [thumbBytes] is optional raw JPEG bytes for an image/video preview.
   /// Wire format carries it as a `data:image/jpeg;base64,...` URL (not
-  /// raw b64 — the opposite encoding convention from the main blob, same
+  /// raw b64 вЂ” the opposite encoding convention from the main blob, same
   /// trap as the Day-3 sticker url vs dataUrl mismatch). If the encoded
   /// data URL exceeds `_maxFileThumbLen`, we drop it rather than
-  /// truncating — a half-rendered thumbnail is worse than the generic
+  /// truncating вЂ” a half-rendered thumbnail is worse than the generic
   /// icon fallback.
   Future<String?> sendFile(
     String targetId,
@@ -923,7 +1008,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
         : name;
     final size = bytes.length;
 
-    // Pre-compute the thumb data URL once — we need it for both the wire
+    // Pre-compute the thumb data URL once вЂ” we need it for both the wire
     // envelope and the persisted metadata (so an own-sent row can show
     // the preview without refetching from disk). We persist the raw
     // thumb bytes in file_blobs.thumb so the UI can also lazy-load from
@@ -936,7 +1021,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       if (candidate.length <= _maxFileThumbLen) {
         thumbDataUrl = candidate;
       }
-      // If the thumb overshoots the cap we silently drop it — the tile
+      // If the thumb overshoots the cap we silently drop it вЂ” the tile
       // falls back to an icon. The alternative (refusing the whole send)
       // is user-hostile for a cosmetic preview failure.
     }
@@ -992,7 +1077,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
 
     if (!open) return msgId;
 
-    final b64 = base64Encode(bytes);
+    final b64 = await b64EncodeHeavy(bytes);
     if (b64.length > _maxFileB64Len) {
       unawaited(db.updateMessageStatus(msgId, 'pending'));
       return msgId;
@@ -1019,12 +1104,15 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       if (sanitizedReply != null) 'replyTo': sanitizedReply,
     });
     if (!ok) {
+      _sentAckGuard.disarm(msgId);
       unawaited(db.updateMessageStatus(msgId, 'pending'));
+    } else {
+      _sentAckGuard.arm(msgId);
     }
     return msgId;
   }
 
-  // ─── Reply helpers ───────────────────────────────────────────
+  // в”Ђв”Ђв”Ђ Reply helpers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
   /// Clamp a `replyTo` blob into a predictable, size-bounded shape. The
   /// user can technically pick *any* bubble to reply to, including a
@@ -1063,9 +1151,9 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     return v.substring(0, max);
   }
 
-  // ─── Helpers ─────────────────────────────────────────────────
+  // в”Ђв”Ђв”Ђ Helpers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
-  /// Short random hex — 8 bytes → 16 chars. Used as the msgId suffix.
+  /// Short random hex вЂ” 8 bytes в†’ 16 chars. Used as the msgId suffix.
   /// `Random.secure()` to avoid collisions on rapid sends, matches the
   /// JS `crypto.getRandomValues` fallback path.
   String _shortId() {
@@ -1079,7 +1167,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
   Map<String, Object?> _clampChatMessage(Map<String, Object?> msg) {
     final text = msg['text'];
     if (text is String && text.length > _maxTextLen) {
-      msg['text'] = '${text.substring(0, _maxTextLen)}…';
+      msg['text'] = '${text.substring(0, _maxTextLen)}вЂ¦';
     }
     final voice = msg['voice'];
     if (voice is Map && voice['b64'] is String) {
@@ -1114,29 +1202,30 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     _peersSub.close();
     _ackTimer?.cancel();
     _ackTimer = null;
+    unawaited(_sentAckGuard.dispose());
     for (final t in _typingIdleTimers.values) {
       t.cancel();
     }
     _typingIdleTimers.clear();
     // Reset the connections-registry bridge to no-ops so an inbound packet
     // arriving after our disposal doesn't invoke closures that capture this
-    // notifier's (now-defunct) `_ref`. Without this, a logout→new-login
+    // notifier's (now-defunct) `_ref`. Without this, a logoutв†’new-login
     // cycle could see the packet router fire `pushInbound` on a dead ref
     // and throw `Ref used after dispose`.
     try {
       _ref.read(connectionsNotifierProvider.notifier)
           .bindMessaging(MessagingBridge.empty);
     } catch (_) {
-      // Container already torn down — nothing to unbind from.
+      // Container already torn down вЂ” nothing to unbind from.
     }
-    // Best-effort final flush — fire-and-forget, the notifier is being torn
+    // Best-effort final flush вЂ” fire-and-forget, the notifier is being torn
     // down anyway.
     unawaited(_flushAckBuffer());
     super.dispose();
   }
 }
 
-// ─── Providers ────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђ Providers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 final messagingNotifierProvider =
     StateNotifierProvider<MessagingNotifier, MessagingState>((ref) {
