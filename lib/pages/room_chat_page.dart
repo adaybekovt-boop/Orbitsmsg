@@ -538,7 +538,10 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
               _channelHeader(channelName),
             RoomNotE2eBanner(
               acknowledged: _hostPlaintextAcked,
-              onAcknowledged: (v) => setState(() => _hostPlaintextAcked = v),
+              onAcknowledged: (v) {
+                setState(() => _hostPlaintextAcked = v);
+                kRoomPlaintextSessionAck.setAcknowledged(v);
+              },
             ),
             Expanded(
               child: effectiveChannelId == null
@@ -717,6 +720,7 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
     );
     if (result == null) return;
     _hostPlaintextAcked = true;
+    kRoomPlaintextSessionAck.setAcknowledged(true);
     if (result.isCreate) {
       // Defense in depth: even if a create result somehow arrives off desktop,
       // never fall back to a cloud room — block with the clear message instead.

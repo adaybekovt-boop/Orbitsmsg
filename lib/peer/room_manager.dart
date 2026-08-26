@@ -46,6 +46,7 @@ import 'helpers.dart';
 import 'peerjs_client.dart';
 import 'peer_server_core.dart';
 import 'room_invite.dart';
+import 'room_plaintext_gate.dart';
 import 'room_scoped_transport.dart';
 import 'room_signaling_host.dart';
 import 'security_monitor.dart';
@@ -1110,6 +1111,7 @@ class RoomManager extends StateNotifier<RoomState> {
     // (voice uses the room-scoped client as rawPeer).
     await _teardownSelfHost();
     _security.reset();
+    kRoomPlaintextSessionAck.reset();
     state = const RoomState();
   }
 
@@ -1311,6 +1313,7 @@ class RoomManager extends StateNotifier<RoomState> {
     if (roomId != null) await db.setRoomStatus(roomId, 'offline');
     await _stopVoice();
     _security.reset();
+    kRoomPlaintextSessionAck.reset();
     state = RoomState(
       joinError: _rejectReasonMessage(packet['reason'] as String?),
     );
@@ -1457,6 +1460,7 @@ class RoomManager extends StateNotifier<RoomState> {
     // Guest's room-scoped client (if self-hosted) is torn down here too.
     await _teardownSelfHost();
     _security.reset();
+    kRoomPlaintextSessionAck.reset();
     state = const RoomState();
   }
 
