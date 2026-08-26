@@ -11,7 +11,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../peer/room_invite.dart';
 import '../peer/room_manager.dart';
 import '../peer/room_signaling_host.dart'
-    show canHostSignalingServer, kServerHostDesktopOnlyMessage;
+    show
+        canHostSignalingServer,
+        kRoomLanOnlyInternetKey,
+        kRoomLanOnlyInternetMessageRu,
+        kServerHostDesktopOnlyMessage;
 import '../state/local_profile_provider.dart';
 import '../storage/db.dart' as db;
 import '../themes/orbits_tokens.dart';
@@ -452,8 +456,6 @@ class _InviteDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
-    final parsed = RoomInvite.tryParse(invite);
-    final public = parsed?.hasPublic ?? false;
     return AlertDialog(
       backgroundColor: tokens.surface,
       title: Text(
@@ -464,6 +466,17 @@ class _InviteDialog extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          Text(
+            kRoomLanOnlyInternetMessageRu,
+            key: kRoomLanOnlyInternetKey,
+            style: TextStyle(
+              color: tokens.danger,
+              fontSize: 13,
+              height: 1.4,
+              fontFamily: tokens.fontBody,
+            ),
+          ),
+          const SizedBox(height: 12),
           Text(
             'Отправьте этот код друзьям — они вставят его в «Подключиться».',
             style: TextStyle(
@@ -493,19 +506,6 @@ class _InviteDialog extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           _ReachLine(invite: invite, tokens: tokens),
-          if (!public) ...[
-            const SizedBox(height: 8),
-            Text(
-              'Для друзей из других сетей включите UPnP на роутере или '
-              'пробросьте порт ${parsed?.port ?? ''} (TCP) на этот ПК.',
-              style: TextStyle(
-                color: tokens.muted,
-                fontSize: 11.5,
-                height: 1.4,
-                fontFamily: tokens.fontBody,
-              ),
-            ),
-          ],
         ],
       ),
       actions: [
