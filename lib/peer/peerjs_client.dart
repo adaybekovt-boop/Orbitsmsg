@@ -1,4 +1,4 @@
-// Port of the PeerJS 1.5.x client library for Dart/Flutter.
+﻿// Port of the PeerJS 1.5.x client library for Dart/Flutter.
 //
 // There is no official PeerJS-for-Dart package, so this file re-implements
 // the wire protocol against a PeerJS signaling server over WebSocket plus
@@ -10,7 +10,7 @@
 // packet_router.dart and (future) orbits_drop.dart consume. Because
 // flutter_webrtc's createPeerConnection/createDataChannel are asynchronous
 // (the browser equivalents are synchronous), [connect] and [callPeer] are
-// Future-returning here — callers must await before wiring streams.
+// Future-returning here вЂ” callers must await before wiring streams.
 //
 //   final peer = PeerJsClient(id: myId, endpoint: ep, iceServers: ice);
 //   await peer.start();
@@ -40,13 +40,14 @@ import 'dart:typed_data';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'ice_lifecycle.dart';
 import 'signaling.dart';
 import 'ws_channel.dart';
 
-// ─────────────────────────────────────────────────────────────────────────
-// Error taxonomy — byte-compatible with PeerJS `err.type` strings so the
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// Error taxonomy вЂ” byte-compatible with PeerJS `err.type` strings so the
 // React-era error handling in peer_connection_manager.dart still matches.
-// ─────────────────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 class PeerError implements Exception {
   final String type;
@@ -58,9 +59,9 @@ class PeerError implements Exception {
   Map<String, Object?> toMap() => {'type': type, 'message': message};
 }
 
-// ─────────────────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 // Wire protocol frame types (PeerJS 1.5.x).
-// ─────────────────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 class _ServerMessageType {
   static const open = 'OPEN';
@@ -75,9 +76,9 @@ class _ServerMessageType {
   static const heartbeat = 'HEARTBEAT';
 }
 
-// ─────────────────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 // Helpers.
-// ─────────────────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 final _rng = Random.secure();
 
@@ -93,14 +94,18 @@ String _randomToken([int len = 36]) {
 String _newDataConnectionId() => 'dc_${_randomToken(15)}';
 String _newMediaConnectionId() => 'mc_${_randomToken(15)}';
 
-// ─────────────────────────────────────────────────────────────────────────
-// _SignalingSocket — WebSocket transport. Owns URL construction, heartbeat,
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// SignalingSocket вЂ” WebSocket transport. Owns URL construction, heartbeat,
 // and the "wait for OPEN before flushing" buffer. Frames in/out are JSON
 // objects {type, src?, dst?, payload?}.
-// ─────────────────────────────────────────────────────────────────────────
+//
+// Public (was `_SignalingSocket`) so tests can drive the transport directly вЂ”
+// e.g. a raw TCP server that never completes the WS upgrade exercises the
+// connect timeout deterministically (audit Round 5 A.4).
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
-class _SignalingSocket {
-  _SignalingSocket({
+class SignalingSocket {
+  SignalingSocket({
     required this.endpoint,
     required this.peerId,
     required this.token,
@@ -108,6 +113,8 @@ class _SignalingSocket {
     this.version = '1.5.5',
     this.pingInterval = const Duration(seconds: 5),
     this.serverEchoesHeartbeat = false,
+    this.connectTimeout = const Duration(seconds: 10),
+    this.maxBufferedFrames = 256,
   });
 
   final ResolvedSignalingEndpoint endpoint;
@@ -118,16 +125,28 @@ class _SignalingSocket {
   final Duration pingInterval;
 
   /// Whether the signaling server echoes our HEARTBEAT frames back. Only then
-  /// can the inbound-silence watchdog distinguish "idle" from "half-open" — so
+  /// can the inbound-silence watchdog distinguish "idle" from "half-open" вЂ” so
   /// it runs ONLY when true (embedded Orbits server). Public peerjs.com is
   /// silent on idle and must NOT be watchdog-killed (see [_startWatchdog]).
   final bool serverEchoesHeartbeat;
+
+  /// Hard budget for the TCP/TLS/WS-upgrade handshake. Without it a half-open
+  /// TCP connect (dropped packets on a dead AP) can hang "connecting" for the
+  /// OS-level timeout вЂ” minutes. When the budget expires we tear down with an
+  /// emitted close so the manager's backoff loop retries (audit Round 5 A.4).
+  final Duration connectTimeout;
+
+  /// Cap on frames buffered before the server OPEN arrives. A hung connect
+  /// would otherwise let callers buffer unboundedly (audit Round 5 A.4).
+  /// Oldest frames are dropped past the cap; [droppedOutbound] counts them.
+  static const int defaultMaxBufferedFrames = 256;
+  final int maxBufferedFrames;
 
   WebSocketChannel? _channel;
   StreamSubscription<dynamic>? _sub;
   Timer? _pingTimer;
 
-  // ── Liveness watchdog ──
+  // в”Ђв”Ђ Liveness watchdog в”Ђв”Ђ
   // Timestamp of the last inbound frame of ANY type (including server
   // heartbeat echoes). If the socket stays open but silent past
   // `pingInterval * 3`, we assume a half-open link (mobile NAT drop, tower
@@ -139,6 +158,10 @@ class _SignalingSocket {
   bool _opened = false;
   bool _closed = false;
   final List<Map<String, Object?>> _outbound = [];
+
+  /// How many buffered frames were dropped because [maxBufferedFrames] was
+  /// exceeded before OPEN. Exposed for tests / diagnostics.
+  int droppedOutbound = 0;
 
   final _frames = StreamController<Map<String, Object?>>.broadcast();
   final _errors = StreamController<PeerError>.broadcast();
@@ -177,13 +200,23 @@ class _SignalingSocket {
       // Native sockets get a protocol-level ping so a half-open TCP link
       // (mobile NAT timeout / network switch) is detected within ~2 ping
       // intervals and reconnected, instead of hanging for the OS TCP timeout
-      // (audit M4). Web ignores pingInterval — the browser handles keepalive.
+      // (audit M4). Web ignores pingInterval вЂ” the browser handles keepalive.
+      //
+      // The connect itself is bounded by [connectTimeout]: WebSocket.connect
+      // can hang indefinitely on a black-holed route, and nothing below would
+      // otherwise cancel it (the manager's 30s timer only changes UI text).
       final ch = await openSignalingChannel(
         uri,
         pingInterval: pingInterval * 2,
+      ).timeout(
+        connectTimeout,
+        onTimeout: () => throw TimeoutException(
+          'signaling connect timed out after ${connectTimeout.inMilliseconds}ms',
+          connectTimeout,
+        ),
       );
       if (_closed) {
-        // close() raced the await — don't leak the socket.
+        // close() raced the await вЂ” don't leak the socket.
         try {
           await ch.sink.close();
         } catch (_) {}
@@ -204,14 +237,16 @@ class _SignalingSocket {
         cancelOnError: false,
       );
     } catch (e) {
-      _errors.add(PeerError('socket-error', e.toString()));
+      if (!_errors.isClosed) {
+        _errors.add(PeerError('socket-error', e.toString()));
+      }
       _teardown(emitClose: true);
     }
   }
 
   void _handleRaw(dynamic raw) {
     if (_closed) return;
-    // Any inbound byte counts as liveness — stamp before we even parse, so a
+    // Any inbound byte counts as liveness вЂ” stamp before we even parse, so a
     // malformed-but-present frame still resets the watchdog.
     _lastFrameTime = DateTime.now();
     Map<String, Object?>? frame;
@@ -223,7 +258,7 @@ class _SignalingSocket {
         frame = decoded.map((k, v) => MapEntry(k.toString(), v));
       }
     } catch (_) {
-      return; // malformed frames are dropped — server bugs shouldn't kill us
+      return; // malformed frames are dropped вЂ” server bugs shouldn't kill us
     }
     if (frame == null) return;
 
@@ -248,14 +283,14 @@ class _SignalingSocket {
     });
   }
 
-  /// Liveness watchdog — ONLY for servers that echo our HEARTBEAT
+  /// Liveness watchdog вЂ” ONLY for servers that echo our HEARTBEAT
   /// ([serverEchoesHeartbeat], i.e. the embedded Orbits server). Checks every
   /// 5 s: if the socket is open but no frame has arrived for `pingInterval * 5`
-  /// (≈25 s), the link is presumed half-open and we tear it down with
+  /// (в‰€25 s), the link is presumed half-open and we tear it down with
   /// `emitClose: true` so the manager's backoff loop reconnects right away.
   ///
   /// CRITICAL: public peerjs.com does NOT echo HEARTBEAT and is silent on an
-  /// idle connection, so inbound silence there is NORMAL — running this
+  /// idle connection, so inbound silence there is NORMAL вЂ” running this
   /// watchdog against it tore down a healthy idle socket every ~25 s, driving
   /// a reconnect storm and breaking incoming connections during the dead
   /// window. For those servers the watchdog is disabled and we rely on the
@@ -277,6 +312,14 @@ class _SignalingSocket {
   void send(Map<String, Object?> frame) {
     if (_closed) return;
     if (!_opened) {
+      // Bound the pre-OPEN buffer (audit Round 5 A.4): a hung connect would
+      // otherwise let callers accumulate frames without limit. Drop the
+      // OLDEST frame вЂ” fresher state (e.g. an updated heartbeat) is more
+      // useful to the server than stale queued traffic.
+      while (_outbound.length >= maxBufferedFrames) {
+        _outbound.removeAt(0);
+        droppedOutbound++;
+      }
       _outbound.add(frame);
       return;
     }
@@ -289,7 +332,9 @@ class _SignalingSocket {
     try {
       ch.sink.add(jsonEncode(frame));
     } catch (e) {
-      _errors.add(PeerError('socket-error', e.toString()));
+      if (!_errors.isClosed) {
+        _errors.add(PeerError('socket-error', e.toString()));
+      }
     }
   }
 
@@ -313,7 +358,7 @@ class _SignalingSocket {
       _channel?.sink.close();
     } catch (_) {}
     _channel = null;
-    if (emitClose) _closes.add(null);
+    if (emitClose && !_closes.isClosed) _closes.add(null);
   }
 
   Future<void> dispose() async {
@@ -324,12 +369,12 @@ class _SignalingSocket {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// PeerDataConnection — wraps a single RTCDataChannel + its RTCPeerConnection.
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// PeerDataConnection вЂ” wraps a single RTCDataChannel + its RTCPeerConnection.
 // Exposed verbatim to consumers; mirrors the PeerJS DataConnection surface
 // the orbits codebase uses (onOpen, onClose, onError, onData, send, close,
 // peer, label, metadata, dataChannel for buffered-amount tuning).
-// ─────────────────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 class PeerDataConnection {
   PeerDataConnection._({
@@ -365,7 +410,7 @@ class PeerDataConnection {
   bool get open => _open;
   bool get closed => _closed;
 
-  /// Raw DataChannel — exposed so callers that need to tune
+  /// Raw DataChannel вЂ” exposed so callers that need to tune
   /// bufferedAmountLowThreshold (file transfer path) can reach it.
   RTCDataChannel? get dataChannel => _dc;
   RTCPeerConnection get peerConnection => _pc;
@@ -390,7 +435,7 @@ class PeerDataConnection {
       if (_closed) return;
       // Anti-OOM cap (audit finding 3): drop any frame larger than the biggest
       // legitimate payload before we allocate/decode it. The largest real frame
-      // is an inline file message (≤16 MiB base64 + JSON envelope — see
+      // is an inline file message (в‰¤16 MiB base64 + JSON envelope вЂ” see
       // `messaging_notifier` `_maxFileB64Len`); Drop chunks are 64 KiB. A
       // hostile peer with an open DataChannel could otherwise send a
       // hundreds-of-MB (or deeply nested) frame and OOM the app on
@@ -470,11 +515,11 @@ class PeerDataConnection {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// PeerMediaConnection — mirror of PeerJS MediaConnection. Outgoing call
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// PeerMediaConnection вЂ” mirror of PeerJS MediaConnection. Outgoing call
 // starts with a local stream already attached; an incoming call is pending
 // until the caller invokes [answer] with their own local stream.
-// ─────────────────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 class PeerMediaConnection {
   PeerMediaConnection._({
@@ -592,11 +637,11 @@ class PeerMediaConnection {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// _Negotiator — registry slot for a single connection. Holds a reference to
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// _Negotiator вЂ” registry slot for a single connection. Holds a reference to
 // either a data or media connection so inbound ICE/ANSWER frames can find
 // the right RTCPeerConnection without reflection.
-// ─────────────────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 class _Negotiator {
   _Negotiator.data(this.data) : media = null;
@@ -615,11 +660,11 @@ class _Negotiator {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────
-// PeerJsClient — orchestrator. One client per local peer id. Owns the
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+// PeerJsClient вЂ” orchestrator. One client per local peer id. Owns the
 // signaling socket, the registry of in-flight RTCPeerConnections, and the
 // public event streams.
-// ─────────────────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 class PeerJsClient {
   PeerJsClient({
@@ -632,6 +677,7 @@ class PeerJsClient {
     Duration pingInterval = const Duration(seconds: 5),
     String? token,
     bool serverEchoesHeartbeat = false,
+    this.connectTimeout = const Duration(seconds: 10),
   })  : _desiredId = id,
         _key = key,
         _version = version,
@@ -656,16 +702,45 @@ class PeerJsClient {
   final String _token;
   final Map<String, Object> _rtcConfig;
 
-  _SignalingSocket? _sock;
+  SignalingSocket? _sock;
   String? _id;
   bool _open = false;
   bool _destroyed = false;
   bool _disconnected = false;
 
+  /// Budget for the signaling handshake (TCP/TLS/WS upgrade). Passed down to
+  /// every [SignalingSocket] this client opens (audit Round 5 A.4).
+  final Duration connectTimeout;
+
+  /// In-flight `_openSocket()` future вЂ” dedupes concurrent reconnect triggers
+  /// (resume + browser-online + backoff timer can all fire in the same
+  /// instant; audit Round 5 A.1). A second caller joins the first attempt
+  /// instead of opening a second socket.
+  Future<void>? _openingSocket;
+
+  /// Monotonic id of the current socket. Close/error events are tagged with
+  /// the generation they belong to so an orphaned predecessor's teardown can
+  /// never clear the live socket's state.
+  int _socketGeneration = 0;
+
+  /// Per-connection ICE state guards (checking budget / disconnected grace).
+  final Map<String, IceLifecycleGuard> _iceGuards = {};
+
+  /// How long an RTCPeerConnection may sit in ICE `checking` before we give
+  /// up and release it (audit Round 5 A.5).
+  static const Duration iceCheckingBudget = Duration(seconds: 20);
+
+  /// How long an ICE `disconnected` link is given to self-recover before we
+  /// treat it as failed and tear it down (audit Round 5 A.5).
+  static const Duration iceDisconnectedGrace = Duration(seconds: 10);
+
+  /// Budget for a full [callPeer]/[connect] setup (offer creation included).
+  static const Duration dialTimeout = Duration(seconds: 15);
+
   final Map<String, _Negotiator> _conns = {};
   final Map<String, List<RTCIceCandidate>> _pendingIce = {};
 
-  // ── Inbound-OFFER flood protection (audit H2) ──
+  // в”Ђв”Ђ Inbound-OFFER flood protection (audit H2) в”Ђв”Ђ
   // An OFFER from the untrusted relay triggers a native RTCPeerConnection
   // allocation. Without a cap an attacker can spray unique connectionIds and
   // exhaust memory / native handles. We bound both the number of concurrent
@@ -674,10 +749,10 @@ class PeerJsClient {
   static const int _maxOffersPerSrcPerWindow = 16;
   static const Duration _offerRateWindow = Duration(seconds: 10);
 
-  /// src → recent inbound-OFFER timestamps (epoch ms), pruned to the window.
+  /// src в†’ recent inbound-OFFER timestamps (epoch ms), pruned to the window.
   final Map<String, List<int>> _offerTimes = {};
 
-  // ── Pending-ICE buffer bounds (audit L1) ──
+  // в”Ђв”Ђ Pending-ICE buffer bounds (audit L1) в”Ђв”Ђ
   // Candidates for a cid that has no OFFER yet are buffered. Without a cap they
   // accumulate forever for connectionIds that never materialise. Bound both
   // the per-cid depth and the number of distinct buffered cids.
@@ -710,11 +785,36 @@ class PeerJsClient {
     if (_destroyed) {
       throw const PeerError('disconnected', 'client is destroyed');
     }
-    await _openSocket();
+    await _openSocketDeduped();
+  }
+
+  /// Dedupe wrapper around [_openSocket] (audit Round 5 A.1): concurrent
+  /// triggers (lifecycle resume + browser online event + backoff timer) all
+  /// join ONE in-flight attempt instead of each opening their own socket.
+  Future<void> _openSocketDeduped() {
+    final inFlight = _openingSocket;
+    if (inFlight != null) return inFlight;
+    final f = _openSocket().whenComplete(() => _openingSocket = null);
+    _openingSocket = f;
+    return f;
   }
 
   Future<void> _openSocket() async {
-    final sock = _SignalingSocket(
+    // Close + dispose any previous socket BEFORE reassigning `_sock` so an
+    // old-but-alive socket can't linger with live heartbeat/watchdog timers
+    // (audit Round 5 A.1). `close()` tears down silently вЂ” no close event.
+    final old = _sock;
+    if (old != null) {
+      try {
+        old.close();
+      } catch (_) {}
+      try {
+        await old.dispose();
+      } catch (_) {}
+      if (identical(_sock, old)) _sock = null;
+    }
+
+    final sock = SignalingSocket(
       endpoint: endpoint,
       peerId: _desiredId ?? '',
       token: _token,
@@ -722,20 +822,41 @@ class PeerJsClient {
       version: _version,
       pingInterval: _pingInterval,
       serverEchoesHeartbeat: _serverEchoesHeartbeat,
+      connectTimeout: connectTimeout,
     );
+    final gen = ++_socketGeneration;
     _sock = sock;
     sock.frames.listen(_handleFrame);
     sock.errors.listen((err) {
       if (_destroyed) return;
+      if (!identical(_sock, sock)) return; // orphaned socket's error
       _errorCtl.add(err);
     });
     sock.closes.listen((_) {
       if (_destroyed) return;
+      // Identity guard (audit Round 5 A.1): only the CURRENT socket's close
+      // may flip the client offline. An orphaned predecessor dying must not
+      // tear down a healthy replacement.
+      if (!identical(_sock, sock)) return;
       _disconnected = true;
       _open = false;
       _disconnectCtl.add(null);
     });
-    await sock.connect();
+    // Generation double-check after the await: if destroy()/another open
+    // raced us past this point, this socket is already stale.
+    if (gen != _socketGeneration || _destroyed) {
+      try {
+        sock.close();
+      } catch (_) {}
+      return;
+    }
+    try {
+      await sock.connect();
+    } catch (_) {
+      // connect() reports its own failure via errors/closes; a race with
+      // destroy() can also land here (closed controllers) вЂ” either way the
+      // client state machine handles the fallout, nothing to rethrow.
+    }
   }
 
   void _handleFrame(Map<String, Object?> frame) {
@@ -743,7 +864,7 @@ class PeerJsClient {
     final type = frame['type'];
     switch (type) {
       case _ServerMessageType.open:
-        // Server-assigned id wins — if we connected with an empty desired id,
+        // Server-assigned id wins вЂ” if we connected with an empty desired id,
         // the server picks one for us and reports it here. Only fall back to
         // the desired id when the server omits one (shouldn't happen on a
         // well-behaved PeerJS 1.5 server, but the check is cheap).
@@ -788,13 +909,29 @@ class PeerJsClient {
     }
   }
 
-  // ─── Outbound actions ───────────────────────────────────────────────
+  // в”Ђв”Ђв”Ђ Outbound actions в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
   /// Open a DataConnection to [targetId]. Returns a connection whose
   /// [PeerDataConnection.onOpen] stream fires when the DataChannel is live.
+  ///
+  /// Bounded by [dialTimeout] (audit Round 5 A.5): a hung createOffer /
+  /// setLocalDescription releases the RTCPeerConnection and throws instead of
+  /// leaving a half-negotiated zombie in [_conns].
   Future<PeerDataConnection> connect(
     String targetId, {
     bool reliable = true,
+    String? label,
+    Map<String, Object?>? metadata,
+  }) {
+    return _connectData(targetId, reliable: reliable, label: label,
+        metadata: metadata).timeout(dialTimeout, onTimeout: () async {
+      throw const PeerError('webrtc', 'data-channel dial timed out');
+    });
+  }
+
+  Future<PeerDataConnection> _connectData(
+    String targetId, {
+    required bool reliable,
     String? label,
     Map<String, Object?>? metadata,
   }) async {
@@ -802,47 +939,65 @@ class PeerJsClient {
       throw const PeerError('disconnected', 'client is destroyed');
     }
     final cid = _newDataConnectionId();
-    final labelOrDefault = label ?? cid;
-    final meta = metadata ?? <String, Object?>{};
-    final pc = await createPeerConnection(_rtcConfig);
-    final dc = await pc.createDataChannel(
-      labelOrDefault,
-      RTCDataChannelInit()..ordered = reliable,
-    );
-    final conn = PeerDataConnection._(
-      peer: targetId,
-      connectionId: cid,
-      label: labelOrDefault,
-      metadata: meta,
-      reliable: reliable,
-      initiator: true,
-      pc: pc,
-      client: this,
-    );
-    conn._attachDataChannel(dc);
-    _wirePcLifecycle(pc, cid);
-    _wireIceOut(pc, cid, targetId, 'data');
-    _conns[cid] = _Negotiator.data(conn);
-    final offer = await pc.createOffer({});
-    await pc.setLocalDescription(offer);
-    _sendFrame({
-      'type': _ServerMessageType.offer,
-      'dst': targetId,
-      'payload': {
-        'sdp': {'type': offer.type, 'sdp': offer.sdp},
-        'type': 'data',
-        'connectionId': cid,
-        'label': labelOrDefault,
-        'reliable': reliable,
-        'metadata': meta,
-        'serialization': 'json',
-      },
-    });
-    return conn;
+    try {
+      final labelOrDefault = label ?? cid;
+      final meta = metadata ?? <String, Object?>{};
+      final pc = await createPeerConnection(_rtcConfig);
+      final dc = await pc.createDataChannel(
+        labelOrDefault,
+        RTCDataChannelInit()..ordered = reliable,
+      );
+      final conn = PeerDataConnection._(
+        peer: targetId,
+        connectionId: cid,
+        label: labelOrDefault,
+        metadata: meta,
+        reliable: reliable,
+        initiator: true,
+        pc: pc,
+        client: this,
+      );
+      conn._attachDataChannel(dc);
+      _wirePcLifecycle(pc, cid);
+      _wireIceOut(pc, cid, targetId, 'data');
+      _conns[cid] = _Negotiator.data(conn);
+      final offer = await pc.createOffer({});
+      await pc.setLocalDescription(offer);
+      _sendFrame({
+        'type': _ServerMessageType.offer,
+        'dst': targetId,
+        'payload': {
+          'sdp': {'type': offer.type, 'sdp': offer.sdp},
+          'type': 'data',
+          'connectionId': cid,
+          'label': labelOrDefault,
+          'reliable': reliable,
+          'metadata': meta,
+          'serialization': 'json',
+        },
+      });
+      return conn;
+    } catch (e) {
+      // Dial failed вЂ” release whatever we allocated for this attempt.
+      _giveUpConnection(cid);
+      rethrow;
+    }
   }
 
   /// Place a media call to [targetId] using [localStream].
+  ///
+  /// Bounded by [dialTimeout] (audit Round 5 A.5): a hung setup releases the
+  /// RTCPeerConnection and throws instead of leaving a zombie media conn.
   Future<PeerMediaConnection> callPeer(
+      String targetId, MediaStream localStream,
+      {Map<String, Object?>? metadata}) {
+    return _callPeerInner(targetId, localStream, metadata: metadata)
+        .timeout(dialTimeout, onTimeout: () async {
+      throw const PeerError('webrtc', 'call setup timed out');
+    });
+  }
+
+  Future<PeerMediaConnection> _callPeerInner(
       String targetId, MediaStream localStream,
       {Map<String, Object?>? metadata}) async {
     if (_destroyed) {
@@ -850,36 +1005,42 @@ class PeerJsClient {
     }
     final meta = metadata ?? const <String, Object?>{};
     final cid = _newMediaConnectionId();
-    final pc = await createPeerConnection(_rtcConfig);
-    final conn = PeerMediaConnection._(
-      peer: targetId,
-      connectionId: cid,
-      initiator: true,
-      pc: pc,
-      client: this,
-      localStream: localStream,
-      metadata: meta,
-    );
-    conn._wireRemoteTracks();
-    for (final track in localStream.getTracks()) {
-      await pc.addTrack(track, localStream);
+    try {
+      final pc = await createPeerConnection(_rtcConfig);
+      final conn = PeerMediaConnection._(
+        peer: targetId,
+        connectionId: cid,
+        initiator: true,
+        pc: pc,
+        client: this,
+        localStream: localStream,
+        metadata: meta,
+      );
+      conn._wireRemoteTracks();
+      for (final track in localStream.getTracks()) {
+        await pc.addTrack(track, localStream);
+      }
+      _wirePcLifecycle(pc, cid);
+      _wireIceOut(pc, cid, targetId, 'media');
+      _conns[cid] = _Negotiator.media(conn);
+      final offer = await pc.createOffer({});
+      await pc.setLocalDescription(offer);
+      _sendFrame({
+        'type': _ServerMessageType.offer,
+        'dst': targetId,
+        'payload': {
+          'sdp': {'type': offer.type, 'sdp': offer.sdp},
+          'type': 'media',
+          'connectionId': cid,
+          if (meta.isNotEmpty) 'metadata': meta,
+        },
+      });
+      return conn;
+    } catch (e) {
+      // Setup failed / timed out вЂ” release whatever we allocated.
+      _giveUpConnection(cid);
+      rethrow;
     }
-    _wirePcLifecycle(pc, cid);
-    _wireIceOut(pc, cid, targetId, 'media');
-    _conns[cid] = _Negotiator.media(conn);
-    final offer = await pc.createOffer({});
-    await pc.setLocalDescription(offer);
-    _sendFrame({
-      'type': _ServerMessageType.offer,
-      'dst': targetId,
-      'payload': {
-        'sdp': {'type': offer.type, 'sdp': offer.sdp},
-        'type': 'media',
-        'connectionId': cid,
-        if (meta.isNotEmpty) 'metadata': meta,
-      },
-    });
-    return conn;
   }
 
   /// Close the signaling socket but leave existing RTCDataChannels alive.
@@ -895,16 +1056,27 @@ class PeerJsClient {
 
   /// Re-establish the signaling socket after [disconnect]. Preserves the
   /// token, so the server recognises this as the same session.
+  ///
+  /// Idempotent under concurrency (audit Round 5 A.1): repeated triggers join
+  /// the same in-flight open instead of racing to create parallel sockets.
   void reconnect() {
     if (_destroyed) return;
     if (!_disconnected && _open) return;
-    unawaited(_openSocket());
+    unawaited(_openSocketDeduped());
   }
 
   /// Irreversibly tear down the client, all connections, and the socket.
   Future<void> destroy() async {
     if (_destroyed) return;
     _destroyed = true;
+    // Invalidate any in-flight _openSocket(): its post-await generation check
+    // will see the mismatch and close the just-opened socket instead of
+    // leaking it into a destroyed client (audit Round 5 A.1 race #2).
+    _socketGeneration++;
+    for (final g in _iceGuards.values) {
+      g.dispose();
+    }
+    _iceGuards.clear();
     _open = false;
     _disconnected = true;
     final conns = List<_Negotiator>.from(_conns.values);
@@ -928,7 +1100,7 @@ class PeerJsClient {
     await _callCtl.close();
   }
 
-  // ─── Inbound handlers ───────────────────────────────────────────────
+  // в”Ђв”Ђв”Ђ Inbound handlers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
   Future<void> _handleOffer(Map<String, Object?> frame) async {
     final src = frame['src']?.toString();
@@ -943,7 +1115,7 @@ class PeerJsClient {
     if (cid == null || cid.isEmpty || cid.length > 128 || sdpMap is! Map) return;
     // Drop duplicate OFFERs for a connectionId we're already negotiating.
     if (_conns.containsKey(cid)) return;
-    // Flood protection — bound concurrent half-open conns and per-source rate
+    // Flood protection вЂ” bound concurrent half-open conns and per-source rate
     // before allocating a native RTCPeerConnection (audit H2).
     if (_conns.length >= _maxConcurrentConns) return;
     if (!_admitOffer(src)) return;
@@ -971,7 +1143,7 @@ class PeerJsClient {
       _wirePcLifecycle(pc, cid);
       _wireIceOut(pc, cid, src, 'media');
       _conns[cid] = _Negotiator.media(media);
-      // Do NOT flush pending ICE here — setRemoteDescription happens later in
+      // Do NOT flush pending ICE here вЂ” setRemoteDescription happens later in
       // [PeerMediaConnection.answer]. Candidates that raced in before the
       // offer arrived stay buffered and get flushed inside answer().
       _callCtl.add(media);
@@ -1112,7 +1284,7 @@ class PeerJsClient {
     }
   }
 
-  // ─── Glue used by PeerDataConnection / PeerMediaConnection ──────────
+  // в”Ђв”Ђв”Ђ Glue used by PeerDataConnection / PeerMediaConnection в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
   void _sendFrame(Map<String, Object?> frame) {
     if (_destroyed) return;
@@ -1122,15 +1294,35 @@ class PeerJsClient {
   void _forgetConnection(String cid) {
     _conns.remove(cid);
     _pendingIce.remove(cid);
+    _iceGuards.remove(cid)?.dispose();
   }
 
+  void _giveUpConnection(String cid) {
+    final n = _conns.remove(cid);
+    _pendingIce.remove(cid);
+    _iceGuards.remove(cid)?.dispose();
+    if (n != null) unawaited(n.dispose());
+  }
+
+  /// Wire ICE state handling with budgets (audit Round 5 A.5):
+  ///   вЂў eternal `checking` в†’ give up after [iceCheckingBudget];
+  ///   вЂў `disconnected` в†’ grace of [iceDisconnectedGrace], then give up;
+  ///   вЂў failed/closed в†’ tear down immediately (previous behaviour).
   void _wirePcLifecycle(RTCPeerConnection pc, String cid) {
+    final guard = IceLifecycleGuard(
+      onGiveUp: () => _giveUpConnection(cid),
+      checkingBudget: iceCheckingBudget,
+      disconnectedGrace: iceDisconnectedGrace,
+    );
+    _iceGuards[cid] = guard;
     pc.onIceConnectionState = (state) {
       if (_destroyed) return;
+      if (!_conns.containsKey(cid)) return;
+      guard.update(state);
+      // Keep the legacy immediate-teardown semantics for terminal states.
       if (state == RTCIceConnectionState.RTCIceConnectionStateFailed ||
           state == RTCIceConnectionState.RTCIceConnectionStateClosed) {
-        final n = _conns.remove(cid);
-        if (n != null) unawaited(n.dispose());
+        _giveUpConnection(cid);
       }
     };
   }

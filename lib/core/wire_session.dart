@@ -1,4 +1,4 @@
-// Port of src/core/wireSession.js — per-peer handshake state machine on top
+﻿// Port of src/core/wireSession.js вЂ” per-peer handshake state machine on top
 // of the Double Ratchet.
 //
 // Handshake protocol (byte-compatible with the React build):
@@ -8,7 +8,7 @@
 //   v4 (signed + X3DH):    v3 fields + x3dhIk, x3dhIkSig, ek, spkId, opkId?
 //
 // v3+ hellos carry an ECDSA-P256/SHA-256 signature over [buildSignedHelloBlob].
-// A v3+ hello with an invalid signature is rejected outright — no ratchet, no
+// A v3+ hello with an invalid signature is rejected outright вЂ” no ratchet, no
 // shared secret. The first verified hello from a peer pins their identity
 // fingerprint (TOFU); subsequent hellos that don't match the pin are rejected
 // until the user explicitly clears the pin.
@@ -23,6 +23,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 
 import 'base64_helpers.dart';
+import '../utils/heavy_codec.dart';
 import 'double_ratchet.dart' as ratchet;
 import 'feature_flags.dart';
 import 'identity_key.dart' as identity_key;
@@ -37,7 +38,7 @@ const String _ratchetTable = 'ratchets';
 const String _ratchetRowPrefix = 'ratchet-';
 
 /// Upper bound on buffered inbound ciphertexts per peer while the ratchet
-/// warms up — prevents an unbounded queue from a misbehaving sender.
+/// warms up вЂ” prevents an unbounded queue from a misbehaving sender.
 const int _maxPendingInbound = 64;
 
 /// How long an inbound ciphertext waits for the ratchet to come up before it
@@ -47,9 +48,9 @@ const Duration _pendingInboundTimeout = Duration(seconds: 15);
 /// Default waitReady timeout, matching the JS 8-second fallback.
 const Duration _defaultWaitReadyTimeout = Duration(seconds: 8);
 
-// ─────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 // Session registry
-// ─────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 class _PendingInbound {
   _PendingInbound(this.wireStr, this.completer, this.timer);
@@ -96,9 +97,9 @@ void _resetPendingReady(_Session s) {
   s.ready = false;
 }
 
-// ─────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 // Shared-secret derivation (v2/v3 fallback path)
-// ─────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 final _ecdh = Ecdh.p256(length: 32);
 
@@ -129,9 +130,9 @@ Future<Uint8List> _deriveSharedSecret({
   );
 }
 
-// ─────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 // Persistence (KeyStore-backed ratchet snapshots)
-// ─────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 String _ratchetRowKey(String peerId) => '$_ratchetRowPrefix$peerId';
 
@@ -172,7 +173,7 @@ Future<Map<String, Uint8List>> _deserializeSkipped(Object? raw) async {
       final v = await _maybeUnwrap(entry.value);
       if (v != null) out['${entry.key}'] = v;
     } catch (_) {
-      // One corrupt entry shouldn't kill the session — drop it.
+      // One corrupt entry shouldn't kill the session вЂ” drop it.
     }
   }
   return out;
@@ -186,11 +187,11 @@ Future<void> _saveRatchetSnapshot(_Session session) async {
   // locked we have no KEK to wrap them, so defer the write entirely rather
   // than persisting an `encVersion: 0` plaintext snapshot. The live session
   // is unaffected; forward secrecy may only degrade across a restart that
-  // happened to race a lock — an acceptable trade vs. plaintext on disk.
+  // happened to race a lock вЂ” an acceptable trade vs. plaintext on disk.
   if (!hasVaultKek()) {
     assert(() {
       // ignore: avoid_print
-      print('[wireSession] skipping ratchet persist for ${session.peerId} — '
+      print('[wireSession] skipping ratchet persist for ${session.peerId} вЂ” '
           'vault locked, would write plaintext');
       return true;
     }());
@@ -198,7 +199,7 @@ Future<void> _saveRatchetSnapshot(_Session session) async {
   }
 
   final dhPriv = Uint8List.fromList(
-    // cryptography 2.9 EcKeyPair path — scalar lives on extracted data.
+    // cryptography 2.9 EcKeyPair path вЂ” scalar lives on extracted data.
     (await state.dhKeyPair.extract()).d,
   );
 
@@ -231,7 +232,7 @@ Future<void> _persistSession(_Session session) {
     try {
       await _saveRatchetSnapshot(session);
     } catch (_) {
-      // Persistence failures are non-fatal — forward secrecy may degrade
+      // Persistence failures are non-fatal вЂ” forward secrecy may degrade
       // across restarts, but the live session is unaffected.
     }
   });
@@ -265,7 +266,7 @@ Future<_Session?> _hydrateSession(String peerId) async {
       recvCk = await _maybeUnwrap(row['recvCk']);
       dhPriv = (await _maybeUnwrap(dhPrivRaw))!;
     } catch (_) {
-      // Vault locked — leave the row on disk for a later retry.
+      // Vault locked вЂ” leave the row on disk for a later retry.
       return null;
     }
 
@@ -323,9 +324,9 @@ Future<_Session?> _hydrateSession(String peerId) async {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 // Signed hello build + verify
-// ─────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 /// Fields carried on a v4 signed hello (X3DH bootstrap).
 class _V4Extras {
@@ -437,18 +438,18 @@ Future<_HelloVerifyResult> _verifySignedHello({
   );
   final ok = await identity_key.verifyWithRemoteSpki(idSpki, blob, sigBytes);
   if (!ok) {
-    throw StateError('wireHello signature verification failed — possible MITM');
+    throw StateError('wireHello signature verification failed вЂ” possible MITM');
   }
 
   final pin = await checkPin(senderPeerId, idSpki);
   if (pin.status == PinStatus.crossBound) {
-    // The same identity key is already pinned under a different peer code —
+    // The same identity key is already pinned under a different peer code вЂ”
     // a relay can't forge a signed hello, so this means one identity is being
     // presented under two transport personas (impersonation / key reuse).
     // Fail closed (audit finding 9). `pin.expected` holds the other peer code.
     throw StateError(
       'Peer $senderPeerId presents an identity key already pinned under a '
-      'different code (${pin.expected ?? "?"}) — refusing (possible relay '
+      'different code (${pin.expected ?? "?"}) вЂ” refusing (possible relay '
       'impersonation).',
     );
   }
@@ -459,7 +460,7 @@ Future<_HelloVerifyResult> _verifySignedHello({
     final gotShort = got.length < 16 ? got : got.substring(0, 16);
     throw StateError(
       'Peer $senderPeerId identity key changed (expected $expectedShort, '
-      'got $gotShort) — possible MITM or legitimate key rotation. '
+      'got $gotShort) вЂ” possible MITM or legitimate key rotation. '
       'Clear the pin manually to accept the new key.',
     );
   }
@@ -475,9 +476,9 @@ Future<_HelloVerifyResult> _verifySignedHello({
   );
 }
 
-// ─────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 // Public API
-// ─────────────────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 /// Called when the reliable DataChannel opens. Ensures a local DH key pair
 /// exists, attempts to hydrate any persisted state, and returns the
@@ -499,7 +500,7 @@ Future<Map<String, Object?>> initiateHandshake({
   session.role = myPeerId.compareTo(peerId) < 0 ? 'alice' : 'bob';
 
   // Force waitReady to block until the peer's hello arrives and the ratchet
-  // resets — stale ratchet state can't encrypt messages the peer will accept.
+  // resets вЂ” stale ratchet state can't encrypt messages the peer will accept.
   if (session.ready) {
     _resetPendingReady(session);
   }
@@ -516,7 +517,7 @@ Future<Map<String, Object?>> initiateHandshake({
         x3dhExtras = boot;
       }
     } catch (_) {
-      // Fall through to v3 — the peer has no published bundle or the cache
+      // Fall through to v3 вЂ” the peer has no published bundle or the cache
       // was stale. Either way, a plain signed hello still works.
     }
   }
@@ -529,7 +530,7 @@ Future<Map<String, Object?>> initiateHandshake({
   );
 }
 
-/// Outcome of [acceptHello] — tells the caller whether it should send a
+/// Outcome of [acceptHello] вЂ” tells the caller whether it should send a
 /// matching reply hello, and surfaces the verification/TOFU result for UI.
 class AcceptHelloResult {
   const AcceptHelloResult({
@@ -544,7 +545,7 @@ class AcceptHelloResult {
 
   /// True when this hello pinned the peer's identity for the *first* time
   /// (TOFU `newPin`). The pin is trusted-on-first-use, so a MITM present at
-  /// first contact would be pinned silently — callers should surface an
+  /// first contact would be pinned silently вЂ” callers should surface an
   /// "unverified, compare safety numbers out-of-band" state and must NOT
   /// auto-promote the peer past TOFU trust until the user confirms (audit H1).
   final bool firstContact;
@@ -560,7 +561,7 @@ Future<AcceptHelloResult> acceptHello({
 }) async {
   // NB: don't allocate a session before the hello passes validation. A
   // rejected hello (missing pub, downgrade, bad signature) must not leave a
-  // half-initialised _Session — its readyCompleter would dangle with no
+  // half-initialised _Session вЂ” its readyCompleter would dangle with no
   // listener. Session creation is deferred to just before its first use.
   final pubB64 = hello['pub'];
   if (pubB64 is! String || pubB64.isEmpty) {
@@ -571,16 +572,16 @@ Future<AcceptHelloResult> acceptHello({
   final protocolVersion = helloVer >= 4 ? 4 : (helloVer >= 3 ? 3 : 2);
   final remoteDhSpki = base64ToBytes(pubB64);
 
-  // ── Downgrade protection (C1) ──
+  // в”Ђв”Ђ Downgrade protection (C1) в”Ђв”Ђ
   // Refuse to complete a handshake below the configured floor. An unsigned
   // v2 hello carries no identity key, so the signature check and TOFU pin
-  // below are skipped entirely — a MITM on the untrusted relay can send
+  // below are skipped entirely вЂ” a MITM on the untrusted relay can send
   // `v: 2` to strip authentication. The default floor (v3) rejects this.
   final minVer = minProtocolVersion();
   if (protocolVersion < minVer) {
     throw StateError(
       'Refusing wireHello protocol v$protocolVersion from $peerId '
-      '(minimum is v$minVer) — possible downgrade attack',
+      '(minimum is v$minVer) вЂ” possible downgrade attack',
     );
   }
   // Belt-and-suspenders for the legacy escape hatch: even when v2 is allowed,
@@ -590,13 +591,13 @@ Future<AcceptHelloResult> acceptHello({
     final existingPin = await getPin(peerId);
     if (existingPin != null && existingPin.fingerprint.isNotEmpty) {
       throw StateError(
-        'Refusing v2 downgrade for already-pinned peer $peerId — '
+        'Refusing v2 downgrade for already-pinned peer $peerId вЂ” '
         'possible MITM',
       );
     }
   }
 
-  // Decode v4 fields up front — used both for signature verification and for
+  // Decode v4 fields up front вЂ” used both for signature verification and for
   // the responder X3DH replay below.
   _V4Extras? v4Extras;
   if (protocolVersion >= 4) {
@@ -641,7 +642,7 @@ Future<AcceptHelloResult> acceptHello({
     remoteFingerprint = v.fingerprint;
   }
 
-  // Validation passed — now it's safe to allocate (or reuse) session state.
+  // Validation passed вЂ” now it's safe to allocate (or reuse) session state.
   final session = _getOrCreateSession(peerId);
 
   // If we haven't generated our own DH yet (peer's hello arrived before our
@@ -678,7 +679,7 @@ Future<AcceptHelloResult> acceptHello({
   final helloType = hello['type'];
   if (session.state != null && (helloType == 'wireRekey' || session.ready)) {
     session.state = null;
-    // Stale X3DH seed must not survive a reconnect / rekey — otherwise both
+    // Stale X3DH seed must not survive a reconnect / rekey вЂ” otherwise both
     // sides keep the old root while believing they rotated DH keys.
     session.bootstrapSk = null;
     _resetPendingReady(session);
@@ -716,10 +717,10 @@ Future<AcceptHelloResult> acceptHello({
   // Invariant guard (C1): a v3+ handshake must have set `verified` before we
   // expose the session for traffic. v3+ verification throws on failure above,
   // so this only trips if the control flow is ever refactored to leave a
-  // signed session unverified — fail closed rather than encrypt blindly.
+  // signed session unverified вЂ” fail closed rather than encrypt blindly.
   if (protocolVersion >= 3 && !verified) {
     throw StateError(
-      'wire session for $peerId reached ready unverified — refusing traffic',
+      'wire session for $peerId reached ready unverified вЂ” refusing traffic',
     );
   }
 
@@ -769,7 +770,7 @@ bool isReady(String peerId) {
 
 bool isVerified(String peerId) => _sessions[peerId]?.verified == true;
 
-/// Encrypt an arbitrary Dart object → wire string. The object is JSON-encoded
+/// Encrypt an arbitrary Dart object в†’ wire string. The object is JSON-encoded
 /// first, so it must be JSON-safe (primitives, lists, maps with string keys).
 Future<String> encryptOutbound(String peerId, Object? obj) async {
   final session = _getOrCreateSession(peerId);
@@ -783,7 +784,7 @@ Future<String> encryptOutbound(String peerId, Object? obj) async {
   return ratchet.encodeWire(envelope);
 }
 
-/// Decrypt a wire string → Dart object. Buffers ciphertexts that arrive
+/// Decrypt a wire string в†’ Dart object. Buffers ciphertexts that arrive
 /// before the handshake completes; they're drained when acceptHello finishes.
 Future<Object?> decryptInbound(String peerId, String wireStr) async {
   var session = _sessions[peerId];
@@ -792,7 +793,7 @@ Future<Object?> decryptInbound(String peerId, String wireStr) async {
     session = _sessions[peerId];
   }
   if (session == null || session.state == null) {
-    // Ratchet not ready yet — buffer the ciphertext and wait for acceptHello
+    // Ratchet not ready yet вЂ” buffer the ciphertext and wait for acceptHello
     // to complete. Avoids silently dropping messages that arrive mid-race.
     return _bufferPendingInbound(peerId, wireStr);
   }
@@ -803,8 +804,8 @@ Future<Object?> decryptInbound(String peerId, String wireStr) async {
   }
   // Hard verified-precondition (audit finding 8). Never decrypt traffic from a
   // session whose identity wasn't cryptographically verified. At the default
-  // protocol floor (v3) this is always satisfied — the acceptHello invariant
-  // (`protocolVersion >= 3 && !verified` → throw) guarantees it — so this is a
+  // protocol floor (v3) this is always satisfied вЂ” the acceptHello invariant
+  // (`protocolVersion >= 3 && !verified` в†’ throw) guarantees it вЂ” so this is a
   // no-op there. But it fail-closes the downgrade path: if setMinProtocolVersion(2)
   // ever lets an unsigned v2 session reach `ready` with verified == false, its
   // traffic is refused here instead of being decrypted as if trusted.
@@ -821,7 +822,7 @@ Future<Object?> decryptInbound(String peerId, String wireStr) async {
     }
   }
   unawaited(_persistSession(session));
-  return jsonDecode(utf8.decode(plaintext));
+  return jsonDecodeHeavy(plaintext);
 }
 
 Future<Object?> _bufferPendingInbound(String peerId, String wireStr) {
@@ -889,7 +890,7 @@ Future<void> teardownSession(String peerId) async {
   } catch (_) {}
 }
 
-/// Handshake verification snapshot for a peer — used by the UI to render a
+/// Handshake verification snapshot for a peer вЂ” used by the UI to render a
 /// "verified" badge and the peer's fingerprint for out-of-band comparison.
 class WireVerification {
   const WireVerification({
@@ -919,7 +920,7 @@ WireVerification? getVerification(String peerId) {
 /// [encryptOutbound]. Delegates to the ratchet's own prefix check.
 bool isWireCiphertext(Object? data) => ratchet.isWireCiphertext(data);
 
-/// Test hook — drop all in-memory session state.
+/// Test hook вЂ” drop all in-memory session state.
 void resetSessionsForTests() {
   for (final s in _sessions.values) {
     if (!s.readyCompleter.isCompleted) {

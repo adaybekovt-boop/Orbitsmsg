@@ -16,6 +16,7 @@
 import 'package:drift/drift.dart';
 
 import '../core/key_store.dart';
+import '../core/vault_kek.dart';
 import 'database.dart';
 import 'row_codec.dart';
 
@@ -32,6 +33,23 @@ class DriftKeyStore implements KeyStore {
 
   final OrbitsDatabase _db;
 
+  /// Storage-level encryption (audit Round 5 B.2): EVERY row this store
+  /// writes is sealed under the vault KEK with the synchronous OB1 AES-GCM
+  /// frame — the same primitive db.dart uses for message/peer content.
+  ///
+  /// This moves secrecy from caller discipline ("remember to wrapSecret each
+  /// field") to a property of the store itself: a raw dump of keys/prekeys/
+  /// ratchets yields ciphertext without the KEK. Callers may still wrap
+  /// individual fields (double-wrapping is harmless).
+  ///
+  /// Reads tolerate legacy plaintext rows (pre-fix data) via the OB1 magic
+  /// check inside [unwrapBlobSync], so existing installs keep working and
+  /// migrate lazily on their next write.
+  ///
+  /// Locked vault → [wrapBlobSync]/[unwrapBlobSync] throw [StateError]:
+  /// writes fail closed; framed reads fail closed too (legacy plaintext
+  /// still passes through, matching db.dart semantics).
+
   @override
   Future<Map<String, Object?>?> get(String table, String id) async {
     switch (table) {
@@ -39,17 +57,17 @@ class DriftKeyStore implements KeyStore {
         final row = await (_db.select(_db.keysTable)
               ..where((t) => t.id.equals(id)))
             .getSingleOrNull();
-        return row == null ? null : decodeRow(row.data);
+        return row == null ? null : decodeRow(unwrapBlobSync(row.data));
       case 'prekeys':
         final row = await (_db.select(_db.prekeysTable)
               ..where((t) => t.id.equals(id)))
             .getSingleOrNull();
-        return row == null ? null : decodeRow(row.data);
+        return row == null ? null : decodeRow(unwrapBlobSync(row.data));
       case 'ratchets':
         final row = await (_db.select(_db.ratchetsTable)
               ..where((t) => t.id.equals(id)))
             .getSingleOrNull();
-        return row == null ? null : decodeRow(row.data);
+        return row == null ? null : decodeRow(unwrapBlobSync(row.data));
       default:
         throw ArgumentError(
             'DriftKeyStore: unsupported table "$table" (use storage/db.dart '
@@ -63,7 +81,7 @@ class DriftKeyStore implements KeyStore {
     if (id is! String || id.isEmpty) {
       throw ArgumentError('DriftKeyStore: put requires a non-empty String id');
     }
-    final data = encodeRow(value);
+    final data = wrapBlobSync(encodeRow(value));
 
     switch (table) {
       case 'keys':
@@ -129,8 +147,8 @@ class DriftKeyStore implements KeyStore {
     switch (table) {
       case 'keys':
         final rows = await _db.select(_db.keysTable).get();
-        return _filter(
-            rows.map((r) => decodeRow(r.data)), indexField, indexValue);
+        return _filter(rows.map((r) => decodeRow(unwrapBlobSync(r.data))),
+            indexField, indexValue);
       case 'prekeys':
         final query = _db.select(_db.prekeysTable);
         // Promote the common `kind=` / `used=` filters to SQL — otherwise
@@ -141,16 +159,16 @@ class DriftKeyStore implements KeyStore {
           query.where((t) => t.used.equals(indexValue.toInt()));
         }
         final rows = await query.get();
-        return _filter(rows.map((r) => decodeRow(r.data)), indexField,
-            indexValue);
+        return _filter(rows.map((r) => decodeRow(unwrapBlobSync(r.data))),
+            indexField, indexValue);
       case 'ratchets':
         final query = _db.select(_db.ratchetsTable);
         if (indexField == 'peerId' && indexValue is String) {
           query.where((t) => t.peerId.equals(indexValue));
         }
         final rows = await query.get();
-        return _filter(rows.map((r) => decodeRow(r.data)), indexField,
-            indexValue);
+        return _filter(rows.map((r) => decodeRow(unwrapBlobSync(r.data))),
+            indexField, indexValue);
       default:
         throw ArgumentError(
             'DriftKeyStore: unsupported table "$table" (use storage/db.dart)');

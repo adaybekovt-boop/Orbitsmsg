@@ -16,6 +16,13 @@
 // Flip [kSqlCipherFileEncryptionEnabled] only after that lands and CI
 // builds Windows.
 //
+// Round 5 update: the residual risk was formally accepted in SECURITY.md
+// ("Database encryption at rest"). Compensating controls now include
+// storage-level sealing of keys/prekeys/ratchets (DriftKeyStore +
+// saveRatchetState wrap every row under the vault KEK), so the crown-jewel
+// tables no longer depend on caller discipline — only metadata columns
+// remain plaintext until SQLCipher lands.
+//
 // Public write-up: `docs/security.md` § Known limitation: SQLCipher.
 
 /// Headline mirrored in `docs/security.md`.

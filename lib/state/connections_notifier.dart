@@ -399,14 +399,16 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     );
     _bindings[key] = binding;
 
-    // Connection timeout — reliable only. Matches the JS 15s budget.
-    if (ch == 'reliable') {
-      binding.connectTimer = Timer(const Duration(seconds: 15), () {
-        final cur = _bindings[key];
-        if (cur == null || cur.conn != conn) return;
-        if (conn.open) return;
-        unawaited(cur.dispose());
-        _bindings.remove(key);
+    // Connection timeout (audit Round 5 A.5) — now for BOTH channels. The
+    // reliable budget matches the JS 15s; the ephemeral side-channel used to
+    // have NO budget and could linger forever as a half-open dial.
+    binding.connectTimer = Timer(const Duration(seconds: 15), () {
+      final cur = _bindings[key];
+      if (cur == null || cur.conn != conn) return;
+      if (conn.open) return;
+      unawaited(cur.dispose());
+      _bindings.remove(key);
+      if (ch == 'reliable') {
         _markPeerOffline(remoteId);
         // Ephemeral side-channel to the same peer often dies with it.
         final ephKey = connKey(remoteId, 'ephemeral');
@@ -415,8 +417,8 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
           _bindings.remove(ephKey);
           unawaited(eph.dispose());
         }
-      });
-    }
+      }
+    });
 
     // Wire events.
     binding.subscriptions.add(conn.onOpen.listen((_) {

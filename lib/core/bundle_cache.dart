@@ -16,6 +16,11 @@ import 'prekey_bundle.dart';
 const String _rowPrefix = 'peer-bundle-';
 const String _keysTable = 'keys';
 
+/// Storage cap for the bundle cache (audit Round 5 B.4). Cached bundles are
+/// re-fetchable on demand, so eviction is always safe — pins live in their
+/// own rows and are never touched here.
+const int kMaxCachedBundles = 128;
+
 String _rowKey(String peerId) => '$_rowPrefix$peerId';
 
 /// A cached bundle along with the cheap metadata callers usually want
@@ -50,7 +55,34 @@ Future<bool> cacheVerifiedBundle(String peerId, PrekeyBundle bundle) async {
     'fingerprint': fingerprint,
     'storedAt': DateTime.now().millisecondsSinceEpoch,
   });
+  await pruneCachedBundles();
   return true;
+}
+
+/// Evict the OLDEST cached bundles past [maxEntries] (audit Round 5 B.4).
+/// Returns how many rows were evicted. Never touches pin rows — only ids
+/// with the `peer-bundle-` prefix are candidates.
+Future<int> pruneCachedBundles({int maxEntries = kMaxCachedBundles}) async {
+  if (maxEntries < 0) maxEntries = 0;
+  List<CachedBundleSummary> summaries;
+  try {
+    summaries = await listCachedBundles();
+  } catch (_) {
+    return 0;
+  }
+  if (summaries.length <= maxEntries) return 0;
+  final oldestFirst = [...summaries]
+    ..sort((a, b) => a.storedAt.compareTo(b.storedAt));
+  var evicted = 0;
+  for (final s in oldestFirst.take(summaries.length - maxEntries)) {
+    try {
+      await keyStore().delete(_keysTable, _rowKey(s.peerId));
+      evicted++;
+    } catch (_) {
+      break; // store unavailable — stop rather than half-prune blind
+    }
+  }
+  return evicted;
 }
 
 /// Retrieve a cached bundle or null. Malformed rows are dropped on the way

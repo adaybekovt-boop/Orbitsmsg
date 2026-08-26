@@ -71,3 +71,30 @@ See `docs/windows-signing.md`. CI calls `signtool sign` when
 Release APKs must never be signed with the well-known Android SDK debug
 keystore. See `docs/android-signing.md` for the upload-key env vars, GitHub
 secrets, rotation, and what to do if a key is compromised.
+
+## Database encryption at rest (risk acceptance, Round 5)
+
+Full-file SQLCipher remains **disabled**. The blocker is documented in
+lib/storage/sqlcipher_status.dart: sqlcipher_flutter_libs and
+sqlite3_flutter_libs both register a CMake target named `sqlite3` on
+Windows, so enabling one breaks the other platform's build. No safe
+per-platform opener split exists yet.
+
+Accepted consequence: the SQLite file itself is plaintext — table names,
+peer ids, timestamps, delivery statuses and room structure are readable to
+anyone with the file (device seizure, unencrypted backup, forensic dump).
+
+Compensating controls shipped instead:
+
+- Message/peer content rows are sealed per-row under the vault KEK
+  (OB1 AES-256-GCM frame, see lib/core/vault_kek.dart).
+- Keys, prekeys, ratchet snapshots AND cached bundles are encrypted at the
+  storage layer itself since Round 5 (DriftKeyStore seals every row;
+  saveRatchetState likewise) — caller code can no longer forget to wrap
+  secrets. Locked vault = fail-closed writes.
+- The KEK comes from scrypt(password); without it neither content rows nor
+  key material decrypt.
+
+This risk is re-evaluated every audit round; reopening SQLCipher work
+requires a Windows-safe CMake split plus a migration path for existing
+plaintext files.

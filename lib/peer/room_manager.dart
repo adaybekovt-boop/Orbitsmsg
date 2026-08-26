@@ -608,6 +608,11 @@ class RoomManager extends StateNotifier<RoomState> {
       if (safeAvatarDataUrl(self?.avatarDataUrl) != null)
         'avatarDataUrl': safeAvatarDataUrl(self?.avatarDataUrl),
     });
+
+    // Session is live — start the room outbox retry loop and immediately
+    // drain anything queued while the link was down (audit Round 5 A.3).
+    _ensureRoomOutboxTimer();
+    unawaited(flushPendingRoomMessages());
   }
 
   /// Clear the last join error (e.g. after the UI showed its SnackBar).
@@ -709,6 +714,11 @@ class RoomManager extends StateNotifier<RoomState> {
       if (safeAvatarDataUrl(self?.avatarDataUrl) != null)
         'avatarDataUrl': safeAvatarDataUrl(self?.avatarDataUrl),
     });
+
+    // Session is live — start the room outbox retry loop and immediately
+    // drain anything queued while the link was down (audit Round 5 A.3).
+    _ensureRoomOutboxTimer();
+    unawaited(flushPendingRoomMessages());
   }
 
   /// Drop a failed join candidate without tearing down a server (guests don't
@@ -786,11 +796,14 @@ class RoomManager extends StateNotifier<RoomState> {
       'channelId': channelId,
       'timestamp': ts,
       'direction': 'out',
-      'status': 'sent',
+      // Queue-first (audit Round 5 A.3): the row only becomes 'sent' after
+      // the transport actually accepted the packet. A guest whose host is
+      // unreachable keeps it pending — flushPendingRoomMessages() retries.
+      'status': 'pending',
       'payload': {'kind': 'text', 'text': trimmed, 'fromName': fromName},
     });
 
-    _dispatchRoomPacket(<String, Object?>{
+    final ok = _dispatchRoomPacket(<String, Object?>{
       'type': 'room_msg',
       'kind': 'text',
       'id': id,
@@ -801,6 +814,9 @@ class RoomManager extends StateNotifier<RoomState> {
       'fromPeerId': selfId,
       'ts': ts,
     });
+    if (ok) {
+      await db.updateMessageStatus(id, 'sent');
+    }
   }
 
   /// Send a sticker to [channelId] in [roomId]. Stickers piggyback on the
@@ -826,11 +842,12 @@ class RoomManager extends StateNotifier<RoomState> {
       'channelId': channelId,
       'timestamp': ts,
       'direction': 'out',
-      'status': 'sent',
+      // Queue-first — see sendRoomMessage (audit Round 5 A.3).
+      'status': 'pending',
       'payload': {'type': 'sticker', 'sticker': clean, 'fromName': fromName},
     });
 
-    _dispatchRoomPacket(<String, Object?>{
+    final ok = _dispatchRoomPacket(<String, Object?>{
       'type': 'room_msg',
       'kind': 'sticker',
       'id': id,
@@ -841,6 +858,9 @@ class RoomManager extends StateNotifier<RoomState> {
       'fromPeerId': selfId,
       'ts': ts,
     });
+    if (ok) {
+      await db.updateMessageStatus(id, 'sent');
+    }
   }
 
   /// Send a file attachment to [channelId] in [roomId]. The raw bytes go to
@@ -911,7 +931,8 @@ class RoomManager extends StateNotifier<RoomState> {
       'channelId': channelId,
       'timestamp': ts,
       'direction': 'out',
-      'status': 'sent',
+      // Queue-first — see sendRoomMessage (audit Round 5 A.3).
+      'status': 'pending',
       'payload': {'type': 'file', 'attachment': attachment, 'fromName': fromName},
     });
 
@@ -922,7 +943,7 @@ class RoomManager extends StateNotifier<RoomState> {
       return;
     }
 
-    _dispatchRoomPacket(<String, Object?>{
+    final ok = _dispatchRoomPacket(<String, Object?>{
       'type': 'room_msg',
       'kind': 'file',
       'id': id,
@@ -934,17 +955,129 @@ class RoomManager extends StateNotifier<RoomState> {
       'fromPeerId': selfId,
       'ts': ts,
     });
+    if (ok) {
+      await db.updateMessageStatus(id, 'sent');
+    }
   }
 
   /// Route an outbound `room_msg` packet: a host broadcasts to all guests; a
-  /// guest sends to the host (who relays). Shared by text/sticker/file sends.
-  void _dispatchRoomPacket(Map<String, Object?> packet) {
+  /// guest sends to the host (who relays). Shared by text/sticker/file sends
+  /// AND by the room outbox flush. Returns whether the packet was accepted by
+  /// the transport (audit Round 5 A.3):
+  ///   • host role → true: the host IS the room authority — its copy is the
+  ///     canonical one and broadcast to currently-connected guests is
+  ///     best-effort by design;
+  ///   • guest role → whatever sendRoomPacket(host) reports, so a dead host
+  ///     link leaves the message queued instead of silently dropped.
+  bool _dispatchRoomPacket(Map<String, Object?> packet) {
     if (state.role == RoomRole.host) {
       _broadcastToGuests(packet);
-    } else if (state.role == RoomRole.guest) {
-      final host = state.hostPeerId;
-      if (host != null) _connections.sendRoomPacket(host, packet);
+      return true;
     }
+    if (state.role == RoomRole.guest) {
+      final host = state.hostPeerId;
+      if (host != null) return _connections.sendRoomPacket(host, packet);
+    }
+    return false;
+  }
+
+  // ─── Room outbox (audit Round 5 A.3) ──────────────────────────────
+
+  /// Retry cadence for undelivered room messages while a session is live.
+  static const Duration roomOutboxRetryInterval = Duration(seconds: 10);
+  Timer? _roomOutboxTimer;
+
+  /// Arm the periodic outbox retry loop. Called when a session becomes
+  /// active (join/create); cancelled on leave/destroy.
+  void _ensureRoomOutboxTimer() {
+    if (_roomOutboxTimer != null) return;
+    _roomOutboxTimer = Timer.periodic(
+      roomOutboxRetryInterval,
+      (_) => unawaited(flushPendingRoomMessages()),
+    );
+  }
+
+  void _stopRoomOutboxTimer() {
+    _roomOutboxTimer?.cancel();
+    _roomOutboxTimer = null;
+  }
+
+  /// Re-dispatch every pending outbound room message of the ACTIVE session.
+  ///
+  /// Triggered by the retry timer and right after a successful join — the
+  /// exact moments a previously-dead host link may have come back. Files are
+  /// rehydrated from `file_blobs` so the retried envelope matches the first
+  /// attempt byte-for-byte. Stops at the first failure: ordering matters and
+  /// the transport is clearly still down.
+  Future<int> flushPendingRoomMessages() async {
+    final roomId = state.roomId;
+    if (roomId == null || roomId.isEmpty) return 0;
+    if (state.role == RoomRole.none) return 0;
+
+    List<Map<String, Object?>> rows;
+    try {
+      rows = await db.getPendingRoomMessages(roomId: roomId);
+    } catch (_) {
+      return 0;
+    }
+
+    var delivered = 0;
+    for (final r in rows) {
+      final id = r['id'] as String?;
+      if (id == null || id.isEmpty) continue;
+      final payloadRaw = r['payload'];
+      if (payloadRaw is! Map) continue;
+      final payload = Map<String, Object?>.from(payloadRaw);
+      final channelId = r['channelId'] as String? ?? '';
+      final fromName = payload['fromName'] as String? ?? '';
+      final ts = (r['timestamp'] as num?)?.toInt() ?? 0;
+
+      final packet = <String, Object?>{
+        'type': 'room_msg',
+        'id': id,
+        'roomId': roomId,
+        'channelId': channelId,
+        'fromPeerId': r['peerId'],
+        'ts': ts,
+      };
+
+      switch (payload['type'] ?? payload['kind']) {
+        case 'text':
+          packet['kind'] = 'text';
+          packet['text'] = payload['text'] ?? '';
+          break;
+        case 'sticker':
+          final sticker = payload['sticker'];
+          if (sticker is! Map) continue; // unrecoverable — leave it queued
+          packet['kind'] = 'sticker';
+          packet['sticker'] = Map<String, Object?>.from(sticker);
+          break;
+        case 'file':
+          final att = payload['attachment'];
+          if (att is! Map) continue;
+          try {
+            final blob = await db.getFileBlob(id);
+            final bytes = blob?['blob'];
+            if (bytes is! Uint8List || bytes.isEmpty) continue;
+            final b64 = base64Encode(bytes);
+            if (b64.length > kMaxRoomFileB64Len) continue;
+            packet['kind'] = 'file';
+            packet['attachment'] = Map<String, Object?>.from(att);
+            packet['b64'] = b64;
+          } catch (_) {
+            continue;
+          }
+          break;
+        default:
+          continue;
+      }
+      packet['fromName'] = fromName;
+
+      if (!_dispatchRoomPacket(packet)) break; // still offline — stop here
+      await db.updateMessageStatus(id, 'sent');
+      delivered++;
+    }
+    return delivered;
   }
 
   /// Validate + clamp an outbound/inbound sticker blob. Returns null if it's
@@ -1430,6 +1563,7 @@ class RoomManager extends StateNotifier<RoomState> {
     final roomId = state.roomId;
     if (roomId != null) await db.setRoomStatus(roomId, 'offline');
     await _stopVoice();
+    _stopRoomOutboxTimer();
     // Guest's room-scoped client (if self-hosted) is torn down here too.
     await _teardownSelfHost();
     _security.reset();
@@ -1828,6 +1962,7 @@ class RoomManager extends StateNotifier<RoomState> {
   @override
   void dispose() {
     unawaited(_stopVoice());
+    _stopRoomOutboxTimer();
     // Release the embedded server + room-scoped client; skip rebinding the
     // bridge since this manager is going away.
     unawaited(_teardownSelfHost(rebind: false));

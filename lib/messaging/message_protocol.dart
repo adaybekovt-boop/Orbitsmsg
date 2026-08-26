@@ -1,45 +1,45 @@
-// Port of `src/messaging/messageProtocol.js`.
+﻿// Port of `src/messaging/messageProtocol.js`.
 //
 // Pure inbound-message dispatcher. Takes a decoded data object coming off a
 // PeerJS DataChannel and routes it to the right application-level handler
 // (profile exchange, ack, edit/delete, bundle push/pull, chat msg). No
-// Flutter / no platform channels at this level — all UI effects are
+// Flutter / no platform channels at this level вЂ” all UI effects are
 // surfaced via typed callbacks on [ReliableInboundCtx], so the module is
 // unit-testable with fakes and has zero dependency on the widget tree.
 //
 // Port choices that deviate from the literal JS:
-// - React `refs.current` → Dart getters (`() => localProfile`) or shared
+// - React `refs.current` в†’ Dart getters (`() => localProfile`) or shared
 //   mutable collections (`Set<String> seenMsgIds`). The owner holds the
 //   state; the dispatcher only reads / mutates it.
 // - `ctx.setProfilesByPeer((prev) => next)` / `setMessagesByPeer` kept as
 //   functional updaters so the eventual Riverpod wiring can plug in as a
 //   `state = updater(state)` without rewriting this module. In Phase 11 we
 //   can swap to Riverpod notifiers; everything under this file stays as-is.
-// - `localStorage.setItem(STORAGE.profiles, …)` inside the profile-res
+// - `localStorage.setItem(STORAGE.profiles, вЂ¦)` inside the profile-res
 //   branch is intentionally *omitted*: peers are already persisted via
 //   [db.savePeer] through `upsertPeer`, so the LS cache is redundant. UI
 //   layer can add a `SharedPreferences` mirror later if hydration latency
 //   matters.
-// - `document.hidden && document.hasFocus()` (web foreground check) →
+// - `document.hidden && document.hasFocus()` (web foreground check) в†’
 //   `ctx.isAppInForeground()` callback. Mobile callers wire this to
 //   `WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed`.
 // - Blobs: web JS uses `Blob`, Dart uses raw `Uint8List`. Voice / file
-//   storage already accepts `List<int>` in `storage/db.dart` — we pass
+//   storage already accepts `List<int>` in `storage/db.dart` вЂ” we pass
 //   base64-decoded bytes straight through.
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math';
 
 import '../core/bundle_cache.dart';
 import '../core/prekey_bundle.dart';
 import '../core/wire_crypto.dart';
 import '../peer/helpers.dart';
+import '../utils/heavy_codec.dart';
 import '../storage/db.dart' as db;
 import '../utils/common.dart';
 import 'message_auth.dart';
 
-// ─── Type aliases ─────────────────────────────────────────────────
+// в”Ђв”Ђв”Ђ Type aliases в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 /// JSON-ish map we pass around when we don't want to invent a class for
 /// every on-the-wire payload.
@@ -47,10 +47,10 @@ typedef JsonMap = Map<String, Object?>;
 
 /// Transport-level callback for sending raw (not yet encrypted) frames
 /// over the underlying PeerJS DataConnection. Used for the plaintext
-/// wire-handshake reply — chat traffic goes through [ReliableInboundCtx.sendEncrypted].
+/// wire-handshake reply вЂ” chat traffic goes through [ReliableInboundCtx.sendEncrypted].
 typedef ConnSend = void Function(Object? data);
 
-// ─── Ephemeral (typing / heartbeat) context ───────────────────────
+// в”Ђв”Ђв”Ђ Ephemeral (typing / heartbeat) context в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 class EphemeralInboundCtx {
   const EphemeralInboundCtx({
@@ -67,7 +67,7 @@ class EphemeralInboundCtx {
   final void Function() onHeartbeat;
 }
 
-// ─── Reliable (chat / control) context ────────────────────────────
+// в”Ђв”Ђв”Ђ Reliable (chat / control) context в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 class ReliableInboundCtx {
   const ReliableInboundCtx({
@@ -96,7 +96,7 @@ class ReliableInboundCtx {
   /// Our own normalized peerId. Was `peerIdRef.current` in JS.
   final String selfPeerId;
 
-  /// Getter for the current local profile (nullable — user may have logged
+  /// Getter for the current local profile (nullable вЂ” user may have logged
   /// out between dispatch and read). Was `localProfileRef.current`.
   final JsonMap? Function() localProfile;
 
@@ -149,7 +149,7 @@ class ReliableInboundCtx {
   /// `WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed`.
   final bool Function() isAppInForeground;
 
-  // ── Optional observers ──────────────────────────────────────────
+  // в”Ђв”Ђ Optional observers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
   final void Function(String remoteId, Object? payload)? onGameMessage;
   final void Function(String remoteId, AcceptBundleResult result)?
@@ -161,7 +161,7 @@ class ReliableInboundCtx {
   final void Function(Object? data)? onUnexpectedPlaintext;
 }
 
-// ─── Ephemeral dispatch ───────────────────────────────────────────
+// в”Ђв”Ђв”Ђ Ephemeral dispatch в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 /// Route a packet that landed on the ephemeral (unreliable) channel.
 /// Only handles `typing` and `hb`; anything else is silently dropped.
@@ -182,11 +182,11 @@ void dispatchEphemeralInbound(
   }
 }
 
-// ─── Reliable dispatch (wire-decrypt + route) ─────────────────────
+// в”Ђв”Ђв”Ђ Reliable dispatch (wire-decrypt + route) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 /// Route a packet that landed on the reliable channel. Accepts either:
 ///   - a plaintext wire-handshake control object (`wireHello` / `wireRekey`)
-///   - a [String] carrying wire ciphertext (`v2:hdr:iv:ct`) → decrypts via
+///   - a [String] carrying wire ciphertext (`v2:hdr:iv:ct`) в†’ decrypts via
 ///     the ratchet, then hands the plaintext to [dispatchReliablePlaintext]
 /// Anything else is dropped with [ReliableInboundCtx.onUnexpectedPlaintext]
 /// so diagnostics surface the drift.
@@ -199,7 +199,7 @@ Future<bool> dispatchReliableInbound(
   String remoteId,
   ReliableInboundCtx ctx,
 ) async {
-  // ── Handshake in plaintext ──
+  // в”Ђв”Ђ Handshake in plaintext в”Ђв”Ђ
   if (data is Map) {
     final type = data['type'];
     if (type == 'wireHello' || type == 'wireRekey') {
@@ -210,7 +210,7 @@ Future<bool> dispatchReliableInbound(
           helloMsg: Map<String, Object?>.from(data),
         );
         // First verified (v3+) handshake pins the peer's identity (TOFU). Bump
-        // stored trust unknown→TOFU so the chat shows an "unverified" (not
+        // stored trust unknownв†’TOFU so the chat shows an "unverified" (not
         // "unknown") badge and nudges the user to compare safety numbers; this
         // never auto-promotes to user-verified, and only fires on first contact
         // to keep the write off the steady-state path (audit H1).
@@ -222,7 +222,7 @@ Future<bool> dispatchReliableInbound(
           try {
             connSend(reply);
           } catch (_) {
-            // Connection might've closed between decide and send — not our
+            // Connection might've closed between decide and send вЂ” not our
             // problem, the upper layer will retry the handshake on reconnect.
           }
         }
@@ -233,7 +233,7 @@ Future<bool> dispatchReliableInbound(
     }
   }
 
-  // ── Encrypted payload ──
+  // в”Ђв”Ђ Encrypted payload в”Ђв”Ђ
   if (isWireCiphertext(data)) {
     Object? plaintext;
     try {
@@ -251,12 +251,12 @@ Future<bool> dispatchReliableInbound(
     );
   }
 
-  // ── Anything else is dropped silently, but we log once for visibility. ──
+  // в”Ђв”Ђ Anything else is dropped silently, but we log once for visibility. в”Ђв”Ђ
   ctx.onUnexpectedPlaintext?.call(data);
   return false;
 }
 
-// ─── Reliable plaintext dispatch (trusted, decrypted) ─────────────
+// в”Ђв”Ђв”Ђ Reliable plaintext dispatch (trusted, decrypted) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 /// Dispatch a decrypted application-level object. This only runs on
 /// trusted input that's already been authenticated by the Double Ratchet
@@ -271,14 +271,14 @@ Future<bool> dispatchReliablePlaintext(
     try {
       ctx.sendEncrypted(msg);
     } catch (_) {
-      // Outbound failure here is fine — the original packet has already
+      // Outbound failure here is fine вЂ” the original packet has already
       // been logically handled; the sender will retry on their side.
     }
   }
 
   final type = data['type'];
 
-  // ─── profile_req — remote wants our profile card ───────────────
+  // в”Ђв”Ђв”Ђ profile_req вЂ” remote wants our profile card в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
   if (type == 'profile_req') {
     final lp = ctx.localProfile();
     if (lp == null) return true;
@@ -298,20 +298,20 @@ Future<bool> dispatchReliablePlaintext(
     return true;
   }
 
-  // ─── profile_res — remote returned their profile card ──────────
+  // в”Ђв”Ђв”Ђ profile_res вЂ” remote returned their profile card в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
   if (type == 'profile_res') {
     final p = data['profile'];
     if (p is! Map) return true;
     final pMap = Map<String, Object?>.from(p);
     final avatarRaw = pMap['avatarDataUrl'];
 
-    // Remote avatars are untrusted — validate MIME + size strictly (the
+    // Remote avatars are untrusted вЂ” validate MIME + size strictly (the
     // validator also rejects data:image/svg+xml which can carry scripts).
     final safeAvatar = safeAvatarDataUrl(avatarRaw);
     if (safeAvatar != null) {
       unawaited(_safelySaveAvatar(remoteId, safeAvatar));
     } else if (avatarRaw == null || avatarRaw == '') {
-      // Peer explicitly cleared their avatar — drop the stale cached copy.
+      // Peer explicitly cleared their avatar вЂ” drop the stale cached copy.
       unawaited(_safelyDeleteAvatar(remoteId));
     }
 
@@ -339,7 +339,7 @@ Future<bool> dispatchReliablePlaintext(
     return true;
   }
 
-  // ─── bundle_req / bundle_res — X3DH prekey bundle exchange ─────
+  // в”Ђв”Ђв”Ђ bundle_req / bundle_res вЂ” X3DH prekey bundle exchange в”Ђв”Ђв”Ђв”Ђв”Ђ
   if (type == 'bundle_req') {
     final nonce = data['nonce'] is num
         ? (data['nonce'] as num).toInt()
@@ -355,7 +355,7 @@ Future<bool> dispatchReliablePlaintext(
           'bundle': serializeBundle(bundle),
         });
       } catch (_) {
-        // Bundle build failure is non-fatal — remote will retry.
+        // Bundle build failure is non-fatal вЂ” remote will retry.
       }
     }());
     return true;
@@ -382,7 +382,7 @@ Future<bool> dispatchReliablePlaintext(
     return true;
   }
 
-  // ─── ack — delivery receipt for an outbound message ────────────
+  // в”Ђв”Ђв”Ђ ack вЂ” delivery receipt for an outbound message в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
   if (type == 'ack') {
     final ackId = data['id'];
     if (ackId is! String || ackId.isEmpty) return true;
@@ -395,7 +395,7 @@ Future<bool> dispatchReliablePlaintext(
     return true;
   }
 
-  // ─── game — mini-game piggyback on the reliable channel ────────
+  // в”Ђв”Ђв”Ђ game вЂ” mini-game piggyback on the reliable channel в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
   if (type == 'game') {
     try {
       ctx.onGameMessage?.call(remoteId, data['payload']);
@@ -403,7 +403,7 @@ Future<bool> dispatchReliablePlaintext(
     return true;
   }
 
-  // ─── edit — remote edited an earlier message ───────────────────
+  // в”Ђв”Ђв”Ђ edit вЂ” remote edited an earlier message в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
   if (type == 'edit') {
     final id = data['id'];
     if (id is! String || id.isEmpty) return true;
@@ -436,7 +436,7 @@ Future<bool> dispatchReliablePlaintext(
     return true;
   }
 
-  // ─── delete — remote tombstones an earlier message ─────────────
+  // в”Ђв”Ђв”Ђ delete вЂ” remote tombstones an earlier message в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
   if (type == 'delete') {
     final id = data['id'];
     if (id is! String || id.isEmpty) return true;
@@ -453,7 +453,7 @@ Future<bool> dispatchReliablePlaintext(
         return out;
       });
       unawaited(db.deleteMessageRow(id));
-      // The row might reference a voice OR file blob — we don't know
+      // The row might reference a voice OR file blob вЂ” we don't know
       // which from the delete envelope alone (id is just the message
       // id, same across types). Try both; each is a no-op if the key
       // doesn't exist in that table. Without this we'd leak `file_blobs`
@@ -470,7 +470,7 @@ Future<bool> dispatchReliablePlaintext(
     return true;
   }
 
-  // ─── msg / text — regular chat message ─────────────────────────
+  // в”Ђв”Ђв”Ђ msg / text вЂ” regular chat message в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
   final typeStr = type is String ? type : '';
   if (typeStr != 'msg' && typeStr != 'text') return false;
 
@@ -534,7 +534,7 @@ Future<bool> dispatchReliablePlaintext(
       }
     } catch (_) {}
 
-    // ── Voice meta: decode + persist blob if inline, else metadata-only ──
+    // в”Ђв”Ђ Voice meta: decode + persist blob if inline, else metadata-only в”Ђв”Ђ
     JsonMap? voiceRef;
     final transcriptRaw = voiceMeta?['transcript'];
     final transcript =
@@ -544,12 +544,12 @@ Future<bool> dispatchReliablePlaintext(
         final b64 = voiceMeta['b64'] as String;
         // Anti-OOM (audit finding 4): cap the attacker-controlled base64 length
         // BEFORE decode. Mirrors the send-side gate `_maxVoiceB64Len` (8 MiB)
-        // in messaging_notifier.dart. Oversized → treated as bad base64 (falls
+        // in messaging_notifier.dart. Oversized в†’ treated as bad base64 (falls
         // through to the metadata-only "voice failed" bubble below).
         if (b64.length > 8 * 1024 * 1024) {
           throw const FormatException('voice b64 exceeds inbound cap');
         }
-        final bytes = base64Decode(b64);
+        final bytes = await b64DecodeHeavy(b64);
         final mime = (voiceMeta['mime'] as String?) ?? 'audio/webm';
         final duration = _asInt(voiceMeta['duration']);
         final waveform = _numListToDoubles(voiceMeta['waveform']);
@@ -567,7 +567,7 @@ Future<bool> dispatchReliablePlaintext(
           'transcript': transcript,
         };
       } catch (_) {
-        // Bad base64 — fall through to metadata-only so the bubble can at
+        // Bad base64 вЂ” fall through to metadata-only so the bubble can at
         // least render a "voice failed" state.
       }
     } else if (voiceMeta != null) {
@@ -579,7 +579,7 @@ Future<bool> dispatchReliablePlaintext(
       };
     }
 
-    // ── Attachment meta: decode + persist blob if inline, else missing:true ──
+    // в”Ђв”Ђ Attachment meta: decode + persist blob if inline, else missing:true в”Ђв”Ђ
     JsonMap? attachmentRef;
     if (attachmentMeta != null) {
       final name = _clip((attachmentMeta['name'] as String?) ?? 'file', 200);
@@ -609,11 +609,11 @@ Future<bool> dispatchReliablePlaintext(
           final b64 = attachmentMeta['b64'] as String;
           // Anti-OOM (audit finding 4): cap base64 length BEFORE decode.
           // Mirrors the send-side gate `_maxFileB64Len` (16 MiB) in
-          // messaging_notifier.dart. Oversized → marked missing (below).
+          // messaging_notifier.dart. Oversized в†’ marked missing (below).
           if (b64.length > 16 * 1024 * 1024) {
             throw const FormatException('attachment b64 exceeds inbound cap');
           }
-          final bytes = base64Decode(b64);
+          final bytes = await b64DecodeHeavy(b64);
           await db.saveFileBlob(
             msgId,
             bytes,
@@ -626,7 +626,7 @@ Future<bool> dispatchReliablePlaintext(
             duration: duration,
             // `thumb` on the wire is a dataURL string; persisting it as bytes
             // would round-trip through utf8 which hurts nothing but adds
-            // nothing either — we keep the string copy inside the UI-side
+            // nothing either вЂ” we keep the string copy inside the UI-side
             // attachmentRef and leave the bytes-column null for now.
           );
           attachmentRef = metaOut;
@@ -677,7 +677,7 @@ Future<bool> dispatchReliablePlaintext(
       'ts': DateTime.now().millisecondsSinceEpoch,
     });
 
-    // Side effects — only when app is actually visible, otherwise push /
+    // Side effects вЂ” only when app is actually visible, otherwise push /
     // local-notif code is the right channel (handled by notifyNewMessage).
     if (ctx.isAppInForeground()) {
       try {
@@ -702,7 +702,7 @@ Future<bool> dispatchReliablePlaintext(
   return true;
 }
 
-// ─── Private helpers ──────────────────────────────────────────────
+// в”Ђв”Ђв”Ђ Private helpers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
 String _clip(String s, int maxChars) =>
     s.length > maxChars ? s.substring(0, maxChars) : s;
@@ -711,7 +711,7 @@ int _asInt(Object? v) => v is num ? v.toInt() : 0;
 
 /// Coerce a dynamic list of numerics into `List<double>` waveform
 /// amplitudes in 0..1. Matches the JS wire format
-/// (`audioRecorder.js::compressSamples` → `Math.min(1, √rms × 2.2)`);
+/// (`audioRecorder.js::compressSamples` в†’ `Math.min(1, в€љrms Г— 2.2)`);
 /// Flutter storage + player widget use the same shape so no rescaling
 /// is needed on either edge.
 ///
@@ -759,15 +759,15 @@ String _previewFor({
 }) {
   if (msgType == 'sticker') {
     final emoji = sticker?['emoji'];
-    return emoji is String && emoji.isNotEmpty ? emoji : '🖼 Стикер';
+    return emoji is String && emoji.isNotEmpty ? emoji : 'рџ–ј РЎС‚РёРєРµСЂ';
   }
-  if (msgType == 'voice') return '🎤 Голосовое';
+  if (msgType == 'voice') return 'рџЋ¤ Р“РѕР»РѕСЃРѕРІРѕРµ';
   if (msgType == 'file') {
     final kind = attachment?['kind'];
-    if (kind == 'image') return '🖼 Фото';
-    if (kind == 'video') return '🎬 Видео';
+    if (kind == 'image') return 'рџ–ј Р¤РѕС‚Рѕ';
+    if (kind == 'video') return 'рџЋ¬ Р’РёРґРµРѕ';
     final name = attachment?['name'];
-    return '📎 ${name is String && name.isNotEmpty ? name : 'Файл'}';
+    return 'рџ“Ћ ${name is String && name.isNotEmpty ? name : 'Р¤Р°Р№Р»'}';
   }
   return text;
 }
