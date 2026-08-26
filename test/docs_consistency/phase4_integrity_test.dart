@@ -54,12 +54,8 @@ void main() {
     expect(pw, contains("'weak'"));
   });
 
-  test('QR copy does not claim vault login', () {
-    final page = read('lib/pages/qr_pairing_page.dart');
-    expect(page, isNot(contains('Сессия авторизована')));
-    expect(page, contains('не вход в профиль'));
-    final settings = read('lib/pages/settings/security_page.dart');
-    expect(settings, contains('не копирование сейфа'));
+  test('QR adopt-session page is gone', () {
+    expect(File('lib/pages/qr_pairing_page.dart').existsSync(), isFalse);
   });
 
   test('notifications page stays honest', () {

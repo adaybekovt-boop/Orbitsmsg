@@ -359,11 +359,6 @@ class RoomManager extends StateNotifier<RoomState> {
   /// and was removed so it could not look like live protection.
   final SecurityMonitor _security = SecurityMonitor();
 
-  /// Optional handler for inbound `qr_auth_response` packets, registered by the
-  /// desktop QrPairingPage while it displays a code. Routed through here because
-  /// the connection layer already bridges plaintext control maps to RoomManager.
-  void Function(String remoteId, Map<String, Object?> packet)? _qrAuthListener;
-
   /// Delegates to the (possibly faked) transport. Named `_connections` for
   /// continuity — the method surface (sendRoomPacket/openReliable/hasReliable)
   /// matches the registry it wraps in production.
@@ -1169,11 +1164,6 @@ class RoomManager extends StateNotifier<RoomState> {
       String remoteId, Map<String, Object?> packet) async {
     final type = packet['type'];
     if (type is! String) return;
-    // QR pairing rides the same plaintext bridge but isn't a room packet.
-    if (type == 'qr_auth_response') {
-      _qrAuthListener?.call(remoteId, packet);
-      return;
-    }
     // Allow-list: ignore anything that isn't a known room packet (no throw).
     if (!kRoomPacketTypes.contains(type)) return;
     // Active-room gate (audit item 1): every room packet must target the room
@@ -1417,23 +1407,6 @@ class RoomManager extends StateNotifier<RoomState> {
     if (state.securityAlert != null) {
       state = state.copyWith(securityAlert: null);
     }
-  }
-
-  /// Register (or clear, with null) the handler for inbound `qr_auth_response`
-  /// packets — used by the desktop QR-pairing page.
-  void setQrAuthListener(
-          void Function(String remoteId, Map<String, Object?> packet)? cb) =>
-      _qrAuthListener = cb;
-
-  /// Phone side: dial [pcPeerId] and send a signed `qr_auth_response`. Reuses
-  /// the reliable plaintext room channel (DTLS-protected). Best-effort: returns
-  /// false if the reliable channel never opened.
-  Future<bool> sendQrAuthResponse(
-      String pcPeerId, Map<String, Object?> packet) async {
-    if (pcPeerId.isEmpty) return false;
-    _connections.openReliable(pcPeerId);
-    if (!await _waitReliable(pcPeerId)) return false;
-    return _connections.sendRoomPacket(pcPeerId, packet);
   }
 
   /// Guest: host created/synced a channel — replicate it with the host's id.

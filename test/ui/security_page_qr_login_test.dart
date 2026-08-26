@@ -5,6 +5,7 @@
 // This is a UI-honesty test, not a crypto test: it pumps Settings → Security
 // and checks that a user cannot start the fake-login flow.
 
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -12,7 +13,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:orbits_flutter/core/qr_pairing.dart';
 import 'package:orbits_flutter/pages/settings/security_page.dart';
 import 'package:orbits_flutter/state/auth_notifier.dart';
 import 'package:orbits_flutter/state/auto_unlock_service.dart';
@@ -77,12 +77,10 @@ void main() {
     expect(find.text('Связь устройств'), findsNothing);
   });
 
-  test('QR scan success copy does not claim the PC session opened', () {
-    expect(kQrDeviceLinkingEnabled, isFalse);
-    expect(kQrScanSentUserMessage.contains('Вход подтверждён'), isFalse);
+  test('QR adopt-session page file is gone', () {
     expect(
-      kQrScanSentUserMessage.toLowerCase().contains('не перенесен'),
-      isTrue,
+      File('lib/pages/qr_pairing_page.dart').existsSync(),
+      isFalse,
     );
   });
 }
