@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../core/authenticode.dart';
 import '../../state/update_notifier.dart';
 import '../../themes/orbits_tokens.dart';
 import '../../ui/primitives/adaptive_page_frame.dart';
@@ -122,19 +123,27 @@ class _UpdatesPageState extends ConsumerState<UpdatesPage> {
                   role: OrbitsGlassRole.card,
                   padding:
                       const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
-                  child: installSupported
-                      ? _WindowsUpdateActions(
-                          state: state,
-                          onDownload: () => ref
-                              .read(updateNotifierProvider.notifier)
-                              .downloadUpdate(),
-                          onInstall: _confirmAndInstall,
+                  child: installSupported &&
+                          !isAuthenticodePinProvisioned()
+                      ? _AutoUpdateUnavailableActions(
+                          onOpenLatest: () =>
+                              _openUrl(kLatestWindowsInstallerUrl),
                           onOpenRelease: () => _openUrl(state.releaseUrl),
                         )
-                      : _OpenLinkActions(
-                          state: state,
-                          onOpenUrl: _openUrl,
-                        ),
+                      : installSupported
+                          ? _WindowsUpdateActions(
+                              state: state,
+                              onDownload: () => ref
+                                  .read(updateNotifierProvider.notifier)
+                                  .downloadUpdate(),
+                              onInstall: _confirmAndInstall,
+                              onOpenRelease: () =>
+                                  _openUrl(state.releaseUrl),
+                            )
+                          : _OpenLinkActions(
+                              state: state,
+                              onOpenUrl: _openUrl,
+                            ),
                 ),
               ),
             ],
@@ -229,6 +238,53 @@ class _StatusCard extends StatelessWidget {
       case UpdateUiStatus.updateAvailable:
         return 'Доступна новая версия ${state.latestTag ?? state.latestVersion ?? ''}';
     }
+  }
+}
+
+/// Empty Authenticode pin: do not offer Install (it always fail-closes).
+class _AutoUpdateUnavailableActions extends StatelessWidget {
+  const _AutoUpdateUnavailableActions({
+    required this.onOpenLatest,
+    required this.onOpenRelease,
+  });
+
+  final VoidCallback onOpenLatest;
+  final VoidCallback onOpenRelease;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          kUpdateAutoUpdateUnavailableMessage,
+          key: const Key('auto-update-unavailable'),
+          style: TextStyle(
+            color: tokens.danger,
+            fontSize: 13,
+            height: 1.4,
+            fontFamily: tokens.fontBody,
+          ),
+        ),
+        const SizedBox(height: 12),
+        OrbitsGlassButton(
+          label: 'Скачать с GitHub Releases',
+          icon: Icons.download_outlined,
+          variant: OrbitsGlassVariant.primary,
+          expand: true,
+          onPressed: onOpenLatest,
+        ),
+        const SizedBox(height: 8),
+        OrbitsGlassButton(
+          label: 'Открыть страницу релиза',
+          icon: Icons.open_in_new,
+          variant: OrbitsGlassVariant.subtle,
+          expand: true,
+          onPressed: onOpenRelease,
+        ),
+      ],
+    );
   }
 }
 

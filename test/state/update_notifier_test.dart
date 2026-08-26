@@ -10,6 +10,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:orbits_flutter/core/authenticode.dart';
 import 'package:orbits_flutter/core/update_checker.dart';
 import 'package:orbits_flutter/core/update_downloader.dart';
 import 'package:orbits_flutter/core/update_installer.dart';
@@ -435,6 +436,32 @@ void main() {
       );
       expect(c.read(updateNotifierProvider).installError,
           isNot(contains('Authenticode')));
+      expect(exitCalls, 0);
+    });
+
+    test('unprovisioned pin → honest unavailable copy, no exit', () async {
+      var exitCalls = 0;
+      final installer = _FakeInstaller(
+        const InstallLaunchResult(InstallLaunchStatus.autoUpdateUnprovisioned,
+            message: 'internal'),
+      );
+      final c = await readyContainer(
+        installer: installer,
+        appExit: () async => exitCalls++,
+      );
+
+      final result =
+          await c.read(updateNotifierProvider.notifier).launchInstaller();
+
+      expect(result.status, InstallLaunchStatus.autoUpdateUnprovisioned);
+      expect(c.read(updateNotifierProvider).installStatus,
+          InstallUiStatus.failed);
+      expect(
+        c.read(updateNotifierProvider).installError,
+        kUpdateAutoUpdateUnavailableMessage,
+      );
+      expect(c.read(updateNotifierProvider).installError,
+          isNot(contains('internal')));
       expect(exitCalls, 0);
     });
 
