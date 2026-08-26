@@ -26,11 +26,10 @@ void main() {
       expect(back, equals(pt));
     });
 
-    test('passes plaintext through unchanged when no KEK', () async {
+    test('wrapBytes throws when locked (no plaintext fallback)', () async {
+      expect(hasVaultKek(), isFalse);
       final pt = Uint8List.fromList([9, 8, 7]);
-      final out = await wrapBytes(pt);
-      expect(identical(out, pt), isTrue);
-      expect(isWrapped(out), isFalse);
+      expect(() => wrapBytes(pt), throwsStateError);
     });
 
     test('wrapping a String round-trips as UTF-8, not UTF-16 (L8)', () async {

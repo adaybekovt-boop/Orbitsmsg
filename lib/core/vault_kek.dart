@@ -138,12 +138,17 @@ Uint8List unwrapBlobSync(List<int> stored) {
   return _gcm(encrypt: false, key: key, nonce: nonce, input: ct);
 }
 
-/// Wrap plaintext bytes under the in-memory KEK. Returns the original input
-/// unchanged when the KEK is not set (matches JS fallback so unlocked callers
-/// can shovel data through wrapBytes without branching).
+/// Wrap plaintext bytes under the in-memory KEK. Throws [StateError] when
+/// the vault is locked — same fail-closed contract as [wrapBlobSync] /
+/// [wrapSecret]. `null` input stays `null`.
 Future<Object?> wrapBytes(Object? plaintext) async {
+  if (plaintext == null) return plaintext;
   final key = _kek;
-  if (key == null || plaintext == null) return plaintext;
+  if (key == null) {
+    throw StateError(
+      'vault: refusing to wrap bytes while locked (no KEK)',
+    );
+  }
   final List<int> bytes = plaintext is List<int>
       ? plaintext
       // utf8 (not codeUnits/UTF-16) so a wrapped String round-trips through
@@ -175,8 +180,6 @@ Future<String> wrapSecret(List<int> plaintext) async {
     );
   }
   final wrapped = await wrapBytes(plaintext);
-  // wrapBytes only returns the input unchanged when the KEK is null, which we
-  // ruled out above — so this is always the wrapped String.
   return wrapped as String;
 }
 
