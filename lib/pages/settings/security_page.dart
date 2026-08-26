@@ -32,6 +32,9 @@ import '../../ui/primitives/orbits_glass_app_bar.dart';
 import '../../ui/primitives/orbits_glass_switch.dart';
 import '../../ui/primitives/orbs_card.dart';
 
+const Key kCryptoE2eOnBadgeKey = Key('crypto-e2e-on');
+const Key kCryptoRoomsOffBadgeKey = Key('crypto-rooms-off');
+
 class SecurityPage extends ConsumerStatefulWidget {
   const SecurityPage({super.key});
 
@@ -303,7 +306,8 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
           const _CryptoRow(
             title: 'Комнаты',
             subtitle:
-                'Без сквозного шифрования: организатор видит текст и файлы',
+                'Без сквозного шифрования — хост видит содержимое',
+            e2eOn: false,
           ),
           const SizedBox(height: 24),
         ],
@@ -317,14 +321,17 @@ class _CryptoRow extends StatelessWidget {
   const _CryptoRow({
     required this.title,
     required this.subtitle,
+    this.e2eOn = true,
   });
 
   final String title;
   final String subtitle;
+  final bool e2eOn;
 
   @override
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
+    final badgeColor = e2eOn ? tokens.success : tokens.danger;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: OrbitsGlassListTile(
@@ -338,18 +345,19 @@ class _CryptoRow extends StatelessWidget {
         ),
         subtitle: Text(subtitle),
         trailing: Container(
+          key: e2eOn ? kCryptoE2eOnBadgeKey : kCryptoRoomsOffBadgeKey,
           padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
           decoration: BoxDecoration(
-            color: tokens.success.withValues(alpha: 0.16),
+            color: badgeColor.withValues(alpha: 0.16),
             borderRadius: BorderRadius.circular(8),
           ),
           child: Text(
-            'ВКЛ',
+            e2eOn ? 'ВКЛ' : 'НЕТ E2E',
             style: TextStyle(
               fontSize: 10,
               fontWeight: FontWeight.w700,
               fontFamily: tokens.fontMono,
-              color: tokens.success,
+              color: badgeColor,
               letterSpacing: 1.0,
             ),
           ),
