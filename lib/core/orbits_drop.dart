@@ -24,6 +24,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 
 import 'base64_helpers.dart';
+import 'file_limits.dart';
 
 /// 64 KB per chunk — same as the JS engine.
 const int dropChunkSize = 65536;
@@ -37,7 +38,7 @@ const int dropMaxBufferSize = 1 << 20; // 1 MB
 /// Unauthenticated binary used to land in the engine before the wire
 /// handshake; the router now gates that, and these caps bound a verified
 /// peer that still tries to OOM the receiver.
-const int kMaxDropFileBytes = 100 * 1024 * 1024; // 100 MiB
+const int kMaxDropFileBytes = kMaxFileRawBytes;
 const int kMaxDropIncoming = 4;
 const int kMaxDropFrameBytes = dropChunkSize + 32;
 
