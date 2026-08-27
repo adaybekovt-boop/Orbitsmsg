@@ -24,5 +24,16 @@ Without those Settings, someone with write access can still push to
 `main` or merge a red PR; `pages.yml` will simply not deploy a red
 **Build & Release**, which is necessary but not sufficient.
 
+A **manual** Pages run (`workflow_dispatch`) must also see a successful
+**Build & Release** run on that same SHA (`pages.yml` gate job). Security
+scans remain required for every deploy path (R6-21).
+
 Rulesets were empty at the time of the fifth audit. Fill them in the UI;
 do not try to emulate protection with workflow hacks alone.
+
+## R6-22 / K02 — still a Settings action
+
+This agent cannot enable branch protection (GitHub Settings API returns
+403 from the cloud environment). Until an admin ticks the boxes above,
+write access can still merge a red PR; Pages will refuse a red Build &
+Release, which is necessary but not sufficient.

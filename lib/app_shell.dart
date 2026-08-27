@@ -23,7 +23,6 @@ import 'state/calls_provider.dart';
 import 'state/drop_provider.dart';
 import 'state/messaging_notifier.dart';
 import 'themes/orbits_tokens.dart';
-import 'ui/calls/call_overlay_mount.dart';
 import 'ui/peer/peer_status_pill.dart';
 import 'ui/primitives/orbits_glass_surface.dart';
 
@@ -83,7 +82,6 @@ class AppShell extends ConsumerWidget {
             ),
           ),
         ),
-        const Positioned.fill(child: CallOverlayMount()),
       ],
     );
 

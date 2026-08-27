@@ -43,6 +43,24 @@ jobs:
             echo "sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Confirm Build & Release succeeded on the same commit
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="${{ steps.sha.outputs.sha }}"
+          # Manual dispatch must not skip Analyze & Test. workflow_run
+          # already implies a green Build & Release; this check covers
+          # the workflow_dispatch hole (R6-21).
+          ids="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/build.yml/runs?head_sha=${sha}&status=completed&per_page=20" \
+            --jq '.workflow_runs[] | select(.conclusion=="success") | .id')"
+          if [ -z "${ids}" ]; then
+            echo "::error::Build & Release has no successful run for ${sha}; refusing to deploy"
+            exit 1
+          fi
+          echo "Build & Release ok for ${sha}"
+
       - name: Confirm Security scans succeeded on the same commit
         env:
           GH_TOKEN: ${{ github.token }}

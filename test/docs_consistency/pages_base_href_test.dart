@@ -23,6 +23,12 @@ void main() {
       yml.contains(RegExp(r'on:\s+push:\s+branches:\s+\[main\]')),
       isFalse,
     );
+    expect(
+      yml,
+      contains('Confirm Build & Release succeeded on the same commit'),
+      reason: 'workflow_dispatch must require a green Build & Release (R6-21)',
+    );
+    expect(yml, contains('github.event_name == \'workflow_dispatch\''));
   });
 
   test('docs describe the Settings branch-protection step', () {
