@@ -1,18 +1,6 @@
-enum DbHealthStatus { ok, missing, quarantined }
+import 'db_health_classify.dart';
 
-class DbHealthResult {
-  const DbHealthResult({
-    required this.status,
-    this.quarantinePath,
-    this.detail,
-  });
-
-  final DbHealthStatus status;
-  final String? quarantinePath;
-  final String? detail;
-}
-
-DbHealthResult? lastDatabaseHealthCheck;
+export 'db_health_classify.dart';
 
 /// Web persists through IndexedDB rather than a SQLite file, so the native
 /// corruption check is not applicable.
