@@ -36,6 +36,17 @@ abstract class KeyStore {
     String? indexField,
     Object? indexValue,
   });
+
+  /// Atomically update [id] if [ifMatches] is true on the current row.
+  /// Returns the written row, or null if the row is missing / predicate
+  /// failed. Implementations must serialize concurrent CAS so only one
+  /// winner observes a successful match (R08).
+  Future<Map<String, Object?>?> compareAndUpdate(
+    String table,
+    String id, {
+    required bool Function(Map<String, Object?> row) ifMatches,
+    required Map<String, Object?> Function(Map<String, Object?> row) update,
+  });
 }
 
 /// Process-local fallback for the KeyStore. Good enough for unit tests and
@@ -43,9 +54,19 @@ abstract class KeyStore {
 /// lives in a future Isar/Hive/Drift adapter.
 class InMemoryKeyStore implements KeyStore {
   final Map<String, Map<String, Map<String, Object?>>> _tables = {};
+  Future<void> _casChain = Future<void>.value();
 
   Map<String, Map<String, Object?>> _table(String name) =>
       _tables.putIfAbsent(name, () => <String, Map<String, Object?>>{});
+
+  Future<T> _exclusive<T>(Future<T> Function() action) {
+    final gate = Completer<void>();
+    final prev = _casChain;
+    _casChain = gate.future;
+    return prev.then((_) => action()).whenComplete(() {
+      if (!gate.isCompleted) gate.complete();
+    });
+  }
 
   @override
   Future<Map<String, Object?>?> get(String table, String id) async {
@@ -83,6 +104,23 @@ class InMemoryKeyStore implements KeyStore {
         .where((r) => r[indexField] == indexValue)
         .map((r) => Map<String, Object?>.from(r))
         .toList();
+  }
+
+  @override
+  Future<Map<String, Object?>?> compareAndUpdate(
+    String table,
+    String id, {
+    required bool Function(Map<String, Object?> row) ifMatches,
+    required Map<String, Object?> Function(Map<String, Object?> row) update,
+  }) {
+    return _exclusive(() async {
+      final current = await get(table, id);
+      if (current == null || !ifMatches(current)) return null;
+      final next = Map<String, Object?>.from(update(current));
+      next['id'] = id;
+      await put(table, next);
+      return next;
+    });
   }
 }
 
