@@ -122,12 +122,29 @@ int computeBackoffMs(int attempt, {int base = 800, int maxMs = 30000, int jitter
   return expMs + _jitterRng.nextInt(jitter);
 }
 
-/// Build the ICE servers list for an RTCPeerConnection. When TURN creds are
-/// configured and the user enabled "relay only", we force iceTransportPolicy.
-({List<Map<String, Object>> iceServers, String? iceTransportPolicy}) buildRtcConfig(PeerEnv env) {
-  final hasTurn = env.turnUrl != null && env.turnUsername != null && env.turnCredential != null;
-  // Deployment-provided STUN/TURN fully replaces the public defaults when set
-  // (audit L7); otherwise fall back to the bundled public servers.
+/// Thrown when the user asked for relay-only ICE but no TURN server is
+/// configured. Callers must refuse the connection instead of falling back
+/// to STUN / host candidates (which would leak the local IP).
+class RelayOnlyUnavailable implements Exception {
+  const RelayOnlyUnavailable(
+      [this.message =
+          'Скрытие IP включено, но TURN-сервер не настроен — соединение отклонено']);
+  final String message;
+  @override
+  String toString() => message;
+}
+
+/// Build the ICE servers list for an RTCPeerConnection.
+///
+/// Relay-only (user "hide my IP") requires a configured TURN server and
+/// forces `iceTransportPolicy=relay`. Without TURN the call fails closed
+/// rather than silently using STUN/host candidates.
+({List<Map<String, Object>> iceServers, String? iceTransportPolicy})
+    buildRtcConfig(PeerEnv env) {
+  final hasTurn = env.turnUrl != null &&
+      env.turnUrl!.isNotEmpty &&
+      env.turnUsername != null &&
+      env.turnCredential != null;
   final base = (env.iceServers != null && env.iceServers!.isNotEmpty)
       ? env.iceServers!
       : defaultIceServers;
@@ -139,9 +156,19 @@ int computeBackoffMs(int attempt, {int base = 800, int maxMs = 30000, int jitter
       'credential': env.turnCredential!,
     });
   }
-  final policy = (hasTurn && env.relayOnly) ? 'relay' : null;
-  return (iceServers: servers, iceTransportPolicy: policy);
+  if (env.relayOnly) {
+    if (!hasTurn) {
+      throw const RelayOnlyUnavailable();
+    }
+    return (iceServers: servers, iceTransportPolicy: 'relay');
+  }
+  return (iceServers: servers, iceTransportPolicy: null);
 }
+
+/// Apply the *user* hide-IP preference (SharedPreferences), not the
+/// compile-time `RELAY_ONLY` dart-define, onto a [PeerEnv].
+PeerEnv applyUserRelayOnly(PeerEnv env, bool hideIp) =>
+    env.copyWith(relayOnly: hideIp);
 
 /// Resolved signaling endpoint the WebSocket client should dial.
 class ResolvedSignalingEndpoint {

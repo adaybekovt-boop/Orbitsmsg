@@ -18,6 +18,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../peer/helpers.dart';
 import '../../state/auth_notifier.dart';
+import '../../state/hide_ip_provider.dart';
 import '../../state/auto_lock_provider.dart';
 import '../../state/remembered_session_io.dart'
     if (dart.library.html) '../../state/remembered_session_web.dart'
@@ -209,7 +210,7 @@ class _SecurityPageState extends ConsumerState<SecurityPage> {
                     ? null
                     : (v) async {
                         setState(() => _relayOnly = v);
-                        await setRelayOnlyEnabled(v);
+                        await ref.read(hideIpProvider.notifier).setEnabled(v);
                       },
               ),
             ),

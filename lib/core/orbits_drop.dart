@@ -41,6 +41,14 @@ const int kMaxDropFileBytes = 100 * 1024 * 1024; // 100 MiB
 const int kMaxDropIncoming = 4;
 const int kMaxDropFrameBytes = dropChunkSize + 32;
 
+/// Combined payload budget across every in-flight inbound transfer.
+const int kMaxDropIncomingBytesTotal = 32 * 1024 * 1024; // 32 MiB
+
+/// Incomplete inbound transfers older than this are dropped.
+const Duration kDropTransferTtl = Duration(minutes: 10);
+
+String dropTransferKey(String peerId, String fileId) => '$peerId\x1f$fileId';
+
 /// Strip path segments and illegal filename characters from a Drop name.
 String sanitizeDropFileName(String? raw) {
   var name = (raw ?? '').trim().replaceAll('\\', '/');
@@ -109,8 +117,10 @@ Future<String> _sha256Hex(List<int> data) async {
 }
 
 class _Incoming {
-  _Incoming(this.meta);
+  _Incoming(this.meta, this.peerId, this.startedAt);
   final DropFileMeta meta;
+  final String peerId;
+  final DateTime startedAt;
   final Map<int, Uint8List> chunks = {};
   int receivedBytes = 0;
 }
@@ -130,7 +140,10 @@ class DropEngine {
     this.onIncomingStart,
     this.onIncomingReady,
     this.chunkSize = dropChunkSize,
-  });
+    this.transferTtl = kDropTransferTtl,
+    this.maxIncomingBytesTotal = kMaxDropIncomingBytesTotal,
+    DateTime Function()? clock,
+  }) : _clock = clock ?? DateTime.now;
 
   /// (fileId, transferredBytes, totalBytes, direction).
   final void Function(String fileId, int sent, int total, DropDirection dir)?
@@ -146,9 +159,18 @@ class DropEngine {
   final void Function(DropFileMeta meta, Uint8List bytes)? onIncomingReady;
 
   final int chunkSize;
+  final Duration transferTtl;
+  final int maxIncomingBytesTotal;
+  final DateTime Function() _clock;
 
   final Map<String, _Incoming> _incoming = {};
   final Map<String, _Outgoing> _outgoing = {};
+
+  /// Bytes currently buffered across all inbound transfers (for tests / caps).
+  int get incomingBufferedBytes =>
+      _incoming.values.fold<int>(0, (sum, s) => sum + s.receivedBytes);
+
+  int get incomingTransferCount => _incoming.length;
 
   /// Begin sending [bytes] to a peer through [send]. Emits a `file-start`,
   /// then binary chunks (pausing on [waitForDrain] if provided), then
@@ -212,23 +234,27 @@ class DropEngine {
 
   /// Feed an inbound packet (control [Map] or binary [Uint8List]). Returns
   /// true if it was a Drop packet this engine consumed.
-  Future<bool> handleInbound(Object? packet) async {
-    if (packet is Uint8List) return _handleChunk(packet);
+  ///
+  /// [peerId] is part of the transfer key — the same [fileId] from a
+  /// different sender cannot join or overwrite another peer's transfer.
+  Future<bool> handleInbound(Object? packet, {String peerId = ''}) async {
+    _expireStale();
+    if (packet is Uint8List) return _handleChunk(packet, peerId);
     if (packet is List<int> && packet is! String) {
-      return _handleChunk(Uint8List.fromList(packet));
+      return _handleChunk(Uint8List.fromList(packet), peerId);
     }
     if (packet is Map) {
       final type = packet['type'];
       if (type == 'file-start') {
-        _handleStart(packet);
+        _handleStart(packet, peerId);
         return true;
       }
       if (type == 'file-end') {
-        await _handleEnd(packet);
+        await _handleEnd(packet, peerId);
         return true;
       }
       if (type == 'file-abort') {
-        _handleAbort(packet);
+        _handleAbort(packet, peerId);
         return true;
       }
     }
@@ -237,17 +263,34 @@ class DropEngine {
 
   // ── Receiver internals ──────────────────────────────────────────
 
-  void _handleStart(Map packet) {
+  void _handleStart(Map packet, String peerId) {
     final fileIdB64 = packet['fileId'];
     if (fileIdB64 is! String || fileIdB64.isEmpty) return;
     final idHex = _toHex(base64ToBytes(fileIdB64));
+    final key = dropTransferKey(peerId, idHex);
     final size = (packet['size'] as num?)?.toInt() ?? 0;
     if (size < 0 || size > kMaxDropFileBytes) {
       onFailed?.call(idHex, DropDirection.incoming, 'Файл слишком большой');
       return;
     }
-    if (_incoming.length >= kMaxDropIncoming && !_incoming.containsKey(idHex)) {
+    final declaredChunks = (packet['totalChunks'] as num?)?.toInt();
+    final expectedChunks =
+        size == 0 ? 0 : ((size + chunkSize - 1) ~/ chunkSize);
+    if (declaredChunks != null &&
+        (declaredChunks < 0 ||
+            declaredChunks > expectedChunks + 1 ||
+            (size == 0 && declaredChunks != 0) ||
+            (size > 0 && declaredChunks != expectedChunks))) {
+      onFailed?.call(idHex, DropDirection.incoming, 'Некорректное число чанков');
+      return;
+    }
+    if (_incoming.length >= kMaxDropIncoming && !_incoming.containsKey(key)) {
       onFailed?.call(idHex, DropDirection.incoming, 'Слишком много передач');
+      return;
+    }
+    if (incomingBufferedBytes + size > maxIncomingBytesTotal &&
+        !_incoming.containsKey(key)) {
+      onFailed?.call(idHex, DropDirection.incoming, 'Превышен лимит памяти');
       return;
     }
     final meta = DropFileMeta(
@@ -256,25 +299,36 @@ class DropEngine {
       size: size,
       mime: (packet['mime'] as String?) ?? 'application/octet-stream',
       hash: (packet['hash'] as String?) ?? '',
-      totalChunks: (packet['totalChunks'] as num?)?.toInt() ??
-          (size == 0 ? 0 : ((size + chunkSize - 1) ~/ chunkSize)),
+      totalChunks: declaredChunks ?? expectedChunks,
     );
-    _incoming[idHex] = _Incoming(meta);
+    _incoming[key] = _Incoming(meta, peerId, _clock());
     onIncomingStart?.call(meta);
     onProgress?.call(idHex, 0, size, DropDirection.incoming);
   }
 
-  bool _handleChunk(Uint8List frame) {
+  bool _handleChunk(Uint8List frame, String peerId) {
     if (frame.length < _frameHeaderLen) return false;
     if (frame.length > kMaxDropFrameBytes) return false;
     if (frame[0] != _frameVersion) return false;
     final idHex = _toHex(frame.sublist(1, 1 + _fileIdLen));
-    final state = _incoming[idHex];
-    if (state == null) return true; // unknown/late chunk — consumed, ignored
+    final key = dropTransferKey(peerId, idHex);
+    final state = _incoming[key];
+    if (state == null) return true; // unknown/late/wrong-peer — consumed
     final bd = ByteData.sublistView(frame, 1 + _fileIdLen, _frameHeaderLen);
     final seq = bd.getUint32(0, Endian.big);
+    if (seq >= state.meta.totalChunks && state.meta.totalChunks > 0) {
+      _failIncoming(key, idHex, 'Некорректный номер чанка');
+      return true;
+    }
     if (state.chunks.containsKey(seq)) return true; // dedup
     final payload = Uint8List.sublistView(frame, _frameHeaderLen);
+    // Bound memory *before* copying. Declared size is the hard cap; the
+    // global budget is a second line so many small transfers cannot OOM.
+    if (state.receivedBytes + payload.length > state.meta.size ||
+        incomingBufferedBytes + payload.length > maxIncomingBytesTotal) {
+      _failIncoming(key, idHex, 'Превышен объявленный размер');
+      return true;
+    }
     state.chunks[seq] = Uint8List.fromList(payload);
     state.receivedBytes += payload.length;
     onProgress?.call(
@@ -282,14 +336,40 @@ class DropEngine {
     return true;
   }
 
-  Future<void> _handleEnd(Map packet) async {
+  void _failIncoming(String key, String idHex, String reason) {
+    _incoming.remove(key);
+    onFailed?.call(idHex, DropDirection.incoming, reason);
+  }
+
+  Future<void> _handleEnd(Map packet, String peerId) async {
     final fileIdB64 = packet['fileId'];
     if (fileIdB64 is! String) return;
     final idHex = _toHex(base64ToBytes(fileIdB64));
-    final state = _incoming.remove(idHex);
+    final key = dropTransferKey(peerId, idHex);
+    final state = _incoming.remove(key);
     if (state == null) return;
 
+    if (state.meta.totalChunks > 0 &&
+        (state.chunks.length != state.meta.totalChunks ||
+            state.receivedBytes != state.meta.size)) {
+      onFailed?.call(
+        idHex,
+        DropDirection.incoming,
+        'Передача неполная',
+      );
+      return;
+    }
     final ordered = state.chunks.keys.toList()..sort();
+    for (var i = 0; i < ordered.length; i++) {
+      if (ordered[i] != i) {
+        onFailed?.call(
+          idHex,
+          DropDirection.incoming,
+          'Части пришли не по порядку',
+        );
+        return;
+      }
+    }
     final builder = BytesBuilder(copy: false);
     for (final s in ordered) {
       builder.add(state.chunks[s]!);
@@ -311,12 +391,32 @@ class DropEngine {
     onComplete?.call(idHex, DropDirection.incoming);
   }
 
-  void _handleAbort(Map packet) {
+  void _handleAbort(Map packet, String peerId) {
     final fileIdB64 = packet['fileId'];
     if (fileIdB64 is! String) return;
     final idHex = _toHex(base64ToBytes(fileIdB64));
-    if (_incoming.remove(idHex) != null) {
+    final key = dropTransferKey(peerId, idHex);
+    if (_incoming.remove(key) != null) {
       onFailed?.call(idHex, DropDirection.incoming, 'Отправитель отменил передачу');
+    }
+  }
+
+  void _expireStale() {
+    if (transferTtl <= Duration.zero) return;
+    final cutoff = _clock().subtract(transferTtl);
+    final stale = <String>[];
+    _incoming.forEach((key, state) {
+      if (state.startedAt.isBefore(cutoff)) stale.add(key);
+    });
+    for (final key in stale) {
+      final state = _incoming.remove(key);
+      if (state != null) {
+        onFailed?.call(
+          state.meta.fileId,
+          DropDirection.incoming,
+          'Передача истекла',
+        );
+      }
     }
   }
 
@@ -334,5 +434,23 @@ class DropEngine {
   void reset() {
     _incoming.clear();
     _outgoing.clear();
+  }
+
+  /// Drop inbound/outbound state for one peer (channel closed / blocked).
+  void resetPeer(String peerId) {
+    final keys = _incoming.entries
+        .where((e) => e.value.peerId == peerId)
+        .map((e) => e.key)
+        .toList();
+    for (final key in keys) {
+      final state = _incoming.remove(key);
+      if (state != null) {
+        onFailed?.call(
+          state.meta.fileId,
+          DropDirection.incoming,
+          'Соединение закрыто',
+        );
+      }
+    }
   }
 }

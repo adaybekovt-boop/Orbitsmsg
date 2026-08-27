@@ -28,6 +28,7 @@ import '../core/error_reporter.dart';
 import '../utils/heavy_codec.dart';
 
 import '../messaging/lost_inbound_ledger.dart';
+import '../messaging/message_protocol.dart' show InboundPersistResult;
 import '../messaging/sent_ack_guard.dart';
 import '../peer/helpers.dart';
 import '../storage/db.dart' as db;
@@ -117,6 +118,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
             flushOutboxForPeer: flushOutboxForPeer,
             loadPendingForPeer: loadPendingForPeer,
             applyTyping: applyTyping,
+            isPeerBlocked: isPeerBlocked,
           ),
         );
 
@@ -183,6 +185,10 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
         }
       },
     );
+
+    // R06: `sent`/`inflight` rows do not survive in-memory timers. Demote
+    // them back to `pending` so the next reliable-open flush retries.
+    unawaited(db.recoverUnconfirmedOutbound());
   }
 
   final Ref _ref;
@@ -242,7 +248,8 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
         // Only demote rows that are STILL un-acked `'sent'`. Anything else
         // ('pending' from a concurrent path, 'delivered'/'read' from a late
         // ack) is left untouched.
-        if (row != null && row['status'] == 'sent') {
+        final st = row?['status'];
+        if (row != null && (st == 'sent' || st == 'inflight')) {
           await db.updateMessageStatus(msgId, 'pending');
         }
       } catch (_) {
@@ -307,45 +314,47 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
   /// "blocked" from "offline" which is the intended UX. If the user later
   /// unblocks, messages arriving after that point come through normally;
   /// anything they sent while blocked is gone.
-  void pushInbound(String remoteId, Map<String, Object?> uiMsg) {
+  Future<InboundPersistResult> pushInbound(
+    String remoteId,
+    Map<String, Object?> uiMsg,
+  ) async {
     final normalized = normalizePeerId(remoteId);
-    if (normalized.isEmpty) return;
-    if (_isPeerBlocked(normalized)) return;
+    if (normalized.isEmpty) return InboundPersistResult.failed;
+    if (_isPeerBlocked(normalized)) return InboundPersistResult.blocked;
 
     final safe = _clampChatMessage(Map<String, Object?>.from(uiMsg));
     final ts = (safe['ts'] as num?)?.toInt() ?? now();
     final msgId = (safe['id'] as String?) ?? '$normalized:$ts:${_shortId()}';
 
-    // Inbound persist is NOT best-effort-silent anymore (audit Round 5 B.5):
-    // a locked vault / failed write loses the message forever вЂ” the sender
-    // thinks it was delivered. Count it, report it (release included), let
-    // the UI show the loss.
-    unawaited(
-      db.saveMessage({
+    try {
+      await db.saveMessage({
         'id': msgId,
         'peerId': normalized,
         'timestamp': ts,
         'direction': 'in',
         'status': 'delivered',
         'payload': safe,
-      }).catchError((Object e, StackTrace st) async {
-        _lostInbound.recordDrop(msgId: msgId, fromPeer: normalized, error: e);
-        if (mounted) {
-          state = state.copyWith(
-            lostInboundCount: state.lostInboundCount + 1,
-          );
-        }
-        return false;
-      }),
-    );
+      });
+    } catch (e) {
+      _lostInbound.recordDrop(msgId: msgId, fromPeer: normalized, error: e);
+      if (mounted) {
+        state = state.copyWith(
+          lostInboundCount: state.lostInboundCount + 1,
+        );
+      }
+      return InboundPersistResult.failed;
+    }
 
-    // Peer row refresh вЂ” keeps chat list sorted by recency without relying
-    // on explicit profile packets.
     _persistBestEffort(
       db.savePeer({'id': normalized, 'lastSeenAt': now()}),
       'inbound savePeer $normalized',
     );
+    return InboundPersistResult.committed;
   }
+
+  /// Exposed so the packet router can refuse traffic from a blocked peer
+  /// before decrypt / Drop / heartbeat.
+  bool isPeerBlocked(String peerId) => _isPeerBlocked(normalizePeerId(peerId));
 
   /// Synchronous block check off the in-memory `_blockedIds` mirror. The
   /// ctor's `ref.listen` keeps this set in lockstep with every Drift emit,
@@ -505,8 +514,11 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       }
       final ok = await conns.sendEncrypted(normalized, envelope);
       if (!ok) break;
-      unawaited(db.updateMessageStatus(id, 'sent'));
-      // Outbox re-send вЂ” arm the same ack deadline as the live path.
+      unawaited(db.updateMessage(id, {
+        'status': 'inflight',
+        'outboxAttempt': ((r['outboxAttempt'] as num?)?.toInt() ?? 0) + 1,
+        'outboxDeadline': now() + sentAckTimeout.inMilliseconds,
+      }));
       _sentAckGuard.arm(id);
     }
   }
@@ -684,7 +696,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       'peerId': normalized,
       'timestamp': ts,
       'direction': 'out',
-      'status': open ? 'sent' : 'pending',
+      'status': 'pending',
       'payload': payload,
     });
 
@@ -707,14 +719,14 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       if (sanitizedReply != null) 'replyTo': sanitizedReply,
     });
     if (!ok) {
-      // Demote to pending so the next flush picks it up. We only touch the
-      // `status` column вЂ” the payload itself is content-only, no delivery
-      // mirror (see note above).
       _sentAckGuard.disarm(msgId);
       unawaited(db.updateMessageStatus(msgId, 'pending'));
     } else {
-      // The row reads 'sent' but is only SCTP-buffered until the receiver's
-      // ack lands вЂ” arm the demotion deadline (audit Round 5 A.2).
+      unawaited(db.updateMessage(msgId, {
+        'status': 'inflight',
+        'outboxAttempt': 1,
+        'outboxDeadline': now() + sentAckTimeout.inMilliseconds,
+      }));
       _sentAckGuard.arm(msgId);
     }
     return msgId;
@@ -791,7 +803,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       'peerId': normalized,
       'timestamp': ts,
       'direction': 'out',
-      'status': open ? 'sent' : 'pending',
+      'status': 'pending',
       'payload': payload,
     });
 
@@ -913,7 +925,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       'peerId': normalized,
       'timestamp': ts,
       'direction': 'out',
-      'status': open ? 'sent' : 'pending',
+      'status': 'pending',
       'payload': payload,
     });
 
@@ -1069,7 +1081,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       'peerId': normalized,
       'timestamp': ts,
       'direction': 'out',
-      'status': open ? 'sent' : 'pending',
+      'status': 'pending',
       'payload': payload,
     });
 

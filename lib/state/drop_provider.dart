@@ -93,10 +93,13 @@ class DropNotifier extends StateNotifier<DropState> {
     // We stash the source peerId just before dispatching so the (peer-agnostic)
     // engine's incoming-start callback can attribute the transfer.
     _ref.read(connectionsNotifierProvider.notifier).bindDrop(
-          DropBridge(handleInbound: (remoteId, packet) {
-            _pendingInboundPeer = remoteId;
-            unawaited(_engine.handleInbound(packet));
-          }),
+          DropBridge(
+            handleInbound: (remoteId, packet) {
+              _pendingInboundPeer = remoteId;
+              unawaited(_engine.handleInbound(packet, peerId: remoteId));
+            },
+            resetPeer: (remoteId) => _engine.resetPeer(remoteId),
+          ),
         );
 
     // Clear everything on sign-out.

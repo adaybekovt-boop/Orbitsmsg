@@ -675,6 +675,24 @@ Future<bool> saveMessage(Map<String, Object?> message) async {
   };
 
   final db = orbitsDb();
+  final existing = await (db.select(db.messagesTable)
+        ..where((t) => t.id.equals(id)))
+      .getSingleOrNull();
+  if (existing != null) {
+    final current = _secureDecode(existing.data);
+    final existingRoom = current['roomId'] as String?;
+    final existingChannel = current['channelId'] as String?;
+    final incomingIsRoom = roomId != null && roomId.isNotEmpty;
+    final existingIsRoom = existingRoom != null && existingRoom.isNotEmpty;
+    if (incomingIsRoom != existingIsRoom ||
+        (incomingIsRoom &&
+            (existingRoom != roomId ||
+                (channelId != null &&
+                    existingChannel != null &&
+                    existingChannel != channelId)))) {
+      return false;
+    }
+  }
   await db.into(db.messagesTable).insertOnConflictUpdate(
         MessagesTableCompanion.insert(
           id: id,
@@ -688,6 +706,13 @@ Future<bool> saveMessage(Map<String, Object?> message) async {
         ),
       );
   return true;
+}
+
+/// Room-message IDs live in a separate namespace from DM IDs so a host
+/// cannot overwrite a guest's 1:1 row by reusing the same wire id (R07).
+String scopedRoomMessageId(String roomId, String rawId) {
+  if (rawId.startsWith('room:')) return rawId;
+  return 'room:$roomId:$rawId';
 }
 
 Future<Map<String, Object?>?> getMessageById(String id) async {
@@ -783,15 +808,26 @@ Future<void> runRetentionSweep({
   }
 }
 
-/// Pending queue. When [peerId] is null, returns up to [limit] oldest
-/// pending messages across all peers; otherwise scoped to one peer.
+/// Unconfirmed outbound statuses that must survive process restart (R06).
+const Set<String> kUnconfirmedOutboundStatuses = {
+  'pending',
+  'inflight',
+  'sent',
+};
+
+/// Pending / inflight / sent-without-ACK queue. When [peerId] is null,
+/// returns up to [limit] oldest unconfirmed outbound rows; otherwise
+/// scoped to one peer. `sent` is included because a crash between the
+/// status flip and the ACK used to drop the row from retry forever.
 Future<List<Map<String, Object?>>> getPendingMessages({
   String? peerId,
   int limit = 200,
 }) async {
   final db = orbitsDb();
   final query = db.select(db.messagesTable)
-    ..where((t) => t.status.equals('pending'))
+    ..where((t) =>
+        t.direction.equals('out') &
+        t.status.isIn(kUnconfirmedOutboundStatuses.toList()))
     ..orderBy([(t) => OrderingTerm.asc(t.timestamp)])
     ..limit(limit);
   if (peerId != null && peerId.isNotEmpty) {
@@ -799,6 +835,22 @@ Future<List<Map<String, Object?>>> getPendingMessages({
   }
   final rows = await query.get();
   return rows.map((r) => _secureDecode(r.data)).toList();
+}
+
+/// After a process restart, demote every outbound `sent`/`inflight` row
+/// back to `pending` so the outbox can retry. Returns how many rows moved.
+Future<int> recoverUnconfirmedOutbound() async {
+  final db = orbitsDb();
+  final rows = await (db.select(db.messagesTable)
+        ..where((t) =>
+            t.direction.equals('out') &
+            (t.status.equals('sent') | t.status.equals('inflight'))))
+      .get();
+  var n = 0;
+  for (final row in rows) {
+    if (await updateMessageStatus(row.id, 'pending')) n++;
+  }
+  return n;
 }
 
 /// Pending queue for ROOM messages of [roomId] (audit Round 5 A.3). Room

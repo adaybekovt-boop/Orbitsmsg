@@ -126,10 +126,32 @@ void main() {
       expect(cfg.iceTransportPolicy, 'relay');
     });
 
-    test('relayOnly WITHOUT TURN does not force relay (would block all ICE)',
+    test('relayOnly WITHOUT TURN fails closed (does not fall back to STUN)',
         () {
-      final cfg = buildRtcConfig(const PeerEnv(relayOnly: true));
-      expect(cfg.iceTransportPolicy, isNull);
+      expect(
+        () => buildRtcConfig(const PeerEnv(relayOnly: true)),
+        throwsA(isA<RelayOnlyUnavailable>()),
+      );
+    });
+
+    test('user hide-IP pref is what drives relayOnly, not compile-time env',
+        () {
+      const compileTime = PeerEnv(relayOnly: false);
+      final hidden = applyUserRelayOnly(compileTime, true);
+      expect(hidden.relayOnly, isTrue);
+      expect(
+        () => buildRtcConfig(hidden),
+        throwsA(isA<RelayOnlyUnavailable>()),
+      );
+      final withTurn = applyUserRelayOnly(
+        const PeerEnv(
+          turnUrl: 'turn:t:3478',
+          turnUsername: 'u',
+          turnCredential: 'c',
+        ),
+        true,
+      );
+      expect(buildRtcConfig(withTurn).iceTransportPolicy, 'relay');
     });
 
     test('no TURN configured → no relay policy, STUN-only', () {
