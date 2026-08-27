@@ -25,6 +25,7 @@ import '../core/identity_key.dart' as identity_key;
 import '../core/scrypt_kdf.dart';
 import '../core/vault_kek.dart';
 import '../storage/db.dart' as db;
+import '../storage/legacy_seal_migration.dart';
 import '../storage/secure_profile_store.dart';
 import 'auto_unlock_service.dart';
 import 'remembered_session_io.dart'
@@ -163,6 +164,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
             kek.length >= 32 &&
             await kekMatchesRecord(kek, stored)) {
           await setVaultKek(kek);
+          await migrateLegacySealedRows();
           state = AuthAuthed(_userFromProfile(identity.peerId, profile));
           return;
         }
@@ -189,6 +191,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       final result = await _autoUnlock.retrieve();
       if (!result.ok) return false;
       await setVaultKek(result.kek!);
+      await migrateLegacySealedRows();
       if (!mounted) return true;
       state = AuthAuthed(_userFromProfile(peerId, profile));
       return true;
@@ -241,6 +244,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
     // persisted as the profile's `passRecord`. No second scrypt run needed.
     final derived = await deriveScryptRecord(username: name, password: password);
     await setVaultKek(derived.dkBytes);
+    await migrateLegacySealedRows();
 
     // Persist for auto-unlock when the user opted in (no-op off-web).
     if (remember) {
@@ -292,6 +296,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       throw const AuthException('bad_password', 'Неверный пароль');
     }
     await setVaultKek(result.dkBytes!);
+    await migrateLegacySealedRows();
 
     // Honor the "Remember me" choice: persist the KEK for auto-unlock, or wipe
     // any prior remembered session if the box is unchecked. No-op off-web.

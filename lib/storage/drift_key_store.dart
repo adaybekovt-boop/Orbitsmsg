@@ -43,8 +43,9 @@ class DriftKeyStore implements KeyStore {
   /// individual fields (double-wrapping is harmless).
   ///
   /// Reads tolerate legacy plaintext rows (pre-fix data) via the OB1 magic
-  /// check inside [unwrapBlobSync], so existing installs keep working and
-  /// migrate lazily on their next write.
+  /// check inside [unwrapBlobSync]. Unlock runs [resealLegacyPlaintext]
+  /// (K01) so leftover plaintext is sealed immediately, not only on the
+  /// next organic write.
   ///
   /// Locked vault → [wrapBlobSync]/[unwrapBlobSync] throw [StateError]:
   /// writes fail closed; framed reads fail closed too (legacy plaintext
@@ -207,6 +208,53 @@ class DriftKeyStore implements KeyStore {
       await put(table, next);
       return next;
     });
+  }
+
+  /// Versioned unlock migration (K01): re-seal every legacy plaintext
+  /// keys/prekeys/ratchets row immediately, without waiting for the next
+  /// organic write.
+  Future<int> resealLegacyPlaintext() async {
+    var n = 0;
+    n += await _reseal('keys');
+    n += await _reseal('prekeys');
+    n += await _reseal('ratchets');
+    return n;
+  }
+
+  Future<int> _reseal(String table) async {
+    final rows = await getAll(table);
+    var n = 0;
+    for (final row in rows) {
+      final id = row['id'];
+      if (id is! String || id.isEmpty) continue;
+      final raw = await _rawData(table, id);
+      if (raw == null || isBlobWrapped(raw)) continue;
+      await put(table, row);
+      n++;
+    }
+    return n;
+  }
+
+  Future<Uint8List?> _rawData(String table, String id) async {
+    switch (table) {
+      case 'keys':
+        final row = await (_db.select(_db.keysTable)
+              ..where((t) => t.id.equals(id)))
+            .getSingleOrNull();
+        return row?.data;
+      case 'prekeys':
+        final row = await (_db.select(_db.prekeysTable)
+              ..where((t) => t.id.equals(id)))
+            .getSingleOrNull();
+        return row?.data;
+      case 'ratchets':
+        final row = await (_db.select(_db.ratchetsTable)
+              ..where((t) => t.id.equals(id)))
+            .getSingleOrNull();
+        return row?.data;
+      default:
+        return null;
+    }
   }
 
   /// Second-pass filter for indexes we didn't promote to SQL. Matches
