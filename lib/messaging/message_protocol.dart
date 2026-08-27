@@ -69,8 +69,11 @@ class EphemeralInboundCtx {
 
 // в”Ђв”Ђв”Ђ Reliable (chat / control) context в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
+/// Outcome of persisting one inbound chat message (R03 / R04).
+enum InboundPersistResult { committed, blocked, failed, duplicate }
+
 class ReliableInboundCtx {
-  const ReliableInboundCtx({
+  ReliableInboundCtx({
     required this.selfPeerId,
     required this.localProfile,
     required this.seenMsgIds,
@@ -91,7 +94,10 @@ class ReliableInboundCtx {
     this.onHandshakeError,
     this.onDecryptError,
     this.onUnexpectedPlaintext,
-  });
+    this.persistInbound,
+    this.isPeerBlocked,
+    Set<String>? processingMsgIds,
+  }) : processingMsgIds = processingMsgIds ?? <String>{};
 
   /// Our own normalized peerId. Was `peerIdRef.current` in JS.
   final String selfPeerId;
@@ -100,13 +106,29 @@ class ReliableInboundCtx {
   /// out between dispatch and read). Was `localProfileRef.current`.
   final JsonMap? Function() localProfile;
 
-  /// De-dup set for inbound messages. Shared-mutable; dispatcher adds the
-  /// id of every delivered message and clamps size to ~4000 / keeps the
-  /// most recent 2000 on overflow. Same heuristic as JS.
+  /// De-dup set for inbound messages that have been *committed*. Shared-
+  /// mutable; dispatcher adds the id only after persist succeeds. Clamp
+  /// ~4000 / keep the most recent 2000 on overflow. Same heuristic as JS.
   final Set<String> seenMsgIds;
 
+  /// Ids currently being persisted. Failed writes leave this set so a
+  /// retry can try again; success moves the id into [seenMsgIds].
+  final Set<String> processingMsgIds;
+
+  /// Optional single awaited persist (R03). When set, the dispatcher
+  /// does not call [db.saveMessage] itself and only ACKs after
+  /// [InboundPersistResult.committed].
+  final Future<InboundPersistResult> Function(String remoteId, JsonMap uiMsg)?
+      persistInbound;
+
+  /// Ingress block-list check (R04). When true, the dispatcher refuses
+  /// the packet before persist / ACK / lastSeen.
+  final bool Function(String remoteId)? isPeerBlocked;
+
   /// Append a fresh inbound message to the UI-side state for [remoteId].
-  final void Function(String remoteId, JsonMap uiMsg) pushMessage;
+  /// Returns an explicit persist result so callers cannot ignore a reject.
+  final Future<InboundPersistResult> Function(String remoteId, JsonMap uiMsg)
+      pushMessage;
 
   /// Patch fields on a UI message (typically `delivery`, `text`, `editedAt`).
   final void Function(String remoteId, String id, JsonMap patch) updateMessage;
@@ -199,6 +221,9 @@ Future<bool> dispatchReliableInbound(
   String remoteId,
   ReliableInboundCtx ctx,
 ) async {
+  if (ctx.isPeerBlocked?.call(remoteId) == true) {
+    return true;
+  }
   // в”Ђв”Ђ Handshake in plaintext в”Ђв”Ђ
   if (data is Map) {
     final type = data['type'];
@@ -498,8 +523,8 @@ Future<bool> dispatchReliablePlaintext(
       ? Map<String, Object?>.from(data['attachment'] as Map)
       : null;
 
-  // De-dup: if we've seen this id before we still owe a fresh ack (remote
-  // may have lost ours), but we do not re-persist / re-notify.
+  // De-dup: committed ids still owe a fresh ack (remote may have lost
+  // ours). Processing ids must NOT be acked — persist has not committed.
   if (ctx.seenMsgIds.contains(msgId)) {
     sendReply(<String, Object?>{
       'type': 'ack',
@@ -508,31 +533,32 @@ Future<bool> dispatchReliablePlaintext(
     });
     return true;
   }
-  ctx.seenMsgIds.add(msgId);
-  // Clamp: ~4000 max, keep the most recent 2000 on overflow. Matches JS.
-  if (ctx.seenMsgIds.length > 4000) {
-    final kept = ctx.seenMsgIds
-        .toList(growable: false)
-        .sublist(ctx.seenMsgIds.length - 2000);
-    ctx.seenMsgIds
-      ..clear()
-      ..addAll(kept);
+  if (ctx.processingMsgIds.contains(msgId)) {
+    return true;
   }
+  if (ctx.isPeerBlocked?.call(remoteId) == true) {
+    return true;
+  }
+  ctx.processingMsgIds.add(msgId);
 
-  unawaited(() async {
+  await () async {
     // Belt-and-braces: the in-memory dedup already fired, but if this
     // dispatcher was just re-hydrated from disk a DB row might exist.
-    try {
-      final existing = await db.getMessageById(msgId);
-      if (existing != null) {
-        sendReply(<String, Object?>{
-          'type': 'ack',
-          'id': msgId,
-          'ts': DateTime.now().millisecondsSinceEpoch,
-        });
-        return;
-      }
-    } catch (_) {}
+    if (ctx.persistInbound == null) {
+      try {
+        final existing = await db.getMessageById(msgId);
+        if (existing != null) {
+          ctx.processingMsgIds.remove(msgId);
+          ctx.seenMsgIds.add(msgId);
+          sendReply(<String, Object?>{
+            'type': 'ack',
+            'id': msgId,
+            'ts': DateTime.now().millisecondsSinceEpoch,
+          });
+          return;
+        }
+      } catch (_) {}
+    }
 
     // в”Ђв”Ђ Voice meta: decode + persist blob if inline, else metadata-only в”Ђв”Ђ
     JsonMap? voiceRef;
@@ -651,34 +677,35 @@ Future<bool> dispatchReliablePlaintext(
       'voice': voiceRef,
       'attachment': attachmentRef,
     };
-    ctx.pushMessage(remoteId, uiMsg);
-    unawaited(db.saveMessage(<String, Object?>{
-      'id': msgId,
-      'peerId': remoteId,
-      'timestamp': ts,
-      'direction': 'in',
-      'status': 'delivered',
-      'payload': <String, Object?>{
-        'id': msgId,
-        'from': remoteId,
-        'to': ctx.selfPeerId,
-        'text': text,
-        'ts': ts,
-        'type': msgType,
-        'sticker': sticker,
-        'replyTo': replyTo,
-        'voice': voiceRef,
-        'attachment': attachmentRef,
-      },
-    }));
+    final persist = ctx.persistInbound ?? ctx.pushMessage;
+    InboundPersistResult persistResult;
+    try {
+      persistResult = await persist(remoteId, uiMsg);
+    } catch (_) {
+      persistResult = InboundPersistResult.failed;
+    }
+    ctx.processingMsgIds.remove(msgId);
+    if (persistResult != InboundPersistResult.committed &&
+        persistResult != InboundPersistResult.duplicate) {
+      return;
+    }
+
+    ctx.seenMsgIds.add(msgId);
+    if (ctx.seenMsgIds.length > 4000) {
+      final kept = ctx.seenMsgIds
+          .toList(growable: false)
+          .sublist(ctx.seenMsgIds.length - 2000);
+      ctx.seenMsgIds
+        ..clear()
+        ..addAll(kept);
+    }
+
     sendReply(<String, Object?>{
       'type': 'ack',
       'id': msgId,
       'ts': DateTime.now().millisecondsSinceEpoch,
     });
 
-    // Side effects вЂ” only when app is actually visible, otherwise push /
-    // local-notif code is the right channel (handled by notifyNewMessage).
     if (ctx.isAppInForeground()) {
       try {
         ctx.hapticMessage();
@@ -697,7 +724,7 @@ Future<bool> dispatchReliablePlaintext(
     try {
       ctx.notifyNewMessage(from: remoteId, text: preview, tag: msgId);
     } catch (_) {}
-  }());
+  }();
 
   return true;
 }

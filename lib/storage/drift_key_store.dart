@@ -43,8 +43,9 @@ class DriftKeyStore implements KeyStore {
   /// individual fields (double-wrapping is harmless).
   ///
   /// Reads tolerate legacy plaintext rows (pre-fix data) via the OB1 magic
-  /// check inside [unwrapBlobSync], so existing installs keep working and
-  /// migrate lazily on their next write.
+  /// check inside [unwrapBlobSync]. Unlock runs [resealLegacyPlaintext]
+  /// (K01) so leftover plaintext is sealed immediately, not only on the
+  /// next organic write.
   ///
   /// Locked vault → [wrapBlobSync]/[unwrapBlobSync] throw [StateError]:
   /// writes fail closed; framed reads fail closed too (legacy plaintext
@@ -172,6 +173,87 @@ class DriftKeyStore implements KeyStore {
       default:
         throw ArgumentError(
             'DriftKeyStore: unsupported table "$table" (use storage/db.dart)');
+    }
+  }
+
+  @override
+  Future<Map<String, Object?>?> compareAndUpdate(
+    String table,
+    String id, {
+    required bool Function(Map<String, Object?> row) ifMatches,
+    required Map<String, Object?> Function(Map<String, Object?> row) update,
+  }) {
+    return _db.transaction(() async {
+      // For prekeys, CAS the indexed `used` column first so a concurrent
+      // transaction cannot also observe used=0 (R08).
+      if (table == 'prekeys') {
+        final claimed = await _db.customUpdate(
+          'UPDATE prekeys SET used = 1 WHERE id = ? AND used = 0',
+          variables: [Variable<String>(id)],
+          updates: {_db.prekeysTable},
+          updateKind: UpdateKind.update,
+        );
+        if (claimed != 1) return null;
+      }
+      final current = await get(table, id);
+      if (current == null) return null;
+      // The SQL claim already flipped used=1; evaluate the caller's
+      // predicate against the pre-claim snapshot.
+      final snapshot = table == 'prekeys'
+          ? (Map<String, Object?>.from(current)..['used'] = 0)
+          : current;
+      if (!ifMatches(snapshot)) return null;
+      final next = Map<String, Object?>.from(update(snapshot));
+      next['id'] = id;
+      await put(table, next);
+      return next;
+    });
+  }
+
+  /// Versioned unlock migration (K01): re-seal every legacy plaintext
+  /// keys/prekeys/ratchets row immediately, without waiting for the next
+  /// organic write.
+  Future<int> resealLegacyPlaintext() async {
+    var n = 0;
+    n += await _reseal('keys');
+    n += await _reseal('prekeys');
+    n += await _reseal('ratchets');
+    return n;
+  }
+
+  Future<int> _reseal(String table) async {
+    final rows = await getAll(table);
+    var n = 0;
+    for (final row in rows) {
+      final id = row['id'];
+      if (id is! String || id.isEmpty) continue;
+      final raw = await _rawData(table, id);
+      if (raw == null || isBlobWrapped(raw)) continue;
+      await put(table, row);
+      n++;
+    }
+    return n;
+  }
+
+  Future<Uint8List?> _rawData(String table, String id) async {
+    switch (table) {
+      case 'keys':
+        final row = await (_db.select(_db.keysTable)
+              ..where((t) => t.id.equals(id)))
+            .getSingleOrNull();
+        return row?.data;
+      case 'prekeys':
+        final row = await (_db.select(_db.prekeysTable)
+              ..where((t) => t.id.equals(id)))
+            .getSingleOrNull();
+        return row?.data;
+      case 'ratchets':
+        final row = await (_db.select(_db.ratchetsTable)
+              ..where((t) => t.id.equals(id)))
+            .getSingleOrNull();
+        return row?.data;
+      default:
+        return null;
     }
   }
 

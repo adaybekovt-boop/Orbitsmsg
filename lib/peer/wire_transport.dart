@@ -39,8 +39,7 @@ class WireTransport {
         await waitForWireReady(norm, timeout: const Duration(seconds: 8));
       }
       final wire = await encryptWirePayload(norm, msg);
-      conn.send(wire);
-      return true;
+      return conn.send(wire);
     } catch (_) {
       return false;
     }
@@ -59,8 +58,7 @@ class WireTransport {
     if (!isWireReady(norm)) return false;
     try {
       final wire = await encryptWirePayload(norm, msg);
-      conn.send(wire);
-      return true;
+      return conn.send(wire);
     } catch (_) {
       return false;
     }

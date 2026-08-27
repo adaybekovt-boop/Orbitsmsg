@@ -2,6 +2,10 @@
 //
 // This native-only implementation runs before Drift opens the SQLite file.
 // Web uses IndexedDB and is routed to db_health_stub.dart instead.
+//
+// R15: only a *confirmed* corrupt image is quarantined. Busy / locked /
+// read-only / permission / I/O errors return [DbHealthStatus.unavailable]
+// and leave the file where it is.
 
 import 'dart:io';
 
@@ -10,28 +14,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 import '../core/error_reporter.dart';
+import 'db_health_classify.dart';
 
-enum DbHealthStatus { ok, missing, quarantined }
-
-class DbHealthResult {
-  const DbHealthResult({
-    required this.status,
-    this.quarantinePath,
-    this.detail,
-  });
-
-  final DbHealthStatus status;
-
-  /// Where the damaged file was moved to (status == quarantined).
-  final String? quarantinePath;
-
-  /// Why it was quarantined (exception text / quick_check output).
-  final String? detail;
-}
-
-/// Result of the last [ensureDatabaseHealthy] call in this process. Surfaces
-/// to diagnostics/UI without wiring a provider around it.
-DbHealthResult? lastDatabaseHealthCheck;
+export 'db_health_classify.dart';
 
 /// Verify (and if needed quarantine) the SQLite database at
 /// `[directory]/<name>.sqlite`. When [directory] is null it resolves to the
@@ -49,24 +34,35 @@ Future<DbHealthResult> ensureDatabaseHealthy({
     return r;
   }
 
-  String? problem;
+  String? quickCheck;
+  Object? openError;
   try {
     final sqlite = sqlite3.open(dbFile.path);
     try {
       final res = sqlite.select('PRAGMA quick_check;');
       final firstRow = res.isEmpty ? null : res.first.values.first?.toString();
       if (firstRow != 'ok') {
-        problem = 'quick_check: ${firstRow ?? '<empty>'}';
+        quickCheck = firstRow ?? '<empty>';
       }
     } finally {
       sqlite.dispose();
     }
   } catch (e) {
-    problem = 'open failed: $e';
+    openError = e;
   }
 
-  if (problem == null) {
+  if (quickCheck == null && openError == null) {
     const r = DbHealthResult(status: DbHealthStatus.ok);
+    lastDatabaseHealthCheck = r;
+    return r;
+  }
+
+  if (!isConfirmedDbCorruption(openError, quickCheck: quickCheck)) {
+    final detail = openError?.toString() ?? 'quick_check: $quickCheck';
+    final r = DbHealthResult(
+      status: DbHealthStatus.unavailable,
+      detail: detail,
+    );
     lastDatabaseHealthCheck = r;
     return r;
   }
@@ -75,6 +71,7 @@ Future<DbHealthResult> ensureDatabaseHealthy({
   final stamp = DateTime.now().millisecondsSinceEpoch;
   final quarantinePath = p.join(dir, '$name.corrupt-$stamp.sqlite');
   var moved = false;
+  var problem = openError?.toString() ?? 'quick_check: $quickCheck';
   try {
     dbFile.renameSync(quarantinePath);
     moved = true;

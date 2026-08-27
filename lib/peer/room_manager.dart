@@ -1521,8 +1521,10 @@ class RoomManager extends StateNotifier<RoomState> {
       final author = (packet['fromPeerId'] as String?) ?? '';
       if (author.isEmpty) return;
       final ts = (packet['ts'] as num?)?.toInt() ?? now();
-      // Trust the host's canonical id; fall back to an author-namespaced id.
-      final id = (packet['id'] as String?) ?? _canonicalMsgId(author, ts);
+      if (packet['roomId'] != null && packet['roomId'] != roomId) return;
+      if (!await _channelExists(roomId, channelId)) return;
+      final rawId = (packet['id'] as String?) ?? _canonicalMsgId(author, ts);
+      final id = db.scopedRoomMessageId(roomId, rawId);
       await _saveRoomContent(
         id: id,
         author: author,

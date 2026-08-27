@@ -63,6 +63,14 @@ AndroidOptions androidKekVaultOptions() => const AndroidOptions.biometric(
       biometricPromptNegativeButton: 'Отмена',
     );
 
+/// iOS Keychain options for the vault KEK. Exposed so tests can assert the
+/// biometric-set binding (R17). `biometryCurrentSet` invalidates the item
+/// when Face ID / Touch ID enrollment changes.
+IOSOptions iosKekVaultOptions() => const IOSOptions(
+      accessibility: KeychainAccessibility.unlocked_this_device,
+      accessControlFlags: [AccessControlFlag.biometryCurrentSet],
+    );
+
 /// Outcome of a [SecureKekVault.retrieveKek] call. The caller dispatches on
 /// this enum — `ok` is the only path that yields bytes, everything else
 /// means "drop to master-password entry".
@@ -182,9 +190,10 @@ class SecureKekVault {
     if (!_effectiveSupported) {
       return const KekRetrieveResult(status: KekRetrieveStatus.unsupported);
     }
-    // iOS: local_auth still gates the read (no accessControlFlags wired).
-    // Android: Keystore user-authentication on [androidKekVaultOptions]
-    // is the binding; a second local_auth sheet is not that binding.
+    // iOS: Keychain access-control is bound to the current biometric set
+    // ([iosKekVaultOptions]). Android: Keystore user-authentication on
+    // [androidKekVaultOptions] is the binding; a second local_auth sheet
+    // is not that binding.
     final gate = await _gateBiometric();
     if (gate != null) {
       return KekRetrieveResult(status: gate);
@@ -309,10 +318,7 @@ class SecureKekVault {
 
   // ─── Platform option builders ────────────────────────────────────
 
-  IOSOptions _iosOptions() => const IOSOptions(
-        // Blocks iCloud backup + restore-to-another-device.
-        accessibility: KeychainAccessibility.unlocked_this_device,
-      );
+  IOSOptions _iosOptions() => iosKekVaultOptions();
 
   AndroidOptions _androidOptions() => androidKekVaultOptions();
 

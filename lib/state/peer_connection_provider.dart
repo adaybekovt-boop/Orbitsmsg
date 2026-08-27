@@ -23,9 +23,11 @@ import '../peer/connectivity_watch_stub.dart'
     if (dart.library.html) '../peer/connectivity_watch_web.dart';
 import '../peer/peer_connection_manager.dart';
 import '../peer/peerjs_client.dart';
+import '../peer/helpers.dart';
 import '../peer/signaling.dart';
 import '../peer/turn_runtime.dart';
 import 'auth_notifier.dart';
+import 'hide_ip_provider.dart';
 
 /// Snapshot of the peer subsystem. Mirrors the flat-ish object the JS
 /// `PeerProvider` exposed via `useConnections()`.
@@ -135,12 +137,14 @@ class PeerConnectionNotifier extends StateNotifier<PeerConnectionState> {
     if (existing != null && existing.desiredPeerId == peerId) return;
     if (existing != null) await _teardown();
 
-    var resolvedEnv = env;
+    var resolvedEnv = envWithUserHideIp(env, await isRelayOnlyEnabled());
     try {
-      resolvedEnv = applyTurnRuntime(env, await loadTurnRuntimeCreds());
+      resolvedEnv =
+          applyTurnRuntime(resolvedEnv, await loadTurnRuntimeCreds());
     } catch (_) {
       // Prefs unavailable — keep compile-time env (secrets already stripped).
     }
+    resolvedEnv = envWithUserHideIp(resolvedEnv, await isRelayOnlyEnabled());
 
     final manager = PeerConnectionManager(
       desiredPeerId: peerId,
@@ -174,6 +178,13 @@ class PeerConnectionNotifier extends StateNotifier<PeerConnectionState> {
     );
     try {
       await manager.start();
+    } on RelayOnlyUnavailable catch (err) {
+      if (!_disposed) {
+        state = state.copyWith(
+          status: 'disconnected',
+          error: err.message,
+        );
+      }
     } catch (err) {
       if (!_disposed) {
         state = state.copyWith(
@@ -304,8 +315,9 @@ final _env = PeerEnv(
 final turnConfiguredProvider = Provider<bool>(
     (ref) => _env.turnUrl != null && _env.turnUrl!.isNotEmpty);
 
-/// Whether this build forces relay-only ICE (requires TURN to connect at all).
-final relayOnlyProvider = Provider<bool>((ref) => _env.relayOnly);
+/// Live user "hide my IP" preference (SharedPreferences), not the
+/// compile-time RELAY_ONLY dart-define.
+final relayOnlyProvider = Provider<bool>((ref) => ref.watch(hideIpProvider));
 
 final peerConnectionProvider =
     StateNotifierProvider<PeerConnectionNotifier, PeerConnectionState>((ref) {
@@ -325,6 +337,19 @@ final peerConnectionProvider =
     },
     fireImmediately: true,
   );
+
+  // Changing hide-IP mid-session must recreate the PeerJS client so the
+  // new iceTransportPolicy applies to every data/media connection.
+  ref.listen<bool>(hideIpProvider, (prev, next) {
+    if (prev == next) return;
+    final auth = ref.read(authNotifierProvider);
+    if (auth is AuthAuthed) {
+      unawaited(() async {
+        await notifier.stop();
+        await notifier.start(auth.user.peerId);
+      }());
+    }
+  });
 
   return notifier;
 });

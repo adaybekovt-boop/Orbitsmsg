@@ -12,6 +12,7 @@
 // RatchetState mirrors the JS state object field-for-field. It is a plain
 // mutable container; callers persist / restore it by copying the fields.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
@@ -187,6 +188,26 @@ bool isWireCiphertext(Object? value) =>
 // State
 // ─────────────────────────────────────────────────────────────
 
+/// Serialises every mutating ratchet operation on one [RatchetState].
+///
+/// Encrypt / decrypt / rekey / reset all await the same tail so two
+/// concurrent `encrypt()` calls cannot both snapshot the same `sendCk`,
+/// and a decrypt's `clone` → `adopt` cannot overwrite a send-chain
+/// advance that landed in between. The transactional decrypt path
+/// (clone → verify tag → adopt) still runs *inside* the queued slot.
+class RatchetOpQueue {
+  Future<void> _tail = Future<void>.value();
+
+  Future<T> enqueue<T>(Future<T> Function() op) {
+    final previous = _tail;
+    final done = Completer<void>();
+    _tail = done.future;
+    return previous.then((_) => op()).whenComplete(() {
+      if (!done.isCompleted) done.complete();
+    });
+  }
+}
+
 /// Ratchet state — mirrors the JS object field-for-field. Mutable; callers
 /// checkpoint by reading the fields out (the ratchet itself never persists).
 class RatchetState {
@@ -201,7 +222,13 @@ class RatchetState {
     this.nr = 0,
     this.pn = 0,
     Map<String, Uint8List>? skipped,
-  }) : skipped = skipped ?? <String, Uint8List>{};
+    RatchetOpQueue? opQueue,
+  })  : skipped = skipped ?? <String, Uint8List>{},
+        opQueue = opQueue ?? RatchetOpQueue();
+
+  /// Per-session op queue. [clone] shares this instance so speculative
+  /// decrypt work stays on the same serialisation domain as the live state.
+  final RatchetOpQueue opQueue;
 
   Uint8List rootKey;
   Uint8List? sendCk;
@@ -237,6 +264,7 @@ class RatchetState {
       skipped: <String, Uint8List>{
         for (final e in skipped.entries) e.key: Uint8List.fromList(e.value),
       },
+      opQueue: opQueue,
     );
   }
 
@@ -413,7 +441,17 @@ Future<Uint8List> _aesGcmDecrypt({
 
 /// Encrypt one message. Mutates [state] (sendCk advance, Ns bump) and returns
 /// the wire envelope. Plaintext is encoded as UTF-8 if given as a String.
+///
+/// Serialized with decrypt / rekey / reset on [RatchetState.opQueue] so two
+/// overlapping calls cannot snapshot the same `sendCk`.
 Future<RatchetEnvelope> ratchetEncrypt(
+  RatchetState state,
+  Object plaintext,
+) {
+  return state.opQueue.enqueue(() => _ratchetEncryptUnlocked(state, plaintext));
+}
+
+Future<RatchetEnvelope> _ratchetEncryptUnlocked(
   RatchetState state,
   Object plaintext,
 ) async {
@@ -459,11 +497,13 @@ Future<RatchetEnvelope> ratchetEncrypt(
 Future<Uint8List> ratchetDecrypt(
   RatchetState state,
   RatchetEnvelope envelope,
-) async {
-  final work = state.clone();
-  final plaintext = await _ratchetDecryptInPlace(work, envelope);
-  state.adopt(work);
-  return plaintext;
+) {
+  return state.opQueue.enqueue(() async {
+    final work = state.clone();
+    final plaintext = await _ratchetDecryptInPlace(work, envelope);
+    state.adopt(work);
+    return plaintext;
+  });
 }
 
 Future<Uint8List> _ratchetDecryptInPlace(

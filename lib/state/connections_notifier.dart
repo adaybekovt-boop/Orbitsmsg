@@ -246,8 +246,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   bool sendDrop(String remoteId, Object packet) {
     final conn = getConn(remoteId, 'reliable');
     if (conn == null || !conn.open) return false;
-    conn.send(packet);
-    return true;
+    return conn.send(packet);
   }
 
   /// Send a plaintext room-protocol control [packet] on the reliable channel.
@@ -362,6 +361,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   Future<void> attachConn(PeerDataConnection conn, String channel) async {
     final remoteId = normalizePeerId(conn.peer);
     if (remoteId.isEmpty) return;
+    if (_messaging.isPeerBlocked(remoteId)) {
+      try {
+        unawaited(conn.close());
+      } catch (_) {}
+      return;
+    }
     final ch = channel == 'ephemeral' ? 'ephemeral' : 'reliable';
     final key = connKey(remoteId, ch);
     final myId = _selfPeerId();
@@ -443,6 +448,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       if (ch == 'reliable') {
         _markPeerOffline(remoteId);
         _refreshConnectedIds();
+        try {
+          _drop.resetPeer?.call(remoteId);
+        } catch (_) {}
       }
     }));
 
@@ -537,8 +545,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         selfPeerId: _selfPeerId(),
         localProfile: () => _localProfileJson(),
         seenMsgIds: _seenMsgIds,
-        pushMessage: (rid, uiMsg) =>
-            _messaging.pushInbound(rid, uiMsg),
+        isPeerBlocked: (rid) => _messaging.isPeerBlocked(rid),
+        persistInbound: (rid, uiMsg) => _messaging.pushInbound(rid, uiMsg),
+        pushMessage: (rid, uiMsg) => _messaging.pushInbound(rid, uiMsg),
         updateMessage: (rid, id, patch) =>
             _messaging.patchMessage(rid, id, patch),
         setProfilesByPeer: (_) {
@@ -586,15 +595,15 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         applyTyping: (isTyping) =>
             _messaging.applyTyping(remoteId, isTyping),
         onHeartbeat: () {
-          // Heartbeat just refreshes the peer's lastSeenAt so the chat list
-          // order stays fresh even without new messages.
+          if (_messaging.isPeerBlocked(remoteId)) return;
           unawaited(db.savePeer({'id': remoteId, 'lastSeenAt': now()}));
         },
       ),
       // Orbits-Drop file-transfer frames (binary chunks + file-* control) on
       // the reliable channel go straight to the Drop engine.
       dropInbound: (rid, packet) => _drop.handleInbound(rid, packet),
-      dropAllowed: isVerified,
+      dropAllowed: (rid) => isVerified(rid) && !_messaging.isPeerBlocked(rid),
+      isBlocked: (rid) => _messaging.isPeerBlocked(rid),
       // Plaintext `room_*` control maps → RoomManager (star-topology rooms).
       roomInbound: (rid, packet) => _room.handleInbound(rid, packet),
     );
@@ -797,18 +806,25 @@ class MessagingBridge {
     required this.flushOutboxForPeer,
     required this.loadPendingForPeer,
     required this.applyTyping,
+    this.isPeerBlocked = _notBlocked,
   });
 
-  final void Function(String remoteId, Map<String, Object?> uiMsg) pushInbound;
+  final Future<InboundPersistResult> Function(
+    String remoteId,
+    Map<String, Object?> uiMsg,
+  ) pushInbound;
   final void Function(String remoteId, String id, Map<String, Object?> patch)
       patchMessage;
   final void Function(String msgId, String status) queueAckStatus;
   final Future<void> Function(String remoteId) flushOutboxForPeer;
   final Future<void> Function(String remoteId) loadPendingForPeer;
   final void Function(String remoteId, bool isTyping) applyTyping;
+  final bool Function(String peerId) isPeerBlocked;
+
+  static bool _notBlocked(String _) => false;
 
   static MessagingBridge get empty => MessagingBridge(
-        pushInbound: (_, __) {},
+        pushInbound: (_, __) async => InboundPersistResult.failed,
         patchMessage: (_, __, ___) {},
         queueAckStatus: (_, __) {},
         flushOutboxForPeer: (_) async {},
@@ -823,11 +839,17 @@ class MessagingBridge {
 /// connection registry can forward inbound file-transfer frames without a
 /// provider cycle. No-ops until [ConnectionsNotifier.bindDrop] is called.
 class DropBridge {
-  const DropBridge({required this.handleInbound});
+  const DropBridge({
+    required this.handleInbound,
+    this.resetPeer,
+  });
 
   /// Receives a control [Map] (`file-start`/`file-end`/`file-abort`) or a
   /// binary chunk [Uint8List] for [remoteId].
   final void Function(String remoteId, Object packet) handleInbound;
+
+  /// Drop in-flight transfers for [remoteId] (disconnect / block).
+  final void Function(String remoteId)? resetPeer;
 
   static DropBridge get empty => const DropBridge(handleInbound: _noop);
   static void _noop(String _, Object __) {}

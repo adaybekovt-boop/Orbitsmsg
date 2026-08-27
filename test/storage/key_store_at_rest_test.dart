@@ -19,6 +19,7 @@ import 'package:orbits_flutter/core/key_store.dart';
 import 'package:orbits_flutter/core/vault_kek.dart';
 import 'package:orbits_flutter/storage/database.dart';
 import 'package:orbits_flutter/storage/drift_key_store.dart';
+import 'package:orbits_flutter/storage/legacy_seal_migration.dart';
 
 void main() {
   late OrbitsDatabase database;
@@ -93,6 +94,31 @@ void main() {
     expect(back, isNotNull,
         reason: 'pre-fix rows must survive the encrypted-store upgrade');
     expect(back!['__note'], 'old');
+  });
+
+  test('K01 unlock migration reseals legacy plaintext without another write',
+      () async {
+    final legacyJson =
+        jsonEncode({'id': 'legacy-migrate', 'peerId': 'Y', 'secret': 'plain'});
+    await database.customStatement(
+      'INSERT INTO keys (id, data) VALUES (?, ?)',
+      ['legacy-migrate', Uint8List.fromList(utf8.encode(legacyJson))],
+    );
+    final before = await (database.select(database.keysTable)
+          ..where((t) => t.id.equals('legacy-migrate')))
+        .getSingle();
+    expect(isBlobWrapped(before.data), isFalse);
+
+    final n = await migrateLegacySealedRows();
+    expect(n, greaterThanOrEqualTo(1));
+
+    final after = await (database.select(database.keysTable)
+          ..where((t) => t.id.equals('legacy-migrate')))
+        .getSingle();
+    expect(isBlobWrapped(after.data), isTrue);
+    expect(after.data[0], 0x4F);
+    final back = await keyStore().get('keys', 'legacy-migrate');
+    expect(back!['secret'], 'plain');
   });
 
   test('locked vault → put fails closed and writes nothing', () async {

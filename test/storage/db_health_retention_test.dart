@@ -49,6 +49,62 @@ void main() {
       expect(f.existsSync(), isTrue, reason: 'healthy file untouched');
     });
 
+    test('busy/locked healthy file is not quarantined', () async {
+      final f = File('${tmp.path}/orbits.sqlite');
+      final hold = sqlite3.sqlite3.open(f.path);
+      hold.execute('CREATE TABLE t (x);');
+      hold.execute('BEGIN EXCLUSIVE;');
+      try {
+        final r = await ensureDatabaseHealthy(directory: tmp.path);
+        expect(r.status, isNot(DbHealthStatus.quarantined),
+            reason: 'lock/busy must not move a healthy file');
+        expect(f.existsSync(), isTrue);
+        expect(
+          r.status,
+          anyOf(DbHealthStatus.ok, DbHealthStatus.unavailable),
+        );
+      } finally {
+        try {
+          hold.execute('COMMIT;');
+        } catch (_) {}
+        hold.dispose();
+      }
+    });
+
+    test('permission / I/O errors do not quarantine', () async {
+      expect(isTransientDbHealthError('SqliteException: database is locked'),
+          isTrue);
+      expect(isTransientDbHealthError('SqliteException(5): database is busy'),
+          isTrue);
+      expect(isTransientDbHealthError('error 8: attempt to write a readonly'),
+          isTrue);
+      expect(isTransientDbHealthError('PathAccessException: Permission denied'),
+          isTrue);
+      expect(isTransientDbHealthError('Input/output error'), isTrue);
+      expect(isConfirmedDbCorruption('file is not a database'), isTrue);
+      expect(
+        isConfirmedDbCorruption(null, quickCheck: '*** in database main'),
+        isTrue,
+      );
+      expect(
+        isConfirmedDbCorruption('database is locked', quickCheck: null),
+        isFalse,
+      );
+
+      final f = File('${tmp.path}/orbits.sqlite');
+      final raw = sqlite3.sqlite3.open(f.path);
+      raw.execute('CREATE TABLE t (x);');
+      raw.dispose();
+      await Process.run('chmod', ['000', f.path]);
+      try {
+        final r = await ensureDatabaseHealthy(directory: tmp.path);
+        expect(r.status, isNot(DbHealthStatus.quarantined));
+        expect(f.existsSync(), isTrue);
+      } finally {
+        await Process.run('chmod', ['644', f.path]);
+      }
+    });
+
     test('corrupt file is quarantined, not deleted, and reported', () async {
       // Real SQLite header + garbage body — opens as SQLite but fails
       // integrity checks / reads.

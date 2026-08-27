@@ -81,6 +81,13 @@ class _Session {
   /// Serialises persistence writes so concurrent encrypt/decrypt calls don't
   /// race each other to saveRatchetState.
   Future<void> persistLock = Future<void>.value();
+
+  /// Single queue for encrypt / decrypt / rekey / reset on this session.
+  /// Wraps the ratchet's own op-queue from the outside so handshake and
+  /// teardown cannot interleave with in-flight crypto.
+  final ratchet.RatchetOpQueue opQueue = ratchet.RatchetOpQueue();
+
+  Future<T> runExclusive<T>(Future<T> Function() op) => opQueue.enqueue(op);
 }
 
 final Map<String, _Session> _sessions = <String, _Session>{};
@@ -644,6 +651,7 @@ Future<AcceptHelloResult> acceptHello({
 
   // Validation passed вЂ” now it's safe to allocate (or reuse) session state.
   final session = _getOrCreateSession(peerId);
+  return session.runExclusive(() async {
 
   // If we haven't generated our own DH yet (peer's hello arrived before our
   // own open fired), do it now and return a matching hello to send back.
@@ -749,6 +757,7 @@ Future<AcceptHelloResult> acceptHello({
     fingerprint: remoteFingerprint,
     firstContact: firstContact,
   );
+  });
 }
 
 /// Wait until the ratchet is ready to encrypt an outgoing message.
@@ -772,16 +781,18 @@ bool isVerified(String peerId) => _sessions[peerId]?.verified == true;
 
 /// Encrypt an arbitrary Dart object в†’ wire string. The object is JSON-encoded
 /// first, so it must be JSON-safe (primitives, lists, maps with string keys).
-Future<String> encryptOutbound(String peerId, Object? obj) async {
+Future<String> encryptOutbound(String peerId, Object? obj) {
   final session = _getOrCreateSession(peerId);
-  final state = session.state;
-  if (!session.ready || state == null || state.sendCk == null) {
-    throw StateError('Wire session not ready for send');
-  }
-  final ptBytes = utf8.encode(jsonEncode(obj));
-  final envelope = await ratchet.ratchetEncrypt(state, ptBytes);
-  unawaited(_persistSession(session));
-  return ratchet.encodeWire(envelope);
+  return session.runExclusive(() async {
+    final state = session.state;
+    if (!session.ready || state == null || state.sendCk == null) {
+      throw StateError('Wire session not ready for send');
+    }
+    final ptBytes = utf8.encode(jsonEncode(obj));
+    final envelope = await ratchet.ratchetEncrypt(state, ptBytes);
+    unawaited(_persistSession(session));
+    return ratchet.encodeWire(envelope);
+  });
 }
 
 /// Decrypt a wire string в†’ Dart object. Buffers ciphertexts that arrive
@@ -814,15 +825,18 @@ Future<Object?> decryptInbound(String peerId, String wireStr) async {
       'Refusing to decrypt from unverified session for $peerId',
     );
   }
-  final plaintext = await ratchet.ratchetDecrypt(session.state!, envelope);
-  if (!session.ready) {
-    session.ready = true;
-    if (!session.readyCompleter.isCompleted) {
-      session.readyCompleter.complete();
+  final live = session;
+  return live.runExclusive(() async {
+    final plaintext = await ratchet.ratchetDecrypt(live.state!, envelope);
+    if (!live.ready) {
+      live.ready = true;
+      if (!live.readyCompleter.isCompleted) {
+        live.readyCompleter.complete();
+      }
     }
-  }
-  unawaited(_persistSession(session));
-  return jsonDecodeHeavy(plaintext);
+    unawaited(_persistSession(live));
+    return jsonDecodeHeavy(plaintext);
+  });
 }
 
 Future<Object?> _bufferPendingInbound(String peerId, String wireStr) {
@@ -872,9 +886,16 @@ Future<void> _drainPendingInbound(String peerId) async {
 
 /// Reset a session entirely (used by blockPeer, resetIdentity, etc.).
 Future<void> teardownSession(String peerId) async {
-  final s = _sessions.remove(peerId);
-  if (s != null && !s.readyCompleter.isCompleted) {
-    s.readyCompleter.completeError(StateError('Session torn down'));
+  final existing = _sessions[peerId];
+  if (existing != null) {
+    await existing.runExclusive(() async {
+      final s = _sessions.remove(peerId);
+      if (s != null && !s.readyCompleter.isCompleted) {
+        s.readyCompleter.completeError(StateError('Session torn down'));
+      }
+    });
+  } else {
+    _sessions.remove(peerId);
   }
   final queue = _pendingInbound.remove(peerId);
   if (queue != null) {

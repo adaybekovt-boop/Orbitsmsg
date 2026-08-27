@@ -16,7 +16,7 @@ import 'package:mime/mime.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../core/attachment_preview.dart' show formatBytes;
-import '../core/orbits_drop.dart' show DropDirection;
+import '../core/orbits_drop.dart' show DropDirection, uniqueDropSaveFileName;
 import '../state/connections_notifier.dart';
 import '../state/drop_provider.dart';
 import '../state/peers_provider.dart';
@@ -91,7 +91,15 @@ class _DropPageState extends ConsumerState<DropPage> {
         _toast('Файл недоступен');
         return;
       }
-      final safeName = _safeFilename(t.name);
+      final dir = kIsWeb ? null : await getApplicationDocumentsDirectory();
+      final sep = dir == null ? '/' : Platform.pathSeparator;
+      final safeName = uniqueDropSaveFileName(
+        t.name,
+        exists: (candidate) {
+          if (dir == null) return false;
+          return File('${dir.path}$sep$candidate').existsSync();
+        },
+      );
       if (kIsWeb) {
         web_download.triggerBrowserDownload(
           bytes: bytes,
@@ -100,19 +108,13 @@ class _DropPageState extends ConsumerState<DropPage> {
         );
         _toast('Файл скачан: $safeName');
       } else {
-        final dir = await getApplicationDocumentsDirectory();
-        final file = File('${dir.path}${Platform.pathSeparator}$safeName');
+        final file = File('${dir!.path}$sep$safeName');
         await file.writeAsBytes(bytes, flush: true);
         _toast('Сохранено: $safeName');
       }
     } catch (_) {
       _toast('Не удалось сохранить файл');
     }
-  }
-
-  String _safeFilename(String name) {
-    final cleaned = name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').trim();
-    return cleaned.isEmpty ? 'file' : cleaned;
   }
 
   void _toast(String msg) {
@@ -468,7 +470,9 @@ class _TransferRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = transfer;
     final incoming = t.direction == DropDirection.incoming;
-    final active = t.status == DropStatus.active;
+    final active = t.status == DropStatus.queued ||
+        t.status == DropStatus.sent ||
+        t.status == DropStatus.received;
     final completed = t.status == DropStatus.completed;
     final failed = t.status == DropStatus.failed;
 

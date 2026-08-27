@@ -253,6 +253,9 @@ class PeerConnectionManager {
     final host = signalingHosts?[signalingIndex] ?? '';
     final endpoint = resolveEndpoint(host: host, env: env);
     final rtc = buildRtcConfig(env);
+    if (rtc.iceTransportPolicy != 'relay' && env.relayOnly) {
+      throw const RelayOnlyUnavailable();
+    }
     return PeerJsClient(
       id: id,
       endpoint: endpoint,

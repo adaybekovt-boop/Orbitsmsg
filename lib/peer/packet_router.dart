@@ -100,6 +100,7 @@ class PacketRouterCtx {
     this.dropInbound,
     this.roomInbound,
     this.dropAllowed,
+    this.isBlocked,
   });
 
   /// Plaintext send over the underlying DataConnection. The router uses
@@ -138,6 +139,9 @@ class PacketRouterCtx {
   /// must not run before a verified wire handshake (audit: Drop-before-Wire
   /// DoS). Null is fail-closed — treat as denied.
   final bool Function(String remoteId)? dropAllowed;
+
+  /// Block-list check at ingress, before decrypt / Drop / rooms / heartbeat.
+  final bool Function(String remoteId)? isBlocked;
 }
 
 bool _dropPermitted(String remoteId, PacketRouterCtx ctx) =>
@@ -242,6 +246,7 @@ PacketHandler createPacketHandler(
 ) {
   if (channel == 'ephemeral') {
     return (data) async {
+      if (ctx.isBlocked?.call(remoteId) == true) return;
       await ephemeralMiddleware(remoteId, data, ctx);
     };
   }
@@ -249,6 +254,7 @@ PacketHandler createPacketHandler(
   // Reliable channel: file-transfer traffic first (binary chunks + control),
   // then the generic drop fast-path (beacons), then everything else.
   return (data) async {
+    if (ctx.isBlocked?.call(remoteId) == true) return;
     // Binary chunk frame → Drop engine. Nothing else on the reliable channel
     // sends raw binary (wire ciphertext is a String, control is a Map).
     if (data is Uint8List) {

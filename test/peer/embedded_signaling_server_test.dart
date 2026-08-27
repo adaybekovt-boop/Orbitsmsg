@@ -146,6 +146,89 @@ void main() {
       expect(core.has('A'), isTrue);
     });
 
+    test('same-token reconnect: late close of the old socket stays registered',
+        () {
+      final core = PeerServerCore(key: 'orbits-test-room-key');
+      final first = <Map<String, Object?>>[];
+      final second = <Map<String, Object?>>[];
+      core.connect(
+        id: 'A',
+        token: 'same',
+        clientKey: 'orbits-test-room-key',
+        send: first.add,
+      );
+      final oldGen = core.generationOf('A');
+      core.connect(
+        id: 'A',
+        token: 'same',
+        clientKey: 'orbits-test-room-key',
+        send: second.add,
+      );
+
+      // Mirrors EmbeddedSignalingServer._drop: old socket onDone still
+      // knows the token (reconnect reused it) and its own generation.
+      core.disconnect('A', token: 'same', generation: oldGen);
+      expect(core.has('A'), isTrue,
+          reason: 'stale generation must not drop the live reconnect');
+
+      core.connect(
+        id: 'B',
+        token: 'tb',
+        clientKey: 'orbits-test-room-key',
+        send: (_) {},
+      );
+      core.frame(fromId: 'B', frame: {
+        'type': PeerServerFrame.offer,
+        'dst': 'A',
+        'payload': {'sdp': 'keep-alive'},
+      });
+      expect(second.any((f) => f['type'] == PeerServerFrame.offer), isTrue);
+      expect(first.where((f) => f['type'] == PeerServerFrame.offer), isEmpty);
+    });
+
+    test('flood from one client is dropped; others still receive OFFER', () {
+      final core = PeerServerCore(
+        key: 'orbits-test-room-key',
+        maxFramesPerWindow: 8,
+      );
+      final toA = <Map<String, Object?>>[];
+      final toB = <Map<String, Object?>>[];
+      core.connect(
+        id: 'A',
+        token: 'ta',
+        clientKey: 'orbits-test-room-key',
+        send: toA.add,
+      );
+      core.connect(
+        id: 'B',
+        token: 'tb',
+        clientKey: 'orbits-test-room-key',
+        send: toB.add,
+      );
+      for (var i = 0; i < 20; i++) {
+        core.frame(fromId: 'A', frame: {
+          'type': PeerServerFrame.offer,
+          'dst': 'B',
+          'payload': {'n': i},
+        });
+      }
+      expect(core.has('A'), isFalse, reason: 'flooder must be evicted');
+      expect(core.has('B'), isTrue);
+      toB.clear();
+      core.connect(
+        id: 'C',
+        token: 'tc',
+        clientKey: 'orbits-test-room-key',
+        send: (_) {},
+      );
+      core.frame(fromId: 'C', frame: {
+        'type': PeerServerFrame.offer,
+        'dst': 'B',
+        'payload': {'sdp': 'still-here'},
+      });
+      expect(toB.any((f) => f['type'] == PeerServerFrame.offer), isTrue);
+    });
+
     test('maxClients caps registrations', () {
       final core = PeerServerCore(key: 'orbits-test-room-key', maxClients: 2);
       expect(core.connect(id: 'A', token: 'a', clientKey: 'orbits-test-room-key', send: (_) {}), isNull);
@@ -182,12 +265,114 @@ void main() {
           },
         );
 
+    test('oversized payload is closed; other members still get OFFER',
+        () async {
+      final tight = EmbeddedSignalingServer(
+        key: 'orbits-test-room-key',
+        maxFrameBytes: 64,
+      );
+      await tight.start(host: '127.0.0.1', port: 0);
+      try {
+        final a = await WebSocket.connect(Uri(
+          scheme: 'ws',
+          host: '127.0.0.1',
+          port: tight.port,
+          path: '/peerjs',
+          queryParameters: {
+            'key': 'orbits-test-room-key',
+            'id': 'A',
+            'token': 'ta',
+          },
+        ).toString());
+        await a.map(_json).first.timeout(const Duration(seconds: 5));
+        final b = await WebSocket.connect(Uri(
+          scheme: 'ws',
+          host: '127.0.0.1',
+          port: tight.port,
+          path: '/peerjs',
+          queryParameters: {
+            'key': 'orbits-test-room-key',
+            'id': 'B',
+            'token': 'tb',
+          },
+        ).toString());
+        final bFrames = b.map(_json).asBroadcastStream();
+        await bFrames.first.timeout(const Duration(seconds: 5));
+
+        a.add('{"type":"OFFER","dst":"B","payload":"${'x' * 200}"}');
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        expect(tight.connectedIds, isNot(contains('A')));
+        expect(tight.connectedIds, contains('B'));
+
+        final c = await WebSocket.connect(Uri(
+          scheme: 'ws',
+          host: '127.0.0.1',
+          port: tight.port,
+          path: '/peerjs',
+          queryParameters: {
+            'key': 'orbits-test-room-key',
+            'id': 'C',
+            'token': 'tc',
+          },
+        ).toString());
+        await c.map(_json).first.timeout(const Duration(seconds: 5));
+        final offerArrived = bFrames
+            .firstWhere((f) => f['type'] == PeerServerFrame.offer)
+            .timeout(const Duration(seconds: 5));
+        c.add(jsonEncode({
+          'type': PeerServerFrame.offer,
+          'dst': 'B',
+          'payload': {'sdp': 'ok'},
+        }));
+        expect((await offerArrived)['src'], 'C');
+        await b.close();
+        await c.close();
+        try {
+          await a.close();
+        } catch (_) {}
+      } finally {
+        await tight.stop();
+      }
+    });
+
     test('a client receives OPEN after connecting', () async {
       final ws = await WebSocket.connect(wsUri('A', 'ta').toString());
       final first = await ws.map(_json).first.timeout(const Duration(seconds: 5));
       expect(first['type'], PeerServerFrame.open);
       expect(first['id'], 'A');
       await ws.close();
+    });
+
+    test('reconnect then close first socket: second still gets OFFER',
+        () async {
+      final first = await WebSocket.connect(wsUri('A', 'same').toString());
+      await first.map(_json).first.timeout(const Duration(seconds: 5));
+
+      final second = await WebSocket.connect(wsUri('A', 'same').toString());
+      final secondFrames = second.map(_json).asBroadcastStream();
+      final open2 =
+          await secondFrames.first.timeout(const Duration(seconds: 5));
+      expect(open2['type'], PeerServerFrame.open);
+
+      await first.close();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(server.connectedIds, contains('A'));
+
+      final b = await WebSocket.connect(wsUri('B', 'tb').toString());
+      await b.map(_json).first.timeout(const Duration(seconds: 5));
+      final offerArrived = secondFrames
+          .firstWhere((f) => f['type'] == PeerServerFrame.offer)
+          .timeout(const Duration(seconds: 5));
+      b.add(jsonEncode({
+        'type': PeerServerFrame.offer,
+        'dst': 'A',
+        'payload': {'sdp': 'after-reconnect'},
+      }));
+      final offer = await offerArrived;
+      expect(offer['src'], 'B');
+
+      await second.close();
+      await b.close();
     });
 
     test('OFFER from A is delivered to B with src=A', () async {

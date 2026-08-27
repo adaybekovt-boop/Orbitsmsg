@@ -53,18 +53,22 @@ class EmbeddedSignalingServer {
     int maxClients = 64,
     this.maxConnectsPerIp = 12,
     this.connectWindow = const Duration(minutes: 1),
+    this.maxFrameBytes = kMaxSignalingFrameBytes,
+    int maxFramesPerWindow = kMaxSignalingFramesPerWindow,
   }) : _core = PeerServerCore(
           key: isForbiddenEmbeddedSignalingKey(key)
               ? generateRoomSignalingKey()
               : key!,
           echoHeartbeat: echoHeartbeat,
           maxClients: maxClients,
+          maxFramesPerWindow: maxFramesPerWindow,
         );
 
   final PeerServerCore _core;
   final bool echoHeartbeat;
   final int maxConnectsPerIp;
   final Duration connectWindow;
+  final int maxFrameBytes;
   final Map<String, List<DateTime>> _connectsByIp = {};
 
   HttpServer? _http;
@@ -152,6 +156,8 @@ class EmbeddedSignalingServer {
       return;
     }
 
+    final generation = _core.generationOf(id);
+
     // A prior socket under the same id is now superseded — drop it.
     final prior = _sockets[id];
     if (prior != null && !identical(prior, ws)) {
@@ -163,20 +169,33 @@ class EmbeddedSignalingServer {
 
     ws.listen(
       (raw) {
+        if (_payloadBytes(raw) > maxFrameBytes) {
+          _drop(id, token, ws, generation);
+          try {
+            ws.close();
+          } catch (_) {}
+          return;
+        }
         final frame = _decode(raw);
-        if (frame != null) _core.frame(fromId: id, frame: frame);
+        if (frame == null) return;
+        final ok = _core.frame(fromId: id, frame: frame);
+        if (!ok) {
+          _drop(id, token, ws, generation);
+          try {
+            ws.close();
+          } catch (_) {}
+        }
       },
-      onDone: () => _drop(id, token, ws),
-      onError: (_) => _drop(id, token, ws),
+      onDone: () => _drop(id, token, ws, generation),
+      onError: (_) => _drop(id, token, ws, generation),
       cancelOnError: false,
     );
   }
 
-  void _drop(String id, String token, WebSocket ws) {
-    // Only evict if this exact socket is still the one registered — a reconnect
-    // may have already replaced it.
+  void _drop(String id, String token, WebSocket ws, int generation) {
+    // Only evict the socket map if this exact socket is still registered.
     if (identical(_sockets[id], ws)) _sockets.remove(id);
-    _core.disconnect(id, token: token);
+    _core.disconnect(id, token: token, generation: generation);
   }
 
   bool _allowConnectFrom(String ip) {
@@ -187,6 +206,12 @@ class EmbeddedSignalingServer {
     if (list.length >= maxConnectsPerIp) return false;
     list.add(now);
     return true;
+  }
+
+  int _payloadBytes(dynamic raw) {
+    if (raw is String) return raw.length;
+    if (raw is List<int>) return raw.length;
+    return 0;
   }
 
   Map<String, Object?>? _decode(dynamic raw) {

@@ -23,7 +23,11 @@ Future<({DropFileMeta meta, Uint8List bytes})?> _transfer(
     bytes: data,
     name: 'f.bin',
     mime: 'application/octet-stream',
-    send: packets.add,
+    send: (p) {
+      packets.add(p);
+      return true;
+    },
+    waitForAck: false,
   );
 
   if (tamper != null) tamper(packets);
@@ -79,7 +83,11 @@ void main() {
         bytes: _bytes(10),
         name: 'photo.jpg',
         mime: 'image/jpeg',
-        send: packets.add,
+        send: (p) {
+          packets.add(p);
+          return true;
+        },
+        waitForAck: false,
       );
       final start = packets.first as Map;
       expect(start['type'], 'file-start');
@@ -129,7 +137,11 @@ void main() {
           bytes: _bytes(64 * 10),
           name: 'big.bin',
           mime: 'application/octet-stream',
-          send: packets.add,
+          send: (p) {
+            packets.add(p);
+            return true;
+          },
+          waitForAck: false,
           fileId: id,
           waitForDrain: () async {
             if (++drains == 2) sender.abortOutgoing(id);
@@ -218,7 +230,8 @@ void main() {
         bytes: data,
         name: 'f',
         mime: 'application/octet-stream',
-        send: (_) {},
+        send: (_) => true,
+        waitForAck: false,
       );
       expect(sent.last, data.length);
       for (var i = 1; i < sent.length; i++) {

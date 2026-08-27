@@ -313,18 +313,24 @@ Future<OneTimePrekeyRecord?> peekFreshOPK(String id) async {
 /// Fetch an OPK and mark it used in one step. Returns null if missing or
 /// already consumed — a second consume of the same id is a no-op so replays
 /// cannot force key reuse.
+///
+/// `used=0→1` is a compare-and-set (R08). The winner is decided *before*
+/// the (async) private-key unwrap so two concurrent handshakes cannot both
+/// obtain the same one-time scalar.
 Future<OneTimePrekeyRecord?> consumeOPK(String id) async {
-  final row = await keyStore().get(_prekeysTable, id);
-  if (row == null || row['kind'] != 'opk') return null;
-  if ((row['used'] as num?)?.toInt() != 0) return null;
-  final rec = await _rowToOpk(row);
-  if (rec == null) return null;
-  await keyStore().put(_prekeysTable, {
-    ...row,
-    'used': 1,
-    'usedAt': DateTime.now().millisecondsSinceEpoch,
-  });
-  return rec;
+  final won = await keyStore().compareAndUpdate(
+    _prekeysTable,
+    id,
+    ifMatches: (row) =>
+        row['kind'] == 'opk' && (row['used'] as num?)?.toInt() == 0,
+    update: (row) => {
+      ...row,
+      'used': 1,
+      'usedAt': DateTime.now().millisecondsSinceEpoch,
+    },
+  );
+  if (won == null) return null;
+  return _rowToOpk(won);
 }
 
 Future<int> pruneUsedOPKs({int maxAgeMs = _usedOpkRetentionMs}) async {
