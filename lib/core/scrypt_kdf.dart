@@ -55,6 +55,34 @@ const int scryptDefaultDkLen = 32;
 const int scryptMinN = 16384; // 2^14
 const int scryptMaxN = 1 << 20; // 2^20
 
+/// Bounds for the rest of the RFC 7914 parameters. Rejected *before* the
+/// KDF runs so a hostile stored record cannot force huge allocations (R16).
+const int scryptMinR = 1;
+const int scryptMaxR = 32;
+const int scryptMinP = 1;
+const int scryptMaxP = 16;
+const int scryptMinDkLen = 16;
+const int scryptMaxDkLen = 64;
+const int scryptMinSaltLen = 16;
+const int scryptMaxSaltLen = 64;
+
+/// True when N/r/p/dkLen/salt are in the admissible ranges (and N is a
+/// power of two). Used by verify before any scrypt work.
+bool scryptParamsAdmissible({
+  required int n,
+  required int r,
+  required int p,
+  required int dkLen,
+  required int saltLen,
+}) {
+  if (n < scryptMinN || n > scryptMaxN || (n & (n - 1)) != 0) return false;
+  if (r < scryptMinR || r > scryptMaxR) return false;
+  if (p < scryptMinP || p > scryptMaxP) return false;
+  if (dkLen < scryptMinDkLen || dkLen > scryptMaxDkLen) return false;
+  if (saltLen < scryptMinSaltLen || saltLen > scryptMaxSaltLen) return false;
+  return true;
+}
+
 /// Web-only cost floor. The browser has no isolates, so scrypt runs on the
 /// single UI thread (see [_scrypt]); at N=2^16 that blocks the page for many
 /// seconds — the "frozen onboarding" symptom. Web therefore derives at a
@@ -270,12 +298,16 @@ Future<ScryptVerifyResult> verifyScryptRecordEx({
   required ScryptStoredRecord record,
 }) async {
   const miss = (ok: false, dkBytes: null);
-  if (record.n < scryptMinN ||
-      record.n > scryptMaxN ||
-      (record.n & (record.n - 1)) != 0) {
+  final salt = base64ToBytes(record.saltB64);
+  if (!scryptParamsAdmissible(
+    n: record.n,
+    r: record.r,
+    p: record.p,
+    dkLen: record.dkLen,
+    saltLen: salt.length,
+  )) {
     return miss;
   }
-  final salt = base64ToBytes(record.saltB64);
   final dk = await _scrypt(
     password: _keyMaterial(username, password),
     salt: salt,
