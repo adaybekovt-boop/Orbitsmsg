@@ -55,6 +55,13 @@ abstract class PeerServerFrame {
 /// Why a connection attempt was rejected (null === accepted).
 enum PeerServerReject { invalidKey, idTaken, missingId, missingToken }
 
+/// Hard cap on one WebSocket text/binary payload before JSON decode (R18).
+const int kMaxSignalingFrameBytes = 64 * 1024;
+
+/// Frames a single connected client may send per [kSignalingFrameWindow].
+const int kMaxSignalingFramesPerWindow = 48;
+const Duration kSignalingFrameWindow = Duration(seconds: 1);
+
 /// Well-known PeerJS cloud key. Embedded rooms must never use it: anyone
 /// who can reach the port already knows it.
 const String kForbiddenEmbeddedSignalingKey = 'peerjs';
@@ -90,6 +97,8 @@ class PeerServerClient {
   /// Incremented on every successful connect/reconnect of this id so a
   /// late close from a superseded socket cannot evict the live one (R09).
   final int generation;
+
+  final List<DateTime> recentFrames = [];
 }
 
 /// Pure signaling relay. Not thread-anything — drive it from a single isolate
@@ -99,6 +108,8 @@ class PeerServerCore {
     this.key = 'peerjs',
     this.echoHeartbeat = true,
     this.maxClients = 64,
+    this.maxFramesPerWindow = kMaxSignalingFramesPerWindow,
+    this.frameWindow = kSignalingFrameWindow,
   });
 
   /// The PeerJS app key clients must present. Defaults to peerjs's own
@@ -114,6 +125,10 @@ class PeerServerCore {
   /// flood of bogus connects exhausting host memory. A room's member cap is
   /// far below this; the limit only bites on abuse.
   final int maxClients;
+
+  /// Per-connected-client inbound frame quota (R18).
+  final int maxFramesPerWindow;
+  final Duration frameWindow;
 
   final Map<String, PeerServerClient> _clients = {};
 
@@ -176,18 +191,23 @@ class PeerServerCore {
   int generationOf(String id) => _clients[id]?.generation ?? 0;
 
   /// Handle one inbound frame from the client registered as [fromId].
-  void frame({required String fromId, required Map<String, Object?> frame}) {
+  /// Returns false when the sender was dropped (quota exceeded).
+  bool frame({required String fromId, required Map<String, Object?> frame}) {
+    if (!_allowFrame(fromId)) {
+      _clients.remove(fromId);
+      return false;
+    }
     final type = frame['type']?.toString();
-    if (type == null) return;
+    if (type == null) return true;
 
     if (type == PeerServerFrame.heartbeat) {
       if (echoHeartbeat) _clients[fromId]?.send(const {'type': PeerServerFrame.heartbeat});
-      return;
+      return true;
     }
 
     if (PeerServerFrame.addressed.contains(type)) {
       final dst = frame['dst']?.toString();
-      if (dst == null || dst.isEmpty) return;
+      if (dst == null || dst.isEmpty) return true;
       final target = _clients[dst];
       if (target == null) {
         // Destination is offline → tell the sender it expired, exactly as the
@@ -197,15 +217,16 @@ class PeerServerCore {
           'src': dst,
           'payload': dst,
         });
-        return;
+        return true;
       }
       // Relay verbatim, but stamp the authenticated source. We never trust a
       // client-supplied `src`; it is always the transport-known sender id.
       final relayed = Map<String, Object?>.from(frame)..['src'] = fromId;
       target.send(relayed);
-      return;
+      return true;
     }
     // Unknown frame types are ignored (forward-compat with newer clients).
+    return true;
   }
 
   /// Remove a client on socket close. [token] guards a late close from a
@@ -217,6 +238,16 @@ class PeerServerCore {
     if (token.isNotEmpty && existing.token != token) return;
     if (generation != null && existing.generation != generation) return;
     _clients.remove(id);
+  }
+
+  bool _allowFrame(String id) {
+    final client = _clients[id];
+    if (client == null) return false;
+    final now = DateTime.now();
+    client.recentFrames.removeWhere((t) => now.difference(t) > frameWindow);
+    if (client.recentFrames.length >= maxFramesPerWindow) return false;
+    client.recentFrames.add(now);
+    return true;
   }
 
   /// Drop everyone (server shutdown).

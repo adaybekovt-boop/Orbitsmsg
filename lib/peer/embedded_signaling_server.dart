@@ -53,18 +53,22 @@ class EmbeddedSignalingServer {
     int maxClients = 64,
     this.maxConnectsPerIp = 12,
     this.connectWindow = const Duration(minutes: 1),
+    this.maxFrameBytes = kMaxSignalingFrameBytes,
+    int maxFramesPerWindow = kMaxSignalingFramesPerWindow,
   }) : _core = PeerServerCore(
           key: isForbiddenEmbeddedSignalingKey(key)
               ? generateRoomSignalingKey()
               : key!,
           echoHeartbeat: echoHeartbeat,
           maxClients: maxClients,
+          maxFramesPerWindow: maxFramesPerWindow,
         );
 
   final PeerServerCore _core;
   final bool echoHeartbeat;
   final int maxConnectsPerIp;
   final Duration connectWindow;
+  final int maxFrameBytes;
   final Map<String, List<DateTime>> _connectsByIp = {};
 
   HttpServer? _http;
@@ -165,8 +169,22 @@ class EmbeddedSignalingServer {
 
     ws.listen(
       (raw) {
+        if (_payloadBytes(raw) > maxFrameBytes) {
+          _drop(id, token, ws, generation);
+          try {
+            ws.close();
+          } catch (_) {}
+          return;
+        }
         final frame = _decode(raw);
-        if (frame != null) _core.frame(fromId: id, frame: frame);
+        if (frame == null) return;
+        final ok = _core.frame(fromId: id, frame: frame);
+        if (!ok) {
+          _drop(id, token, ws, generation);
+          try {
+            ws.close();
+          } catch (_) {}
+        }
       },
       onDone: () => _drop(id, token, ws, generation),
       onError: (_) => _drop(id, token, ws, generation),
@@ -188,6 +206,12 @@ class EmbeddedSignalingServer {
     if (list.length >= maxConnectsPerIp) return false;
     list.add(now);
     return true;
+  }
+
+  int _payloadBytes(dynamic raw) {
+    if (raw is String) return raw.length;
+    if (raw is List<int>) return raw.length;
+    return 0;
   }
 
   Map<String, Object?>? _decode(dynamic raw) {
