@@ -147,6 +147,12 @@ class PacketRouterCtx {
 bool _dropPermitted(String remoteId, PacketRouterCtx ctx) =>
     ctx.dropAllowed?.call(remoteId) == true;
 
+/// Production Drop gate used by [ConnectionsNotifier]: a verified wire
+/// handshake **and** the peer must not be blocked. Source-string tests
+/// must not pin the exact lambda text (R6-20).
+bool dropAllowedForPeer({required bool verified, required bool blocked}) =>
+    verified && !blocked;
+
 // ─── Middlewares ──────────────────────────────────────────────────
 
 /// Reliable-channel drop-packet fast-path. Returns `true` if the packet

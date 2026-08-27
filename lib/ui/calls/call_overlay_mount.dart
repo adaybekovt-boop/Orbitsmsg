@@ -26,8 +26,12 @@ class CallOverlayMount extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isActive = ref.watch(callIsActiveProvider);
-    if (!isActive) {
+    final s = ref.watch(callsNotifierProvider);
+    if (!s.isActive) {
+      final err = s.lastError;
+      if (err != null && err.isNotEmpty) {
+        return _IdleCallError(message: err);
+      }
       return const IgnorePointer(
         ignoring: true,
         child: SizedBox.shrink(),
@@ -589,6 +593,30 @@ class _LocalPip extends StatelessWidget {
                   ),
                 ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Visible when a call failed but we are idle again (R6-14). Mounted at
+/// the [MaterialApp.builder] layer so a pushed chat cannot hide it.
+class _IdleCallError extends StatelessWidget {
+  const _IdleCallError({required this.message});
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
+    return IgnorePointer(
+      ignoring: true,
+      child: SafeArea(
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: _ErrorToast(message: message, tokens: tokens),
           ),
         ),
       ),

@@ -4,6 +4,7 @@
 // SharedPreferences with a short idle timeout.
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -75,6 +76,18 @@ void main() {
     await tester.pump(const Duration(milliseconds: 150)); // 150 < 200 since reset
     expect(calls, 0);
     await tester.pump(const Duration(milliseconds: 100)); // now past 200
+    expect(calls, 1);
+  });
+
+  testWidgets('keyboard activity also resets the idle timer (X1)', (tester) async {
+    var calls = 0;
+    await pumpScope(tester, enabled: true, onLockCount: (n) => calls = n);
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(calls, 0);
+    await tester.sendKeyEvent(LogicalKeyboardKey.space);
+    await tester.pump(const Duration(milliseconds: 150));
+    expect(calls, 0);
+    await tester.pump(const Duration(milliseconds: 100));
     expect(calls, 1);
   });
 

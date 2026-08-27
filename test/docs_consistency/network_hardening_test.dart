@@ -8,6 +8,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbits_flutter/peer/packet_router.dart';
 
 void main() {
   final repoRoot = Directory.current;
@@ -29,7 +30,15 @@ void main() {
     expect(router, contains('ctx.dropAllowed?.call(remoteId) == true'));
 
     final conns = read('lib/state/connections_notifier.dart');
-    expect(conns, contains('dropAllowed: isVerified'));
+    expect(conns, contains('dropAllowedForPeer'));
+    expect(conns, contains('isVerified'));
+    expect(conns, contains('isPeerBlocked'));
+
+    // Real gate, not a source-string pin: verified AND !blocked.
+    expect(dropAllowedForPeer(verified: true, blocked: false), isTrue);
+    expect(dropAllowedForPeer(verified: true, blocked: true), isFalse);
+    expect(dropAllowedForPeer(verified: false, blocked: false), isFalse);
+    expect(dropAllowedForPeer(verified: false, blocked: true), isFalse);
 
     final drop = read('lib/core/orbits_drop.dart');
     expect(drop, contains('kMaxDropFileBytes'));

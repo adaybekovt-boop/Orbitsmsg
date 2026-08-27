@@ -29,6 +29,7 @@ import 'package:mime/mime.dart';
 
 import '../state/calls_provider.dart';
 import '../state/chat_prefs_provider.dart';
+import '../state/composer_drafts.dart';
 import '../state/connections_notifier.dart';
 import '../state/messages_provider.dart';
 import '../state/messaging_notifier.dart';
@@ -714,13 +715,14 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
       break;
     }
 
-    // Strict TOFU gate: a contact whose key is pinned but not yet user-verified
-    // (trustLevel == 1, "Защищён") has its conversation withheld until the
-    // safety code is confirmed. Level 0 = no pin yet (nothing to verify);
-    // level >= 2 = verified. Messages still decrypt + persist underneath — only
-    // their display is gated — so the ratchet stays in sync.
+    // Strict TOFU gate: anything below user-verified (trustLevel 2) is
+    // withheld — unknown (0) and silent-TOFU (1) alike (R6-13). Messages
+    // still decrypt + persist underneath so the ratchet stays in sync.
     final strictVerify = ref.watch(strictVerifyProvider);
-    final isGated = strictVerify && trustLevel == 1;
+    final isGated = isStrictVerifyGated(
+      strictVerify: strictVerify,
+      trustLevel: trustLevel,
+    );
 
     final list = messagesAsync.asData?.value ?? const [];
 
@@ -964,6 +966,13 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
                 onRecordVoice: _openVoiceRecorder,
               ),
               replyPreview: _replyPreview(),
+              initialDraft:
+                  ref.read(composerDraftsProvider.notifier).draftFor(widget.peerId),
+              onDraftChanged: (text) => unawaited(
+                ref
+                    .read(composerDraftsProvider.notifier)
+                    .setDraft(widget.peerId, text),
+              ),
             ),
         ],
       ),

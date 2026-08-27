@@ -18,7 +18,7 @@ while unlocked (`lib/core/vault_kek.dart`). It is never written to disk.
 | Double-ratchet / identity / prekey scalars | Fail-closed `orb-wrap-v1` (`wrapSecret`). Never written while locked. |
 | SQLite file as a whole | **Not** SQLCipher. See **Known limitation: SQLCipher** below (`kSqlCipherFileEncryptionEnabled == false`). |
 | Stickers, room membership lists, channel names | Not covered by the blob cipher. Treat as metadata. |
-| Own profile `displayName` / `bio` / `avatarDataUrl` | **Not encrypted.** Stored as ordinary JSON in SharedPreferences (`orbits_local_profile_v1`, `lib/storage/secure_profile_store.dart`). The filename says "secure" because it also holds the scrypt *verifier*, which is not a secret. Encrypting these display fields under the KEK is deferred — they are visible on an unlocked lock-screen / contact card by design. Do not assume they are vault-protected. |
+| Own profile `displayName` / `bio` / `avatarDataUrl` | **Not encrypted.** Stored as ordinary JSON in SharedPreferences (`orbits_local_profile_v1`, `lib/storage/secure_profile_store.dart`). The filename says "secure" because it also holds the scrypt *verifier*, which is not a secret. Encrypting these display fields under the KEK is deferred — they are visible on an unlocked lock-screen / contact card by design. Do not assume they are vault-protected. The scrypt record's `kdfId` is an immutable KDF label (`orbits` on new accounts); it is **not** the display name. Renaming the profile must not change the password wrap (R6-01). |
 
 ## Known limitation: SQLCipher
 

@@ -15,6 +15,7 @@ import '../peer/helpers.dart';
 import '../storage/db.dart' as db;
 import 'auth_notifier.dart';
 import 'connections_notifier.dart';
+import 'messaging_notifier.dart';
 
 enum DropStatus { queued, sent, received, completed, failed }
 
@@ -132,6 +133,9 @@ class DropNotifier extends StateNotifier<DropState> {
     required String mime,
   }) async {
     final pid = normalizePeerId(peerId);
+    if (_ref.read(messagingNotifierProvider.notifier).isPeerBlocked(pid)) {
+      return null;
+    }
     final conns = _ref.read(connectionsNotifierProvider.notifier);
 
     if (!conns.hasReliable(pid)) {
@@ -225,17 +229,9 @@ class DropNotifier extends StateNotifier<DropState> {
 
   Future<bool> _persistIncoming(DropFileMeta meta, Uint8List bytes) async {
     _patch(meta.fileId, (t) => t.copyWith(status: DropStatus.received));
-    final blobId = 'drop-${meta.fileId}';
-    try {
-      await db.saveFileBlob(
-        blobId,
-        bytes,
-        mime: meta.mime,
-        name: meta.name,
-        size: meta.size,
-        kind: _kindForMime(meta.mime),
-      );
-    } catch (_) {
+    final blobId = dropBlobId(meta.fileId);
+    final saved = await persistIncomingDropFile(meta, bytes);
+    if (!saved) {
       _patch(
         meta.fileId,
         (t) => t.copyWith(
@@ -279,6 +275,26 @@ class DropNotifier extends StateNotifier<DropState> {
     if (m.startsWith('video/')) return 'video';
     if (m.startsWith('audio/')) return 'audio';
     return 'file';
+  }
+}
+
+String dropBlobId(String fileId) => 'drop-$fileId';
+
+/// Persist a verified inbound Drop file. Returns `false` when
+/// [db.saveFileBlob] refuses the write (oversize, empty id, …) so the
+/// engine NACKs and the transfer is not completed (R6-04).
+Future<bool> persistIncomingDropFile(DropFileMeta meta, Uint8List bytes) async {
+  try {
+    return await db.saveFileBlob(
+      dropBlobId(meta.fileId),
+      bytes,
+      mime: meta.mime,
+      name: meta.name,
+      size: meta.size,
+      kind: DropNotifier._kindForMime(meta.mime),
+    );
+  } catch (_) {
+    return false;
   }
 }
 

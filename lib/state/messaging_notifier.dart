@@ -25,6 +25,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/error_reporter.dart';
+import '../core/file_limits.dart';
 import '../utils/heavy_codec.dart';
 
 import '../messaging/lost_inbound_ledger.dart';
@@ -68,7 +69,7 @@ const int _maxTextLen = 32 * 1024;
 const int _maxStickerLen = 512 * 1024;
 const int _maxVoiceRawBytes = 6 * 1024 * 1024; // ~8 MiB base64
 const int _maxVoiceB64Len = 8 * 1024 * 1024;
-const int _maxFileRawBytes = 12 * 1024 * 1024; // JS UI gate (Chats.jsx:822)
+const int _maxFileRawBytes = kMaxFileRawBytes; // JS UI gate (Chats.jsx:822)
 const int _maxFileB64Len = 16 * 1024 * 1024;
 const int _maxFileThumbLen = 48 * 1024;
 const int _maxFileNameLen = 200; // JS: messageProtocol.js:347

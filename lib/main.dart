@@ -21,6 +21,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_acrylic/flutter_acrylic.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'app_navigator.dart';
 import 'storage/db.dart' as db;
 import 'storage/db_health.dart';
 import 'storage/drift_key_store.dart';
@@ -28,6 +29,8 @@ import 'storage/drift_sticker_store.dart';
 import 'themes/theme_data_factory.dart';
 import 'themes/theme_notifier.dart';
 import 'ui/auth/auth_gate.dart';
+import 'ui/auth/auto_lock_scope.dart';
+import 'ui/calls/call_overlay_mount.dart';
 
 Future<void> main() async {
   // Binding first — required before anything that hits a platform channel
@@ -111,6 +114,7 @@ class OrbitsApp extends ConsumerWidget {
     final background = manifest.background;
     return MaterialApp(
       title: 'Orbits',
+      navigatorKey: orbitsRootNavigatorKey,
       debugShowCheckedModeBanner: false,
       theme: buildOrbitsTheme(manifest),
       // Mount the atmospheric background once at the app root so every
@@ -122,13 +126,20 @@ class OrbitsApp extends ConsumerWidget {
       // wrapping `home:` so dialog/bottom-sheet routes inherit the same
       // backdrop without each page re-mounting it.
       builder: (context, child) {
-        if (background == null) return child ?? const SizedBox.shrink();
-        return Stack(
+        Widget layered = child ?? const SizedBox.shrink();
+        // Call overlay must sit above Navigator.push routes (chat, profile,
+        // games) so a 1:1 call is not trapped under the pushed page (X2).
+        layered = Stack(
           children: [
-            Positioned.fill(child: Builder(builder: background)),
-            if (child != null) Positioned.fill(child: child),
+            if (background != null)
+              Positioned.fill(child: Builder(builder: background)),
+            Positioned.fill(child: layered),
+            const Positioned.fill(child: CallOverlayMount()),
           ],
         );
+        // Activity on pushed routes (and the software keyboard) must reset
+        // the idle timer — AutoLockScope used to wrap only AppShell (X1).
+        return AutoLockScope(child: layered);
       },
       home: const AuthGate(),
     );

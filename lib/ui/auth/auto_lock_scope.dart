@@ -16,6 +16,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../state/auth_notifier.dart';
@@ -50,14 +51,21 @@ class _AutoLockScopeState extends ConsumerState<AutoLockScope>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    HardwareKeyboard.instance.addHandler(_onKey);
     _resetIdleTimer();
   }
 
   @override
   void dispose() {
     _idleTimer?.cancel();
+    HardwareKeyboard.instance.removeHandler(_onKey);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  bool _onKey(KeyEvent event) {
+    _onActivity();
+    return false;
   }
 
   AutoLockSettings get _settings => ref.read(autoLockProvider);

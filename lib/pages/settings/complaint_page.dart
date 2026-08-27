@@ -28,10 +28,24 @@ class _ComplaintPageState extends State<ComplaintPage> {
   }
 
   Future<void> _openChannel() async {
-    final uri = Uri.parse(kComplaintChannelUrl);
+    final note = _note.text.trim();
+    final base = Uri.parse(kComplaintChannelUrl);
+    final uri = note.isEmpty
+        ? base
+        : base.replace(queryParameters: {
+            ...base.queryParameters,
+            'body': note,
+          });
     final launch = widget.launchUri ??
         ((u) => launchUrl(u, mode: LaunchMode.externalApplication));
-    await launch(uri);
+    final ok = await launch(uri);
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Не удалось открыть внешний канал'),
+        ),
+      );
+    }
   }
 
   @override

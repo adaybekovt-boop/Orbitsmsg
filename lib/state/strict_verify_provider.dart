@@ -46,6 +46,15 @@ class StrictVerifyController extends StateNotifier<bool> {
   }
 }
 
+/// True when the conversation must stay behind the confirm-identity wall.
+/// Unknown (0) and silent-TOFU (1) are both gated; only user-verified (2+)
+/// may be read (R6-13).
+bool isStrictVerifyGated({
+  required bool strictVerify,
+  required int trustLevel,
+}) =>
+    strictVerify && trustLevel < 2;
+
 /// Whether strict contact verification is enabled. Watch it in the chat view
 /// to decide whether to gate an unverified peer.
 final strictVerifyProvider =

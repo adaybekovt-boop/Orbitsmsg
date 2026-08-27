@@ -14,8 +14,12 @@
 // v2: stores `verifierB64` = HMAC-SHA256(dk, "orbits-scrypt-verifier-v2").
 //   Verifying reveals one HMAC image — useless without brute-forcing scrypt.
 //
-// keyMaterial is always `"${username}:${password}:ORBITS_P2P"` — do not
-// change without bumping the record version, or every user gets locked out.
+// keyMaterial is `"${kdfId}:${password}:ORBITS_P2P"`. New records use the
+// immutable [kScryptStableKdfId] so a later displayName rename cannot
+// invalidate the vault (R6-01). Legacy records without `kdfId` still
+// derive with the profile displayName until the first successful unlock
+// stamps `kdfId` (same salt — never re-salt). Do not change the suffix
+// without bumping the record version, or every user gets locked out.
 //
 // IMPORTANT: scrypt is CPU-heavy (~400–800 ms on a mobile device at N=2^16).
 // To keep the UI thread responsive (audit L10) the heavy derivation is
@@ -41,6 +45,10 @@ const bool _kIsWeb = identical(0, 0.0);
 
 const String verifierTag = 'orbits-scrypt-verifier-v2';
 const String _keyMaterialSuffix = 'ORBITS_P2P';
+
+/// Immutable KDF label stored as `kdfId` on new scrypt records. Never a
+/// display name — `updateProfile` must not change the password wrap.
+const String kScryptStableKdfId = 'orbits';
 
 /// Default scrypt cost parameters — must match scryptKdf.js defaults so newly
 /// derived records are byte-identical to the JS build.
@@ -184,6 +192,7 @@ class ScryptRecord {
     required this.dkLen,
     required this.verifierB64,
     required this.dkBytes,
+    required this.kdfId,
   });
   final String algo = 'scrypt';
   final int v = 2;
@@ -195,6 +204,9 @@ class ScryptRecord {
   final String verifierB64;
   final Uint8List dkBytes;
 
+  /// Username actually mixed into keyMaterial. Independent of displayName.
+  final String kdfId;
+
   /// Persistable JSON matching the JS `deriveScryptRecord` output shape.
   Map<String, Object?> toJson() => {
         'algo': algo,
@@ -205,6 +217,7 @@ class ScryptRecord {
         'p': p,
         'dkLen': dkLen,
         'verifierB64': verifierB64,
+        'kdfId': kdfId,
       };
 }
 
@@ -239,7 +252,38 @@ Future<ScryptRecord> deriveScryptRecord({
     dkLen: dkLen,
     verifierB64: bytesToBase64(verifier),
     dkBytes: dk,
+    kdfId: username,
   );
+}
+
+/// Username mixed into scrypt keyMaterial for [record]. New records store
+/// [kScryptStableKdfId]; legacy rows without `kdfId` still use [displayName]
+/// until the first successful unlock stamps the working id.
+String scryptKdfUsername({
+  required ScryptStoredRecord record,
+  required String displayName,
+}) =>
+    record.kdfId ?? displayName;
+
+/// Rewrite [record] to v2 JSON using an already-verified [dkBytes].
+/// Same salt / N / r / p / dkLen — never generates a new salt (R6-03).
+Future<Map<String, Object?>> persistableScryptRecord({
+  required ScryptStoredRecord record,
+  required Uint8List dkBytes,
+  required String kdfId,
+}) async {
+  final verifier = await _computeVerifier(dkBytes);
+  return {
+    'algo': 'scrypt',
+    'v': 2,
+    'saltB64': record.saltB64,
+    'N': record.n,
+    'r': record.r,
+    'p': record.p,
+    'dkLen': record.dkLen,
+    'verifierB64': bytesToBase64(verifier),
+    'kdfId': kdfId,
+  };
 }
 
 /// Stored record as read back from disk / JSON. Accepts both v1 (`dkB64`)
@@ -253,6 +297,7 @@ class ScryptStoredRecord {
     required this.dkLen,
     this.verifierB64,
     this.dkB64,
+    this.kdfId,
   });
 
   final String saltB64;
@@ -263,6 +308,9 @@ class ScryptStoredRecord {
   final String? verifierB64;
   final String? dkB64;
 
+  /// Immutable KDF label. Null on pre-R6-01 records (derive with displayName).
+  final String? kdfId;
+
   static ScryptStoredRecord? fromJson(Map<String, Object?> json) {
     if (json['algo'] != 'scrypt') return null;
     final saltB64 = json['saltB64'];
@@ -272,6 +320,7 @@ class ScryptStoredRecord {
     final p = (json['p'] as num?)?.toInt() ?? 0;
     final dkLen = (json['dkLen'] as num?)?.toInt() ?? 0;
     if (n == 0 || r == 0 || p == 0 || dkLen == 0) return null;
+    final rawKdfId = json['kdfId'];
     return ScryptStoredRecord(
       saltB64: saltB64,
       n: n,
@@ -280,6 +329,7 @@ class ScryptStoredRecord {
       dkLen: dkLen,
       verifierB64: json['verifierB64'] as String?,
       dkB64: json['dkB64'] as String?,
+      kdfId: rawKdfId is String ? rawKdfId : null,
     );
   }
 }

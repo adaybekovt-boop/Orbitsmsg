@@ -602,7 +602,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       // Orbits-Drop file-transfer frames (binary chunks + file-* control) on
       // the reliable channel go straight to the Drop engine.
       dropInbound: (rid, packet) => _drop.handleInbound(rid, packet),
-      dropAllowed: (rid) => isVerified(rid) && !_messaging.isPeerBlocked(rid),
+      dropAllowed: (rid) => dropAllowedForPeer(
+        verified: isVerified(rid),
+        blocked: _messaging.isPeerBlocked(rid),
+      ),
       isBlocked: (rid) => _messaging.isPeerBlocked(rid),
       // Plaintext `room_*` control maps → RoomManager (star-topology rooms).
       roomInbound: (rid, packet) => _room.handleInbound(rid, packet),

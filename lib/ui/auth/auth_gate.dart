@@ -11,9 +11,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../app_navigator.dart';
 import '../../app_shell.dart';
 import '../../state/auth_notifier.dart';
-import 'auto_lock_scope.dart';
 import 'onboarding_page.dart';
 import 'unlock_page.dart';
 
@@ -23,6 +23,14 @@ class AuthGate extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final state = ref.watch(authNotifierProvider);
+    // Pushed chat/profile/game routes sit on the root navigator *above*
+    // this gate. Pop them when the vault locks so UnlockPage is not
+    // covered (X1).
+    ref.listen<AuthState>(authNotifierProvider, (prev, next) {
+      if (prev is AuthAuthed && next is! AuthAuthed) {
+        popRoutesAboveAuthGate();
+      }
+    });
     // Use AnimatedSwitcher so the splash-→-shell transition has some polish.
     // Key by runtimeType so identical states (e.g. two AuthLoading ticks)
     // don't trigger a crossfade.
@@ -34,7 +42,7 @@ class AuthGate extends ConsumerWidget {
           AuthLoading() => const _SplashScreen(),
           AuthGuest() => const OnboardingPage(),
           AuthLocked() => const UnlockPage(),
-          AuthAuthed() => const AutoLockScope(child: AppShell()),
+          AuthAuthed() => const AppShell(),
         },
       ),
     );

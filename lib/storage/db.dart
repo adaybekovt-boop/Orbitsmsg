@@ -26,9 +26,11 @@ import 'dart:math';
 
 import 'package:drift/drift.dart';
 
+import '../core/file_limits.dart';
 import '../core/vault_kek.dart';
 import '../utils/common.dart';
 import 'database.dart';
+import 'idb_store.dart';
 import 'row_codec.dart';
 
 // ─── At-rest content encryption (audit L3) ──────────────────────────
@@ -307,9 +309,8 @@ Future<bool> saveFileBlob(
   int duration = 0,
 }) async {
   if (id.isEmpty) return false;
-  // Defense-in-depth byte cap (audit finding 4): mirror the send-side raw cap
-  // `_maxFileRawBytes` (12 MiB).
-  if (bytes.length > 12 * 1024 * 1024) return false;
+  // Defense-in-depth byte cap (R6-04): same advertised limit as Drop / chat.
+  if (bytes.length > kMaxFileRawBytes) return false;
   // JS trims name to 200 chars — keep parity so inbound rows don't diverge.
   final trimmedName = _clipName(name ?? 'file');
   final db = orbitsDb();
@@ -331,6 +332,11 @@ Future<bool> saveFileBlob(
           data: encodeRow(<String, Object?>{}),
         ),
       );
+  // Drop files are keyed `drop-<fileId>` and have no message row. Register
+  // ownership so [sweepOrphanBlobs] cannot delete them (R6-05).
+  if (id.startsWith('drop-')) {
+    await registerDropOwnedBlob(id);
+  }
   return true;
 }
 
@@ -361,7 +367,52 @@ Future<bool> deleteFileBlob(String id) async {
   if (id.isEmpty) return false;
   final db = orbitsDb();
   await (db.delete(db.fileBlobsTable)..where((t) => t.id.equals(id))).go();
+  if (id.startsWith('drop-')) {
+    await unregisterDropOwnedBlob(id);
+  }
   return true;
+}
+
+// ─── Drop-owned file blobs (R6-05) ─────────────────────────────────
+//
+// Chat GC (`sweepOrphanBlobs`) deletes `file_blobs` whose id is not a
+// message id. Orbits Drop persists as `drop-<fileId>` with no message
+// row, so those blobs must be listed here or they vanish on an unrelated
+// "clear chat" / startup sweep.
+
+const String kDropOwnedBlobsKey = 'drop_owned_blobs';
+
+Future<Set<String>> loadDropOwnedBlobIds() async {
+  final raw = await idbGetString(kDropOwnedBlobsKey);
+  if (raw == null || raw.isEmpty) return <String>{};
+  try {
+    final decoded = jsonDecode(raw);
+    if (decoded is! List) return <String>{};
+    return {
+      for (final e in decoded)
+        if (e is String && e.isNotEmpty) e,
+    };
+  } catch (_) {
+    return <String>{};
+  }
+}
+
+Future<void> registerDropOwnedBlob(String blobId) async {
+  if (blobId.isEmpty) return;
+  final ids = await loadDropOwnedBlobIds();
+  if (!ids.add(blobId)) return;
+  await idbSetString(kDropOwnedBlobsKey, jsonEncode(ids.toList()..sort()));
+}
+
+Future<void> unregisterDropOwnedBlob(String blobId) async {
+  if (blobId.isEmpty) return;
+  final ids = await loadDropOwnedBlobIds();
+  if (!ids.remove(blobId)) return;
+  if (ids.isEmpty) {
+    await idbDel(kDropOwnedBlobsKey);
+    return;
+  }
+  await idbSetString(kDropOwnedBlobsKey, jsonEncode(ids.toList()..sort()));
 }
 
 // ─── Legacy identity key pair ───────────────────────────────────────
@@ -607,20 +658,33 @@ Future<int> clearMessagesForPeer(String peerId) async {
   return n;
 }
 
-/// Orphan-blob garbage collector. Voice/file blobs are keyed by the owning
-/// message id (`voice_blobs.id` / `file_blobs.id` == `messages.id`), so a row
-/// whose id no longer appears in `messages` is dead weight bloating the SQLite
-/// file. A single `NOT IN (SELECT id FROM messages)` subquery per table sweeps
-/// them. Call after chat deletions, message revokes, and once at app start.
+/// Orphan-blob garbage collector. Voice blobs are keyed by the owning
+/// message id. File blobs are kept when they belong to a message **or**
+/// to an Orbits Drop transfer (`drop-*` / the persisted ownership set).
+/// Call after chat deletions, message revokes, and once at app start.
 Future<void> sweepOrphanBlobs() async {
+  final owned = await loadDropOwnedBlobIds();
   final db = orbitsDb();
   await db.transaction(() async {
     await db.customStatement(
       'DELETE FROM voice_blobs WHERE id NOT IN (SELECT id FROM messages)',
     );
-    await db.customStatement(
-      'DELETE FROM file_blobs WHERE id NOT IN (SELECT id FROM messages)',
-    );
+    // Keep message-owned rows, registered Drop refs, and the `drop-`
+    // prefix (pre-R6-05 blobs that never made it into the kv list).
+    if (owned.isEmpty) {
+      await db.customStatement(
+        "DELETE FROM file_blobs WHERE id NOT IN (SELECT id FROM messages) "
+        "AND id NOT LIKE 'drop-%'",
+      );
+    } else {
+      final placeholders = List.filled(owned.length, '?').join(',');
+      await db.customStatement(
+        'DELETE FROM file_blobs WHERE id NOT IN (SELECT id FROM messages) '
+        "AND id NOT LIKE 'drop-%' "
+        'AND id NOT IN ($placeholders)',
+        owned.toList(),
+      );
+    }
   });
 }
 
@@ -1422,7 +1486,7 @@ Stream<List<Map<String, Object?>>> watchChatMetas() {
 /// skipping `prekeys` and `kv` — leaving private prekeys and a reusable auth
 /// token behind after a supposed full reset (audit H4). It now wipes
 /// everything consistently. Use only when the caller really wants a clean
-/// slate; `logout()` keeps the identity for re-onboarding.
+/// slate; `logout()` locks the session and keeps the profile + identity.
 Future<bool> clearAllData() async {
   final db = orbitsDb();
   await db.transaction(() async {

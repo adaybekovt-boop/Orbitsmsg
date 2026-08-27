@@ -92,7 +92,13 @@ class ComposerReplyPreview {
 }
 
 class ChatComposer extends StatefulWidget {
-  const ChatComposer({super.key, required this.actions, this.replyPreview});
+  const ChatComposer({
+    super.key,
+    required this.actions,
+    this.replyPreview,
+    this.initialDraft = '',
+    this.onDraftChanged,
+  });
   final ComposerActions actions;
 
   /// When non-null, a preview pill is rendered above the text field and
@@ -100,6 +106,12 @@ class ChatComposer extends StatefulWidget {
   /// context (resolved by the page before it receives the send
   /// callback).
   final ComposerReplyPreview? replyPreview;
+
+  /// Restored unsent text (R6-07). Empty means a fresh composer.
+  final String initialDraft;
+
+  /// Fired on every text change so the page can persist the draft.
+  final ValueChanged<String>? onDraftChanged;
 
   @override
   State<ChatComposer> createState() => _ChatComposerState();
@@ -115,9 +127,16 @@ class _ChatComposerState extends State<ChatComposer> {
   // about "has content or not" for the send-button visibility.
   bool _hasText = false;
 
+  /// In-flight send — a second tap must not dispatch again (R6-08).
+  bool _sending = false;
+
   @override
   void initState() {
     super.initState();
+    if (widget.initialDraft.isNotEmpty) {
+      _ctl.text = widget.initialDraft;
+      _hasText = widget.initialDraft.trim().isNotEmpty;
+    }
     _ctl.addListener(_onTextChanged);
   }
 
@@ -136,6 +155,7 @@ class _ChatComposerState extends State<ChatComposer> {
   }
 
   void _onTextChanged() {
+    widget.onDraftChanged?.call(_ctl.text);
     final hasText = _ctl.text.trim().isNotEmpty;
     if (hasText != _hasText) {
       setState(() => _hasText = hasText);
@@ -162,16 +182,25 @@ class _ChatComposerState extends State<ChatComposer> {
   }
 
   Future<void> _handleSend() async {
+    if (_sending) return;
     final text = _ctl.text.trim();
     if (text.isEmpty) return;
+    _sending = true;
+    if (mounted) setState(() {});
     _stopTyping();
-    final ok = await widget.actions.onSend(text);
-    if (ok && mounted) {
-      _ctl.clear();
-      // Refocus so the user can keep typing without a second tap. Same
-      // quality-of-life choice the web build makes by keeping `<textarea>`
-      // focused after clear.
-      _focus.requestFocus();
+    try {
+      final ok = await widget.actions.onSend(text);
+      if (ok && mounted) {
+        _ctl.clear();
+        widget.onDraftChanged?.call('');
+        // Refocus so the user can keep typing without a second tap. Same
+        // quality-of-life choice the web build makes by keeping `<textarea>`
+        // focused after clear.
+        _focus.requestFocus();
+      }
+    } finally {
+      _sending = false;
+      if (mounted) setState(() {});
     }
   }
 
@@ -291,8 +320,10 @@ class _ChatComposerState extends State<ChatComposer> {
                             icon: Icons.send,
                             tooltip: 'Отправить',
                             variant: OrbitsGlassVariant.primary,
-                            enabled: _hasText,
-                            onPressed: _hasText ? _handleSend : null,
+                            enabled: _hasText && !_sending,
+                            onPressed: (_hasText && !_sending)
+                                ? _handleSend
+                                : null,
                           )
                         : OrbitsGlassIconButton(
                             key: const ValueKey('mic'),

@@ -37,7 +37,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../peer/peerjs_client.dart';
+import 'call_policy.dart';
+import 'messaging_notifier.dart';
 import 'peer_connection_provider.dart';
+import 'peers_provider.dart';
 
 /// Lifecycle phases the UI needs to disambiguate. Names kept aligned
 /// with `src/call/state/initialCallState.js` so log parsing across
@@ -144,6 +147,29 @@ class CallsNotifier extends StateNotifier<CallState> {
       (_, __) => _bindToCurrentPeer(),
       fireImmediately: true,
     );
+    // Mid-call block: hang up if the remote is newly blocked (R6-06).
+    // Read the persisted row directly so we don't race the messaging
+    // `_blockedIds` mirror on the same peersProvider tick.
+    _ref.listen(peersProvider, (prev, next) {
+      final peer = state.remotePeerId;
+      if (peer == null || !state.isActive) return;
+      final rows = next.asData?.value;
+      if (rows == null) return;
+      for (final r in rows) {
+        if (r['id'] != peer) continue;
+        final b = r['blocked'];
+        final blocked = b == true || (b is num && b.toInt() == 1);
+        if (blocked &&
+            shouldEndCallForBlockedPeer(
+              remotePeerId: peer,
+              isActive: true,
+              blockedPeerId: peer,
+            )) {
+          unawaited(hangUp());
+        }
+        return;
+      }
+    });
   }
 
   final Ref _ref;
@@ -493,15 +519,22 @@ class CallsNotifier extends StateNotifier<CallState> {
     if (current == null) return;
 
     _callSub = current.onCall.listen((conn) {
-      // Room voice calls carry a `room-voice` tag and are owned by RoomManager —
-      // never surface them as a 1:1 call (audit item 6). Normal 1:1 calls have
-      // no such tag and continue exactly as before.
-      if (conn.metadata['channel'] == 'room-voice') return;
-      // Only one call at a time. If we're already busy, decline so
-      // the caller's pill clears cleanly.
-      if (state.isActive) {
-        unawaited(conn.close().catchError((_) {}));
-        return;
+      final decision = decideIncomingCall(
+        metadata: conn.metadata,
+        busy: state.isActive,
+        blocked: _ref
+            .read(messagingNotifierProvider.notifier)
+            .isPeerBlocked(conn.peer),
+      );
+      switch (decision) {
+        case IncomingCallDecision.ignoreRoomVoice:
+          return;
+        case IncomingCallDecision.declineBusy:
+        case IncomingCallDecision.declineBlocked:
+          unawaited(conn.close().catchError((_) {}));
+          return;
+        case IncomingCallDecision.accept:
+          break;
       }
       _attachConnection(conn);
       state = state.copyWith(
