@@ -80,11 +80,16 @@ class PeerServerClient {
     required this.id,
     required this.token,
     required this.send,
+    required this.generation,
   });
 
   final String id;
   final String token;
   final FrameSink send;
+
+  /// Incremented on every successful connect/reconnect of this id so a
+  /// late close from a superseded socket cannot evict the live one (R09).
+  final int generation;
 }
 
 /// Pure signaling relay. Not thread-anything — drive it from a single isolate
@@ -158,11 +163,17 @@ class PeerServerCore {
       send({'type': PeerServerFrame.error, 'payload': 'server full'});
       return PeerServerReject.idTaken; // closest existing client-side mapping
     }
-    // New registration, or a reconnect under the same id+token: (re)bind sink.
-    _clients[id] = PeerServerClient(id: id, token: token, send: send);
+    // New registration, or a reconnect under the same id+token: (re)bind sink
+    // and bump generation so the superseded socket's onDone is a no-op.
+    final nextGen = (existing?.generation ?? 0) + 1;
+    _clients[id] =
+        PeerServerClient(id: id, token: token, send: send, generation: nextGen);
     send({'type': PeerServerFrame.open, 'id': id});
     return null;
   }
+
+  /// Current generation for [id], or 0 if unregistered.
+  int generationOf(String id) => _clients[id]?.generation ?? 0;
 
   /// Handle one inbound frame from the client registered as [fromId].
   void frame({required String fromId, required Map<String, Object?> frame}) {
@@ -197,13 +208,14 @@ class PeerServerCore {
     // Unknown frame types are ignored (forward-compat with newer clients).
   }
 
-  /// Remove a client on socket close. [token] guards against a late close from
-  /// a superseded session evicting the live one: if a different token now holds
-  /// the id (a reconnect happened), the stale close is a no-op.
-  void disconnect(String id, {String token = ''}) {
+  /// Remove a client on socket close. [token] guards a late close from a
+  /// *different* session; [generation] guards a late close from the same
+  /// token after a reconnect (R09).
+  void disconnect(String id, {String token = '', int? generation}) {
     final existing = _clients[id];
     if (existing == null) return;
     if (token.isNotEmpty && existing.token != token) return;
+    if (generation != null && existing.generation != generation) return;
     _clients.remove(id);
   }
 
