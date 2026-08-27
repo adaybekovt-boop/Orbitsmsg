@@ -40,6 +40,7 @@ import 'dart:typed_data';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
+import 'dial_attempt.dart';
 import 'ice_lifecycle.dart';
 import 'signaling.dart';
 import 'ws_channel.dart';
@@ -740,6 +741,9 @@ class PeerJsClient {
   /// Budget for a full [callPeer]/[connect] setup (offer creation included).
   static const Duration dialTimeout = Duration(seconds: 15);
 
+  /// Generation of the next outbound dial (R13).
+  int _dialGeneration = 0;
+
   final Map<String, _Negotiator> _conns = {};
   final Map<String, List<RTCIceCandidate>> _pendingIce = {};
 
@@ -926,10 +930,12 @@ class PeerJsClient {
     String? label,
     Map<String, Object?>? metadata,
   }) {
-    return _connectData(targetId, reliable: reliable, label: label,
-        metadata: metadata).timeout(dialTimeout, onTimeout: () async {
-      throw const PeerError('webrtc', 'data-channel dial timed out');
-    });
+    final attempt = DialAttempt(++_dialGeneration);
+    return _connectData(targetId,
+        reliable: reliable,
+        label: label,
+        metadata: metadata,
+        attempt: attempt);
   }
 
   Future<PeerDataConnection> _connectData(
@@ -937,6 +943,7 @@ class PeerJsClient {
     required bool reliable,
     String? label,
     Map<String, Object?>? metadata,
+    required DialAttempt attempt,
   }) async {
     if (_destroyed) {
       throw const PeerError('disconnected', 'client is destroyed');
@@ -964,21 +971,32 @@ class PeerJsClient {
       _wirePcLifecycle(pc, cid);
       _wireIceOut(pc, cid, targetId, 'data');
       _conns[cid] = _Negotiator.data(conn);
-      final offer = await pc.createOffer({});
-      await pc.setLocalDescription(offer);
-      _sendFrame({
-        'type': _ServerMessageType.offer,
-        'dst': targetId,
-        'payload': {
-          'sdp': {'type': offer.type, 'sdp': offer.sdp},
-          'type': 'data',
-          'connectionId': cid,
-          'label': labelOrDefault,
-          'reliable': reliable,
-          'metadata': meta,
-          'serialization': 'json',
+      attempt.connectionId = cid;
+      await runOwnedDial(
+        attempt: attempt,
+        timeout: dialTimeout,
+        dispose: () => _giveUpConnection(cid),
+        createOffer: () async {
+          final offer = await pc.createOffer({});
+          await pc.setLocalDescription(offer);
+          return offer;
         },
-      });
+        publishOffer: (offer) {
+          _sendFrame({
+            'type': _ServerMessageType.offer,
+            'dst': targetId,
+            'payload': {
+              'sdp': {'type': offer.type, 'sdp': offer.sdp},
+              'type': 'data',
+              'connectionId': cid,
+              'label': labelOrDefault,
+              'reliable': reliable,
+              'metadata': meta,
+              'serialization': 'json',
+            },
+          });
+        },
+      );
       return conn;
     } catch (e) {
       // Dial failed вЂ” release whatever we allocated for this attempt.
@@ -994,15 +1012,15 @@ class PeerJsClient {
   Future<PeerMediaConnection> callPeer(
       String targetId, MediaStream localStream,
       {Map<String, Object?>? metadata}) {
-    return _callPeerInner(targetId, localStream, metadata: metadata)
-        .timeout(dialTimeout, onTimeout: () async {
-      throw const PeerError('webrtc', 'call setup timed out');
-    });
+    final attempt = DialAttempt(++_dialGeneration);
+    return _callPeerInner(targetId, localStream,
+        metadata: metadata, attempt: attempt);
   }
 
   Future<PeerMediaConnection> _callPeerInner(
       String targetId, MediaStream localStream,
-      {Map<String, Object?>? metadata}) async {
+      {Map<String, Object?>? metadata,
+      required DialAttempt attempt}) async {
     if (_destroyed) {
       throw const PeerError('disconnected', 'client is destroyed');
     }
@@ -1026,18 +1044,29 @@ class PeerJsClient {
       _wirePcLifecycle(pc, cid);
       _wireIceOut(pc, cid, targetId, 'media');
       _conns[cid] = _Negotiator.media(conn);
-      final offer = await pc.createOffer({});
-      await pc.setLocalDescription(offer);
-      _sendFrame({
-        'type': _ServerMessageType.offer,
-        'dst': targetId,
-        'payload': {
-          'sdp': {'type': offer.type, 'sdp': offer.sdp},
-          'type': 'media',
-          'connectionId': cid,
-          if (meta.isNotEmpty) 'metadata': meta,
+      attempt.connectionId = cid;
+      await runOwnedDial(
+        attempt: attempt,
+        timeout: dialTimeout,
+        dispose: () => _giveUpConnection(cid),
+        createOffer: () async {
+          final offer = await pc.createOffer({});
+          await pc.setLocalDescription(offer);
+          return offer;
         },
-      });
+        publishOffer: (offer) {
+          _sendFrame({
+            'type': _ServerMessageType.offer,
+            'dst': targetId,
+            'payload': {
+              'sdp': {'type': offer.type, 'sdp': offer.sdp},
+              'type': 'media',
+              'connectionId': cid,
+              if (meta.isNotEmpty) 'metadata': meta,
+            },
+          });
+        },
+      );
       return conn;
     } catch (e) {
       // Setup failed / timed out вЂ” release whatever we allocated.
