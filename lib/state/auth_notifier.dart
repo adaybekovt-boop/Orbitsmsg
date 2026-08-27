@@ -1,7 +1,7 @@
 // Port of src/context/AuthContext.jsx — Riverpod StateNotifier replacing the
 // React provider. Keeps the same four-state machine (loading/guest/locked/
 // authed) and the same four actions the UI calls (completeOnboarding, unlock,
-// logout, wipeLocal).
+// logout = session lock, wipeLocal = full destroy).
 //
 // Architectural choices the React build doesn't have to worry about:
 //   • SharedPreferences is async → the notifier starts in `loading` and moves
@@ -241,8 +241,12 @@ class AuthNotifier extends StateNotifier<AuthState> {
     final identity = await setDisplayName(name);
 
     // Single scrypt pass — `dkBytes` seeds the KEK, everything else is
-    // persisted as the profile's `passRecord`. No second scrypt run needed.
-    final derived = await deriveScryptRecord(username: name, password: password);
+    // persisted as the profile's `passRecord`. Key material uses the
+    // immutable KDF id, never the display name (R6-01).
+    final derived = await deriveScryptRecord(
+      username: kScryptStableKdfId,
+      password: password,
+    );
     await setVaultKek(derived.dkBytes);
     await migrateLegacySealedRows();
 
@@ -287,8 +291,12 @@ class AuthNotifier extends StateNotifier<AuthState> {
       throw const AuthException('corrupt_record', 'Повреждённый профиль');
     }
 
+    final kdfUsername = scryptKdfUsername(
+      record: stored,
+      displayName: profile.displayName,
+    );
     final result = await verifyScryptRecordEx(
-      username: profile.displayName,
+      username: kdfUsername,
       password: password,
       record: stored,
     );
@@ -306,23 +314,22 @@ class AuthNotifier extends StateNotifier<AuthState> {
       await remembered.clearRememberedKek();
     }
 
-    // v1 → v2 migration — re-derive with the stored cost parameters so the
-    // next unlock reads a safe record. Failure is non-fatal; we'll try again
-    // next time the user signs in.
+    // v1 → v2 and/or stamp kdfId. Same salt and same derived key — never
+    // re-salt (R6-03). Stamping kdfId on a legacy record freezes the
+    // username that just worked so a later rename cannot lock the vault
+    // (R6-01). Failure is non-fatal; we'll try again next unlock.
     final storedVersion = (rawRecord['v'] as num?)?.toInt() ?? 1;
-    if (storedVersion != 2) {
+    final needsRewrite = storedVersion != 2 ||
+        stored.verifierB64 == null ||
+        stored.kdfId == null;
+    if (needsRewrite) {
       try {
-        final fresh = await deriveScryptRecord(
-          username: profile.displayName,
-          password: password,
-          params: ScryptParams(
-            n: stored.n,
-            r: stored.r,
-            p: stored.p,
-            dkLen: stored.dkLen,
-          ),
+        final upgraded = await persistableScryptRecord(
+          record: stored,
+          dkBytes: result.dkBytes!,
+          kdfId: kdfUsername,
         );
-        await saveLocalProfile(profile.copyWith(passRecord: fresh.toJson()));
+        await saveLocalProfile(profile.copyWith(passRecord: upgraded));
       } catch (_) {
         // Swallow — we can retry migration on the next unlock.
       }
@@ -354,25 +361,22 @@ class AuthNotifier extends StateNotifier<AuthState> {
     state = AuthLocked(profile);
   }
 
-  /// Sign out: clear the KEK and profile but keep the peerId / crypto keys.
-  /// The user can onboard again to the same device without losing peer
-  /// pins or TOFU history (that's what [wipeLocal] is for).
+  /// Sign out: lock the vault and forget remember-me / biometrics, but
+  /// **keep** the profile and password record. Settings copy says keys and
+  /// password stay; the user re-enters the same password (R6-02).
+  /// [wipeLocal] is the full destroy path ("forgot password" / reset).
   ///
   /// Locking the vault (clearing the KEK) is what makes the at-rest secrets
   /// unreadable again — message/peer rows stay on disk (intended: history
   /// survives a re-login to the *same* identity) but the ratchet/identity
   /// secrets are KEK-wrapped and inert until the next unlock. In-memory
   /// session state (typing bubbles, blocked mirror) is reset by
-  /// `MessagingNotifier`'s auth listener on the authed→guest transition, so it
-  /// can't bleed across a logout (audit H4).
+  /// `MessagingNotifier`'s auth listener on the authed→locked transition.
   Future<void> logout() async {
-    clearVaultKek();
-    // Drop both auto-unlock copies — a logged-out device must not auto-unlock
-    // back into the (now cleared) session.
+    // Drop auto-unlock copies so the next visit must type the password.
     await _autoUnlock.clear();
     await remembered.clearRememberedKek();
-    await clearLocalProfile();
-    state = const AuthGuest();
+    await lock();
   }
 
   /// Full reset: clears the profile, every local store, AND the cryptographic

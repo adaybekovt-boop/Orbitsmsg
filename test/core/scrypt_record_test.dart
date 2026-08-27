@@ -27,6 +27,9 @@ void main() {
       );
       expect(ok.ok, isTrue);
       expect(ok.dkBytes, equals(rec.dkBytes));
+      expect(rec.kdfId, 'alice');
+      expect(rec.toJson()['kdfId'], 'alice');
+      expect(stored.kdfId, 'alice');
     },
   );
 

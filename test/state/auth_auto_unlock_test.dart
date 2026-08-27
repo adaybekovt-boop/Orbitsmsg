@@ -247,7 +247,8 @@ void main() {
       expect(fake.disableCalls, 1);
     });
 
-    test('logout clears the secure keystore copy', () async {
+    test('logout clears the secure keystore copy but keeps the profile',
+        () async {
       final fake = _FakeAutoUnlock(supported: true, enabled: true, stored: true);
       final fakeAuthed = _FakeAutoUnlock(supported: true);
       // Use a locked bootstrap, then logout and assert clear() ran.
@@ -255,6 +256,8 @@ void main() {
       await settle(c);
       await c.read(authNotifierProvider.notifier).logout();
       expect(fakeAuthed.clearCalls, 1);
+      expect(await loadLocalProfile(), isNotNull,
+          reason: 'R6-02: logout must not wipe passRecord');
       // (fake is unused beyond construction; keep analyzer happy)
       expect(fake.supported, isTrue);
     });
