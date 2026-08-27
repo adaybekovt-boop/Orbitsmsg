@@ -15,6 +15,7 @@ import '../peer/helpers.dart';
 import '../storage/db.dart' as db;
 import 'auth_notifier.dart';
 import 'connections_notifier.dart';
+import 'messaging_notifier.dart';
 
 enum DropStatus { queued, sent, received, completed, failed }
 
@@ -132,6 +133,9 @@ class DropNotifier extends StateNotifier<DropState> {
     required String mime,
   }) async {
     final pid = normalizePeerId(peerId);
+    if (_ref.read(messagingNotifierProvider.notifier).isPeerBlocked(pid)) {
+      return null;
+    }
     final conns = _ref.read(connectionsNotifierProvider.notifier);
 
     if (!conns.hasReliable(pid)) {

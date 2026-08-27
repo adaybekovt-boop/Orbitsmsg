@@ -278,6 +278,14 @@ class DropEngine {
         final end = (offset + chunkSize < total) ? offset + chunkSize : total;
         final payload = Uint8List.sublistView(bytes, offset, end);
         if (waitForDrain != null) await waitForDrain();
+        // resetPeer during drain must stop the loop (R6-11).
+        if (state.aborted) {
+          emit(<String, Object?>{
+            'type': 'file-abort',
+            'fileId': bytesToBase64(idBytes),
+          });
+          throw StateError('Transfer aborted');
+        }
         if (!emit(_frameChunk(idBytes, seq, payload))) {
           throw StateError('Drop send failed');
         }
@@ -350,7 +358,7 @@ class DropEngine {
         return true;
       }
       if (type == 'file-ack' || type == 'file-nack') {
-        _handleAck(packet, accepted: type == 'file-ack');
+        _handleAck(packet, peerId: peerId, accepted: type == 'file-ack');
         return true;
       }
     }
@@ -367,6 +375,10 @@ class DropEngine {
     final size = (packet['size'] as num?)?.toInt() ?? 0;
     if (size < 0 || size > kMaxDropFileBytes) {
       onFailed?.call(idHex, DropDirection.incoming, 'Файл слишком большой');
+      onReply?.call(peerId, <String, Object?>{
+        'type': 'file-nack',
+        'fileId': fileIdB64,
+      });
       return;
     }
     final declaredChunks = (packet['totalChunks'] as num?)?.toInt();
@@ -508,12 +520,18 @@ class DropEngine {
     }
   }
 
-  void _handleAck(Map packet, {required bool accepted}) {
+  void _handleAck(Map packet, {required String peerId, required bool accepted}) {
     final fileIdB64 = packet['fileId'];
     if (fileIdB64 is! String) return;
     final idHex = _toHex(base64ToBytes(fileIdB64));
     final state = _outgoing[idHex];
     if (state == null) return;
+    // ACK/NACK is only valid from the peer we sent the file to (R6-09).
+    if (state.peerId.isNotEmpty &&
+        peerId.isNotEmpty &&
+        state.peerId != peerId) {
+      return;
+    }
     if (!state.ack.isCompleted) state.ack.complete(accepted);
   }
 
@@ -588,6 +606,7 @@ class DropEngine {
     for (final key in outKeys) {
       final state = _outgoing.remove(key);
       if (state == null) continue;
+      state.aborted = true;
       if (!state.ack.isCompleted) state.ack.complete(false);
       onFailed?.call(key, DropDirection.outgoing, 'Соединение закрыто');
     }

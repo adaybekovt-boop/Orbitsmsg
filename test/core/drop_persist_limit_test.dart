@@ -54,7 +54,8 @@ void main() {
     );
     expect(started, isFalse);
     expect(receiver.incomingTransferCount, 0);
-    expect(replies, isEmpty, reason: 'oversize start must not ACK');
+    expect(replies, isNotEmpty, reason: 'oversize start must NACK (R6-10)');
+    expect((replies.first as Map)['type'], 'file-nack');
     expect(failure, isNotNull);
   });
 
@@ -83,13 +84,13 @@ void main() {
     expect(await db.getFileBlob(dropBlobId(fileId)), isNull);
   });
 
-  test('saveFileBlob of a 12 MiB file is kept', () async {
-    final bytes = Uint8List(kMaxFileRawBytes);
+  test('saveFileBlob under the 12 MiB cap is kept', () async {
+    final bytes = Uint8List(64 * 1024);
     bytes[0] = 0xab;
     expect(await db.saveFileBlob('drop-ok', bytes), isTrue);
     final got = await db.getFileBlob('drop-ok');
     expect(got, isNotNull);
-    expect((got!['blob'] as List<int>).length, kMaxFileRawBytes);
+    expect((got!['blob'] as List<int>).length, 64 * 1024);
     expect((got['blob'] as List<int>).first, 0xab);
   });
 }
