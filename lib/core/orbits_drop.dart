@@ -57,7 +57,34 @@ String sanitizeDropFileName(String? raw) {
   }
   name = name.replaceAll(RegExp(r'[\x00-\x1f\\/:*?"<>|]'), '_').trim();
   if (name.isEmpty || name == '.' || name == '..') return 'file';
-  return name.length > 200 ? name.substring(0, 200) : name;
+  name = name.length > 200 ? name.substring(0, 200) : name;
+  // Windows reserved device names (CON, PRN, AUX, NUL, COM1…, LPT1…).
+  final dot = name.lastIndexOf('.');
+  final stem = (dot <= 0 ? name : name.substring(0, dot)).toLowerCase();
+  const reserved = {
+    'con', 'prn', 'aux', 'nul',
+    'com1', 'com2', 'com3', 'com4', 'com5', 'com6', 'com7', 'com8', 'com9',
+    'lpt1', 'lpt2', 'lpt3', 'lpt4', 'lpt5', 'lpt6', 'lpt7', 'lpt8', 'lpt9',
+  };
+  if (reserved.contains(stem)) return '_$name';
+  return name;
+}
+
+/// Pick a filename that does not collide with [exists] (R14). Never overwrites.
+String uniqueDropSaveFileName(
+  String requested, {
+  required bool Function(String candidate) exists,
+}) {
+  final base = sanitizeDropFileName(requested);
+  if (!exists(base)) return base;
+  final dot = base.lastIndexOf('.');
+  final stem = dot <= 0 ? base : base.substring(0, dot);
+  final ext = dot <= 0 ? '' : base.substring(dot);
+  for (var i = 1; i < 1000; i++) {
+    final candidate = '$stem ($i)$ext';
+    if (!exists(candidate)) return candidate;
+  }
+  return '$stem-${DateTime.now().millisecondsSinceEpoch}$ext';
 }
 
 const int _frameVersion = 1;
