@@ -1,12 +1,21 @@
 name: Deploy Web
 
+# K02: do not publish from a raw push to main. Deploy only after
+# "Build & Release" (which includes Analyze & Test) succeeded on that
+# commit, and only if "Security scans" also succeeded on the same SHA.
+# Branch protection for `main` (required status checks) is a GitHub
+# Settings action — see docs/ci-protection.md. This workflow cannot
+# substitute for that.
 on:
-  push:
+  workflow_run:
+    workflows: ["Build & Release"]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
   pages: write
   id-token: write
 
@@ -15,11 +24,49 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  gate:
+    name: Require Analyze & Test + Security
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - id: sha
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          else
+            echo "sha=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Confirm Security scans succeeded on the same commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          sha="${{ steps.sha.outputs.sha }}"
+          # Fail closed if Security scans has no successful completed run
+          # for this SHA. A red or missing scan must not publish the site.
+          ids="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/security.yml/runs?head_sha=${sha}&status=completed&per_page=20" \
+            --jq '.workflow_runs[] | select(.conclusion=="success") | .id')"
+          if [ -z "${ids}" ]; then
+            echo "::error::Security scans has no successful run for ${sha}; refusing to deploy"
+            exit 1
+          fi
+          echo "Security scans ok for ${sha}"
+
   build:
     name: Build Flutter web
+    needs: gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
 
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
@@ -56,8 +103,20 @@ jobs:
         run: |
           echo "DART_DEFINES=--dart-define=TURN_URL=${TURN_URL} --dart-define=RELAY_ONLY=${RELAY_ONLY:-false} --dart-define=PEER_SERVER=${PEER_SERVER} --dart-define=PEER_HOST=${PEER_HOST} --dart-define=PEER_PATH=${PEER_PATH:-/} --dart-define=PEER_PORT=${PEER_PORT:--1} --dart-define=PEER_SECURE=${PEER_SECURE} --dart-define=PEER_SECURE_SET=${PEER_SECURE:+true}" >> "$GITHUB_ENV"
 
+      - name: Derive Pages base-href from the repository name
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY##*/}"
+          if [[ "$repo" == *.github.io ]]; then
+            base=/
+          else
+            base="/${repo}/"
+          fi
+          echo "BASE_HREF=${base}" >> "$GITHUB_ENV"
+          echo "Using --base-href ${base}"
+
       - name: Build web for GitHub Pages
-        run: flutter build web --release --base-href /tkmessenger/ --pwa-strategy none $DART_DEFINES
+        run: flutter build web --release --base-href "$BASE_HREF" --pwa-strategy none $DART_DEFINES
 
       - name: Restore self-unregistering SW tombstones
         # `--pwa-strategy none` makes Flutter emit an EMPTY flutter_service_worker.js,
@@ -67,21 +126,27 @@ jobs:
         # legacy React/Vite PWA SW name — is preserved by the build untouched.)
         run: cp web/flutter_service_worker.js build/web/flutter_service_worker.js
 
-      - name: Verify static assets
+      - name: Verify static assets and base-href
         run: |
+          set -euo pipefail
           test -f build/web/index.html
           test -f build/web/sqlite3.wasm
           test -f build/web/drift_worker.js
           test -s build/web/sw.js
           test -s build/web/flutter_service_worker.js
-          # Branding: favicon / Safari touch icon / PWA manifest + icons must
-          # survive into the deployed bundle, or installs lose the Orbits icon.
           test -s build/web/favicon.png
           test -s build/web/apple-touch-icon.png
           test -s build/web/manifest.json
           for i in Icon-192 Icon-512 Icon-maskable-192 Icon-maskable-512; do
             test -s "build/web/icons/$i.png"
           done
+          # R11: the built index must reference the live repo path, not the
+          # pre-rename /tkmessenger/ prefix.
+          grep -F "<base href=\"${BASE_HREF}\"" build/web/index.html
+          if grep -q '/tkmessenger/' build/web/index.html; then
+            echo "::error::built bundle still references /tkmessenger/"
+            exit 1
+          fi
 
       - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5.0.0
 
@@ -91,7 +156,7 @@ jobs:
 
   deploy:
     name: Deploy to GitHub Pages
-    needs: build
+    needs: [gate, build]
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -99,3 +164,24 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+
+      - name: Smoke published bootstrap / JS / WASM / worker URLs
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          set -euo pipefail
+          base="${PAGE_URL}"
+          case "$base" in
+            */) ;;
+            *) base="${base}/" ;;
+          esac
+          # These must be reachable at the published base-href, not merely
+          # present in the artifact (R11).
+          for f in flutter.js flutter_bootstrap.js sqlite3.wasm drift_worker.js; do
+            code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 30 "${base}${f}")"
+            if [ "$code" != "200" ]; then
+              echo "::error::${base}${f} returned HTTP ${code}"
+              exit 1
+            fi
+            echo "ok ${base}${f}"
+          done
