@@ -1,7 +1,6 @@
 // R08 — consumeOPK must be an atomic used=0→1 compare-and-set.
 // Two concurrent handshakes reading the same unused OPK must not both win.
 
-import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/key_store.dart';
 import 'package:orbits_flutter/core/prekey_store.dart';
