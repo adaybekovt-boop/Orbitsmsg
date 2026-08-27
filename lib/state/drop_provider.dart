@@ -16,7 +16,7 @@ import '../storage/db.dart' as db;
 import 'auth_notifier.dart';
 import 'connections_notifier.dart';
 
-enum DropStatus { active, completed, failed }
+enum DropStatus { queued, sent, received, completed, failed }
 
 /// A single transfer row for the UI.
 class DropTransfer {
@@ -28,7 +28,7 @@ class DropTransfer {
     required this.peerId,
     required this.direction,
     this.transferred = 0,
-    this.status = DropStatus.active,
+    this.status = DropStatus.queued,
     this.error,
     this.blobId,
   });
@@ -86,7 +86,11 @@ class DropNotifier extends StateNotifier<DropState> {
       onProgress: _onProgress,
       onComplete: _onComplete,
       onFailed: _onFailed,
-      onIncomingReady: _onIncomingReady,
+      onOutgoingSent: _onOutgoingSent,
+      persistIncoming: _persistIncoming,
+      onReply: (peerId, packet) {
+        _ref.read(connectionsNotifierProvider.notifier).sendDrop(peerId, packet);
+      },
     );
 
     // Forward inbound frames from the connection registry into the engine.
@@ -154,6 +158,7 @@ class DropNotifier extends StateNotifier<DropState> {
         fileId: id,
         send: (packet) => conns.sendDrop(pid, packet),
         waitForDrain: () => conns.waitForDropDrain(pid),
+        peerId: pid,
       );
     } catch (e) {
       _patch(id, (t) => t.copyWith(status: DropStatus.failed, error: '$e'));
@@ -201,9 +206,13 @@ class DropNotifier extends StateNotifier<DropState> {
     _patch(fileId, (t) => t.copyWith(transferred: sent));
   }
 
+  void _onOutgoingSent(String fileId) {
+    _patch(fileId, (t) => t.copyWith(status: DropStatus.sent));
+  }
+
   void _onComplete(String fileId, DropDirection dir) {
-    // Incoming completion is finalised in [_onIncomingReady] (after the file is
-    // saved); only flip outgoing here.
+    // Outgoing: only after the receiver's persist ACK (R12).
+    // Incoming: persistIncoming already marked received/completed.
     if (dir == DropDirection.outgoing) {
       _patch(fileId,
           (t) => t.copyWith(status: DropStatus.completed, transferred: t.size));
@@ -214,9 +223,9 @@ class DropNotifier extends StateNotifier<DropState> {
     _patch(fileId, (t) => t.copyWith(status: DropStatus.failed, error: reason));
   }
 
-  Future<void> _onIncomingReady(DropFileMeta meta, Uint8List bytes) async {
+  Future<bool> _persistIncoming(DropFileMeta meta, Uint8List bytes) async {
+    _patch(meta.fileId, (t) => t.copyWith(status: DropStatus.received));
     final blobId = 'drop-${meta.fileId}';
-    var saved = true;
     try {
       await db.saveFileBlob(
         blobId,
@@ -227,17 +236,24 @@ class DropNotifier extends StateNotifier<DropState> {
         kind: _kindForMime(meta.mime),
       );
     } catch (_) {
-      saved = false;
+      _patch(
+        meta.fileId,
+        (t) => t.copyWith(
+          status: DropStatus.failed,
+          error: 'Не удалось сохранить файл',
+        ),
+      );
+      return false;
     }
     _patch(
       meta.fileId,
       (t) => t.copyWith(
         transferred: t.size,
-        status: saved ? DropStatus.completed : DropStatus.failed,
-        error: saved ? null : 'Не удалось сохранить файл',
-        blobId: saved ? blobId : null,
+        status: DropStatus.completed,
+        blobId: blobId,
       ),
     );
+    return true;
   }
 
   // ── State helpers ─────────────────────────────────────────────

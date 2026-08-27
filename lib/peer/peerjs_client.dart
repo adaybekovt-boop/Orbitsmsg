@@ -462,10 +462,11 @@ class PeerDataConnection {
   /// Send JSON-serializable payload (Map/List/String/num/bool) or raw bytes.
   /// Binary payloads (Uint8List / List<int>) are sent as binary DataChannel
   /// messages; everything else is jsonEncoded and sent as text.
-  void send(Object? value) {
-    if (_closed) return;
+  /// Returns `true` only when the DataChannel accepted the payload.
+  bool send(Object? value) {
+    if (_closed) return false;
     final dc = _dc;
-    if (dc == null || !_open) return;
+    if (dc == null || !_open) return false;
     try {
       if (value is Uint8List) {
         dc.send(RTCDataChannelMessage.fromBinary(value));
@@ -476,8 +477,10 @@ class PeerDataConnection {
       } else {
         dc.send(RTCDataChannelMessage(jsonEncode(value)));
       }
+      return true;
     } catch (e) {
       _errorCtl.add(PeerError('send-error', e.toString()));
+      return false;
     }
   }
 

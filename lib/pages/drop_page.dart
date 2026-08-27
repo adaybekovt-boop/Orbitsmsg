@@ -470,7 +470,9 @@ class _TransferRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = transfer;
     final incoming = t.direction == DropDirection.incoming;
-    final active = t.status == DropStatus.active;
+    final active = t.status == DropStatus.queued ||
+        t.status == DropStatus.sent ||
+        t.status == DropStatus.received;
     final completed = t.status == DropStatus.completed;
     final failed = t.status == DropStatus.failed;
 

@@ -92,8 +92,11 @@ const int _fileIdLen = 16;
 const int _frameHeaderLen = 1 + _fileIdLen + 4; // ver + fileId + seq
 
 /// Sink the engine writes to: a JSON-able [Map] (control) or [Uint8List]
-/// (binary chunk). The transport decides how each is serialised.
-typedef DropSend = void Function(Object packet);
+/// (binary chunk). Returns `false` when the transport could not send.
+typedef DropSend = bool Function(Object packet);
+
+/// How long the sender waits for the receiver's persist ACK (R12).
+const Duration kDropAckTimeout = Duration(seconds: 20);
 
 /// Metadata describing a transfer, surfaced to the UI/provider layer.
 class DropFileMeta {
@@ -153,8 +156,10 @@ class _Incoming {
 }
 
 class _Outgoing {
-  _Outgoing();
+  _Outgoing({this.peerId = ''});
   bool aborted = false;
+  String peerId;
+  final Completer<bool> ack = Completer<bool>();
 }
 
 /// The transfer engine. One instance can drive many concurrent transfers
@@ -166,6 +171,9 @@ class DropEngine {
     this.onFailed,
     this.onIncomingStart,
     this.onIncomingReady,
+    this.onOutgoingSent,
+    this.onReply,
+    this.persistIncoming,
     this.chunkSize = dropChunkSize,
     this.transferTtl = kDropTransferTtl,
     this.maxIncomingBytesTotal = kMaxDropIncomingBytesTotal,
@@ -182,8 +190,19 @@ class DropEngine {
   /// create a transfer row (name/size/mime) before any bytes land.
   final void Function(DropFileMeta meta)? onIncomingStart;
 
-  /// A complete, integrity-verified inbound file.
+  /// A complete, integrity-verified inbound file. Prefer [persistIncoming]
+  /// when the caller needs to ACK only after a durable save (R12).
   final void Function(DropFileMeta meta, Uint8List bytes)? onIncomingReady;
+
+  /// Chunks + file-end were written; not yet confirmed by the receiver.
+  final void Function(String fileId)? onOutgoingSent;
+
+  /// Receiver → sender control frames (`file-ack` / `file-nack`).
+  final void Function(String peerId, Object packet)? onReply;
+
+  /// Persist a verified inbound file. Return `false` to nack the sender.
+  final Future<bool> Function(DropFileMeta meta, Uint8List bytes)?
+      persistIncoming;
 
   final int chunkSize;
   final Duration transferTtl;
@@ -201,7 +220,8 @@ class DropEngine {
 
   /// Begin sending [bytes] to a peer through [send]. Emits a `file-start`,
   /// then binary chunks (pausing on [waitForDrain] if provided), then
-  /// `file-end`. Returns the fileId. Throws if aborted mid-flight.
+  /// `file-end`. When [waitForAck] is true (default), does **not** fire
+  /// [onComplete] until the receiver ACKs a successful persist (R12).
   Future<String> sendFile({
     required Uint8List bytes,
     required String name,
@@ -209,6 +229,9 @@ class DropEngine {
     required DropSend send,
     Future<void> Function()? waitForDrain,
     String? fileId,
+    String peerId = '',
+    bool waitForAck = true,
+    Duration ackTimeout = kDropAckTimeout,
   }) async {
     final idBytes = fileId != null ? _hexToBytes(fileId) : _randomFileId();
     final idHex = _toHex(idBytes);
@@ -216,10 +239,18 @@ class DropEngine {
     final totalChunks = total == 0 ? 0 : ((total + chunkSize - 1) ~/ chunkSize);
     final hash = await _sha256Hex(bytes);
 
-    final state = _Outgoing();
+    final state = _Outgoing(peerId: peerId);
     _outgoing[idHex] = state;
 
-    send(<String, Object?>{
+    bool emit(Object packet) {
+      final ok = send(packet);
+      if (!ok && !state.ack.isCompleted) {
+        state.ack.complete(false);
+      }
+      return ok;
+    }
+
+    if (!emit(<String, Object?>{
       'type': 'file-start',
       'fileId': bytesToBase64(idBytes),
       'name': name,
@@ -227,28 +258,58 @@ class DropEngine {
       'mime': mime,
       'hash': hash,
       'totalChunks': totalChunks,
-    });
+    })) {
+      _outgoing.remove(idHex);
+      throw StateError('Drop send failed');
+    }
 
     try {
       var seq = 0;
       var offset = 0;
       while (offset < total) {
         if (state.aborted) {
-          send(<String, Object?>{'type': 'file-abort', 'fileId': bytesToBase64(idBytes)});
+          emit(<String, Object?>{
+            'type': 'file-abort',
+            'fileId': bytesToBase64(idBytes),
+          });
           throw StateError('Transfer aborted');
         }
         final end = (offset + chunkSize < total) ? offset + chunkSize : total;
         final payload = Uint8List.sublistView(bytes, offset, end);
         if (waitForDrain != null) await waitForDrain();
-        send(_frameChunk(idBytes, seq, payload));
+        if (!emit(_frameChunk(idBytes, seq, payload))) {
+          throw StateError('Drop send failed');
+        }
         offset = end;
         seq++;
         onProgress?.call(idHex, offset, total, DropDirection.outgoing);
       }
-      send(<String, Object?>{'type': 'file-end', 'fileId': bytesToBase64(idBytes)});
+      if (!emit(<String, Object?>{
+        'type': 'file-end',
+        'fileId': bytesToBase64(idBytes),
+      })) {
+        throw StateError('Drop send failed');
+      }
+      onOutgoingSent?.call(idHex);
+      if (!waitForAck) {
+        onComplete?.call(idHex, DropDirection.outgoing);
+        return idHex;
+      }
+      final acked = await state.ack.future.timeout(ackTimeout, onTimeout: () {
+        return false;
+      });
+      if (!acked) {
+        onFailed?.call(
+          idHex,
+          DropDirection.outgoing,
+          'Получатель не подтвердил сохранение',
+        );
+        throw StateError('Drop not acknowledged');
+      }
       onComplete?.call(idHex, DropDirection.outgoing);
       return idHex;
     } finally {
+      if (!state.ack.isCompleted) state.ack.complete(false);
       _outgoing.remove(idHex);
     }
   }
@@ -256,7 +317,10 @@ class DropEngine {
   /// Mark an in-flight outgoing transfer as aborted; the send loop stops at
   /// its next chunk boundary.
   void abortOutgoing(String fileId) {
-    _outgoing[fileId]?.aborted = true;
+    final state = _outgoing[fileId];
+    if (state == null) return;
+    state.aborted = true;
+    if (!state.ack.isCompleted) state.ack.complete(false);
   }
 
   /// Feed an inbound packet (control [Map] or binary [Uint8List]). Returns
@@ -282,6 +346,10 @@ class DropEngine {
       }
       if (type == 'file-abort') {
         _handleAbort(packet, peerId);
+        return true;
+      }
+      if (type == 'file-ack' || type == 'file-nack') {
+        _handleAck(packet, accepted: type == 'file-ack');
         return true;
       }
     }
@@ -415,7 +483,37 @@ class DropEngine {
       }
     }
     onIncomingReady?.call(state.meta, assembled);
-    onComplete?.call(idHex, DropDirection.incoming);
+    var persisted = true;
+    final persist = persistIncoming;
+    if (persist != null) {
+      try {
+        persisted = await persist(state.meta, assembled);
+      } catch (_) {
+        persisted = false;
+      }
+    }
+    onReply?.call(peerId, <String, Object?>{
+      'type': persisted ? 'file-ack' : 'file-nack',
+      'fileId': fileIdB64,
+    });
+    if (persisted) {
+      onComplete?.call(idHex, DropDirection.incoming);
+    } else {
+      onFailed?.call(
+        idHex,
+        DropDirection.incoming,
+        'Не удалось сохранить файл',
+      );
+    }
+  }
+
+  void _handleAck(Map packet, {required bool accepted}) {
+    final fileIdB64 = packet['fileId'];
+    if (fileIdB64 is! String) return;
+    final idHex = _toHex(base64ToBytes(fileIdB64));
+    final state = _outgoing[idHex];
+    if (state == null) return;
+    if (!state.ack.isCompleted) state.ack.complete(accepted);
   }
 
   void _handleAbort(Map packet, String peerId) {
@@ -459,6 +557,9 @@ class DropEngine {
 
   /// Drop all in-flight state (e.g. on disconnect / logout).
   void reset() {
+    for (final s in _outgoing.values) {
+      if (!s.ack.isCompleted) s.ack.complete(false);
+    }
     _incoming.clear();
     _outgoing.clear();
   }
@@ -478,6 +579,16 @@ class DropEngine {
           'Соединение закрыто',
         );
       }
+    }
+    final outKeys = _outgoing.entries
+        .where((e) => e.value.peerId == peerId)
+        .map((e) => e.key)
+        .toList();
+    for (final key in outKeys) {
+      final state = _outgoing.remove(key);
+      if (state == null) continue;
+      if (!state.ack.isCompleted) state.ack.complete(false);
+      onFailed?.call(key, DropDirection.outgoing, 'Соединение закрыто');
     }
   }
 }

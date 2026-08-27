@@ -246,8 +246,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   bool sendDrop(String remoteId, Object packet) {
     final conn = getConn(remoteId, 'reliable');
     if (conn == null || !conn.open) return false;
-    conn.send(packet);
-    return true;
+    return conn.send(packet);
   }
 
   /// Send a plaintext room-protocol control [packet] on the reliable channel.
