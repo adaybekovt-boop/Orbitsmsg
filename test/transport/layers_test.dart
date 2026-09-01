@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -31,6 +32,11 @@ void main() {
     expect(kLiveApnsGateway, isFalse);
     expect(kLiveFcmGateway, isFalse);
     expect(kBareBinaryShipped, isFalse);
+    expect(kBareWorkletRunsOnBareRuntime, isFalse);
+    expect(
+      File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
+      contains("require('node:fs')"),
+    );
     expect(kHolepunchCorestoreAddonLinked, isFalse);
     expect(kCorestoreJsModuleOptional, isTrue);
   });

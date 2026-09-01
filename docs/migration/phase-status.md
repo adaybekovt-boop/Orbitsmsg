@@ -37,7 +37,9 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
 - Bare: `tool/bare/vendor.sh` pins Holepunch `bare-runtime` 1.31.0 at
   **build time** (linux-x64 sha256 pinned). `embed.sh` copies a local slot
   into plugin native dirs. Dart spawn never downloads. `kBareBinaryShipped`
-  is false until every OS slot is in the app bundle.
+  is false until every OS slot is in the app bundle. Vendored Bare still
+  cannot load `worklet.js` (`kBareWorkletRunsOnBareRuntime` false; Node
+  remains the spawn).
 - Holepunch Corestore native addon: `kHolepunchCorestoreAddonLinked` is
   false. JS `corestore` is used when locally installed, else memory.
 - Store review: [app-review-notes.md](app-review-notes.md) is a checklist,

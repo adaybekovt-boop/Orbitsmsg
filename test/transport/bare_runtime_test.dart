@@ -20,7 +20,8 @@ void main() {
     expect(src, isNot(contains('https://')));
 
     final launch = resolveBareRuntime(File('tool/connectivity_harness/src/worklet.js'));
-    expect(launch.kind, anyOf('bare', 'node'));
+    expect(launch.kind, 'node');
+    expect(launch.executable, 'node');
     expect(launch.arguments, isNotEmpty);
   });
 
@@ -31,6 +32,7 @@ void main() {
     expect(bareManifestHasOsSlots(Map<String, Object?>.from(manifest)), isTrue);
     expect(manifest['shipped'], isFalse);
     expect(kBareBinaryShipped, isFalse);
+    expect(kBareWorkletRunsOnBareRuntime, isFalse);
     expect(bareOsSlot(osArch: 'linux-x64'), 'tool/bare/linux-x64/bare');
     expect(bareOsSlot(osArch: 'windows-x64'), 'tool/bare/windows-x64/bare.exe');
     expect(manifest['vendor'], isA<Map>());

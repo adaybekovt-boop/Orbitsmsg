@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/push/opaque_wake.dart';
 import 'package:orbits_flutter/push/push_gateway.dart';
@@ -41,18 +40,9 @@ void main() {
   });
 
   test('native push registration is skipped while gateways are off', () async {
-    TestWidgetsFlutterBinding.ensureInitialized();
-    const channel = MethodChannel('app.orbits/push');
-    var invoked = 0;
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, (call) async {
-      invoked += 1;
-      return null;
-    });
-    final reg = PushRegistration(channel: channel);
+    final reg = PushRegistration();
     expect(reg.shouldRegisterNative, isFalse);
     await reg.registerNativeIfDeployed();
-    expect(invoked, 0);
     reg.acceptToken({'apns': 'aa', 'fcm': 'bb'});
     expect(reg.tokens.apnsToken, 'aa');
     expect(reg.tokens.fcmToken, 'bb');

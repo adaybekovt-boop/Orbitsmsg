@@ -7,6 +7,11 @@ import 'dart:io';
 /// False until a per-OS Bare binary is committed/linked into the app.
 const bool kBareBinaryShipped = false;
 
+/// The worklet still `require('node:fs')` and friends. Holepunch Bare
+/// 1.31.0 does not load those specifiers, so spawn stays on Node until a
+/// Bare-compatible module graph is bundled next to the binary.
+const bool kBareWorkletRunsOnBareRuntime = false;
+
 class BareRuntimeLaunch {
   const BareRuntimeLaunch({
     required this.executable,
@@ -61,9 +66,10 @@ String bareOsSlot({String? osArch}) {
 }
 
 /// Resolves how to start the bundled worklet. Order:
-/// 1. `ORBITS_BARE_BIN` (absolute local path)
-/// 2. Per-OS slot under `tool/bare/<os-arch>/`
-/// 3. Legacy `tool/bare/bare.exe` / `tool/bare/bare`
+/// 1. `ORBITS_BARE_BIN` (absolute local path, experimental)
+/// 2. Per-OS slot under `tool/bare/<os-arch>/` only when
+///    [kBareWorkletRunsOnBareRuntime] is true
+/// 3. Legacy `tool/bare/bare.exe` / `tool/bare/bare` (same gate)
 /// 4. `node` for CI / desktop harness
 BareRuntimeLaunch resolveBareRuntime(File worklet) {
   final env = Platform.environment['ORBITS_BARE_BIN'];
@@ -74,13 +80,15 @@ BareRuntimeLaunch resolveBareRuntime(File worklet) {
       kind: 'bare',
     );
   }
-  final local = _localBareBinary();
-  if (local != null) {
-    return BareRuntimeLaunch(
-      executable: local.path,
-      arguments: [worklet.path],
-      kind: 'bare',
-    );
+  if (kBareWorkletRunsOnBareRuntime) {
+    final local = _localBareBinary();
+    if (local != null) {
+      return BareRuntimeLaunch(
+        executable: local.path,
+        arguments: [worklet.path],
+        kind: 'bare',
+      );
+    }
   }
   return BareRuntimeLaunch(
     executable: 'node',
