@@ -28,7 +28,7 @@ independent room-E2E audit stay **blocked** until the user is free.
 | 8 | Mailbox + HTTP storage peer + tombstone/stats + local loopback fleet + unsigned directory rows + `OpaqueWakeService` + `PushSender` refuse + resume drain + signed RelayDirectory tests + Android Doze intent + block-before-drain | Public storage fleet / APNs send / live signed directory |
 | 9 | 10 and 50 MiB chunk/resume; `chunkFromByteStream`; native `sendFileFromPath` | Default PeerJS Drop |
 | 10 | Three-device fan-out + QR + revoke journal + RatchetState isolation | Live hardware sessions |
-| 11–12 | Rooms on native carrier + Autobase converge | Live rooms on Hyperswarm |
+| 11–12 | Rooms on native carrier + Autobase converge over `autobase-event` | Live rooms on Hyperswarm |
 | 13 | Epoch revoke/rejoin; E2E flag stays false | Independent audit |
 | 14 | PeerJS still default live path | Support window + removal |
 

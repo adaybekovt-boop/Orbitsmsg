@@ -36,6 +36,14 @@ void main() {
     expect(left.state.members, right.state.members);
     expect(left.state.channels, right.state.channels);
     expect(left.state.messages, right.state.messages);
+    final rebuilt = AutobaseProjection()
+      ..reset()
+      ..applyAll(events.reversed);
+    expect(rebuilt.state.members, left.state.members);
+    expect(
+      RoomEvent.fromWire(events.last.toWire())?.kind,
+      'message',
+    );
   });
 
   test('epoch rotate excludes the removed device', () {

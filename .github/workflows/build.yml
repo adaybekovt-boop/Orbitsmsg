@@ -82,6 +82,13 @@ jobs:
       - name: Vendor linux-x64 Bare at build time (not shipped in the app)
         run: tool/bare/vendor.sh linux-x64
 
+      - name: Embed linux-x64 Bare into the Linux plugin (not the app bundle)
+        run: |
+          set -euo pipefail
+          tool/bare/embed.sh linux-x64
+          test -x packages/orbits_transport_linux/linux/bare
+          echo "plugin host has a local linux-x64 binary; kBareBinaryShipped stays false"
+
       - name: Connectivity harness (loopback, no hardware)
         working-directory: tool/connectivity_harness
         run: |

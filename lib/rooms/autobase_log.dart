@@ -13,6 +13,30 @@ class RoomEvent {
   final int seq;
   final String kind;
   final Map<String, Object?> payload;
+
+  Map<String, Object?> toWire() => <String, Object?>{
+        'type': 'autobase-event',
+        'writerId': writerId,
+        'seq': seq,
+        'kind': kind,
+        'payload': payload,
+      };
+
+  static RoomEvent? fromWire(Map<String, Object?> packet) {
+    if (packet['type'] != 'autobase-event') return null;
+    final writer = packet['writerId'] as String?;
+    final kind = packet['kind'] as String?;
+    if (writer == null || kind == null) return null;
+    final raw = packet['payload'];
+    return RoomEvent(
+      writerId: writer,
+      seq: (packet['seq'] as num?)?.toInt() ?? 0,
+      kind: kind,
+      payload: raw is Map
+          ? Map<String, Object?>.from(raw)
+          : <String, Object?>{},
+    );
+  }
 }
 
 class RoomState {
@@ -29,6 +53,14 @@ class RoomState {
 
 class AutobaseProjection {
   final RoomState state = RoomState();
+
+  void reset() {
+    state.members.clear();
+    state.roles.clear();
+    state.channels.clear();
+    state.messages.clear();
+    state.applied.clear();
+  }
 
   void apply(RoomEvent event) {
     final key = state.keyOf(event);

@@ -18,6 +18,7 @@ import '../replication/drift_projector.dart';
 import '../replication/file_journal.dart';
 import '../replication/hypercore_store.dart';
 import '../replication/memory_journal.dart';
+import '../rooms/autobase_log.dart';
 import '../transport/replication_schema.dart';
 import 'discovery_secret_store.dart';
 import 'hello_capabilities.dart';
@@ -68,6 +69,8 @@ class DualStackBridge {
   void Function(String peerId, Object packet)? onDrop;
   final Set<String> _drainedMailboxKeys = <String>{};
   Future<void> _durable = Future<void>.value();
+  final AutobaseProjection rooms = AutobaseProjection();
+  final List<RoomEvent> roomLog = <RoomEvent>[];
 
   final Set<String> connected = <String>{};
   final List<CapabilityRecord> remoteCapabilities = <CapabilityRecord>[];
@@ -401,6 +404,40 @@ class DualStackBridge {
     return true;
   }
 
+  /// Phase 12 Autobase on the native carrier. Host-plaintext warning stays.
+  /// Message bodies stay in the local projection — not Hypercore.
+  Future<bool> sendAutobaseEvent(String peerId, RoomEvent event) async {
+    final norm = normalizePeerId(peerId);
+    if (isBlocked(norm)) return false;
+    _applyRoom(event);
+    if (!isNativeConnected(norm)) return false;
+    await transport.send(
+      norm,
+      TransportChannel.control,
+      jsonPayload(event.toWire()),
+    );
+    return true;
+  }
+
+  void _applyRoom(RoomEvent event) {
+    final key = '${event.writerId}:${event.seq}';
+    if (roomLog.any((e) => '${e.writerId}:${e.seq}' == key)) return;
+    roomLog.add(event);
+    rooms.reset();
+    rooms.applyAll(roomLog);
+    if (event.kind != 'membership') return;
+    final record = journal.append(
+      ReplicationEventKind.roomMembershipChanged,
+      <String, Object?>{
+        'peerId': event.payload['peerId'],
+        'action': event.payload['action'],
+        'createdAt': DateTime.now().millisecondsSinceEpoch,
+      },
+    );
+    unawaited(_persistDurable(record));
+    hypercore.append(record);
+  }
+
   Future<void> sendCallSignal(String peerId, CallSignal signal) {
     return transport.send(
       normalizePeerId(peerId),
@@ -563,6 +600,10 @@ class DualStackBridge {
       } else {
         final decoded = decodeJsonPayload(bytes);
         data = decoded;
+        if (decoded['type'] == 'autobase-event') {
+          final event = RoomEvent.fromWire(decoded);
+          if (event != null) _applyRoom(event);
+        }
         if (decoded['type'] == 'capabilities' || decoded['type'] == 'wireHello') {
           try {
             if (decoded['type'] == 'capabilities') {

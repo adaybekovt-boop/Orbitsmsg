@@ -13,6 +13,7 @@ import 'package:orbits_flutter/transport/replication_schema.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
+import 'package:orbits_flutter/rooms/autobase_log.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
@@ -678,6 +679,90 @@ void main() {
       NativeRollbackReason.driftJournalDiverge,
     );
     await a.detach();
+  });
+
+  test('Autobase writers converge on the native carrier without Hypercore plaintext',
+      () async {
+    final (a, b, _) = await linked();
+    expect(
+      await a.sendAutobaseEvent(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        const RoomEvent(
+          writerId: 'a',
+          seq: 0,
+          kind: 'membership',
+          payload: {
+            'peerId': 'ORBIT-AAAAAAAAAAAAAAAA',
+            'action': 'join',
+            'displayName': 'A',
+          },
+        ),
+      ),
+      isTrue,
+    );
+    expect(
+      await b.sendAutobaseEvent(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        const RoomEvent(
+          writerId: 'b',
+          seq: 0,
+          kind: 'membership',
+          payload: {
+            'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+            'action': 'join',
+            'displayName': 'B',
+          },
+        ),
+      ),
+      isTrue,
+    );
+    expect(
+      await a.sendAutobaseEvent(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        const RoomEvent(
+          writerId: 'a',
+          seq: 1,
+          kind: 'channel',
+          payload: {'id': 'c1', 'name': 'general'},
+        ),
+      ),
+      isTrue,
+    );
+    expect(
+      await b.sendAutobaseEvent(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        const RoomEvent(
+          writerId: 'b',
+          seq: 1,
+          kind: 'message',
+          payload: {'id': 'm1', 'text': 'host-plaintext'},
+        ),
+      ),
+      isTrue,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(a.rooms.state.members, b.rooms.state.members);
+    expect(a.rooms.state.channels, b.rooms.state.channels);
+    expect(a.rooms.state.messages, b.rooms.state.messages);
+    expect(a.rooms.state.members['ORBIT-AAAAAAAAAAAAAAAA'], 'A');
+    expect(b.rooms.state.channels['c1'], 'general');
+    expect(
+      a.journal.records.any(
+        (r) => r.kind == ReplicationEventKind.roomMembershipChanged,
+      ),
+      isTrue,
+    );
+    expect(
+      a.journal.records.every((r) => !r.fields.containsKey('plaintext')),
+      isTrue,
+    );
+    expect(
+      a.journal.records.every((r) => !r.fields.containsKey('text')),
+      isTrue,
+    );
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+    await a.detach();
+    await b.detach();
   });
 
   test('room_msg is blocked without the plaintext ack', () {

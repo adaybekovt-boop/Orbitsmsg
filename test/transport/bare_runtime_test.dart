@@ -75,6 +75,14 @@ void main() {
       File('tool/bare/embed.sh').readAsStringSync(),
       contains('NEVER downloads'),
     );
+    expect(
+      File('.github/workflows/build.yml').readAsStringSync(),
+      contains('tool/bare/embed.sh linux-x64'),
+    );
+    expect(
+      File('.github/workflows/build.yml').readAsStringSync(),
+      contains('kBareBinaryShipped stays false'),
+    );
     final assets = (manifest['vendor'] as Map)['assets'] as Map;
     expect(
       bareManifestPinsAllVendorHashes(Map<String, Object?>.from(manifest)),
