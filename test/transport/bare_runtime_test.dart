@@ -5,7 +5,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/transport/bare_runtime.dart';
 
 void main() {
-  test('Bare manifest forbids remote fetch and spawn prefers a local file', () {
+  final worklet = File('tool/connectivity_harness/src/worklet.js');
+
+  test('Bare manifest forbids remote fetch and spawn has no download URL', () {
     final manifest = jsonDecode(
       File('tool/bare/BARE.manifest').readAsStringSync(),
     ) as Map<String, dynamic>;
@@ -18,11 +20,34 @@ void main() {
     expect(src, contains('resolveBareRuntime'));
     expect(src, isNot(contains('http://')));
     expect(src, isNot(contains('https://')));
+    expect(src, contains("executable: 'node'"));
+    expect(launchKindForCurrentTree(), anyOf('bare', 'node'));
+  });
 
-    final launch = resolveBareRuntime(File('tool/connectivity_harness/src/worklet.js'));
-    expect(launch.kind, 'node');
-    expect(launch.executable, 'node');
-    expect(launch.arguments, isNotEmpty);
+  test('worklet import maps send node builtins to bare-* on Bare', () {
+    final pkg = jsonDecode(
+      File('tool/connectivity_harness/package.json').readAsStringSync(),
+    ) as Map;
+    final imports = pkg['imports'] as Map;
+    expect(imports['node:fs'], containsPair('bare', 'bare-fs'));
+    expect(imports['node:path'], containsPair('bare', 'bare-path'));
+    expect(imports['node:crypto'], containsPair('bare', 'bare-crypto'));
+    expect(imports['node:net'], containsPair('bare', 'bare-net'));
+    expect(imports['node:events'], containsPair('bare', 'bare-events'));
+    expect(imports['node:os'], containsPair('bare', 'bare-os'));
+    final source = worklet.readAsStringSync();
+    expect(source, contains("require('node:fs')"));
+    expect(source, contains("require('bare-process')"));
+    expect(source, contains('typeof globalThis.process'));
+    expect(
+      File('tool/connectivity_harness/vendor-bare-modules.sh').readAsStringSync(),
+      contains('NEVER invoked from Dart'),
+    );
+    final modules = jsonDecode(
+      File('tool/connectivity_harness/BARE_MODULES.manifest').readAsStringSync(),
+    ) as Map;
+    expect(modules['remoteFetch'], isFalse);
+    expect(modules['downloadUrl'], isNull);
   });
 
   test('Bare manifest lists per-OS slots and does not claim a shipped binary', () {
@@ -32,7 +57,7 @@ void main() {
     expect(bareManifestHasOsSlots(Map<String, Object?>.from(manifest)), isTrue);
     expect(manifest['shipped'], isFalse);
     expect(kBareBinaryShipped, isFalse);
-    expect(kBareWorkletRunsOnBareRuntime, isFalse);
+    expect(kBareWorkletRunsOnBareRuntime, isTrue);
     expect(bareOsSlot(osArch: 'linux-x64'), 'tool/bare/linux-x64/bare');
     expect(bareOsSlot(osArch: 'windows-x64'), 'tool/bare/windows-x64/bare.exe');
     expect(manifest['vendor'], isA<Map>());
@@ -55,5 +80,20 @@ void main() {
       '9408f82dd1344d7403acb93a0c66b50a4b2cc63c483c6bf48ef8df67203b6ec7',
     );
     expect(kBareBinaryShipped, isFalse);
+
+    final launch = resolveBareRuntime(worklet);
+    final haveBin = File(bareOsSlot()).existsSync();
+    final haveGraph = bareWorkletGraphPresent(worklet);
+    if (haveBin && haveGraph) {
+      expect(launch.kind, 'bare');
+      expect(launch.executable, isNot('node'));
+      expect(File(launch.executable).existsSync(), isTrue);
+    } else {
+      expect(launch.kind, 'node');
+      expect(launch.executable, 'node');
+    }
   });
 }
+
+String launchKindForCurrentTree() =>
+    resolveBareRuntime(File('tool/connectivity_harness/src/worklet.js')).kind;

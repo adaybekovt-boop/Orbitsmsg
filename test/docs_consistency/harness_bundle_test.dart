@@ -22,5 +22,12 @@ void main() {
     final digest = sha256.convert(worklet.readAsBytesSync()).toString();
     expect(digest, hasLength(64));
     expect(manifest['workletSha256'], digest);
+
+    final pkg = File('tool/connectivity_harness/package.json');
+    expect(pkg.existsSync(), isTrue);
+    final pkgDigest = sha256.convert(pkg.readAsBytesSync()).toString();
+    expect(manifest['packageJsonSha256'], pkgDigest);
+    final pkgJson = jsonDecode(pkg.readAsStringSync()) as Map;
+    expect((pkgJson['imports'] as Map)['node:fs'], containsPair('bare', 'bare-fs'));
   });
 }

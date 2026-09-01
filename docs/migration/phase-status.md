@@ -10,7 +10,7 @@ still PeerJS.
 | 0 | ADRs, contracts, tests | Closed |
 | 1 | Harness + loopback echo/file/suspend | NAT matrix **blocked** |
 | 2 | Stand runner + metrics schema | Live KZ matrix **blocked** |
-| 3 | Plugin + worklet IPC + OS hosts refuse remote JS; spawn prefers local `bare` then Node; per-OS Bare slots + build-time `vendor.sh` / `embed.sh`; linux-x64 vendor pin | Bare binary not shipped in the app bundle (`kBareBinaryShipped` false) |
+| 3 | Plugin + worklet IPC + OS hosts refuse remote JS; spawn prefers local `bare` then Node when stdlib is present; per-OS Bare slots + build-time `vendor.sh` / `embed.sh` / `vendor-bare-modules.sh`; linux-x64 vendor pin; worklet import maps | Bare binary not shipped in the app bundle (`kBareBinaryShipped` false) |
 | 4 | App boot binds native host when rollout ≠ off; prefers Hyperswarm then loopback; loopback natives exchange `v2:` / wireHello | Default still PeerJS; two physical natives not run |
 | 5 | Identity-signed caps on native connect and as a PeerJS `wireHello.caps` sibling; contact QR may carry discovery secret `d=`; secrets persist vault-wrapped | Physical pair not run |
 | 6 | Native `call` channel + CallKit / Telecom in-app sheet (opaque handle, name “Orbits”); iOS remote-notification *handlers* (no PushKit) | No PushKit / `voip` background; registration gated; no physical call |
@@ -36,10 +36,11 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
   stay false. iOS/Android hosts can register only after those flags flip.
 - Bare: `tool/bare/vendor.sh` pins Holepunch `bare-runtime` 1.31.0 at
   **build time** (linux-x64 sha256 pinned). `embed.sh` copies a local slot
-  into plugin native dirs. Dart spawn never downloads. `kBareBinaryShipped`
-  is false until every OS slot is in the app bundle. Vendored Bare still
-  cannot load `worklet.js` (`kBareWorkletRunsOnBareRuntime` false; Node
-  remains the spawn).
+  into plugin native dirs. `vendor-bare-modules.sh` installs `bare-*`
+  next to the worklet. Dart spawn never downloads. `kBareBinaryShipped`
+  is false until every OS slot is in the app bundle.
+  `kBareWorkletRunsOnBareRuntime` is true: spawn uses Bare when the local
+  binary and `bare-fs` are present, otherwise Node.
 - Holepunch Corestore native addon: `kHolepunchCorestoreAddonLinked` is
   false. JS `corestore` is used when locally installed, else memory.
 - Store review: [app-review-notes.md](app-review-notes.md) is a checklist,

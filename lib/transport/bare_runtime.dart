@@ -7,10 +7,12 @@ import 'dart:io';
 /// False until a per-OS Bare binary is committed/linked into the app.
 const bool kBareBinaryShipped = false;
 
-/// The worklet still `require('node:fs')` and friends. Holepunch Bare
-/// 1.31.0 does not load those specifiers, so spawn stays on Node until a
-/// Bare-compatible module graph is bundled next to the binary.
-const bool kBareWorkletRunsOnBareRuntime = false;
+/// The worklet module graph is Bare-compatible: `package.json` import maps
+/// send `node:fs` and friends to `bare-*` modules, and `worklet.js` loads
+/// `bare-process` when `process` is missing. Spawn uses a local Bare binary
+/// only when that binary and `node_modules/bare-fs` are both present.
+/// [kBareBinaryShipped] stays false until every OS slot is in the app bundle.
+const bool kBareWorkletRunsOnBareRuntime = true;
 
 class BareRuntimeLaunch {
   const BareRuntimeLaunch({
@@ -65,34 +67,50 @@ String bareOsSlot({String? osArch}) {
       (Platform.isWindows ? 'tool/bare/bare.exe' : 'tool/bare/bare');
 }
 
+/// True when the Holepunch `bare-*` stdlib is next to [worklet] so Bare
+/// can resolve `bare-fs` / `bare-process` without a remote fetch.
+bool bareWorkletGraphPresent(File worklet) {
+  var dir = worklet.parent;
+  for (var i = 0; i < 6; i++) {
+    final fsPkg = File('${dir.path}${Platform.pathSeparator}node_modules'
+        '${Platform.pathSeparator}bare-fs${Platform.pathSeparator}package.json');
+    if (fsPkg.existsSync()) return true;
+    final parent = dir.parent;
+    if (parent.path == dir.path) break;
+    dir = parent;
+  }
+  return false;
+}
+
 /// Resolves how to start the bundled worklet. Order:
 /// 1. `ORBITS_BARE_BIN` (absolute local path, experimental)
 /// 2. Per-OS slot under `tool/bare/<os-arch>/` only when
-///    [kBareWorkletRunsOnBareRuntime] is true
+///    [kBareWorkletRunsOnBareRuntime] is true and the Bare stdlib is present
 /// 3. Legacy `tool/bare/bare.exe` / `tool/bare/bare` (same gate)
 /// 4. `node` for CI / desktop harness
 BareRuntimeLaunch resolveBareRuntime(File worklet) {
+  final workletPath = worklet.absolute.path;
   final env = Platform.environment['ORBITS_BARE_BIN'];
   if (env != null && env.isNotEmpty && File(env).existsSync()) {
     return BareRuntimeLaunch(
-      executable: env,
-      arguments: [worklet.path],
+      executable: File(env).absolute.path,
+      arguments: [workletPath],
       kind: 'bare',
     );
   }
   if (kBareWorkletRunsOnBareRuntime) {
     final local = _localBareBinary();
-    if (local != null) {
+    if (local != null && bareWorkletGraphPresent(worklet)) {
       return BareRuntimeLaunch(
-        executable: local.path,
-        arguments: [worklet.path],
+        executable: local.absolute.path,
+        arguments: [workletPath],
         kind: 'bare',
       );
     }
   }
   return BareRuntimeLaunch(
     executable: 'node',
-    arguments: [worklet.path],
+    arguments: [workletPath],
     kind: 'node',
   );
 }

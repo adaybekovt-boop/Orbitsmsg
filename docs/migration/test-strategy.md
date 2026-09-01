@@ -11,7 +11,7 @@ independent room-E2E audit stay **blocked** until the user is free.
 | JS harness | Echo, file stream, suspend/resume, stand metrics schema | `node --test` in `tool/connectivity_harness` |
 | JS mailbox / fleet / wake | Local HTTP storage, 3/2/2 fleet health, opaque wake | `node --test tool/storage_peer/test.js tool/fleet/test.js tool/push_gateway/test.js` |
 | Plugin | Federated facade + in-process lifecycle | `flutter test` in `packages/orbits_transport` |
-| IPC | `orbits-bare-ipc-v1` request/response | `test/transport/bare_ipc_client_test.dart` |
+| IPC | `orbits-bare-ipc-v1` request/response | `test/transport/bare_ipc_client_test.dart`, Node + Bare worklet IPC |
 
 ## Phase gates (how we check them)
 
@@ -20,7 +20,7 @@ independent room-E2E audit stay **blocked** until the user is free.
 | 0 | `test/docs_consistency/migration_phase0_test.dart` | — |
 | 1 | Loopback + JS harness echo/file/suspend | Live NAT matrix |
 | 2 | `src/stand.js` metrics schema | Live KZ operators |
-| 3 | Plugin lifecycle + IPC + OS hosts refuse remote JS; per-OS Bare slots; `vendor.sh` / `embed.sh` | Bare binary embed per OS |
+| 3 | Plugin lifecycle + IPC + OS hosts refuse remote JS; per-OS Bare slots; `vendor.sh` / `embed.sh` / `vendor-bare-modules.sh`; worklet import maps | Bare binary embed per OS |
 | 4 | `dual_stack_bridge_test` two natives, `v2:` / wireHello; `preferredWorkletBackend` | Two physical devices |
 | 5 | Signed caps on native connect and PeerJS `wireHello.caps`; vault-wrapped discovery persist | Physical pair |
 | 6 | `NativeCallSession` + CallKit/Telecom opaque handle; iOS remote-notification handlers | PushKit / physical devices |

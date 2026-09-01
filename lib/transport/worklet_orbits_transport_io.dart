@@ -30,11 +30,33 @@ Future<WorkletOrbitsTransport?> spawnWorkletTransport({
 }) async {
   final script = _resolveWorklet() ?? await extractBundledWorklet();
   if (script == null) return null;
+  final launch = resolveBareRuntime(script);
+  final started = await _spawnLaunch(launch, script, backend);
+  if (started != null) return started;
+  if (launch.kind == 'bare') {
+    return _spawnLaunch(
+      BareRuntimeLaunch(
+        executable: 'node',
+        arguments: [script.path],
+        kind: 'node',
+      ),
+      script,
+      backend,
+    );
+  }
+  return null;
+}
+
+Future<WorkletOrbitsTransport?> _spawnLaunch(
+  BareRuntimeLaunch launch,
+  File script,
+  String backend,
+) async {
   try {
-    final launch = resolveBareRuntime(script);
     final proc = await Process.start(
       launch.executable,
       launch.arguments,
+      workingDirectory: script.parent.path,
       environment: {
         ...Platform.environment,
         'ORBITS_HARNESS_BACKEND': backend,
@@ -70,6 +92,13 @@ Future<File?> extractBundledWorklet() async {
       await File('${dest.path}${Platform.pathSeparator}$name')
           .writeAsBytes(data.buffer.asUint8List());
     }
+    try {
+      final pkg = await rootBundle.load(
+        'tool/connectivity_harness/package.json',
+      );
+      await File('${dest.path}${Platform.pathSeparator}package.json')
+          .writeAsBytes(pkg.buffer.asUint8List());
+    } catch (_) {}
     final script = File('${dest.path}${Platform.pathSeparator}worklet.js');
     return script.existsSync() ? script : null;
   } catch (_) {

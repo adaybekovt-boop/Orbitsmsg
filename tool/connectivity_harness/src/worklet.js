@@ -1,9 +1,17 @@
 'use strict'
 
 /**
- * Headless worklet. Runs under Node for CI and under Bare when embedded.
- * Does not load remote executable JS.
+ * Headless worklet. Runs under Node for CI and under Bare when the Bare
+ * stdlib is installed next to this tree. Does not load remote executable JS.
+ *
+ * Bare 1.31 has no `process` global. Load `bare-process` only then so Node
+ * CI does not need the native addon. `node:fs` and friends resolve through
+ * package.json import maps on Bare and stay Node builtins on Node.
  */
+const process =
+  typeof globalThis.process !== 'undefined'
+    ? globalThis.process
+    : require('bare-process')
 
 const fs = require('node:fs')
 const path = require('node:path')

@@ -32,10 +32,25 @@ void main() {
     expect(kLiveApnsGateway, isFalse);
     expect(kLiveFcmGateway, isFalse);
     expect(kBareBinaryShipped, isFalse);
-    expect(kBareWorkletRunsOnBareRuntime, isFalse);
+    expect(kBareWorkletRunsOnBareRuntime, isTrue);
     expect(
       File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
       contains("require('node:fs')"),
+    );
+    expect(
+      File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
+      contains("require('bare-process')"),
+    );
+    expect(
+      File('tool/connectivity_harness/package.json').readAsStringSync(),
+      contains('"bare": "bare-fs"'),
+    );
+    final worklet = File('tool/connectivity_harness/src/worklet.js').readAsStringSync();
+    expect(worklet, contains('fs.readFileSync(file.path)'));
+    expect(worklet, isNot(contains('file.bytes')));
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'path': file.path"),
     );
     expect(kHolepunchCorestoreAddonLinked, isFalse);
     expect(kCorestoreJsModuleOptional, isTrue);

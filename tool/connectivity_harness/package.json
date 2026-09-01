@@ -14,7 +14,29 @@
     "node": ">=20"
   },
   "dependencies": {
+    "bare-crypto": "^1.15.3",
+    "bare-events": "^2.9.2",
+    "bare-fs": "^4.8.1",
+    "bare-net": "^2.3.3",
+    "bare-os": "^3.9.3",
+    "bare-path": "^3.1.2",
+    "bare-process": "^4.5.1",
     "hyperdht": "^6.20.0",
     "hyperswarm": "^4.11.0"
+  },
+  "imports": {
+    "fs": { "bare": "bare-fs", "default": "fs" },
+    "fs/*": { "bare": "bare-fs/*", "default": "fs/*" },
+    "node:fs": { "bare": "bare-fs", "default": "node:fs" },
+    "path": { "bare": "bare-path", "default": "path" },
+    "node:path": { "bare": "bare-path", "default": "node:path" },
+    "crypto": { "bare": "bare-crypto", "default": "crypto" },
+    "node:crypto": { "bare": "bare-crypto", "default": "node:crypto" },
+    "net": { "bare": "bare-net", "default": "net" },
+    "node:net": { "bare": "bare-net", "default": "node:net" },
+    "events": { "bare": "bare-events", "default": "events" },
+    "node:events": { "bare": "bare-events", "default": "node:events" },
+    "os": { "bare": "bare-os", "default": "os" },
+    "node:os": { "bare": "bare-os", "default": "node:os" }
   }
 }

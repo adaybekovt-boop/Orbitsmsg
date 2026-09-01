@@ -1,0 +1,8 @@
+{
+  "name": "orbits-bare-stdlib",
+  "remoteFetch": false,
+  "downloadUrl": null,
+  "bundleUrl": null,
+  "vendorScript": "tool/connectivity_harness/vendor-bare-modules.sh",
+  "note": "Build-time npm ci of Holepunch bare-* modules next to the worklet. Dart/Flutter must never fetch these. node_modules is gitignored."
+}

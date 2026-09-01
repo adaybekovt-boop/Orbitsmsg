@@ -103,7 +103,13 @@ jobs:
           pinned = manifest.get("workletSha256")
           if pinned != digest:
               raise SystemExit(f"worklet hash {digest} != pinned {pinned}")
+          pkg = Path("tool/connectivity_harness/package.json").read_bytes()
+          pkg_digest = hashlib.sha256(pkg).hexdigest()
+          pkg_pin = manifest.get("packageJsonSha256")
+          if pkg_pin != pkg_digest:
+              raise SystemExit(f"package.json hash {pkg_digest} != pinned {pkg_pin}")
           print(f"worklet.js sha256={digest}")
+          print(f"package.json sha256={pkg_digest}")
           PY
 
       - name: Transport plugin lifecycle

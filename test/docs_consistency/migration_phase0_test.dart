@@ -34,6 +34,7 @@ void main() {
       'docs/migration/phase13-group-e2e-review.md',
       'docs/migration/peerjs-support-window.md',
       'tool/connectivity_harness/BUNDLE.manifest',
+      'tool/connectivity_harness/BARE_MODULES.manifest',
       'tool/bare/BARE.manifest',
       'tool/bare/addons/CORESTORE.manifest',
     ]) {
