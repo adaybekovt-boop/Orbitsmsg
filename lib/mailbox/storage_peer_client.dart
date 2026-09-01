@@ -2,12 +2,20 @@
 
 import 'blind_store.dart';
 
+class MailboxPeerStats {
+  const MailboxPeerStats({required this.usedBytes, required this.pendingCount});
+
+  final int usedBytes;
+  final int pendingCount;
+}
+
 class StoragePeerClient {
   StoragePeerClient({
     required this.putRemote,
     required this.getRemote,
     this.tombstoneRemote,
     this.grantRemote,
+    this.statsRemote,
   });
 
   final Future<void> Function({
@@ -26,6 +34,11 @@ class StoragePeerClient {
       tombstoneRemote;
 
   final Future<void> Function(MailboxCapability cap)? grantRemote;
+
+  final Future<MailboxPeerStats> Function({
+    required String token,
+    required String writerKey,
+  })? statsRemote;
 
   Future<void> put({
     required String token,
@@ -64,6 +77,18 @@ class StoragePeerClient {
     await fn(cap);
   }
 
+  Future<MailboxPeerStats?> stats({
+    required String token,
+    required String writerKey,
+  }) async {
+    final fn = statsRemote;
+    if (fn == null) return null;
+    if (token.isEmpty) {
+      throw StateError('anonymous reads are rejected');
+    }
+    return fn(token: token, writerKey: writerKey);
+  }
+
   /// In-process peer used by tests and desktop mailbox mode.
   factory StoragePeerClient.local(BlindMailboxStore store) {
     return StoragePeerClient(
@@ -90,6 +115,12 @@ class StoragePeerClient {
       },
       grantRemote: (cap) async {
         store.grant(cap);
+      },
+      statsRemote: ({required token, required writerKey}) async {
+        return MailboxPeerStats(
+          usedBytes: store.usedBytes(writerKey),
+          pendingCount: store.pendingCount(writerKey),
+        );
       },
     );
   }

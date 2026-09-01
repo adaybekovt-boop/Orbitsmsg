@@ -33,6 +33,13 @@ void main() {
     expect(src, contains('ingestFcm'));
     expect(src, contains('onDoze'));
     expect(src, contains('rollbackNativeToPeerjs'));
+    expect(src, contains('_abandonNativeCarrier'));
+    expect(src, contains('verifyLiveMatchesReplay'));
+    expect(src, contains('unbindNativeTransport'));
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains('worklet-exit'),
+    );
     expect(
       File('tool/connectivity_harness/src/swarm.js').readAsStringSync(),
       contains('refusing public DHT default'),

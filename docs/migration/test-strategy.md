@@ -21,11 +21,11 @@ independent room-E2E audit stay **blocked** until the user is free.
 | 1 | Loopback + JS harness echo/file/suspend | Live NAT matrix |
 | 2 | `src/stand.js` metrics schema | Live KZ operators |
 | 3 | Plugin lifecycle + IPC + OS hosts refuse remote JS; per-OS Bare slots; `vendor.sh` / `embed.sh` / `vendor-bare-modules.sh`; all vendor tarball sha256 pins; worklet import maps; path-streamed `sendFile` | Bare binary embed per OS |
-| 4 | `dual_stack_bridge_test` two natives, `v2:` / wireHello; `preferredWorkletBackend`; `rollbackNativeToPeerjs` | Two physical devices |
+| 4 | `dual_stack_bridge_test` two natives, `v2:` / wireHello; `preferredWorkletBackend`; `rollbackNativeToPeerjs` on start fail / worklet-exit / journal / mailbox / lost messages | Two physical devices |
 | 5 | Signed caps on native connect and PeerJS `wireHello.caps`; vault-wrapped discovery persist | Physical pair |
 | 6 | `NativeCallSession` + CallKit/Telecom opaque handle; iOS remote-notification handlers | PushKit / physical devices |
-| 7 | Memory + file journal, identical projector, worklet `useCorestoreIfPresent` | Holepunch Corestore addon |
-| 8 | Mailbox + HTTP storage peer + local loopback fleet + unsigned directory rows + `OpaqueWakeService` + `PushSender` refuse + resume drain + signed RelayDirectory tests + Android Doze intent | Public storage fleet / APNs send / live signed directory |
+| 7 | Memory + file journal, identical projector fingerprint, Hypercore ingest into journal, worklet `useCorestoreIfPresent` | Holepunch Corestore addon |
+| 8 | Mailbox + HTTP storage peer + tombstone/stats + local loopback fleet + unsigned directory rows + `OpaqueWakeService` + `PushSender` refuse + resume drain + signed RelayDirectory tests + Android Doze intent + block-before-drain | Public storage fleet / APNs send / live signed directory |
 | 9 | 10 and 50 MiB chunk/resume; `chunkFromByteStream`; native `sendFileFromPath` | Default PeerJS Drop |
 | 10 | Three-device fan-out + QR + revoke journal + RatchetState isolation | Live hardware sessions |
 | 11–12 | Rooms on native carrier + Autobase converge | Live rooms on Hyperswarm |

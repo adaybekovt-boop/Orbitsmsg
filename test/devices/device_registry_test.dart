@@ -28,6 +28,8 @@ void main() {
     expect(alice.acceptsWriter('a1'), isTrue);
     alice.revoke('a1');
     expect(alice.acceptsWriter('a1'), isFalse);
+    expect(alice.isRevoked('a1'), isTrue);
+    expect(alice.isRevoked('unknown-device'), isFalse);
     expect(
       () => alice.authorize(dev('a1')),
       throwsStateError,

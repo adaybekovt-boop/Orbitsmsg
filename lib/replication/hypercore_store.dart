@@ -17,8 +17,30 @@ class HypercoreLocalStore {
     if (!replicationFieldsAreSafe(record.fields.keys)) {
       throw ArgumentError('refusing secret field in hypercore');
     }
+    if (_alreadyHas(record)) return record;
     blocks.add(record);
     return record;
+  }
+
+  bool _alreadyHas(JournalRecord record) {
+    final eventId = record.fields['eventId'];
+    for (final existing in blocks) {
+      if (existing.seq == record.seq &&
+          existing.writerDeviceId == record.writerDeviceId) {
+        return true;
+      }
+      if (eventId is String &&
+          eventId.isNotEmpty &&
+          existing.fields['eventId'] == eventId) {
+        return true;
+      }
+      final enc = record.fields['encryptedEnvelope'];
+      if (enc is List<int> &&
+          encryptedEnvelopeEquals(existing.fields['encryptedEnvelope'], enc)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   Map<String, Object?> toReplicationFrame(JournalRecord record) {
@@ -59,6 +81,7 @@ class HypercoreLocalStore {
       kind: kind.first,
       fields: fields,
     );
+    if (_alreadyHas(record)) return null;
     return append(record);
   }
 }

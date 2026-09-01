@@ -69,4 +69,25 @@ test('HTTP storage peer grants, rejects plaintext/anonymous, stores ciphertext',
   const json = JSON.parse(got.body)
   assert.equal(json.blocks.length, 1)
   assert.equal(json.blocks[0].b64, Buffer.from([1, 2, 3]).toString('base64'))
+
+  const st = await request(port, {
+    method: 'GET',
+    path: '/v1/stats?token=cap-1&writerKey=w',
+  })
+  assert.equal(st.status, 200)
+  const statsBody = JSON.parse(st.body)
+  assert.equal(statsBody.pendingCount, 1)
+  assert.equal(statsBody.usedBytes, 3)
+
+  const tomb = await request(port, {
+    method: 'POST',
+    path: '/v1/tombstone',
+    body: { token: 'cap-1', writerKey: 'w', seq: 0 },
+  })
+  assert.equal(tomb.status, 200)
+  const after = await request(port, {
+    method: 'GET',
+    path: '/v1/blocks?token=cap-1&writerKey=w&fromSeq=0',
+  })
+  assert.equal(JSON.parse(after.body).blocks.length, 0)
 })

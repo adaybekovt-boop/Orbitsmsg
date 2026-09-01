@@ -36,9 +36,20 @@ Drop to PeerJS (or fail visibly if fallback is off) when:
 
 `logDowngrade` records `pwa` vs `remote-missing-hyperswarm-v1`.
 `rollbackNativeToPeerjs` in `lib/transport/native_rollback.dart` forces
-`HyperswarmRollout.off`. `NativeTransportHost` calls it when a Hyperswarm
-start fails. It never enables native transport. The default product
-rollout is already off.
+`HyperswarmRollout.off`. Hooks:
+
+- `NativeTransportHost` — Hyperswarm `start` failure and worklet
+  `worklet-exit` (unexpected Bare/Node process death). After rollback the
+  native carrier is unbound so PeerJS stays the live path.
+- `DualStackBridge.verifyLiveMatchesReplay` — live projector vs durable
+  replay, and Hypercore envelope ids vs the journal.
+- `DualStackBridge.checkMailboxBacklog` / quota — mailbox ciphertext
+  volume.
+- `DualStackBridge.noteMessagesLost` — explicit lost-message path.
+
+It never enables native transport. The default product rollout is already
+off. Other operational triggers (battery, relay blow-up) still need a
+fleet before they can fire in production.
 
 ## Hardware
 

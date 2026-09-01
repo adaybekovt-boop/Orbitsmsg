@@ -50,6 +50,18 @@ class JournalProjector {
     }
   }
 
+  /// Stable identity of the read-model. Used to detect live vs replay drift.
+  String fingerprint() {
+    final keys = messages.keys.toList()..sort();
+    final rows = <String>[
+      for (final id in keys)
+        '$id|${messages[id]!.status}|${messages[id]!.plaintext}|${messages[id]!.conversationId}',
+    ];
+    return '$cursor|${rows.join('\n')}';
+  }
+
+  bool matches(JournalProjector other) => fingerprint() == other.fingerprint();
+
   Future<void> apply(JournalRecord record) async {
     switch (record.kind) {
       case ReplicationEventKind.messageEnvelopeCreated:

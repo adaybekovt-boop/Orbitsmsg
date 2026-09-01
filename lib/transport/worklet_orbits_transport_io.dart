@@ -112,6 +112,12 @@ class WorkletOrbitsTransport implements OrbitsTransport {
     _proc.stdout.listen(_client.addBytes);
     _proc.stderr.listen((_) {});
     _sub = _client.events.listen(_onIpcEvent);
+    _proc.exitCode.then((code) {
+      if (_stopping) return;
+      if (!_events.isClosed) {
+        _events.add(TransportError('worklet-exit', 'worklet exited $code'));
+      }
+    });
   }
 
   final Process _proc;
@@ -119,6 +125,7 @@ class WorkletOrbitsTransport implements OrbitsTransport {
   late final BareIpcClient _client;
   late final StreamSubscription<Map<String, Object?>> _sub;
   final _events = StreamController<TransportEvent>.broadcast();
+  bool _stopping = false;
 
   @override
   Stream<TransportEvent> get events => _events.stream;
@@ -134,6 +141,7 @@ class WorkletOrbitsTransport implements OrbitsTransport {
 
   @override
   Future<void> stop() async {
+    _stopping = true;
     try {
       await _client.request('stop');
     } catch (_) {}

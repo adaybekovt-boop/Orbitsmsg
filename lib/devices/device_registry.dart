@@ -122,6 +122,13 @@ class DeviceRegistry {
     return device != null && device.status == DeviceStatus.active;
   }
 
+  /// True only for a known revoked writer. Unknown ids stay allowed so
+  /// 1:1 Hypercore frames are not dropped before a device-link exists.
+  bool isRevoked(String deviceId) {
+    final device = _devices[deviceId];
+    return device != null && device.status == DeviceStatus.revoked;
+  }
+
   /// Fan-out targets: every active device of the recipient, plus own
   /// devices except the sending one (sync copy).
   List<AuthorizedDevice> fanout({

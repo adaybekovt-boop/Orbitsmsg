@@ -1,6 +1,7 @@
 // Starts the native carrier and binds it into ConnectionsNotifier.
 // Default product path stays PeerJS until rollout != off.
 
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -50,6 +51,7 @@ class NativeTransportHost {
     await deviceRegistry.hydrate();
 
     await _openCarrier();
+    _watchCarrier();
 
     final journal = await openLocalFileJournal('local-device');
     final secret = discoverySecretStore.getOrCreateLocal();
@@ -66,13 +68,8 @@ class NativeTransportHost {
           reason: NativeRollbackReason.nativeConnectFailed,
           detail: 'hyperswarm start failed',
         );
-        await _respawnLoopback();
-        await transport!.start(
-          TransportLocalConfiguration(
-            peerId: auth.user.peerId,
-            discoverySecret: secret,
-          ),
-        );
+        await _abandonNativeCarrier();
+        return;
       } else {
         rethrow;
       }
@@ -135,11 +132,16 @@ class NativeTransportHost {
     lifecycle = TransportLifecycle(
       transport: transport!,
       onResumeDrain: () async {
-        return await _ref
+        final n = await _ref
                 .read(connectionsNotifierProvider.notifier)
                 .nativeBridge
                 ?.drainMailbox() ??
             0;
+        await _ref
+            .read(connectionsNotifierProvider.notifier)
+            .nativeBridge
+            ?.verifyLiveMatchesReplay();
+        return n;
       },
     );
     wake = OpaqueWakeService(onAccepted: (_) => lifecycle!.onOpaqueWake());
@@ -167,13 +169,35 @@ class NativeTransportHost {
     backend = 'loopback';
   }
 
-  Future<void> _respawnLoopback() async {
+  StreamSubscription<TransportEvent>? _carrierEvents;
+
+  void _watchCarrier() {
+    _carrierEvents?.cancel();
+    final carrier = transport;
+    if (carrier == null) return;
+    _carrierEvents = carrier.events.listen((event) {
+      if (event is TransportError && event.code == 'worklet-exit') {
+        rollbackNativeToPeerjs(
+          reason: NativeRollbackReason.bareWorkletCrash,
+          detail: event.message,
+        );
+        unawaited(_abandonNativeCarrier());
+      }
+    });
+  }
+
+  Future<void> _abandonNativeCarrier() async {
+    attached = false;
+    await _carrierEvents?.cancel();
+    _carrierEvents = null;
+    try {
+      await _ref.read(connectionsNotifierProvider.notifier).unbindNativeTransport();
+    } catch (_) {}
     try {
       await transport?.stop();
     } catch (_) {}
-    final worklet = await spawnWorkletTransport(backend: 'loopback');
-    transport = worklet ?? LoopbackOrbitsTransport();
-    backend = worklet != null ? 'worklet' : 'loopback';
+    transport = null;
+    backend = 'none';
   }
 
   /// Local HTTP mailbox when possible; env origin for a desktop peer.

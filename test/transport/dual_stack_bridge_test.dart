@@ -17,6 +17,7 @@ import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
+import 'package:orbits_flutter/transport/native_rollback.dart';
 import 'package:orbits_flutter/transport/transport_api.dart';
 
 DeviceBinding _bind(String id) => DeviceBinding(
@@ -268,6 +269,9 @@ void main() {
       seen.whereType<Map>().any((m) => m['type'] == 'wireHello'),
       isTrue,
     );
+    expect(store.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 0);
+    expect(await b.verifyLiveMatchesReplay(), isTrue);
+    expect(b.hypercoreMatchesJournal(), isTrue);
   });
 
   test('drop chunks and hypercore replication ride native channels', () async {
@@ -295,6 +299,7 @@ void main() {
       b.hypercore.blocks.every((r) => !r.fields.containsKey('plaintext')),
       isTrue,
     );
+    expect(b.hypercoreMatchesJournal(), isTrue);
   });
 
   test('native sendFileFromPath streams from a path, not bytes', () async {
@@ -458,6 +463,7 @@ void main() {
       seen.whereType<Map>().any((m) => m['type'] == 'wireHello'),
       isTrue,
     );
+    expect(await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA'), 0);
     await a.detach();
     await b.detach();
   });
@@ -527,6 +533,151 @@ void main() {
       }),
       400,
     );
+  });
+
+  test('blocked mailbox drain tombstones without decrypt or journal persist',
+      () async {
+    final store = BlindMailboxStore()
+      ..grant(
+        MailboxCapability(
+          token: 'cap-1',
+          quotaBytes: 4096,
+          retentionMs: 60 * 1000,
+          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+        ),
+      );
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    final seen = <Object?>[];
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    final a = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: secrets,
+      isBlocked: (_) => false,
+      mailbox: store,
+      mailboxToken: 'cap-1',
+      mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      onPacket: (_, __) async {},
+    )..attach();
+    final b = DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'b',
+      secrets: secrets,
+      isBlocked: (id) => id == 'ORBIT-AAAAAAAAAAAAAAAA',
+      mailbox: store,
+      mailboxToken: 'cap-1',
+      mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      onPacket: (peer, data) async => seen.add(data),
+    )..attach();
+    expect(
+      await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'wireHello',
+        'v': 4,
+      }),
+      isTrue,
+    );
+    final n = await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA');
+    expect(n, 0);
+    expect(seen, isEmpty);
+    expect(b.journal.length, 0);
+    expect(store.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 0);
+    await a.detach();
+    await b.detach();
+  });
+
+  test('mailbox quota and backlog force PeerJS rollback', () async {
+    final store = BlindMailboxStore()
+      ..grant(
+        MailboxCapability(
+          token: 'cap-1',
+          quotaBytes: 4,
+          retentionMs: 60 * 1000,
+          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+        ),
+      );
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    clearNativeRollbackLogForTests();
+    final pair = loopbackPair();
+    final a = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: DiscoverySecretStore(),
+      isBlocked: (_) => false,
+      mailbox: store,
+      mailboxToken: 'cap-1',
+      mailboxWriterKey: 'writer',
+      onPacket: (_, __) async {},
+    )..attach();
+    expect(await a.depositMailbox(const [1, 2, 3, 4]), isTrue);
+    await a.checkMailboxBacklog(maxBytes: 4, maxCount: 100);
+    expect(hyperswarmRollout(), HyperswarmRollout.off);
+    expect(
+      nativeRollbackLog.last.reason,
+      NativeRollbackReason.relayMailboxBacklog,
+    );
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    expect(await a.depositMailbox(const [5, 6, 7, 8, 9]), isFalse);
+    expect(hyperswarmRollout(), HyperswarmRollout.off);
+    expect(
+      nativeRollbackLog.last.reason,
+      NativeRollbackReason.relayMailboxBacklog,
+    );
+    await a.detach();
+  });
+
+  test('lost messages and journal mismatch rollback to PeerJS', () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    clearNativeRollbackLogForTests();
+    final pair = loopbackPair();
+    final a = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: DiscoverySecretStore(),
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    expect(a.noteMessagesLost('ack timeout'), isTrue);
+    expect(hyperswarmRollout(), HyperswarmRollout.off);
+    expect(
+      nativeRollbackLog.single.reason,
+      NativeRollbackReason.messagesLost,
+    );
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    a.hypercore.append(
+      const JournalRecord(
+        seq: 99,
+        writerDeviceId: 'other',
+        kind: ReplicationEventKind.messageEnvelopeCreated,
+        fields: {
+          'eventId': 'orphan',
+          'encryptedEnvelope': <int>[1],
+        },
+      ),
+    );
+    expect(await a.verifyLiveMatchesReplay(), isFalse);
+    expect(hyperswarmRollout(), HyperswarmRollout.off);
+    expect(
+      nativeRollbackLog.last.reason,
+      NativeRollbackReason.driftJournalDiverge,
+    );
+    await a.detach();
   });
 
   test('room_msg is blocked without the plaintext ack', () {

@@ -39,4 +39,13 @@ void main() {
     expect(nativeRollbackLog.single.reason, NativeRollbackReason.bareWorkletCrash);
     expect(nativeRollbackLog.single.detail, 'ipc eof');
   });
+
+  test('every documented rollback reason forces PeerJS', () {
+    for (final reason in NativeRollbackReason.values) {
+      setHyperswarmRollout(HyperswarmRollout.internal);
+      expect(rollbackNativeToPeerjs(reason: reason), isTrue);
+      expect(hyperswarmRollout(), HyperswarmRollout.off);
+      expect(isHyperswarmTransportEnabled(), isFalse);
+    }
+  });
 }

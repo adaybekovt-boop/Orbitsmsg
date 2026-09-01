@@ -35,6 +35,26 @@ function put(token, writerKey, seq, bytes) {
   cores.set(writerKey, list)
 }
 
+function tombstone(token, writerKey, seq) {
+  const cap = caps.get(token)
+  if (!cap) throw new Error('capability rejected')
+  const list = cores.get(writerKey) || []
+  cores.set(
+    writerKey,
+    list.filter((b) => b.seq !== seq),
+  )
+}
+
+function stats(token, writerKey) {
+  const cap = caps.get(token)
+  if (!cap || Date.now() >= cap.expiresAt) throw new Error('capability rejected')
+  const list = cores.get(writerKey) || []
+  return {
+    usedBytes: list.reduce((n, b) => n + b.bytes.length, 0),
+    pendingCount: list.length,
+  }
+}
+
 function get(token, writerKey, fromSeq) {
   const cap = caps.get(token)
   if (!cap || Date.now() >= cap.expiresAt) throw new Error('capability rejected')
@@ -111,6 +131,38 @@ function createServer(opts = {}) {
         res.end(JSON.stringify({ ok: true }))
         return
       }
+      if (req.method === 'POST' && url.pathname === '/v1/tombstone') {
+        const body = JSON.parse((await readBody(req)).toString('utf8'))
+        for (const key of Object.keys(body)) {
+          if (FORBIDDEN.has(key)) {
+            res.writeHead(400)
+            res.end()
+            return
+          }
+        }
+        if (!body.token || !body.writerKey || body.seq == null) {
+          res.writeHead(400)
+          res.end()
+          return
+        }
+        tombstone(body.token, body.writerKey, body.seq)
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ ok: true }))
+        return
+      }
+      if (req.method === 'GET' && url.pathname === '/v1/stats') {
+        const token = url.searchParams.get('token') || ''
+        const writerKey = url.searchParams.get('writerKey') || ''
+        if (!token || !writerKey) {
+          res.writeHead(400)
+          res.end()
+          return
+        }
+        const s = stats(token, writerKey)
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify(s))
+        return
+      }
       if (req.method === 'GET' && url.pathname === '/v1/blocks') {
         const token = url.searchParams.get('token') || ''
         const writerKey = url.searchParams.get('writerKey') || ''
@@ -153,4 +205,4 @@ if (require.main === module) {
   })
 }
 
-module.exports = { createServer, grant, put, get, FORBIDDEN }
+module.exports = { createServer, grant, put, get, tombstone, stats, FORBIDDEN }

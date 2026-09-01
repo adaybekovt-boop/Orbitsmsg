@@ -53,6 +53,43 @@ class MemoryJournal {
     return append(ReplicationEventKind.messageEnvelopeCreated, event.toJournalFields());
   }
 
+  /// Ingest a remote/durable record. Skips duplicate envelope eventIds.
+  /// Local seq is assigned here; Hypercore writer seq stays on [record].
+  JournalRecord? ingest(JournalRecord record) {
+    if (!replicationFieldsAreSafe(record.fields.keys)) {
+      throw ArgumentError('refusing secret field in journal');
+    }
+    if (record.kind == ReplicationEventKind.messageEnvelopeCreated) {
+      final id = record.fields['eventId'] as String?;
+      if (id != null &&
+          _records.any((r) => r.fields['eventId'] == id)) {
+        return null;
+      }
+      final enc = record.fields['encryptedEnvelope'];
+      if (enc is List<int> && hasEncryptedEnvelope(enc)) {
+        return null;
+      }
+    }
+    return append(record.kind, record.fields);
+  }
+
   List<JournalRecord> since(int cursor) =>
       _records.where((r) => r.seq >= cursor).toList(growable: false);
+
+  bool hasEncryptedEnvelope(List<int> bytes) {
+    for (final record in _records) {
+      if (encryptedEnvelopeEquals(record.fields['encryptedEnvelope'], bytes)) {
+        return true;
+      }
+    }
+    return false;
+  }
+}
+
+bool encryptedEnvelopeEquals(Object? stored, List<int> bytes) {
+  if (stored is! List<int> || stored.length != bytes.length) return false;
+  for (var i = 0; i < bytes.length; i++) {
+    if (stored[i] != bytes[i]) return false;
+  }
+  return true;
 }

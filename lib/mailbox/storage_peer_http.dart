@@ -75,6 +75,48 @@ class StoragePeerHttp {
         _json(req, {'ok': true});
         return;
       }
+      if (req.method == 'POST' && req.uri.path == '/v1/tombstone') {
+        final body = jsonDecode(await utf8.decodeStream(req))
+            as Map<String, dynamic>;
+        final map = Map<String, Object?>.from(body);
+        if (!storagePeerKeysAreSafe(map)) {
+          req.response.statusCode = 400;
+          await req.response.close();
+          return;
+        }
+        final token = map['token'] as String? ?? '';
+        final writer = map['writerKey'] as String? ?? '';
+        final seq = (map['seq'] as num?)?.toInt();
+        if (token.isEmpty || writer.isEmpty || seq == null) {
+          req.response.statusCode = 400;
+          await req.response.close();
+          return;
+        }
+        store.tombstone(token, writer, seq);
+        _json(req, {'ok': true});
+        return;
+      }
+      if (req.method == 'GET' && req.uri.path == '/v1/stats') {
+        final token = req.uri.queryParameters['token'] ?? '';
+        final writer = req.uri.queryParameters['writerKey'] ?? '';
+        if (token.isEmpty || writer.isEmpty) {
+          req.response.statusCode = 400;
+          await req.response.close();
+          return;
+        }
+        try {
+          store.get(token: token, writerKey: writer);
+        } catch (_) {
+          req.response.statusCode = 400;
+          await req.response.close();
+          return;
+        }
+        _json(req, {
+          'usedBytes': store.usedBytes(writer),
+          'pendingCount': store.pendingCount(writer),
+        });
+        return;
+      }
       if (req.method == 'GET' && req.uri.path == '/v1/blocks') {
         final token = req.uri.queryParameters['token'] ?? '';
         final writer = req.uri.queryParameters['writerKey'] ?? '';
@@ -193,6 +235,48 @@ StoragePeerClient httpStoragePeerClient(String origin) {
         if (res.statusCode != 200) {
           throw StateError('storage peer grant ${res.statusCode}');
         }
+      } finally {
+        client.close(force: true);
+      }
+    },
+    tombstoneRemote: (token, writerKey, seq) async {
+      final client = HttpClient();
+      try {
+        final req = await client.postUrl(Uri.parse('$origin/v1/tombstone'));
+        req.headers.contentType = ContentType.json;
+        req.write(
+          jsonEncode({
+            'token': token,
+            'writerKey': writerKey,
+            'seq': seq,
+          }),
+        );
+        final res = await req.close();
+        if (res.statusCode != 200) {
+          throw StateError('storage peer tombstone ${res.statusCode}');
+        }
+      } finally {
+        client.close(force: true);
+      }
+    },
+    statsRemote: ({required token, required writerKey}) async {
+      final client = HttpClient();
+      try {
+        final uri = Uri.parse(
+          '$origin/v1/stats?token=${Uri.encodeQueryComponent(token)}'
+          '&writerKey=${Uri.encodeQueryComponent(writerKey)}',
+        );
+        final req = await client.getUrl(uri);
+        final res = await req.close();
+        if (res.statusCode != 200) {
+          throw StateError('storage peer stats ${res.statusCode}');
+        }
+        final json = jsonDecode(await utf8.decodeStream(res))
+            as Map<String, dynamic>;
+        return MailboxPeerStats(
+          usedBytes: (json['usedBytes'] as num?)?.toInt() ?? 0,
+          pendingCount: (json['pendingCount'] as num?)?.toInt() ?? 0,
+        );
       } finally {
         client.close(force: true);
       }

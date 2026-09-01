@@ -29,6 +29,10 @@ class EncryptedBlock {
   final int storedAt;
 }
 
+/// Local operator threshold. Not a public-fleet SLA.
+const int kMailboxBacklogRollbackBytes = 48 * 1024 * 1024;
+const int kMailboxBacklogRollbackCount = 4096;
+
 class BlindMailboxStore {
   BlindMailboxStore({this.maxAnonymous = false});
 
@@ -83,5 +87,21 @@ class BlindMailboxStore {
     final list = _cores[writerKey];
     if (list == null) return;
     list.removeWhere((b) => b.seq == seq);
+  }
+
+  int usedBytes(String writerKey) =>
+      (_cores[writerKey] ?? const <EncryptedBlock>[])
+          .fold<int>(0, (n, b) => n + b.bytes.length);
+
+  int pendingCount(String writerKey) =>
+      (_cores[writerKey] ?? const <EncryptedBlock>[]).length;
+
+  bool isBacklogged(
+    String writerKey, {
+    int maxBytes = kMailboxBacklogRollbackBytes,
+    int maxCount = kMailboxBacklogRollbackCount,
+  }) {
+    return usedBytes(writerKey) >= maxBytes ||
+        pendingCount(writerKey) >= maxCount;
   }
 }

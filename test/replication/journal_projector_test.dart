@@ -34,6 +34,9 @@ void main() {
     expect(replay.messages['e1']?.plaintext, 'Hi');
     expect(replay.messages['e1']?.status, live.messages['e1']?.status);
     expect(replay.cursor, live.cursor);
+    expect(live.matches(replay), isTrue);
+    replay.messages['e1'] = replay.messages['e1']!.copyWith(status: 'read');
+    expect(live.matches(replay), isFalse);
   });
 
   test('duplicates and missing seq do not corrupt the projection', () async {

@@ -268,6 +268,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       ..attach();
   }
 
+  Future<void> unbindNativeTransport() async {
+    await _dual?.detach();
+    _dual = null;
+    _nativeJournal = null;
+  }
+
   ({String from, CallSignal signal})? _lastCallSignal;
 
   ({String from, CallSignal signal})? get lastCallSignal => _lastCallSignal;

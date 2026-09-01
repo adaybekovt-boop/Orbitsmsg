@@ -14,6 +14,7 @@ import '../mailbox/blind_store.dart';
 import '../mailbox/mailbox_pump.dart';
 import '../mailbox/storage_peer_client.dart';
 import '../peer/helpers.dart';
+import '../replication/drift_projector.dart';
 import '../replication/file_journal.dart';
 import '../replication/hypercore_store.dart';
 import '../replication/memory_journal.dart';
@@ -21,6 +22,7 @@ import '../transport/replication_schema.dart';
 import 'discovery_secret_store.dart';
 import 'hello_capabilities.dart';
 import 'mux_frames.dart';
+import 'native_rollback.dart';
 import 'signed_capabilities.dart';
 import 'transport_api.dart';
 
@@ -64,6 +66,8 @@ class DualStackBridge {
   final HypercoreLocalStore hypercore;
   final MailboxPump _mailboxPump = MailboxPump();
   void Function(String peerId, Object packet)? onDrop;
+  final Set<String> _drainedMailboxKeys = <String>{};
+  Future<void> _durable = Future<void>.value();
 
   final Set<String> connected = <String>{};
   final List<CapabilityRecord> remoteCapabilities = <CapabilityRecord>[];
@@ -126,7 +130,9 @@ class DualStackBridge {
       }
       if (!isWireReady(norm)) return false;
       final queued = await encryptWirePayload(norm, msg);
-      return await depositMailbox(utf8.encode(queued));
+      final bytes = utf8.encode(queued);
+      _appendEnvelope(norm, bytes);
+      return await depositMailbox(bytes);
     }
     if (msg is Map &&
         (msg['type'] == 'wireHello' || msg['type'] == 'wireRekey')) {
@@ -156,25 +162,37 @@ class DualStackBridge {
     final token = mailboxToken;
     final writer = mailboxWriterKey;
     if (token == null || writer == null) return false;
-    final client = storagePeer;
-    if (client != null) {
-      await _mailboxPump.depositClient(
-        client: client,
+    try {
+      final client = storagePeer;
+      if (client != null) {
+        await _mailboxPump.depositClient(
+          client: client,
+          token: token,
+          writerKey: writer,
+          encryptedEnvelope: encryptedEnvelope,
+        );
+        await checkMailboxBacklog();
+        return true;
+      }
+      final store = mailbox;
+      if (store == null) return false;
+      _mailboxPump.deposit(
+        store: store,
         token: token,
         writerKey: writer,
         encryptedEnvelope: encryptedEnvelope,
       );
+      await checkMailboxBacklog();
       return true;
+    } on StateError catch (e) {
+      if ('$e'.contains('quota')) {
+        rollbackNativeToPeerjs(
+          reason: NativeRollbackReason.relayMailboxBacklog,
+          detail: '$e',
+        );
+      }
+      return false;
     }
-    final store = mailbox;
-    if (store == null) return false;
-    _mailboxPump.deposit(
-      store: store,
-      token: token,
-      writerKey: writer,
-      encryptedEnvelope: encryptedEnvelope,
-    );
-    return true;
   }
 
   /// Authorization log: revoked writers are ignored on the next fan-out.
@@ -187,7 +205,7 @@ class DualStackBridge {
         'createdAt': DateTime.now().millisecondsSinceEpoch,
       },
     );
-    unawaited(durableJournal?.append(record));
+    unawaited(_persistDurable(record));
     hypercore.append(record);
   }
 
@@ -200,7 +218,7 @@ class DualStackBridge {
         'createdAt': device.createdAt,
       },
     );
-    unawaited(durableJournal?.append(record));
+    unawaited(_persistDurable(record));
     hypercore.append(record);
   }
 
@@ -226,12 +244,123 @@ class DualStackBridge {
       );
     }
     final from = normalizePeerId(fromPeerId ?? writer);
+    if (isBlocked(from)) {
+      for (final block in blocks) {
+        await _tombstoneMailbox(token, writer, block.seq);
+      }
+      return 0;
+    }
+    var delivered = 0;
     for (final block in blocks) {
+      final key = '$writer:${block.seq}';
+      if (_drainedMailboxKeys.contains(key)) {
+        await _tombstoneMailbox(token, writer, block.seq);
+        continue;
+      }
+      _drainedMailboxKeys.add(key);
       _appendEnvelope(from, block.bytes);
       final text = utf8.decode(block.bytes);
-      await onPacket(from, isWireCiphertext(text) ? text : decodeJsonPayload(block.bytes));
+      await onPacket(
+        from,
+        isWireCiphertext(text) ? text : decodeJsonPayload(block.bytes),
+      );
+      await _tombstoneMailbox(token, writer, block.seq);
+      delivered++;
     }
-    return blocks.length;
+    await verifyLiveMatchesReplay();
+    await checkMailboxBacklog();
+    return delivered;
+  }
+
+  Future<void> _tombstoneMailbox(String token, String writer, int seq) async {
+    final client = storagePeer;
+    if (client != null) {
+      await client.tombstone(token, writer, seq);
+      return;
+    }
+    mailbox?.tombstone(token, writer, seq);
+  }
+
+  /// Force PeerJS when native delivery is known lost. Never enables native.
+  bool noteMessagesLost(String detail) {
+    return rollbackNativeToPeerjs(
+      reason: NativeRollbackReason.messagesLost,
+      detail: detail,
+    );
+  }
+
+  Future<void> _persistDurable(JournalRecord record) {
+    final durable = durableJournal;
+    if (durable == null) return Future<void>.value();
+    _durable = _durable.then((_) => durable.append(record));
+    return _durable;
+  }
+
+  Future<bool> verifyLiveMatchesReplay({EnvelopeDecrypt? decrypt}) async {
+    await _durable;
+    Future<Map<String, Object?>?> hook(List<int> enc) async {
+      if (decrypt != null) return decrypt(enc);
+      return {'text': base64Encode(enc)};
+    }
+
+    final live = JournalProjector(decrypt: hook);
+    await live.applyAll(journal);
+    final replaySource =
+        durableJournal != null ? await durableJournal!.replay() : journal;
+    final replay = JournalProjector(decrypt: hook);
+    await replay.applyAll(replaySource);
+    if (!live.matches(replay)) {
+      rollbackNativeToPeerjs(
+        reason: NativeRollbackReason.journalReplayMismatch,
+        detail: 'journal live/replay fingerprint mismatch',
+      );
+      return false;
+    }
+    if (!hypercoreMatchesJournal()) {
+      rollbackNativeToPeerjs(
+        reason: NativeRollbackReason.driftJournalDiverge,
+        detail: 'hypercore envelope ids diverge from journal',
+      );
+      return false;
+    }
+    return true;
+  }
+
+  bool hypercoreMatchesJournal() {
+    Set<Object?> idsOf(Iterable<JournalRecord> records) => records
+        .where((r) => r.kind == ReplicationEventKind.messageEnvelopeCreated)
+        .map((r) => r.fields['eventId'])
+        .whereType<String>()
+        .toSet();
+    return idsOf(journal.records).containsAll(idsOf(hypercore.blocks)) &&
+        idsOf(hypercore.blocks).containsAll(idsOf(journal.records));
+  }
+
+  Future<void> checkMailboxBacklog({
+    int maxBytes = kMailboxBacklogRollbackBytes,
+    int maxCount = kMailboxBacklogRollbackCount,
+  }) async {
+    final writer = mailboxWriterKey;
+    if (writer == null) return;
+    final token = mailboxToken;
+    final store = mailbox;
+    if (store != null &&
+        store.isBacklogged(writer, maxBytes: maxBytes, maxCount: maxCount)) {
+      rollbackNativeToPeerjs(
+        reason: NativeRollbackReason.relayMailboxBacklog,
+        detail: 'mailbox backlog ${store.usedBytes(writer)} bytes',
+      );
+      return;
+    }
+    if (token == null) return;
+    final stats = await storagePeer?.stats(token: token, writerKey: writer);
+    if (stats != null &&
+        (stats.usedBytes >= maxBytes || stats.pendingCount >= maxCount)) {
+      rollbackNativeToPeerjs(
+        reason: NativeRollbackReason.relayMailboxBacklog,
+        detail: 'mailbox backlog ${stats.usedBytes} bytes',
+      );
+    }
   }
 
   Future<void> sendAttachmentChunks(
@@ -314,6 +443,20 @@ class DualStackBridge {
   }
 
   void _appendEnvelope(String peerId, List<int> encrypted) {
+    if (journal.hasEncryptedEnvelope(encrypted)) {
+      if (!hypercore.blocks.any(
+        (r) =>
+            encryptedEnvelopeEquals(r.fields['encryptedEnvelope'], encrypted),
+      )) {
+        // Keep Hypercore aligned with the journal ciphertext set.
+        final existing = journal.records.firstWhere(
+          (r) =>
+              encryptedEnvelopeEquals(r.fields['encryptedEnvelope'], encrypted),
+        );
+        hypercore.append(existing);
+      }
+      return;
+    }
     final id =
         '${DateTime.now().millisecondsSinceEpoch}-$peerId-${encrypted.length}';
     final record = journal.appendEnvelope(
@@ -327,7 +470,7 @@ class DualStackBridge {
         encryptedEnvelope: encrypted,
       ),
     );
-    unawaited(durableJournal?.append(record));
+    unawaited(_persistDurable(record));
     hypercore.append(record);
     if (isNativeConnected(peerId)) {
       unawaited(
@@ -397,8 +540,17 @@ class DualStackBridge {
       return;
     }
     if (channel == TransportChannel.replication) {
+      if (isBlocked(norm)) return;
       try {
-        hypercore.applyRemote(decodeJsonPayload(bytes));
+        final frame = decodeJsonPayload(bytes);
+        final writerId = frame['writerDeviceId'] as String? ?? '';
+        if (devices?.isRevoked(writerId) == true) return;
+        final remote = hypercore.applyRemote(frame);
+        if (remote == null) return;
+        final ingested = journal.ingest(remote);
+        if (ingested != null) {
+          unawaited(_persistDurable(ingested));
+        }
       } catch (_) {}
       return;
     }

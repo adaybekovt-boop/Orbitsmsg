@@ -14,8 +14,8 @@ still PeerJS.
 | 4 | App boot binds native host when rollout ≠ off; prefers Hyperswarm then loopback; loopback natives exchange `v2:` / wireHello | Default still PeerJS; two physical natives not run |
 | 5 | Identity-signed caps on native connect and as a PeerJS `wireHello.caps` sibling; contact QR may carry discovery secret `d=`; secrets persist vault-wrapped | Physical pair not run |
 | 6 | Native `call` channel + CallKit / Telecom in-app sheet (opaque handle, name “Orbits”); iOS remote-notification *handlers* (no PushKit) | No PushKit / `voip` background; registration gated; no physical call |
-| 7 | File journal + Hypercore local store + worklet Corestore journal (`useCorestoreIfPresent`); addon manifest | Not a Holepunch Corestore native addon |
-| 8 | Blind mailbox + HTTP `StoragePeerClient` + local loopback fleet (3/2/2 health + unsigned directory rows) + opaque wake HTTP intake; `PushSender` refuses APNs/FCM; Android `DEVICE_IDLE` → Doze | No deployed public fleet / APNs/FCM send / live signed directory |
+| 7 | File journal + Hypercore local store + worklet Corestore journal (`useCorestoreIfPresent`); live vs replay projector fingerprint; DualStackBridge ingest of replication frames into the journal | Not a Holepunch Corestore native addon |
+| 8 | Blind mailbox + HTTP `StoragePeerClient` + local loopback fleet (3/2/2 health + unsigned directory rows) + opaque wake HTTP intake; `PushSender` refuses APNs/FCM; Android `DEVICE_IDLE` → Doze; drain tombstones ciphertext; block list before mailbox decrypt/persist; backlog rollback | No deployed public fleet / APNs/FCM send / live signed directory |
 | 9 | Drop packets on native `attachment` channel; 10–50 MiB resume tests; path-streamed native `sendFileFromPath`; Drop UI tries path before bytes | In-memory Drop still used when PeerJS |
 | 10 | Device-link QR + revoke journal events + per-identity fan-out + three-device RatchetState isolation test | No live multi-device ratchet sessions on hardware |
 | 11–12 | Room maps on native carrier; Autobase writers converge | Live rooms still PeerJS host-plaintext |
@@ -52,6 +52,10 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
 - Phase 14 isolation stays `default-live`. Do not remove PeerJS.
 - Android Doze: `MainActivity` forwards `ACTION_DEVICE_IDLE_MODE_CHANGED`
   into `TransportLifecycle.onDoze`. Not hardware-proven.
+- Auto-rollback hooks force `HyperswarmRollout.off` on Hyperswarm start
+  failure, worklet process exit, journal live/replay mismatch,
+  Hypercore/journal envelope diverge, mailbox backlog/quota, and explicit
+  lost messages. They do not enable native transport.
 
 Do not mark the migration done until every Definition of Done line in
 `master-plan.md` has current-state evidence.
