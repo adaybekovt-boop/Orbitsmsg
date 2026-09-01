@@ -20,12 +20,13 @@ async function createHyperswarmBackend(opts = {}) {
   } catch (err) {
     throw new Error('hyperswarm is not installed: ' + err.message)
   }
-  const swarm = new Hyperswarm({
-    bootstrap,
-    keyPair: opts.keyPair,
-    seed: opts.seed,
-    firewall: opts.firewall,
-  })
+  const swarmOpts = { bootstrap }
+  if (opts.keyPair) swarmOpts.keyPair = opts.keyPair
+  if (opts.seed) {
+    swarmOpts.seed = Buffer.isBuffer(opts.seed) ? opts.seed : Buffer.from(opts.seed)
+  }
+  if (opts.firewall) swarmOpts.firewall = opts.firewall
+  const swarm = new Hyperswarm(swarmOpts)
   return {
     swarm,
     async join(topic) {

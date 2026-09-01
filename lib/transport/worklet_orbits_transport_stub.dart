@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'device_binding.dart';
 import 'transport_api.dart';
 
@@ -7,6 +9,8 @@ Future<WorkletOrbitsTransport?> spawnWorkletTransport({
     null;
 
 class WorkletOrbitsTransport implements OrbitsTransport {
+  Uint8List? noisePublicKey;
+
   @override
   Stream<TransportEvent> get events => const Stream.empty();
 

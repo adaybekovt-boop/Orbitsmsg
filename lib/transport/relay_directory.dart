@@ -47,9 +47,13 @@ class DirectoryPeer {
         orElse: () => DirectoryPeerKind.relay,
       ),
       host: json['host'] as String? ?? '',
-      port: json['port'] as int? ?? 0,
+      port: json['port'] is int
+          ? json['port'] as int
+          : (json['port'] as num?)?.toInt() ?? 0,
       region: json['region'] as String? ?? '',
-      rttMs: json['rttMs'] as int? ?? 0,
+      rttMs: json['rttMs'] is int
+          ? json['rttMs'] as int
+          : (json['rttMs'] as num?)?.toInt() ?? 0,
       unsound: json['unsound'] == true,
     );
   }

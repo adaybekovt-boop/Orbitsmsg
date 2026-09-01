@@ -13,6 +13,7 @@ import 'bare_ipc_client.dart';
 import 'bare_runtime.dart';
 import 'device_binding.dart';
 import 'transport_api.dart';
+import 'transport_noise_seed.dart';
 
 const _bundledWorkletFiles = <String>[
   'worklet.js',
@@ -126,17 +127,23 @@ class WorkletOrbitsTransport implements OrbitsTransport {
   late final StreamSubscription<Map<String, Object?>> _sub;
   final _events = StreamController<TransportEvent>.broadcast();
   bool _stopping = false;
+  Uint8List? noisePublicKey;
 
   @override
   Stream<TransportEvent> get events => _events.stream;
 
   @override
   Future<void> start(TransportLocalConfiguration config) async {
-    await _client.request('start', {
+    final result = await _client.request('start', {
       'peerId': config.peerId,
       'discoverySecret': config.discoverySecret,
       'relayForced': config.relayForced,
+      'bootstrap': [
+        for (final node in config.bootstrap) node.toJson(),
+      ],
+      if (config.transportSeed != null) 'seed': config.transportSeed,
     });
+    noisePublicKey = noisePublicKeyFromHex(result['noisePublicKey'] as String?);
   }
 
   @override

@@ -11,7 +11,7 @@ still PeerJS.
 | 1 | Harness + loopback echo/file/suspend | NAT matrix **blocked** |
 | 2 | Stand runner + metrics schema | Live KZ matrix **blocked** |
 | 3 | Plugin + worklet IPC + OS hosts refuse remote JS; spawn prefers local `bare` then Node when stdlib is present; per-OS Bare slots + build-time `vendor.sh` / `embed.sh` / `vendor-bare-modules.sh`; **all** vendor tarball sha256 pins; worklet import maps; path-streamed `sendFile`; CI embeds linux-x64 into the Linux plugin host | Bare binary not shipped in the app bundle (`kBareBinaryShipped` false) |
-| 4 | App boot binds native host when rollout ≠ off; prefers Hyperswarm then loopback; loopback natives exchange `v2:` / wireHello | Default still PeerJS; two physical natives not run |
+| 4 | App boot binds native host when rollout ≠ off; prefers Hyperswarm **only** with module + explicit HyperDHT bootstrap (`ORBITS_DHT_BOOTSTRAP` / directory rows), else loopback; Noise seed ≠ identity; loopback natives exchange `v2:` / wireHello | Default still PeerJS; two physical natives not run |
 | 5 | Identity-signed caps on native connect and as a PeerJS `wireHello.caps` sibling; contact QR may carry discovery secret `d=`; secrets persist vault-wrapped | Physical pair not run |
 | 6 | Native `call` channel + CallKit / Telecom in-app sheet (opaque handle, name “Orbits”); iOS remote-notification *handlers* (no PushKit) | No PushKit / `voip` background; registration gated; no physical call |
 | 7 | File journal + Hypercore local store + worklet Corestore journal (`useCorestoreIfPresent`); live vs replay projector fingerprint; DualStackBridge ingest of replication frames into the journal; boot replays the file journal into memory + Drift after block-then-decrypt | Not a Holepunch Corestore native addon |
@@ -57,6 +57,9 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
   failure, worklet process exit, journal live/replay mismatch,
   Hypercore/journal envelope diverge, mailbox backlog/quota, and explicit
   lost messages. They do not enable native transport.
+- Hyperswarm bootstrap is explicit. Empty `ORBITS_DHT_BOOTSTRAP` / no
+  directory bootstrap rows → loopback, not the public DHT. Local fleet
+  HTTP health bootstrap ports are **not** HyperDHT addresses.
 
 Do not mark the migration done until every Definition of Done line in
 `master-plan.md` has current-state evidence.

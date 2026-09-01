@@ -1,7 +1,8 @@
 // Worklet backend pick for NativeTransportHost.
 // Default product rollout stays off, so this is never used on the live
-// PeerJS path. When rollout ≠ off, prefer Hyperswarm and fall back to
-// loopback if the module is missing.
+// PeerJS path. When rollout ≠ off, prefer Hyperswarm if the module is
+// present *and* bootstrap is explicit; otherwise loopback. Never the
+// public DHT.
 
 import 'dart:io';
 
@@ -12,11 +13,17 @@ bool hyperswarmModulePresent({String harnessRoot = 'tool/connectivity_harness'})
   return pkg.existsSync();
 }
 
-/// Hyperswarm only when the native path is enabled *and* the module exists.
-String preferredWorkletBackend({bool? modulePresent}) {
+/// Hyperswarm only when rollout ≠ off, the module exists, *and* an
+/// explicit bootstrap list was provided. Missing bootstrap is loopback,
+/// never the public DHT.
+String preferredWorkletBackend({
+  bool? modulePresent,
+  bool? hasBootstrap,
+}) {
   if (!isHyperswarmTransportEnabled()) return 'loopback';
   final present = modulePresent ?? hyperswarmModulePresent();
-  return present ? 'hyperswarm' : 'loopback';
+  final bootstrap = hasBootstrap ?? false;
+  return present && bootstrap ? 'hyperswarm' : 'loopback';
 }
 
 /// If a hyperswarm spawn/start fails, the host retries with loopback.

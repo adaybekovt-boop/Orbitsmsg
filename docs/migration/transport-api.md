@@ -58,6 +58,17 @@ must not copy that pattern.
 
 Until Phase 4 the only live implementation remains `PeerJsClient`.
 
+`TransportLocalConfiguration.bootstrap` is the HyperDHT list. An empty
+list means the host must stay on loopback (or PeerJS) — it must not
+open Hyperswarm against the public DHT. Lab override:
+`ORBITS_DHT_BOOTSTRAP=127.0.0.1:port,…`. A local
+`ORBITS_RELAY_DIRECTORY` file may supply identity-signed or unsigned lab
+rows. `kLiveSignedRelayDirectory` stays false until a public directory
+is actually deployed.
+
+`transportSeed` is a 32-byte Hyperswarm Noise seed. It is not the
+identity key, not a discovery secret, and not stored in Hypercore.
+
 ## Compatibility
 
 Old clients keep speaking PeerJS JSON. New clients keep implementing

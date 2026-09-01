@@ -16,16 +16,35 @@ void main() {
     );
   });
 
-  test('rollout ≠ off prefers hyperswarm then falls back if missing', () {
+  test('rollout ≠ off prefers hyperswarm only with module and bootstrap', () {
     setHyperswarmRollout(HyperswarmRollout.internal);
-    expect(preferredWorkletBackend(modulePresent: true), 'hyperswarm');
-    expect(preferredWorkletBackend(modulePresent: false), 'loopback');
+    expect(
+      preferredWorkletBackend(modulePresent: true, hasBootstrap: true),
+      'hyperswarm',
+    );
+    expect(
+      preferredWorkletBackend(modulePresent: true, hasBootstrap: false),
+      'loopback',
+    );
+    expect(
+      preferredWorkletBackend(modulePresent: true),
+      'loopback',
+    );
+    expect(
+      preferredWorkletBackend(modulePresent: false, hasBootstrap: true),
+      'loopback',
+    );
     expect(fallbackWorkletBackend('hyperswarm'), 'loopback');
   });
 
   test('NativeTransportHost prefers hyperswarm then falls back to loopback', () {
     final src = File('lib/transport/native_transport_host.dart').readAsStringSync();
     expect(src, contains('preferredWorkletBackend'));
+    expect(src, contains('hasBootstrap: bootstrap.isNotEmpty'));
+    expect(src, contains('resolveDhtBootstrap'));
+    expect(src, contains('transportSeed'));
+    expect(src, contains('derivedTransportPublicPlaceholder'));
+    expect(src, isNot(contains('List<int>.filled(32, 1)')));
     expect(src, contains('spawnWorkletTransport(backend: preferred)'));
     expect(src, contains("backend == 'hyperswarm'"));
     expect(src, contains('httpStoragePeerClient'));
@@ -40,6 +59,10 @@ void main() {
     expect(
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
       contains('worklet-exit'),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'bootstrap':"),
     );
     expect(
       File('tool/connectivity_harness/src/swarm.js').readAsStringSync(),

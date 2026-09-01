@@ -9,8 +9,10 @@ void main() {
     expect(kHolepunchCorestoreAddonLinked, isFalse);
     expect(kCorestoreAddonRemoteFetch, isFalse);
     expect(corestoreAddonPresent(), isFalse);
+    expect(corestoreBareAddonPresent(), isFalse);
     expect(corestoreAddonIsProductionReady(), isFalse);
     expect(File(kCorestoreAddonSlot).existsSync(), isFalse);
+    expect(File(kCorestoreBareAddonSlot).existsSync(), isFalse);
     expect(File(kCorestoreAddonManifestPath).existsSync(), isTrue);
     final manifest = jsonDecode(
       File(kCorestoreAddonManifestPath).readAsStringSync(),
@@ -22,6 +24,7 @@ void main() {
       isTrue,
     );
     expect(manifest['linked'], isFalse);
+    expect(manifest['bareSlot'], kCorestoreBareAddonSlot);
     expect(
       File('tool/connectivity_harness/src/corestore_journal.js').readAsStringSync(),
       contains("typeof Bare !== 'undefined'"),

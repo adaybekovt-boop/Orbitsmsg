@@ -19,13 +19,17 @@ import '../state/auth_notifier.dart';
 import '../state/connections_notifier.dart';
 import 'capabilities.dart';
 import 'device_binding.dart';
+import 'dht_bootstrap.dart';
 import 'discovery_secret_store.dart';
 import 'journal_file_io.dart' if (dart.library.html) 'journal_file_stub.dart';
 import 'loopback_transport.dart';
 import 'native_rollback.dart';
+import 'relay_directory.dart';
+import 'relay_directory_load.dart';
 import 'signed_capabilities.dart';
 import 'transport_api.dart';
 import 'transport_lifecycle.dart';
+import 'transport_noise_seed.dart';
 import 'worklet_backend.dart';
 import 'worklet_orbits_transport.dart';
 
@@ -40,6 +44,7 @@ class NativeTransportHost {
   OpaqueWakeService? wake;
   PushGateway? push;
   StoragePeerHttp? storageHttp;
+  RelayDirectory? directory;
 
   Future<void> ensureStarted() async {
     if (!isHyperswarmTransportEnabled()) return;
@@ -49,17 +54,30 @@ class NativeTransportHost {
 
     await discoverySecretStore.hydrate();
     await deviceRegistry.hydrate();
+    await transportNoiseSeedStore.hydrate();
 
-    await _openCarrier();
+    directory = await loadRelayDirectoryFromEnv();
+    final bootstrap = resolveDhtBootstrap(
+      env: Platform.environment,
+      directory: directory,
+    );
+
+    await _openCarrier(hasBootstrap: bootstrap.isNotEmpty);
     _watchCarrier();
 
     final journal = await openLocalFileJournal('local-device');
     final secret = discoverySecretStore.getOrCreateLocal();
+    final seed = transportNoiseSeedStore.getOrCreate();
     try {
       await transport!.start(
         TransportLocalConfiguration(
           peerId: auth.user.peerId,
           discoverySecret: secret,
+          bootstrap: bootstrap,
+          transportSeed: seed,
+          relayForced: isHyperswarmRelayForced(),
+          diagnosticsEnabled: isHyperswarmDiagnosticsEnabled(),
+          allowPeerjsFallback: isPeerjsFallbackEnabled(),
         ),
       );
     } catch (_) {
@@ -92,14 +110,21 @@ class NativeTransportHost {
       );
     } catch (_) {}
 
+    final workletPk = switch (transport) {
+      final WorkletOrbitsTransport w => w.noisePublicKey,
+      _ => null,
+    };
+    final transportPublicKey =
+        workletPk ?? derivedTransportPublicPlaceholder(seed);
+    final hypercorePublicKey = derivedHypercorePublicPlaceholder(seed);
     try {
       await transport!.publish(
         DeviceBinding(
           version: kDeviceBindingVersion,
           identityPublicKey: caps?.identityPublicKey ?? Uint8List(0),
           deviceId: 'local-device',
-          transportPublicKey: Uint8List.fromList(List<int>.filled(32, 1)),
-          hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 2)),
+          transportPublicKey: transportPublicKey,
+          hypercorePublicKey: hypercorePublicKey,
           capabilities: const ['hyperswarm-v1', 'peerjs-v4'],
           createdAt: DateTime.now().millisecondsSinceEpoch,
           expiresAt: DateTime.now().millisecondsSinceEpoch + 86400000 * 30,
@@ -115,7 +140,7 @@ class NativeTransportHost {
       expiresAt: DateTime.now().millisecondsSinceEpoch + 86400000 * 30,
     );
     final mailbox = BlindMailboxStore()..grant(cap);
-    final storagePeer = await _bindStoragePeer(mailbox, cap);
+    final storagePeer = await _bindStoragePeer(mailbox, cap, directory);
 
     final memory = MemoryJournal('local-device');
     if (journal != null) {
@@ -159,8 +184,8 @@ class NativeTransportHost {
     attached = true;
   }
 
-  Future<void> _openCarrier() async {
-    final preferred = preferredWorkletBackend();
+  Future<void> _openCarrier({required bool hasBootstrap}) async {
+    final preferred = preferredWorkletBackend(hasBootstrap: hasBootstrap);
     var worklet = await spawnWorkletTransport(backend: preferred);
     if (worklet != null) {
       transport = worklet;
@@ -215,12 +240,18 @@ class NativeTransportHost {
   Future<StoragePeerClient> _bindStoragePeer(
     BlindMailboxStore mailbox,
     MailboxCapability cap,
+    RelayDirectory? directory,
   ) async {
-    final origin = Platform.environment['ORBITS_STORAGE_PEER_ORIGIN'];
+    final origin = resolveStoragePeerOrigin(
+      env: Platform.environment,
+      directory: directory,
+    );
     if (origin != null && origin.isNotEmpty) {
-      final client = httpStoragePeerClient(origin);
-      await client.grant(cap);
-      return client;
+      try {
+        final client = httpStoragePeerClient(origin);
+        await client.grant(cap);
+        return client;
+      } catch (_) {}
     }
     try {
       final http = StoragePeerHttp(mailbox);

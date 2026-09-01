@@ -71,15 +71,29 @@ class Worklet {
       this._loop.on('connection', (sock, info) => this._onConn(sock, info))
     } else {
       const { createHyperswarmBackend } = require('./swarm')
-      this._swarm = await createHyperswarmBackend({
+      const swarmOpts = {
         bootstrap: config.bootstrap,
         keyPair: config.keyPair,
-        seed: config.seed,
         firewall: config.firewall,
-      })
+      }
+      if (config.seed) {
+        swarmOpts.seed = Buffer.isBuffer(config.seed)
+          ? config.seed
+          : Buffer.from(config.seed)
+      }
+      this._swarm = await createHyperswarmBackend(swarmOpts)
       this._swarm.onConnection((sock, info) => this._onConn(sock, info))
     }
-    this._emit('started', { backend: this.backend, port: this._loop.port })
+    this._emit('started', {
+      backend: this.backend,
+      port: this._loop.port,
+      noisePublicKey: this.noisePublicKeyHex(),
+    })
+  }
+
+  noisePublicKeyHex() {
+    const kp = this._swarm && this._swarm.swarm && this._swarm.swarm.keyPair
+    return kp && kp.publicKey ? Buffer.from(kp.publicKey).toString('hex') : null
   }
 
   async publish(binding) {
@@ -224,7 +238,11 @@ async function handleIpcRequest(worklet, body) {
   switch (method) {
     case 'start':
       await worklet.start(params)
-      return { port: worklet._loop.port }
+      return {
+        port: worklet._loop.port,
+        backend: worklet.backend,
+        noisePublicKey: worklet.noisePublicKeyHex(),
+      }
     case 'stop':
       await worklet.stop()
       return {}

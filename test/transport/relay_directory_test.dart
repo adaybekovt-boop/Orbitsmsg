@@ -1,7 +1,12 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/spki_codec.dart';
+import 'package:orbits_flutter/transport/dht_bootstrap.dart';
 import 'package:orbits_flutter/transport/fleet_status.dart';
 import 'package:orbits_flutter/transport/relay_directory.dart';
+import 'package:orbits_flutter/transport/relay_directory_load.dart';
 
 import '../helpers/pointycastle_ecdh.dart';
 
@@ -171,6 +176,55 @@ void main() {
       ),
       isFalse,
     );
+  });
+
+  test('unsigned lab directory file loads; URLs are refused', () async {
+    final dir = await Directory.systemTemp.createTemp('orbits-relay-dir');
+    addTearDown(() => dir.delete(recursive: true));
+    final file = File('${dir.path}/directory.json');
+    await file.writeAsString(
+      jsonEncode({
+        'issuedAt': 1,
+        'expiresAt': 10,
+        'peers': _fleetPeers().map((p) => p.toJson()).toList(),
+      }),
+    );
+    final loaded = await loadRelayDirectoryFile(file.path);
+    expect(loaded, isNotNull);
+    expect(loaded!.meetsFleetMinimum, isTrue);
+    expect(kLiveSignedRelayDirectory, isFalse);
+    expect(await loadRelayDirectoryFile('https://example.com/dir.json'), isNull);
+    expect(await loadRelayDirectoryFile('http://127.0.0.1/dir.json'), isNull);
+    expect(
+      await loadRelayDirectoryFromEnv(
+        env: {kRelayDirectoryEnv: file.path},
+      ),
+      isNotNull,
+    );
+  });
+
+  test('signed directory file verifies; tamper is dropped', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final good = await issueRelayDirectory(
+      issuedAt: 1,
+      expiresAt: 10,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+      peers: _fleetPeers(),
+    );
+    final dir = await Directory.systemTemp.createTemp('orbits-relay-signed');
+    addTearDown(() => dir.delete(recursive: true));
+    final file = File('${dir.path}/signed.json');
+    await file.writeAsString(jsonEncode(relayDirectoryToJson(good)));
+    final loaded = await loadRelayDirectoryFile(file.path);
+    expect(loaded, isNotNull);
+    expect(await verifyRelayDirectory(loaded!), isTrue);
+
+    final tampered = relayDirectoryToJson(good);
+    (tampered['peers'] as List).first['host'] = 'evil.example';
+    await file.writeAsString(jsonEncode(tampered));
+    expect(await loadRelayDirectoryFile(file.path), isNull);
   });
 }
 

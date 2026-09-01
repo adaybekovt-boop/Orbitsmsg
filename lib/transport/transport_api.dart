@@ -50,6 +50,27 @@ class PeerDescriptor {
   final List<int>? discoverySecret;
 }
 
+/// HyperDHT bootstrap address. Empty lists mean "do not start Hyperswarm"
+/// — never the public DHT default.
+class DhtBootstrapNode {
+  const DhtBootstrapNode({required this.host, required this.port});
+
+  final String host;
+  final int port;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+        'host': host,
+        'port': port,
+      };
+
+  @override
+  bool operator ==(Object other) =>
+      other is DhtBootstrapNode && other.host == host && other.port == port;
+
+  @override
+  int get hashCode => Object.hash(host, port);
+}
+
 class TransportLocalConfiguration {
   const TransportLocalConfiguration({
     required this.peerId,
@@ -57,6 +78,8 @@ class TransportLocalConfiguration {
     this.allowPeerjsFallback = true,
     this.relayForced = false,
     this.diagnosticsEnabled = false,
+    this.bootstrap = const [],
+    this.transportSeed,
   });
 
   final String peerId;
@@ -67,6 +90,13 @@ class TransportLocalConfiguration {
   final bool allowPeerjsFallback;
   final bool relayForced;
   final bool diagnosticsEnabled;
+
+  /// Explicit HyperDHT bootstrap. Required for the Hyperswarm backend.
+  final List<DhtBootstrapNode> bootstrap;
+
+  /// 32-byte Hyperswarm Noise seed. Not the identity key, KEK, or
+  /// discovery secret.
+  final List<int>? transportSeed;
 }
 
 sealed class TransportEvent {

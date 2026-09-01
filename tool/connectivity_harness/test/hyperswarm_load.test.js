@@ -27,16 +27,15 @@ function hyperswarmAvailable() {
 
 const skipLoad = hyperswarmAvailable() ? false : 'hyperswarm/hyperdht not installed'
 
-test('hyperswarm refuses public DHT default', async () => {
+test('worklet hyperswarm start refuses missing bootstrap', async () => {
+  const w = new Worklet({ backend: 'hyperswarm' })
+  await assert.rejects(() => w.start({ peerId: 'A' }), /refusing public DHT/)
   await assert.rejects(
-    () => createHyperswarmBackend({}),
-    /refusing public DHT/,
-  )
-  await assert.rejects(
-    () => createHyperswarmBackend({ bootstrap: [] }),
+    () => w.start({ peerId: 'A', bootstrap: [] }),
     /refusing public DHT/,
   )
 })
+
 
 test(
   'two worklets echo over local Hyperswarm bootstrap',
@@ -91,11 +90,13 @@ test(
       peerId: 'A',
       discoverySecret: secret,
       bootstrap: local.bootstrap,
+      seed: Buffer.alloc(32, 7),
     })
     await b.start({
       peerId: 'B',
       discoverySecret: secret,
       bootstrap: local.bootstrap,
+      seed: Buffer.alloc(32, 8),
     })
     await a.publish({ deviceId: 'a' })
     await b.publish({ deviceId: 'b' })
@@ -108,6 +109,11 @@ test(
     assert.equal(a.backend, 'hyperswarm')
     assert.ok(a._swarm)
     assert.ok(b._swarm)
+    const aPk = a.noisePublicKeyHex()
+    const bPk = b.noisePublicKeyHex()
+    assert.equal(aPk.length, 64)
+    assert.equal(bPk.length, 64)
+    assert.notEqual(aPk, bPk)
     const peerId = await aPeer
     await bPeer
 

@@ -14,6 +14,8 @@ Default product path is PeerJS. Native Hyperswarm is behind
 
 `isHyperswarmTransportEnabled()` is false until rollout ≠ `off`.
 Discovery still requires an explicit shared secret — never `HASH(peerId)`.
+Hyperswarm also requires an explicit HyperDHT bootstrap list. Missing
+bootstrap keeps the worklet on loopback; it does not use the public DHT.
 
 ## Rings
 

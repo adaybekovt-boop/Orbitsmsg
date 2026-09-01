@@ -14,10 +14,18 @@ const bool kCorestoreAddonRemoteFetch = false;
 
 const String kCorestoreAddonSlot = 'tool/bare/addons/corestore.node';
 
+/// Bare-native addon slot. Same rule: local file only, never downloaded.
+const String kCorestoreBareAddonSlot = 'tool/bare/addons/corestore.bare';
+
 const String kCorestoreAddonManifestPath =
     'tool/bare/addons/CORESTORE.manifest';
 
 bool corestoreAddonPresent({String path = kCorestoreAddonSlot}) {
+  if (kCorestoreAddonRemoteFetch) return false;
+  return File(path).existsSync();
+}
+
+bool corestoreBareAddonPresent({String path = kCorestoreBareAddonSlot}) {
   if (kCorestoreAddonRemoteFetch) return false;
   return File(path).existsSync();
 }
