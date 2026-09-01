@@ -134,6 +134,11 @@ dependencies:
   url_launcher: ^6.3.2
   package_info_plus: ^9.0.1
 
+  # Federated Bare host. No web implementation — PWA stays on PeerJS.
+  # kBareBinaryShipped stays false until every OS slot is in the app bundle.
+  orbits_transport:
+    path: packages/orbits_transport
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -2,7 +2,8 @@
 
 Place a locally built `corestore.node` at
 `tool/bare/addons/corestore.node`, or a Bare addon at
-`tool/bare/addons/corestore.bare`.
+`tool/bare/addons/corestore.bare`, or copy one with
+`tool/bare/addons/vendor-corestore.sh <path>` (local file only).
 
 - `kHolepunchCorestoreAddonLinked` stays **false** until that file is
   linked into the app bundle for every shipping OS.

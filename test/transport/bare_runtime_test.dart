@@ -81,6 +81,18 @@ void main() {
     );
     expect(
       File('.github/workflows/build.yml').readAsStringSync(),
+      contains('tool/bare/embed.sh ios-arm64'),
+    );
+    expect(
+      File('.github/workflows/build.yml').readAsStringSync(),
+      contains('tool/bare/embed.sh android-arm64'),
+    );
+    expect(
+      File('.github/workflows/build.yml').readAsStringSync(),
+      contains('tool/bare/embed.sh windows-x64'),
+    );
+    expect(
+      File('.github/workflows/build.yml').readAsStringSync(),
       contains('kBareBinaryShipped stays false'),
     );
     final assets = (manifest['vendor'] as Map)['assets'] as Map;

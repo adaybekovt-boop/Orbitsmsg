@@ -11,7 +11,11 @@ if [[ -z "$SLOT" ]]; then
   exit 2
 fi
 
-python3 - "$MANIFEST" "$SLOT" "$ROOT" <<'PY'
+PYTHON_BIN="${PYTHON:-python3}"
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+  PYTHON_BIN=python
+fi
+"$PYTHON_BIN" - "$MANIFEST" "$SLOT" "$ROOT" <<'PY'
 import hashlib, json, os, sys, tarfile, urllib.request
 from pathlib import Path
 

@@ -107,10 +107,45 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "1.18.0"
+  orbits_transport_android:
+    dependency: "direct main"
+    description:
+      path: "../orbits_transport_android"
+      relative: true
+    source: path
+    version: "0.1.0"
+  orbits_transport_ios:
+    dependency: "direct main"
+    description:
+      path: "../orbits_transport_ios"
+      relative: true
+    source: path
+    version: "0.1.0"
+  orbits_transport_linux:
+    dependency: "direct main"
+    description:
+      path: "../orbits_transport_linux"
+      relative: true
+    source: path
+    version: "0.1.0"
+  orbits_transport_macos:
+    dependency: "direct main"
+    description:
+      path: "../orbits_transport_macos"
+      relative: true
+    source: path
+    version: "0.1.0"
   orbits_transport_platform_interface:
     dependency: "direct main"
     description:
       path: "../orbits_transport_platform_interface"
+      relative: true
+    source: path
+    version: "0.1.0"
+  orbits_transport_windows:
+    dependency: "direct main"
+    description:
+      path: "../orbits_transport_windows"
       relative: true
     source: path
     version: "0.1.0"

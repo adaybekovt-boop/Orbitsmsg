@@ -196,6 +196,17 @@ jobs:
           flutter pub get
           dart run build_runner build --delete-conflicting-outputs
 
+      - name: Vendor and embed iOS/macOS Bare slots (not the shipped flag)
+        run: |
+          set -euo pipefail
+          tool/bare/vendor.sh ios-arm64
+          tool/bare/embed.sh ios-arm64
+          test -f packages/orbits_transport_ios/ios/bare
+          tool/bare/vendor.sh darwin-arm64
+          tool/bare/embed.sh darwin-arm64
+          test -f packages/orbits_transport_macos/macos/bare
+          echo "kBareBinaryShipped stays false"
+
       - name: Generate and verify iOS assets
         run: |
           set -euo pipefail
@@ -335,6 +346,14 @@ jobs:
       # than cascading into a confusing "Type X not found" cascade later.
       - name: Generate code (drift / build_runner)
         run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Vendor and embed android-arm64 Bare (not the shipped flag)
+        run: |
+          set -euo pipefail
+          tool/bare/vendor.sh android-arm64
+          tool/bare/embed.sh android-arm64
+          test -f packages/orbits_transport_android/android/src/main/assets/bare
+          echo "kBareBinaryShipped stays false"
 
       # TURN URL (not a secret) + PeerJS config. Username/credential are
       # loaded at runtime — never baked via --dart-define into the APK.
@@ -559,6 +578,15 @@ jobs:
       # windows kernel compile. Kept fatal, matching the android/web jobs.
       - name: Generate code (drift / build_runner)
         run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Vendor and embed windows-x64 Bare (not the shipped flag)
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool/bare/vendor.sh windows-x64
+          tool/bare/embed.sh windows-x64
+          test -f packages/orbits_transport_windows/windows/bare.exe
+          echo "kBareBinaryShipped stays false"
 
       - name: flutter build windows (release)
         env:

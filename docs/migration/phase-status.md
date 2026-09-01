@@ -10,7 +10,7 @@ still PeerJS.
 | 0 | ADRs, contracts, tests | Closed |
 | 1 | Harness + loopback echo/file/suspend | NAT matrix **blocked** |
 | 2 | Stand runner + metrics schema | Live KZ matrix **blocked** |
-| 3 | Plugin + worklet IPC + OS hosts refuse remote JS; spawn prefers local `bare` then Node when stdlib is present; per-OS Bare slots + build-time `vendor.sh` / `embed.sh` / `vendor-bare-modules.sh`; iOS/macOS podspecs copy a local slot and never curl; **all** vendor tarball sha256 pins; worklet import maps; path-streamed `sendFile`; CI embeds linux-x64 into the Linux plugin host | Bare binary not shipped in the app bundle (`kBareBinaryShipped` false) |
+| 3 | Plugin + worklet IPC + OS hosts refuse remote JS; federated `orbits_transport` is an app dependency with per-OS `default_package` (no web — PWA stays PeerJS); spawn prefers local `bare` then Node when stdlib is present; per-OS Bare slots + build-time `vendor.sh` / `embed.sh` / `vendor-bare-modules.sh`; iOS/macOS podspecs copy a local slot and never curl; **all** vendor tarball sha256 pins; CI vendors+embeds linux-x64, ios-arm64, darwin-arm64, android-arm64, windows-x64 into plugin hosts; worklet import maps; path-streamed `sendFile` | Bare binary not shipped as the product flag (`kBareBinaryShipped` false) |
 | 4 | App boot binds native host when rollout ≠ off; prefers Hyperswarm **only** with module + explicit HyperDHT bootstrap (`ORBITS_DHT_BOOTSTRAP` / directory rows), else loopback; Noise seed ≠ identity; loopback natives exchange `v2:` / wireHello | Default still PeerJS; two physical natives not run |
 | 5 | Identity-signed caps on native connect and as a PeerJS `wireHello.caps` sibling; contact QR may carry discovery secret `d=`; secrets persist vault-wrapped | Physical pair not run |
 | 6 | Native `call` channel + CallKit / Telecom in-app sheet (opaque handle, name “Orbits”); iOS remote-notification *handlers* (no PushKit) | No PushKit / `voip` background; registration gated; no physical call |
@@ -44,10 +44,15 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
   the app bundle. `kBareWorkletRunsOnBareRuntime` is true: spawn uses Bare
   when the local binary and `bare-fs` are present, otherwise Node.
   CI vendors linux-x64 at **build time** via `vendor.sh` (pinned sha256)
-  and copies it into the Linux plugin with `embed.sh`. That still does
-  not set `kBareBinaryShipped` — other OS slots are not in the app bundle.
+  and copies it into the Linux plugin with `embed.sh`. iOS, macOS, Android,
+  and Windows CI jobs vendor+embed their runner slots the same way. The
+  app depends on the federated plugin so those binaries can land in native
+  builds. That still does
+  not set `kBareBinaryShipped` — not every OS slot is in every app bundle,
+  and darwin-x64 / linux-arm64 are not CI-embedded.
 - Holepunch Corestore native addon: `kHolepunchCorestoreAddonLinked` is
-  false. JS `corestore` may load on Node when locally installed, else
+  false. `tool/bare/addons/vendor-corestore.sh` copies a **local** `.node`
+  / `.bare` only (refuses http). JS `corestore` may load on Node when locally installed, else
   memory. Bare must not `require('corestore')` (Node's addon hangs Bare
   1.31).
 - Store review: [app-review-notes.md](app-review-notes.md) is a checklist,
@@ -62,7 +67,10 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
   `relay-blow-up` carrier error). Battery-okay does not re-enable native.
   They do not enable native transport.
 - iOS/macOS plugin podspecs copy a **local** Bare slot if present and
-  never curl/wget/http. `kBareBinaryShipped` stays false.
+  never curl/wget/http. The app depends on the federated plugin
+  (`packages/orbits_transport`, no web `default_package`). CI embeds
+  linux-x64, ios-arm64, darwin-arm64, android-arm64, and windows-x64.
+  `kBareBinaryShipped` stays false.
 - Hyperswarm bootstrap is explicit. Empty `ORBITS_DHT_BOOTSTRAP` / no
   directory bootstrap rows → loopback, not the public DHT. Local fleet
   HTTP health bootstrap ports are **not** HyperDHT addresses.

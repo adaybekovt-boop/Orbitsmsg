@@ -11,7 +11,7 @@ Vendors a locally built Bare binary into the app bundle when present.
 Production must not fetch remote executable JS or binaries.
                        DESC
   s.homepage         = 'https://github.com/adaybekovt-boop/Orbitsmsg'
-  s.license          = { :file => '../../../LICENSE' }
+  s.license          = { :type => 'UNLICENSED', :text => 'Proprietary. See the repository LICENSE.' }
   s.author           = { 'Orbits' => 'security@example.com' }
   s.source           = { :path => '.' }
   s.source_files     = 'Classes/**/*'

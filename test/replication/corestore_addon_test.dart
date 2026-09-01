@@ -29,5 +29,11 @@ void main() {
       File('tool/connectivity_harness/src/corestore_journal.js').readAsStringSync(),
       contains("typeof Bare !== 'undefined'"),
     );
+    final vendor = File('tool/bare/addons/vendor-corestore.sh').readAsStringSync();
+    expect(vendor, contains('NEVER downloads'));
+    expect(vendor, contains('kHolepunchCorestoreAddonLinked stays false'));
+    expect(vendor, isNot(contains('curl')));
+    expect(vendor, isNot(contains('wget')));
+    expect(vendor, contains('refusing remote Corestore addon URL'));
   });
 }

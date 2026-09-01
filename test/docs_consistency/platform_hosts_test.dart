@@ -48,5 +48,29 @@ void main() {
           .readAsStringSync(),
       isNot(contains('http')),
     );
+
+    final appPub = File('pubspec.yaml').readAsStringSync();
+    expect(appPub, contains('path: packages/orbits_transport'));
+    expect(appPub, contains('PWA stays on PeerJS'));
+
+    final facade = File('packages/orbits_transport/pubspec.yaml').readAsStringSync();
+    expect(facade, contains('default_package: orbits_transport_android'));
+    expect(facade, contains('default_package: orbits_transport_ios'));
+    expect(facade, contains('default_package: orbits_transport_linux'));
+    expect(facade, contains('default_package: orbits_transport_macos'));
+    expect(facade, contains('default_package: orbits_transport_windows'));
+    expect(facade, isNot(contains('default_package: orbits_transport_web')));
+    expect(
+      facade.contains(RegExp(r'^\s+web:', multiLine: true)),
+      isFalse,
+    );
+
+    final ci = File('.github/workflows/build.yml').readAsStringSync();
+    expect(ci, contains('tool/bare/embed.sh linux-x64'));
+    expect(ci, contains('tool/bare/embed.sh ios-arm64'));
+    expect(ci, contains('tool/bare/embed.sh darwin-arm64'));
+    expect(ci, contains('tool/bare/embed.sh android-arm64'));
+    expect(ci, contains('tool/bare/embed.sh windows-x64'));
+    expect(ci, contains('kBareBinaryShipped stays false'));
   });
 }

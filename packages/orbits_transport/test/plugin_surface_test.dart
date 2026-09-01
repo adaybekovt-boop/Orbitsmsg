@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_transport/orbits_transport.dart';
 
@@ -29,6 +31,16 @@ void main() {
     await plugin.stop();
     expect(host.started, isFalse);
     expect(host.calls, containsAll(['start', 'publish', 'suspend', 'resume', 'stop']));
+  });
+
+  test('federated facade maps every native OS and not the PWA', () {
+    final pub = File('pubspec.yaml').readAsStringSync();
+    expect(pub, contains('default_package: orbits_transport_android'));
+    expect(pub, contains('default_package: orbits_transport_ios'));
+    expect(pub, contains('default_package: orbits_transport_linux'));
+    expect(pub, contains('default_package: orbits_transport_macos'));
+    expect(pub, contains('default_package: orbits_transport_windows'));
+    expect(pub, isNot(contains('orbits_transport_web')));
   });
 
   test('hosts refuse remote executable JS', () async {
