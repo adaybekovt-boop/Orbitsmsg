@@ -44,6 +44,7 @@ void main() {
     expect(src, contains('resolveDhtBootstrap'));
     expect(src, contains('transportSeed'));
     expect(src, contains('derivedTransportPublicPlaceholder'));
+    expect(src, contains('rememberPublished'));
     expect(src, isNot(contains('List<int>.filled(32, 1)')));
     expect(src, contains('spawnWorkletTransport(backend: preferred)'));
     expect(src, contains("backend == 'hyperswarm'"));
@@ -63,6 +64,22 @@ void main() {
     expect(
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
       contains("'bootstrap':"),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'noisePublicKey': hexEncode(noise)"),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('noisePublicKeyFor'),
+    );
+    expect(
+      File('lib/ui/profile/device_link_page.dart').readAsStringSync(),
+      contains('localDeviceBindingKeys'),
+    );
+    expect(
+      File('lib/ui/profile/device_link_page.dart').readAsStringSync(),
+      isNot(contains('List<int>.filled(32, 1)')),
     );
     expect(
       File('tool/connectivity_harness/src/swarm.js').readAsStringSync(),

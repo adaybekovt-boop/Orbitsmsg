@@ -17,7 +17,7 @@ still PeerJS.
 | 7 | File journal + Hypercore local store + worklet Corestore journal (`useCorestoreIfPresent`); live vs replay projector fingerprint; DualStackBridge ingest of replication frames into the journal; boot replays the file journal into memory + Drift after block-then-decrypt | Not a Holepunch Corestore native addon |
 | 8 | Blind mailbox + HTTP `StoragePeerClient` + local loopback fleet (3/2/2 health + unsigned directory rows) + opaque wake HTTP intake; `PushSender` refuses APNs/FCM; Android `DEVICE_IDLE` → Doze; drain tombstones ciphertext; block list before mailbox decrypt/persist; backlog rollback | No deployed public fleet / APNs/FCM send / live signed directory |
 | 9 | Drop packets on native `attachment` channel; 10–50 MiB resume tests; path-streamed native `sendFileFromPath`; Drop UI tries path before bytes | In-memory Drop still used when PeerJS |
-| 10 | Device-link QR + revoke journal events + per-identity fan-out + three-device RatchetState isolation test | No live multi-device ratchet sessions on hardware |
+| 10 | Device-link QR + revoke journal events + per-identity fan-out + three-device RatchetState isolation test; QR keys from Noise seed (not dummy bytes); native `dial` passes Noise public key | No live multi-device ratchet sessions on hardware |
 | 11–12 | Room maps on native carrier; live `room_join` / `room_msg` project into Autobase; Autobase writers converge over DualStackBridge (`autobase-event`); membership is journaled without message plaintext | Live rooms still PeerJS host-plaintext |
 | 13 | Sender-key epoch tests + [phase13-group-e2e-review.md](phase13-group-e2e-review.md) | Flag false; no independent audit |
 | 14 | Isolation helpers wired; mode stays `default-live`; support window [peerjs-support-window.md](peerjs-support-window.md) | Support window not started |
@@ -60,6 +60,10 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
 - Hyperswarm bootstrap is explicit. Empty `ORBITS_DHT_BOOTSTRAP` / no
   directory bootstrap rows → loopback, not the public DHT. Local fleet
   HTTP health bootstrap ports are **not** HyperDHT addresses.
+- Device-link QR carries the local Noise / Hypercore placeholders from
+  the per-device seed (or the worklet Noise public key after native
+  start). Dummy `0x01` keys are gone. `dial` forwards the recipient
+  Noise public key for Hyperswarm `joinPeer`.
 
 Do not mark the migration done until every Definition of Done line in
 `master-plan.md` has current-state evidence.

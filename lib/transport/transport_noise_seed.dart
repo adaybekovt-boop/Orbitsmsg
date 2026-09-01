@@ -24,6 +24,7 @@ class TransportNoiseSeedStore {
   WrappedSnapshotWriter? writeSnapshot;
   WrappedSnapshotReader? readSnapshot;
   List<int>? _seed;
+  Uint8List? publishedPublicKey;
 
   List<int>? get current =>
       _seed == null ? null : List<int>.from(_seed!);
@@ -60,7 +61,15 @@ class TransportNoiseSeedStore {
     } catch (_) {}
   }
 
-  void clearMemory() => _seed = null;
+  void rememberPublished(List<int> publicKey) {
+    if (publicKey.length != 32) return;
+    publishedPublicKey = Uint8List.fromList(publicKey);
+  }
+
+  void clearMemory() {
+    _seed = null;
+    publishedPublicKey = null;
+  }
 }
 
 final transportNoiseSeedStore = TransportNoiseSeedStore();
@@ -90,4 +99,23 @@ Uint8List? noisePublicKeyFromHex(String? hex) {
     out[i] = byte;
   }
   return out;
+}
+
+String hexEncode(List<int> bytes) {
+  final out = StringBuffer();
+  for (final b in bytes) {
+    out.write((b & 0xff).toRadixString(16).padLeft(2, '0'));
+  }
+  return out.toString();
+}
+
+/// Keys this device advertises in a device-link QR. Prefer the worklet
+/// Noise public key when NativeTransportHost has published one.
+({Uint8List transport, Uint8List hypercore}) localDeviceBindingKeys() {
+  final seed = transportNoiseSeedStore.getOrCreate();
+  final published = transportNoiseSeedStore.publishedPublicKey;
+  return (
+    transport: published ?? derivedTransportPublicPlaceholder(seed),
+    hypercore: derivedHypercorePublicPlaceholder(seed),
+  );
 }

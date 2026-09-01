@@ -8,7 +8,6 @@ import 'dart:typed_data';
 import '../core/vault_kek.dart';
 import '../peer/helpers.dart';
 import '../storage/wrapped_snapshot.dart';
-import '../transport/discovery_secret_store.dart';
 
 enum DeviceStatus { active, revoked }
 
@@ -148,13 +147,33 @@ class DeviceRegistry {
     final primary = normalizePeerId(ownerPeerId);
     final out = <String>{primary};
     for (final device in active) {
-      if (device.transportPeerId == null || device.transportPeerId!.isEmpty) {
-        continue;
-      }
+      final transportId = device.transportPeerId;
+      if (transportId == null || transportId.isEmpty) continue;
       if (normalizePeerId(device.ownerPeerId) != primary) continue;
-      out.add(normalizePeerId(device.transportPeerId!));
+      out.add(normalizePeerId(transportId));
     }
     return out;
+  }
+
+  /// Noise public key for a transport or owner id. Not the identity key.
+  List<int>? noisePublicKeyFor(String peerId) {
+    final norm = normalizePeerId(peerId);
+    AuthorizedDevice? ownerMatch;
+    for (final device in active) {
+      final transport = device.transportPeerId;
+      if (transport != null &&
+          transport.isNotEmpty &&
+          normalizePeerId(transport) == norm &&
+          device.transportPublicKey.isNotEmpty) {
+        return List<int>.from(device.transportPublicKey);
+      }
+      if (normalizePeerId(device.ownerPeerId) == norm &&
+          device.transportPublicKey.isNotEmpty) {
+        ownerMatch ??= device;
+      }
+    }
+    final key = ownerMatch?.transportPublicKey;
+    return key == null || key.isEmpty ? null : List<int>.from(key);
   }
 
   Future<void> hydrate() async {

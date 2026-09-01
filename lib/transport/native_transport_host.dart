@@ -117,6 +117,7 @@ class NativeTransportHost {
     final transportPublicKey =
         workletPk ?? derivedTransportPublicPlaceholder(seed);
     final hypercorePublicKey = derivedHypercorePublicPlaceholder(seed);
+    transportNoiseSeedStore.rememberPublished(transportPublicKey);
     try {
       await transport!.publish(
         DeviceBinding(

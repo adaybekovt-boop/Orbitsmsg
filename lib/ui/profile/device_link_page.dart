@@ -2,7 +2,6 @@
 // not share a ratchet snapshot.
 
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -11,6 +10,7 @@ import '../../core/identity_key.dart';
 import '../../devices/device_link.dart';
 import '../../devices/device_registry.dart';
 import '../../themes/orbits_tokens.dart';
+import '../../transport/transport_noise_seed.dart';
 import '../primitives/orbits_glass_app_bar.dart';
 import '../primitives/orbits_glass_button.dart';
 import '../primitives/orbits_glass_list_tile.dart';
@@ -45,11 +45,13 @@ class _DeviceLinkPageState extends State<DeviceLinkPage> {
   Future<void> _build() async {
     try {
       await deviceRegistry.hydrate();
+      await transportNoiseSeedStore.hydrate();
       final pub = await exportIdentityPubSpki();
+      final keys = localDeviceBindingKeys();
       final link = await issueDeviceLink(
         deviceId: 'local-device',
-        transportPublicKey: Uint8List.fromList(List<int>.filled(32, 1)),
-        hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 2)),
+        transportPublicKey: keys.transport,
+        hypercorePublicKey: keys.hypercore,
         createdAt: DateTime.now().millisecondsSinceEpoch,
         identityPublicKey: pub,
         sign: signBytes,

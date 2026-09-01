@@ -106,8 +106,13 @@ class DualStackBridge {
     if (!nativeEnabled) return;
     final secret = secrets.get(peerId);
     if (secret == null) return;
+    final noise = devices?.noisePublicKeyFor(peerId);
     await transport.connect(
-      PeerDescriptor(peerId: normalizePeerId(peerId), discoverySecret: secret),
+      PeerDescriptor(
+        peerId: normalizePeerId(peerId),
+        discoverySecret: secret,
+        noisePublicKey: noise,
+      ),
     );
   }
 

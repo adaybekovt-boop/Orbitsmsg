@@ -75,5 +75,13 @@ void main() {
       again.transportTargets('ORBIT-BBBBBBBBBBBBBBBB'),
       {'ORBIT-BBBBBBBBBBBBBBBB', 'ORBIT-B1B1B1B1B1B1B1B1'},
     );
+    expect(
+      again.noisePublicKeyFor('ORBIT-B1B1B1B1B1B1B1B1'),
+      List<int>.filled(32, 1),
+    );
+    expect(
+      again.noisePublicKeyFor('ORBIT-BBBBBBBBBBBBBBBB'),
+      List<int>.filled(32, 1),
+    );
   });
 }

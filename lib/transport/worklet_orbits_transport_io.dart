@@ -173,9 +173,11 @@ class WorkletOrbitsTransport implements OrbitsTransport {
 
   @override
   Future<void> connect(PeerDescriptor peer) async {
+    final noise = peer.noisePublicKey ?? peer.binding?.transportPublicKey;
     await _client.request('connect', {
       'peerId': peer.peerId,
       if (peer.discoverySecret != null) 'discoverySecret': peer.discoverySecret,
+      if (noise != null && noise.isNotEmpty) 'noisePublicKey': hexEncode(noise),
     });
   }
 

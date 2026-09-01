@@ -41,6 +41,7 @@ class PeerDescriptor {
     required this.peerId,
     this.binding,
     this.discoverySecret,
+    this.noisePublicKey,
   });
 
   final String peerId;
@@ -48,6 +49,10 @@ class PeerDescriptor {
 
   /// Shared contact-discovery secret. Never the public Peer ID.
   final List<int>? discoverySecret;
+
+  /// Hyperswarm Noise public key. Not the identity key. Used for
+  /// `joinPeer` when the worklet is on Hyperswarm.
+  final List<int>? noisePublicKey;
 }
 
 /// HyperDHT bootstrap address. Empty lists mean "do not start Hyperswarm"
