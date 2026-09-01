@@ -32,7 +32,7 @@ void main() {
     );
     await durable.append(event);
 
-    Future<Map<String, Object?>?> decrypt(List<int> enc) async => {
+    Future<Map<String, Object?>?> decrypt(List<int> enc, String conv) async => {
           'text': String.fromCharCodes(enc),
         };
     final fromLive = JournalProjector(decrypt: decrypt);

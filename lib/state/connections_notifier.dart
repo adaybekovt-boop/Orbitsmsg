@@ -34,7 +34,8 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/bundle_cache.dart';
-import '../core/wire_crypto.dart' show initWireSession;
+import '../core/wire_crypto.dart'
+    show decryptWirePayload, initWireSession, isWireCiphertext, isWireReady;
 import '../core/wire_session.dart' show isVerified;
 import '../messaging/message_protocol.dart';
 import '../core/orbits_drop.dart' show dropMaxBufferSize;
@@ -50,6 +51,7 @@ import '../mailbox/blind_store.dart';
 import '../mailbox/storage_peer_client.dart';
 import '../replication/file_journal.dart';
 import '../replication/memory_journal.dart';
+import '../replication/drift_projector.dart';
 import '../rooms/autobase_log.dart';
 import '../storage/db.dart' as db;
 import '../transport/dual_stack_bridge.dart';
@@ -267,6 +269,41 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         _drop.handleInbound(peerId, packet);
       }
       ..attach();
+  }
+
+  /// Replay the native journal into Drift after decrypt. Block list runs
+  /// first. Drift is not the sync source of truth.
+  Future<int> restoreReadModelFromJournal() async {
+    final journal = _nativeJournal;
+    if (journal == null) return 0;
+    return projectJournalToReadModel(
+      journal: journal,
+      isBlocked: (id) => _messaging.isPeerBlocked(id),
+      decrypt: (enc, conv) async {
+        if (_messaging.isPeerBlocked(conv)) return null;
+        final text = String.fromCharCodes(enc);
+        if (!isWireCiphertext(text) || !isWireReady(conv)) return null;
+        try {
+          final obj = await decryptWirePayload(conv, text);
+          if (obj is Map && obj['text'] is String) {
+            return {'text': obj['text'] as String};
+          }
+        } catch (_) {}
+        return null;
+      },
+      persist: (msg) async {
+        if (msg.plaintext.isEmpty) return;
+        await db.saveMessage({
+          'id': msg.eventId,
+          'peerId': msg.conversationId,
+          'timestamp': msg.createdAt,
+          'payload': {'type': 'chat', 'text': msg.plaintext},
+          'direction':
+              msg.senderIdentity == _selfPeerId() ? 'out' : 'in',
+          'status': msg.status,
+        });
+      },
+    );
   }
 
   Future<void> unbindNativeTransport() async {

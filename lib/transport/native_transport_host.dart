@@ -117,9 +117,16 @@ class NativeTransportHost {
     final mailbox = BlindMailboxStore()..grant(cap);
     final storagePeer = await _bindStoragePeer(mailbox, cap);
 
+    final memory = MemoryJournal('local-device');
+    if (journal != null) {
+      for (final record in (await journal.replay()).records) {
+        memory.ingest(record);
+      }
+    }
+
     _ref.read(connectionsNotifierProvider.notifier).bindNativeTransport(
           transport!,
-          journal: MemoryJournal('local-device'),
+          journal: memory,
           deviceId: 'local-device',
           durableJournal: journal,
           mailbox: mailbox,
@@ -129,6 +136,9 @@ class NativeTransportHost {
           localCapabilities: caps,
           devices: deviceRegistry,
         );
+    await _ref
+        .read(connectionsNotifierProvider.notifier)
+        .restoreReadModelFromJournal();
     lifecycle = TransportLifecycle(
       transport: transport!,
       onResumeDrain: () async {

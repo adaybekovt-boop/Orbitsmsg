@@ -302,8 +302,8 @@ class DualStackBridge {
 
   Future<bool> verifyLiveMatchesReplay({EnvelopeDecrypt? decrypt}) async {
     await _durable;
-    Future<Map<String, Object?>?> hook(List<int> enc) async {
-      if (decrypt != null) return decrypt(enc);
+    Future<Map<String, Object?>?> hook(List<int> enc, String conv) async {
+      if (decrypt != null) return decrypt(enc, conv);
       return {'text': base64Encode(enc)};
     }
 

@@ -6,6 +6,7 @@ import '../transport/replication_schema.dart';
 
 typedef EnvelopeDecrypt = Future<Map<String, Object?>?> Function(
   List<int> encryptedEnvelope,
+  String conversationId,
 );
 
 class ProjectedMessage {
@@ -16,6 +17,7 @@ class ProjectedMessage {
     required this.senderDeviceId,
     required this.plaintext,
     required this.status,
+    this.createdAt = 0,
   });
 
   final String eventId;
@@ -24,6 +26,7 @@ class ProjectedMessage {
   final String senderDeviceId;
   final String plaintext;
   final String status;
+  final int createdAt;
 
   ProjectedMessage copyWith({String? status}) => ProjectedMessage(
         eventId: eventId,
@@ -32,13 +35,20 @@ class ProjectedMessage {
         senderDeviceId: senderDeviceId,
         plaintext: plaintext,
         status: status ?? this.status,
+        createdAt: createdAt,
       );
 }
 
 class JournalProjector {
-  JournalProjector({required this.decrypt});
+  JournalProjector({
+    required this.decrypt,
+    this.isBlocked,
+    this.persist,
+  });
 
   final EnvelopeDecrypt decrypt;
+  final bool Function(String conversationId)? isBlocked;
+  final Future<void> Function(ProjectedMessage message)? persist;
   final Map<String, ProjectedMessage> messages = <String, ProjectedMessage>{};
   final Set<String> seenEventIds = <String>{};
   int cursor = 0;
@@ -67,19 +77,24 @@ class JournalProjector {
       case ReplicationEventKind.messageEnvelopeCreated:
         final id = record.fields['eventId'] as String?;
         if (id == null || seenEventIds.contains(id)) return;
+        final conv = record.fields['conversationId'] as String? ?? '';
+        if (isBlocked?.call(conv) == true) return;
         seenEventIds.add(id);
         final enc = record.fields['encryptedEnvelope'];
         if (enc is! List<int>) return;
-        final plain = await decrypt(enc);
+        final plain = await decrypt(enc, conv);
         if (plain == null) return;
-        messages[id] = ProjectedMessage(
+        final msg = ProjectedMessage(
           eventId: id,
-          conversationId: record.fields['conversationId'] as String? ?? '',
+          conversationId: conv,
           senderIdentity: record.fields['senderIdentity'] as String? ?? '',
           senderDeviceId: record.fields['senderDeviceId'] as String? ?? '',
           plaintext: plain['text'] as String? ?? '',
           status: 'delivered',
+          createdAt: (record.fields['createdAt'] as num?)?.toInt() ?? 0,
         );
+        messages[id] = msg;
+        await persist?.call(msg);
       case ReplicationEventKind.deliveryAcknowledged:
         final ackId = record.fields['eventId'] as String?;
         if (ackId == null) return;
@@ -97,4 +112,21 @@ class JournalProjector {
         break;
     }
   }
+}
+
+/// Replay the journal into a local read-model. Drift is the sink, not
+/// the sync source of truth. Block list runs before decrypt.
+Future<int> projectJournalToReadModel({
+  required MemoryJournal journal,
+  required EnvelopeDecrypt decrypt,
+  required Future<void> Function(ProjectedMessage message) persist,
+  bool Function(String conversationId)? isBlocked,
+}) async {
+  final projector = JournalProjector(
+    decrypt: decrypt,
+    isBlocked: isBlocked,
+    persist: persist,
+  );
+  await projector.applyAll(journal);
+  return projector.messages.length;
 }

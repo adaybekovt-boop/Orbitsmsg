@@ -6,7 +6,7 @@ import 'package:orbits_flutter/transport/replication_schema.dart';
 void main() {
   test('live apply and replay produce the same projection', () async {
     final journal = MemoryJournal('dev-a');
-    Future<Map<String, Object?>?> decrypt(List<int> enc) async => {
+    Future<Map<String, Object?>?> decrypt(List<int> enc, String conv) async => {
           'text': String.fromCharCodes(enc),
         };
 
@@ -64,7 +64,7 @@ void main() {
       ),
     );
     final projector = JournalProjector(
-      decrypt: (enc) async => {'text': String.fromCharCodes(enc)},
+      decrypt: (enc, conv) async => {'text': String.fromCharCodes(enc)},
     );
     await projector.applyAll(journal);
     expect(projector.messages, hasLength(1));
@@ -78,5 +78,45 @@ void main() {
       }),
       throwsArgumentError,
     );
+  });
+
+  test('block list skips decrypt and persist', () async {
+    final journal = MemoryJournal('dev-a');
+    journal.appendEnvelope(
+      const MessageEnvelopeCreated(
+        eventId: 'e-blocked',
+        conversationId: 'blocked-peer',
+        senderIdentity: 'eve',
+        senderDeviceId: 'dev-e',
+        logicalSequence: 1,
+        createdAt: 1,
+        encryptedEnvelope: <int>[72, 105],
+      ),
+    );
+    journal.appendEnvelope(
+      const MessageEnvelopeCreated(
+        eventId: 'e-ok',
+        conversationId: 'c1',
+        senderIdentity: 'alice',
+        senderDeviceId: 'dev-a',
+        logicalSequence: 2,
+        createdAt: 2,
+        encryptedEnvelope: <int>[72, 105],
+      ),
+    );
+    final decrypted = <String>[];
+    final persisted = <String>[];
+    final n = await projectJournalToReadModel(
+      journal: journal,
+      isBlocked: (id) => id == 'blocked-peer',
+      decrypt: (enc, conv) async {
+        decrypted.add(conv);
+        return {'text': String.fromCharCodes(enc)};
+      },
+      persist: (msg) async => persisted.add(msg.eventId),
+    );
+    expect(n, 1);
+    expect(decrypted, ['c1']);
+    expect(persisted, ['e-ok']);
   });
 }

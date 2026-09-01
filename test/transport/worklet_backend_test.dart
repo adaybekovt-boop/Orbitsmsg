@@ -34,6 +34,7 @@ void main() {
     expect(src, contains('onDoze'));
     expect(src, contains('rollbackNativeToPeerjs'));
     expect(src, contains('_abandonNativeCarrier'));
+    expect(src, contains('restoreReadModelFromJournal'));
     expect(src, contains('verifyLiveMatchesReplay'));
     expect(src, contains('unbindNativeTransport'));
     expect(
