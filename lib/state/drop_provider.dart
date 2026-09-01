@@ -32,6 +32,7 @@ class DropTransfer {
     this.status = DropStatus.queued,
     this.error,
     this.blobId,
+    this.localPath,
   });
 
   final String id;
@@ -47,6 +48,9 @@ class DropTransfer {
   /// `fileBlobs` row id once a received file has been saved (null otherwise).
   final String? blobId;
 
+  /// Native path-streamed receive: verified file on disk, not Drift bytes.
+  final String? localPath;
+
   double get progress =>
       size == 0 ? 1.0 : (transferred / size).clamp(0.0, 1.0).toDouble();
 
@@ -55,6 +59,7 @@ class DropTransfer {
     DropStatus? status,
     String? error,
     String? blobId,
+    String? localPath,
   }) =>
       DropTransfer(
         id: id,
@@ -67,6 +72,7 @@ class DropTransfer {
         status: status ?? this.status,
         error: error ?? this.error,
         blobId: blobId ?? this.blobId,
+        localPath: localPath ?? this.localPath,
       );
 }
 
@@ -101,6 +107,7 @@ class DropNotifier extends StateNotifier<DropState> {
           DropBridge(
             handleInbound: (remoteId, packet) {
               _pendingInboundPeer = remoteId;
+              if (_handleNativePathPacket(remoteId, packet)) return;
               unawaited(_engine.handleInbound(packet, peerId: remoteId));
             },
             resetPeer: (remoteId) => _engine.resetPeer(remoteId),
@@ -175,6 +182,7 @@ class DropNotifier extends StateNotifier<DropState> {
     required String name,
     required String mime,
     required int sizeBytes,
+    int resumeOffset = 0,
   }) async {
     if (path.isEmpty) return null;
     final pid = normalizePeerId(peerId);
@@ -187,16 +195,31 @@ class DropNotifier extends StateNotifier<DropState> {
     }
 
     final id = dropNewFileId();
-    final ok = await conns.sendFileFromPath(
-      pid,
-      TransportFileDescriptor(
-        path: path,
-        sizeBytes: sizeBytes,
-        fileName: name,
+    try {
+      final ok = await conns.sendFileFromPath(
+        pid,
+        TransportFileDescriptor(
+          path: path,
+          sizeBytes: sizeBytes,
+          fileName: name,
+          mime: mime,
+          resumeOffset: resumeOffset,
+        ),
+      );
+      if (!ok) return null;
+    } on StateError catch (e) {
+      _upsert(DropTransfer(
+        id: id,
+        name: name,
+        size: sizeBytes,
         mime: mime,
-      ),
-    );
-    if (!ok) return null;
+        peerId: pid,
+        direction: DropDirection.outgoing,
+        status: DropStatus.failed,
+        error: e.message,
+      ));
+      return id;
+    }
     _upsert(DropTransfer(
       id: id,
       name: name,
@@ -265,6 +288,66 @@ class DropNotifier extends StateNotifier<DropState> {
 
   void _onFailed(String fileId, DropDirection _, String reason) {
     _patch(fileId, (t) => t.copyWith(status: DropStatus.failed, error: reason));
+  }
+
+  bool _handleNativePathPacket(String peerId, Object packet) {
+    if (packet is! Map) return false;
+    final type = packet['type'];
+    if (type == 'harness-file-start') {
+      final id = packet['id'] as String? ?? '';
+      if (id.isEmpty) return true;
+      _upsert(DropTransfer(
+        id: id,
+        name: (packet['name'] as String?) ?? 'file',
+        size: (packet['size'] as num?)?.toInt() ?? 0,
+        mime: (packet['mime'] as String?) ?? 'application/octet-stream',
+        peerId: peerId,
+        direction: DropDirection.incoming,
+      ));
+      return true;
+    }
+    if (type == 'harness-file-chunk') {
+      final id = packet['id'] as String? ?? '';
+      final offset = (packet['offset'] as num?)?.toInt() ?? 0;
+      if (id.isNotEmpty) {
+        _patch(id, (t) => t.copyWith(transferred: offset));
+      }
+      return true;
+    }
+    if (type == 'harness-file-end' || type == 'harness-file-resume') {
+      return true;
+    }
+    if (type == 'harness-file-received') {
+      final id = packet['id'] as String? ?? '';
+      final localPath = packet['path'] as String? ?? '';
+      final size = (packet['size'] as num?)?.toInt() ?? 0;
+      if (id.isEmpty) return true;
+      final existing = state.transfers.where((t) => t.id == id);
+      if (existing.isEmpty) {
+        _upsert(DropTransfer(
+          id: id,
+          name: (packet['name'] as String?) ?? 'file',
+          size: size,
+          mime: 'application/octet-stream',
+          peerId: peerId,
+          direction: DropDirection.incoming,
+          transferred: size,
+          status: DropStatus.completed,
+          localPath: localPath,
+        ));
+      } else {
+        _patch(
+          id,
+          (t) => t.copyWith(
+            transferred: size == 0 ? t.size : size,
+            status: DropStatus.completed,
+            localPath: localPath,
+          ),
+        );
+      }
+      return true;
+    }
+    return false;
   }
 
   Future<bool> _persistIncoming(DropFileMeta meta, Uint8List bytes) async {

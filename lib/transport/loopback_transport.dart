@@ -6,8 +6,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart' show sha256;
-
+import '../attachments/path_attachment.dart';
 import 'device_binding.dart';
 import 'discovery.dart';
 import 'mux_frames.dart';
@@ -46,7 +45,15 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   final _events = StreamController<TransportEvent>.broadcast();
   final Map<String, LoopbackOrbitsTransport> _peers =
       <String, LoopbackOrbitsTransport>{};
-  final Map<String, _IncomingFile> _files = <String, _IncomingFile>{};
+  final Map<String, IncomingPathAttachment> _files =
+      <String, IncomingPathAttachment>{};
+  final Map<String, int> _resumeOffsets = <String, int>{};
+  final Map<String, Completer<int>> _resumeWaiters = <String, Completer<int>>{};
+  Future<void> _attachmentIo = Future<void>.value();
+
+  /// Test hook: stop [sendFile] after this many payload bytes from the
+  /// agreed offset, without sending `harness-file-end`.
+  int? debugFileSendBudget;
 
   TransportLocalConfiguration? _config;
   DeviceBinding? _binding;
@@ -72,6 +79,10 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
     for (final id in _peers.keys.toList()) {
       await disconnect(id);
     }
+    for (final incoming in _files.values) {
+      await incoming.close();
+    }
+    _files.clear();
     _hub.detach(this);
     _started = false;
     _published = false;
@@ -156,15 +167,19 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
       throw StateError('sendFile needs a path');
     }
     final onDisk = File(file.path);
-    final digest = (await sha256.bind(onDisk.openRead()).first).toString();
+    final digest = await sha256File(onDisk.path);
     final raf = await onDisk.open();
+    String? transferId;
     try {
       final size = await raf.length();
       final resumeOffset = file.resumeOffset;
       if (resumeOffset < 0 || resumeOffset > size) {
         throw StateError('sendFile resumeOffset out of range');
       }
-      final id = digest.substring(0, 16);
+      final id = attachmentIdFromDigest(digest);
+      transferId = id;
+      final waiter = Completer<int>();
+      _resumeWaiters[id] = waiter;
       await send(
         peerId,
         TransportChannel.attachment,
@@ -177,9 +192,20 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
           'mime': file.mime,
         }),
       );
+      final agreed = await waiter.future.timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => _resumeOffsets.remove(id) ?? resumeOffset,
+      );
+      _resumeWaiters.remove(id);
       var offset = resumeOffset;
+      if (agreed > offset) offset = agreed;
+      final startOffset = offset;
       final chunk = Uint8List(kFileChunkSize);
       while (offset < size) {
+        final sent = offset - startOffset;
+        if (debugFileSendBudget != null && sent >= debugFileSendBudget!) {
+          throw StateError('file-send interrupted');
+        }
         await raf.setPosition(offset);
         final remaining = size - offset;
         final want = remaining < kFileChunkSize ? remaining : kFileChunkSize;
@@ -204,6 +230,9 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
       );
     } finally {
       await raf.close();
+      if (transferId != null) {
+        _resumeWaiters.remove(transferId);
+      }
     }
   }
 
@@ -242,11 +271,29 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
     if (remoteBinding != null) {
       _events.add(TransportAuthenticated(remote.peerId, remoteBinding));
     }
+    for (final incoming in _files.values) {
+      if (incoming.isComplete) continue;
+      unawaited(
+        send(
+          remote.peerId,
+          TransportChannel.attachment,
+          jsonPayload({
+            'type': 'harness-file-resume',
+            'id': incoming.id,
+            'offset': incoming.nextOffset,
+          }),
+        ),
+      );
+    }
   }
 
   void _deliver(String from, TransportChannel channel, Uint8List frame) {
     if (channel == TransportChannel.attachment) {
-      unawaited(_handleAttachment(from, frame));
+      if (_isHarnessFileFrame(frame)) {
+        unawaited(_enqueueAttachment(from, frame));
+        return;
+      }
+      _events.add(TransportFrame(from, TransportChannel.attachment, frame));
       return;
     }
     if (channel == TransportChannel.message) {
@@ -272,6 +319,32 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
     _events.add(TransportFrame(from, channel, frame));
   }
 
+  bool _isHarnessFileFrame(Uint8List frame) {
+    try {
+      final type = decodeJsonPayload(frame)['type'];
+      return type == 'harness-file-start' ||
+          type == 'harness-file-chunk' ||
+          type == 'harness-file-end' ||
+          type == 'harness-file-resume' ||
+          type == 'harness-file-received';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<void> _enqueueAttachment(String from, Uint8List frame) {
+    final previous = _attachmentIo;
+    final gate = Completer<void>();
+    _attachmentIo = gate.future;
+    return previous.then((_) async {
+      try {
+        await _handleAttachment(from, frame);
+      } finally {
+        gate.complete();
+      }
+    });
+  }
+
   Future<void> _handleAttachment(String from, Uint8List frame) async {
     Map<String, Object?> body;
     try {
@@ -281,6 +354,13 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
       return;
     }
     final type = body['type'];
+    if (type == 'harness-file-resume') {
+      final id = body['id'] as String?;
+      final offset = (body['offset'] as num?)?.toInt() ?? 0;
+      if (id != null) _onResume(id, offset);
+      _events.add(TransportFrame(from, TransportChannel.attachment, frame));
+      return;
+    }
     if (type != 'harness-file-start' &&
         type != 'harness-file-chunk' &&
         type != 'harness-file-end') {
@@ -293,56 +373,81 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
       return;
     }
     if (type == 'harness-file-start') {
-      _files[id] = _IncomingFile(
-        name: body['name'] as String? ?? id,
-        size: body['size'] as int? ?? 0,
-        sha256hex: body['sha256'] as String? ?? '',
+      final existing = _files[id];
+      final digest = body['sha256'] as String? ?? '';
+      IncomingPathAttachment incoming;
+      if (existing != null && existing.sha256hex == digest) {
+        incoming = existing;
+      } else {
+        if (existing != null) {
+          await existing.close();
+        }
+        incoming = await IncomingPathAttachment.open(
+          id: id,
+          name: body['name'] as String? ?? id,
+          totalBytes: (body['size'] as num?)?.toInt() ?? 0,
+          sha256hex: digest,
+        );
+        _files[id] = incoming;
+      }
+      await send(
+        from,
+        TransportChannel.attachment,
+        jsonPayload({
+          'type': 'harness-file-resume',
+          'id': id,
+          'offset': incoming.nextOffset,
+        }),
       );
     } else if (type == 'harness-file-chunk') {
       final incoming = _files[id];
       if (incoming == null) return;
-      incoming.bytes.addAll(base64Decode(body['b64'] as String));
+      final raw = body['b64'] as String? ?? '';
+      await incoming.writeChunk(
+        (body['offset'] as num?)?.toInt() ?? 0,
+        base64Decode(raw),
+      );
     } else if (type == 'harness-file-end') {
-      final incoming = _files.remove(id);
+      final incoming = _files[id];
       if (incoming == null) return;
-      final assembled = Uint8List.fromList(incoming.bytes);
-      final actual = sha256.convert(assembled).toString();
-      if (incoming.sha256hex.isNotEmpty && actual != incoming.sha256hex) {
-        _events.add(TransportError('file-hash', 'attachment hash mismatch'));
+      try {
+        final done = await incoming.complete();
+        if (done == null) {
+          _events.add(TransportFrame(from, TransportChannel.attachment, frame));
+          return;
+        }
+        _files.remove(id);
+        _events.add(
+          TransportFrame(
+            from,
+            TransportChannel.attachment,
+            jsonPayload({
+              'type': 'harness-file-received',
+              'id': id,
+              'path': done.path,
+              'size': done.size,
+              'sha256': done.sha256hex,
+            }),
+          ),
+        );
+      } on StateError catch (e) {
+        _files.remove(id);
+        _events.add(TransportError('file-hash', e.message));
+        _events.add(TransportFrame(from, TransportChannel.attachment, frame));
         return;
       }
-      final dir = await Directory.systemTemp.createTemp('orbits-harness-');
-      final out = File('${dir.path}${Platform.pathSeparator}${incoming.name}');
-      await out.writeAsBytes(assembled, flush: true);
-      _events.add(
-        TransportFrame(
-          from,
-          TransportChannel.attachment,
-          jsonPayload({
-            'type': 'harness-file-received',
-            'id': id,
-            'path': out.path,
-            'size': assembled.length,
-            'sha256': actual,
-          }),
-        ),
-      );
     }
     _events.add(TransportFrame(from, TransportChannel.attachment, frame));
   }
-}
 
-class _IncomingFile {
-  _IncomingFile({
-    required this.name,
-    required this.size,
-    required this.sha256hex,
-  });
-
-  final String name;
-  final int size;
-  final String sha256hex;
-  final List<int> bytes = <int>[];
+  void _onResume(String id, int offset) {
+    final waiter = _resumeWaiters.remove(id);
+    if (waiter != null && !waiter.isCompleted) {
+      waiter.complete(offset);
+      return;
+    }
+    _resumeOffsets[id] = offset;
+  }
 }
 
 String hexOf(List<int> bytes) {

@@ -15,6 +15,7 @@ const process =
 
 const fs = require('node:fs')
 const path = require('node:path')
+const os = require('node:os')
 const { createHash } = require('node:crypto')
 const { encodeMux, MuxDecoder } = require('./mux')
 const { contactDiscoveryTopic } = require('./discovery')
@@ -23,6 +24,38 @@ const { REQUEST, RESPONSE, EVENT, encode, Decoder } = require('./ipc')
 const { CorestoreJournal } = require('./corestore_journal')
 
 const FILE_CHUNK = 64 * 1024
+
+function safeFileName(raw) {
+  let name = String(raw || 'file').replace(/\\/g, '/').split('/').pop()
+  name = name.replace(/[\x00-\x1f\\/:*?"<>|]/g, '_').trim()
+  if (!name || name === '.' || name === '..') return 'file'
+  return name.slice(0, 200)
+}
+
+function nextContiguousOffset(ranges) {
+  if (!ranges.length) return 0
+  const sorted = ranges.slice().sort((a, b) => a[0] - b[0])
+  let pos = 0
+  for (const r of sorted) {
+    if (r[0] > pos) return pos
+    if (r[1] > pos) pos = r[1]
+  }
+  return pos
+}
+
+function addRange(ranges, start, length) {
+  if (length <= 0) return ranges
+  ranges.push([start, start + length])
+  ranges.sort((a, b) => a[0] - b[0])
+  const merged = []
+  for (const r of ranges) {
+    if (!merged.length || r[0] > merged[merged.length - 1][1]) merged.push(r)
+    else if (r[1] > merged[merged.length - 1][1]) merged[merged.length - 1][1] = r[1]
+  }
+  ranges.length = 0
+  for (const r of merged) ranges.push(r)
+  return ranges
+}
 
 // Stream a file for hashing. Never load the whole blob into one buffer.
 function hashPath(filePath) {
@@ -55,6 +88,10 @@ class Worklet {
     this._topic = null
     this.events = []
     this._journal = new CorestoreJournal('local-device')
+    this._files = new Map()
+    this._resumeOffsets = new Map()
+    this._resumeWaiters = new Map()
+    this.fileSendBudget = null
     this._emit = opts.emit || ((name, payload) => this.events.push({ name, payload }))
   }
 
@@ -146,11 +183,16 @@ class Worklet {
       size,
       sha256: digest,
     })
+    const agreed = await this._awaitResume(id, resumeOffset)
+    let offset = resumeOffset > agreed ? resumeOffset : agreed
+    const startOffset = offset
     const fd = fs.openSync(file.path, 'r')
     try {
       const buf = Buffer.alloc(FILE_CHUNK)
-      let offset = resumeOffset
       while (offset < size) {
+        if (this.fileSendBudget != null && offset - startOffset >= this.fileSendBudget) {
+          throw new Error('file-send interrupted')
+        }
         const n = fs.readSync(fd, buf, 0, buf.length, offset)
         if (!n) break
         await this.send(peerId, 'attachment', {
@@ -163,6 +205,7 @@ class Worklet {
       }
     } finally {
       fs.closeSync(fd)
+      this._resumeWaiters.delete(id)
     }
     await this.send(peerId, 'attachment', { type: 'harness-file-end', id })
   }
@@ -189,6 +232,14 @@ class Worklet {
   async stop() {
     for (const peer of this._peers.values()) peer.socket.destroy()
     this._peers.clear()
+    for (const incoming of this._files.values()) {
+      try {
+        fs.closeSync(incoming.fd)
+      } catch {
+        // already closed
+      }
+    }
+    this._files.clear()
     if (this._swarm) await this._swarm.destroy()
     await this._loop.destroy()
     this._started = false
@@ -228,7 +279,119 @@ class Worklet {
         text: body.text,
       }).catch(() => {})
     }
+    if (channel === 'attachment') {
+      this._handleIncomingFile(peerId, body)
+    }
     this._emit('frame', { peerId, channel, body, frameB64 })
+  }
+
+  _awaitResume(id, fallback) {
+    if (this._resumeOffsets.has(id)) {
+      const n = this._resumeOffsets.get(id)
+      this._resumeOffsets.delete(id)
+      return Promise.resolve(n > fallback ? n : fallback)
+    }
+    return new Promise((resolve) => {
+      const t = setTimeout(() => {
+        this._resumeWaiters.delete(id)
+        resolve(fallback)
+      }, 2000)
+      this._resumeWaiters.set(id, (n) => {
+        clearTimeout(t)
+        resolve(n > fallback ? n : fallback)
+      })
+    })
+  }
+
+  _onResume(id, offset) {
+    const waiter = this._resumeWaiters.get(id)
+    if (waiter) {
+      this._resumeWaiters.delete(id)
+      waiter(offset)
+      return
+    }
+    this._resumeOffsets.set(id, offset)
+  }
+
+  _handleIncomingFile(peerId, body) {
+    const type = body && body.type
+    const id = body && body.id
+    if (type === 'harness-file-resume') {
+      if (id) this._onResume(id, Number(body.offset) || 0)
+      return
+    }
+    if (type === 'harness-file-start') {
+      const digest = body.sha256 || ''
+      let incoming = this._files.get(id)
+      if (!incoming || incoming.sha256 !== digest) {
+        if (incoming) {
+          try {
+            fs.closeSync(incoming.fd)
+          } catch {
+            // already closed
+          }
+        }
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbits-harness-'))
+        const filePath = path.join(dir, safeFileName(body.name || id))
+        const fd = fs.openSync(filePath, 'w+')
+        incoming = {
+          id,
+          name: safeFileName(body.name || id),
+          size: Number(body.size) || 0,
+          sha256: digest,
+          path: filePath,
+          fd,
+          ranges: [],
+        }
+        this._files.set(id, incoming)
+      }
+      this.send(peerId, 'attachment', {
+        type: 'harness-file-resume',
+        id,
+        offset: nextContiguousOffset(incoming.ranges),
+      }).catch(() => {})
+      return
+    }
+    if (type === 'harness-file-chunk') {
+      const incoming = this._files.get(id)
+      if (!incoming) return
+      const buf = Buffer.from(body.b64 || '', 'base64')
+      const offset = Number(body.offset) || 0
+      fs.writeSync(incoming.fd, buf, 0, buf.length, offset)
+      addRange(incoming.ranges, offset, buf.length)
+      return
+    }
+    if (type === 'harness-file-end') {
+      const incoming = this._files.get(id)
+      if (!incoming) return
+      try {
+        fs.fsyncSync(incoming.fd)
+        fs.closeSync(incoming.fd)
+      } catch {
+        // already closed
+      }
+      if (nextContiguousOffset(incoming.ranges) < incoming.size) {
+        incoming.fd = fs.openSync(incoming.path, 'r+')
+        return
+      }
+      const hashed = hashPath(incoming.path)
+      this._files.delete(id)
+      if (incoming.sha256 && hashed.digest !== incoming.sha256) {
+        this._emit('error', { code: 'file-hash', message: 'attachment hash mismatch' })
+        return
+      }
+      this._emit('frame', {
+        peerId,
+        channel: 'attachment',
+        body: {
+          type: 'harness-file-received',
+          id,
+          path: incoming.path,
+          size: hashed.size,
+          sha256: hashed.digest,
+        },
+      })
+    }
   }
 }
 

@@ -117,6 +117,39 @@ test('sendFile rejects bytes and streams from a resume offset', async () => {
   await b.stop()
 })
 
+test('sendFile interrupt then resume writes a complete hashed file', async () => {
+  const { a, b, peerId } = await pair()
+  const src = path.join(os.tmpdir(), 'orbits-harness-survive.bin')
+  const payload = Buffer.alloc(FILE_CHUNK + 4096, 11)
+  fs.writeFileSync(src, payload)
+  const expected = hashPath(src)
+  a.fileSendBudget = FILE_CHUNK
+  await assert.rejects(
+    () => a.sendFile(peerId, { path: src, fileName: 'survive.bin' }),
+    /file-send interrupted/,
+  )
+  a.fileSendBudget = null
+  const done = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('no harness-file-received')), 5000)
+    const prev = b._emit
+    b._emit = (name, payload) => {
+      prev(name, payload)
+      if (name === 'frame' && payload.body && payload.body.type === 'harness-file-received') {
+        clearTimeout(timer)
+        resolve(payload.body)
+      }
+    }
+  })
+  await a.sendFile(peerId, { path: src, fileName: 'survive.bin' })
+  const received = await done
+  assert.equal(received.sha256, expected.digest)
+  assert.equal(received.size, expected.size)
+  const onDisk = fs.readFileSync(received.path)
+  assert.equal(onDisk.equals(payload), true)
+  await a.stop()
+  await b.stop()
+})
+
 test('suspend blocks send', async () => {
   const { a, b, peerId } = await pair()
   await a.suspend()

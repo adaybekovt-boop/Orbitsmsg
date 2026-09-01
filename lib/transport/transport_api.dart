@@ -34,6 +34,15 @@ class TransportFileDescriptor {
 
   /// Byte offset already acked. Worklet / loopback skip those bytes.
   final int resumeOffset;
+
+  TransportFileDescriptor copyWith({int? resumeOffset}) =>
+      TransportFileDescriptor(
+        path: path,
+        sizeBytes: sizeBytes,
+        mime: mime,
+        fileName: fileName,
+        resumeOffset: resumeOffset ?? this.resumeOffset,
+      );
 }
 
 class PeerDescriptor {

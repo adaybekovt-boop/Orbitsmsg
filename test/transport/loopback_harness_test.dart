@@ -134,6 +134,64 @@ void main() {
     await b.stop();
   });
 
+  test('sendFile interrupt then resume writes a complete hashed file', () async {
+    final (a, b) = await paired();
+    final received = b.events
+        .where((e) => e is TransportFrame)
+        .cast<TransportFrame>()
+        .firstWhere((e) {
+      if (e.channel != TransportChannel.attachment) return false;
+      return decodeJsonPayload(e.bytes)['type'] == 'harness-file-received';
+    });
+    final src = File(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}harness-survive.bin',
+    );
+    await src.writeAsBytes(List<int>.generate(80 * 1024, (i) => i % 251));
+    a.debugFileSendBudget = kFileChunkSize;
+    await expectLater(
+      a.sendFile(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        TransportFileDescriptor(
+          path: src.path,
+          sizeBytes: src.lengthSync(),
+          fileName: 'harness-survive.bin',
+        ),
+      ),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('file-send interrupted'),
+        ),
+      ),
+    );
+    a.debugFileSendBudget = null;
+    await a.sendFile(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      TransportFileDescriptor(
+        path: src.path,
+        sizeBytes: src.lengthSync(),
+        fileName: 'harness-survive.bin',
+        resumeOffset: kFileChunkSize,
+      ),
+    );
+    final frame = await received.timeout(const Duration(seconds: 3));
+    final body = decodeJsonPayload(frame.bytes);
+    final out = File(body['path'] as String);
+    expect(out.existsSync(), isTrue);
+    expect(out.readAsBytesSync(), src.readAsBytesSync());
+    expect(
+      File('lib/transport/loopback_transport.dart').readAsStringSync(),
+      isNot(contains('incoming.bytes.addAll')),
+    );
+    expect(
+      File('lib/transport/loopback_transport.dart').readAsStringSync(),
+      contains('harness-file-resume'),
+    );
+    await a.stop();
+    await b.stop();
+  });
+
   test('sendFile resumeOffset out of range is rejected', () async {
     final (a, b) = await paired();
     final src = File(

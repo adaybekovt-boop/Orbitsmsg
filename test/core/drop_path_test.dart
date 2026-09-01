@@ -11,6 +11,10 @@ void main() {
     final provider = File('lib/state/drop_provider.dart').readAsStringSync();
     expect(provider, contains('sendFileFromPath'));
     expect(provider, contains('TransportFileDescriptor'));
+    expect(provider, contains('harness-file-received'));
+    expect(provider, contains('localPath'));
+    expect(provider, contains('resumeOffset'));
+    expect(page, contains('t.localPath'));
     expect(
       File('lib/transport/native_transport_host.dart').readAsStringSync(),
       contains('rollbackNativeToPeerjs'),

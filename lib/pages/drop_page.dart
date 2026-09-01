@@ -95,6 +95,27 @@ class _DropPageState extends ConsumerState<DropPage> {
   }
 
   Future<void> _saveReceived(DropTransfer t) async {
+    final localPath = t.localPath;
+    if (localPath != null && localPath.isNotEmpty && !kIsWeb) {
+      try {
+        final src = File(localPath);
+        if (!src.existsSync()) {
+          _toast('Файл недоступен');
+          return;
+        }
+        final dir = await getApplicationDocumentsDirectory();
+        final sep = Platform.pathSeparator;
+        final safeName = uniqueDropSaveFileName(
+          t.name,
+          exists: (candidate) => File('${dir.path}$sep$candidate').existsSync(),
+        );
+        await src.copy('${dir.path}$sep$safeName');
+        _toast('Сохранено: $safeName');
+      } catch (_) {
+        _toast('Не удалось сохранить файл');
+      }
+      return;
+    }
     final blobId = t.blobId;
     if (blobId == null) return;
     try {
@@ -552,7 +573,10 @@ class _TransferRow extends StatelessWidget {
                       size: OrbitsGlassSize.small,
                       onPressed: onCancel,
                     )
-                  else if (completed && incoming && t.blobId != null)
+                  else if (completed &&
+                      incoming &&
+                      (t.blobId != null ||
+                          (t.localPath != null && t.localPath!.isNotEmpty)))
                     OrbitsGlassIconButton(
                       icon: Icons.save_alt,
                       tooltip: 'Сохранить',

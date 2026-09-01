@@ -373,6 +373,96 @@ void main() {
     );
   });
 
+  test('native path attachment survives loss and resumes from offset', () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    DualStackBridge make(LoopbackOrbitsTransport t, String self, String device) {
+      return DualStackBridge(
+        transport: t,
+        journal: MemoryJournal(device),
+        selfPeerId: () => self,
+        selfDeviceId: device,
+        secrets: secrets,
+        isBlocked: (_) => false,
+        onPacket: (_, __) async {},
+      )..attach();
+    }
+
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(_bind('a'));
+    await pair.$2.publish(_bind('b'));
+    final a = make(pair.$1, 'ORBIT-AAAAAAAAAAAAAAAA', 'dev-a');
+    final b = make(pair.$2, 'ORBIT-BBBBBBBBBBBBBBBB', 'dev-b');
+    await pair.$1.connect(
+      const PeerDescriptor(peerId: 'ORBIT-BBBBBBBBBBBBBBBB'),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    final dropped = <Object>[];
+    b.onDrop = (peer, packet) => dropped.add(packet);
+    final dir = await Directory.systemTemp.createTemp('orbits-survive-');
+    addTearDown(() => dir.delete(recursive: true));
+    final src = File('${dir.path}${Platform.pathSeparator}survive.bin');
+    await src.writeAsBytes(List<int>.generate(80 * 1024, (i) => i % 251));
+    pair.$1.debugFileSendBudget = 64 * 1024;
+    await expectLater(
+      a.sendFileFromPath(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        TransportFileDescriptor(
+          path: src.path,
+          sizeBytes: src.lengthSync(),
+          fileName: 'survive.bin',
+        ),
+      ),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('file-send interrupted'),
+        ),
+      ),
+    );
+    pair.$1.debugFileSendBudget = null;
+    expect(
+      await a.sendFileFromPath(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        TransportFileDescriptor(
+          path: src.path,
+          sizeBytes: src.lengthSync(),
+          fileName: 'survive.bin',
+          resumeOffset: 64 * 1024,
+        ),
+      ),
+      isTrue,
+    );
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    while (DateTime.now().isBefore(deadline) &&
+        !dropped.whereType<Map>().any((m) => m['type'] == 'harness-file-received')) {
+      await Future<void>.delayed(const Duration(milliseconds: 15));
+    }
+    final received = dropped.whereType<Map>().firstWhere(
+          (m) => m['type'] == 'harness-file-received',
+        );
+    expect(File(received['path'] as String).readAsBytesSync(), src.readAsBytesSync());
+    await a.detach();
+    await b.detach();
+    await pair.$1.stop();
+    await pair.$2.stop();
+  });
+
   test('device revoke is journaled and drops that writer from fan-out', () async {
     setHyperswarmRollout(HyperswarmRollout.internal);
     final pair = loopbackPair();

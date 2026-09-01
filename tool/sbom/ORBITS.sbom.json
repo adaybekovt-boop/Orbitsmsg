@@ -21,13 +21,13 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "172784445823e080da344ed5507f03361ef42058e338329a216f32580fe8b2f1"
+          "content": "14272dbccd942a31488cfc8d407ad11c90f3cdcece00ba7bfe895ce62e5131ac"
         }
       ],
       "properties": [
         {
           "name": "pinnedWorkletSha256",
-          "value": "172784445823e080da344ed5507f03361ef42058e338329a216f32580fe8b2f1"
+          "value": "14272dbccd942a31488cfc8d407ad11c90f3cdcece00ba7bfe895ce62e5131ac"
         },
         {
           "name": "remoteJs",

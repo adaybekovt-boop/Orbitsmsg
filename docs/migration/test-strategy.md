@@ -26,7 +26,7 @@ independent room-E2E audit stay **blocked** until the user is free.
 | 6 | `NativeCallSession` + CallKit/Telecom opaque handle; iOS remote-notification handlers | PushKit / physical devices |
 | 7 | Memory + file journal, identical projector fingerprint, Hypercore ingest into journal, boot restore into Drift after block-then-decrypt, worklet `useCorestoreIfPresent`; Bare `Addon.load` of a local `.bare` + JSONL `fs` journal | Holepunch Corestore addon |
 | 8 | Mailbox + HTTP storage peer + tombstone/stats + local loopback fleet (HyperDHT bootstrap when present) + unsigned directory rows + `OpaqueWakeService` + `PushSender` refuse + opaque APNs/FCM builders + resume drain + signed RelayDirectory tests + Android Doze intent + block-before-drain | Public storage fleet / APNs send / live signed directory |
-| 9 | 10 and 50 MiB chunk/resume; `chunkFromByteStream`; native `sendFileFromPath` | Default PeerJS Drop |
+| 9 | 10 and 50 MiB chunk/resume; `chunkFromByteStream`; native `sendFileFromPath`; path-backed receive + `harness-file-resume` after loss | Default PeerJS Drop |
 | 10 | Three-device fan-out + QR + revoke journal + RatchetState isolation; revoke drops that device's transport ratchet only | Live hardware sessions |
 | 11–12 | Rooms on native carrier + Autobase converge over `autobase-event` | Live rooms on Hyperswarm |
 | 13 | Epoch revoke/rejoin; E2E flag stays false | Independent audit |

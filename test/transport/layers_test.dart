@@ -52,6 +52,9 @@ void main() {
     expect(worklet, contains('fs.readSync'));
     expect(worklet, contains('sendFile takes a path, not bytes'));
     expect(worklet, contains('resumeOffset'));
+    expect(worklet, contains('harness-file-resume'));
+    expect(worklet, contains('fs.writeSync'));
+    expect(worklet, contains('file-send interrupted'));
     expect(worklet, isNot(contains('readFileSync(file.path)')));
     expect(
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
@@ -63,6 +66,18 @@ void main() {
     );
     expect(kHolepunchCorestoreAddonLinked, isFalse);
     expect(kCorestoreJsModuleOptional, isTrue);
+    expect(
+      File('lib/transport/loopback_transport.dart').readAsStringSync(),
+      contains('IncomingPathAttachment'),
+    );
+    expect(
+      File('lib/transport/loopback_transport.dart').readAsStringSync(),
+      isNot(contains('incoming.bytes.addAll')),
+    );
+    expect(
+      File('lib/attachments/path_attachment.dart').existsSync(),
+      isTrue,
+    );
   });
 
   test('connect checks keep block before TOFU', () {
