@@ -524,6 +524,77 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # Linux desktop. Compiles the federated Bare host so generated
+  # registrant can link orbits_transport_plugin_register_with_registrar.
+  # Does not ship the product Bare flag. Never embed.sh linux-arm64
+  # (that slot stays beside the host-arch binary).
+  build-linux:
+    name: Build Linux
+    needs: analyze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - name: Linux desktop toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Enable linux desktop
+        run: flutter config --enable-linux-desktop
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Generate code (drift / build_runner)
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Vendor and embed linux-x64 Bare (not the shipped flag)
+        run: |
+          set -euo pipefail
+          tool/bare/vendor.sh linux-x64
+          tool/bare/embed.sh linux-x64
+          test -x packages/orbits_transport_linux/linux/bare
+          tool/bare/vendor.sh linux-arm64
+          test -x tool/bare/linux-arm64/bare
+          mkdir -p packages/orbits_transport_linux/linux
+          cp -f tool/bare/linux-arm64/bare packages/orbits_transport_linux/linux/bare-arm64
+          test -x packages/orbits_transport_linux/linux/bare
+          test -x packages/orbits_transport_linux/linux/bare-arm64
+          echo "kBareBinaryShipped stays false"
+
+      - name: flutter build linux (release)
+        env:
+          TURN_URL: ${{ secrets.TURN_URL }}
+          RELAY_ONLY: ${{ vars.RELAY_ONLY }}
+          PEER_SERVER: ${{ vars.PEER_SERVER }}
+          PEER_HOST: ${{ vars.PEER_HOST }}
+          PEER_PATH: ${{ vars.PEER_PATH }}
+          PEER_PORT: ${{ vars.PEER_PORT }}
+          PEER_SECURE: ${{ vars.PEER_SECURE }}
+        run: |
+          set -euo pipefail
+          flutter build linux --release \
+            --dart-define=TURN_URL="$TURN_URL" \
+            --dart-define=RELAY_ONLY="${RELAY_ONLY:-false}" \
+            --dart-define=PEER_SERVER="$PEER_SERVER" \
+            --dart-define=PEER_HOST="$PEER_HOST" \
+            --dart-define=PEER_PATH="${PEER_PATH:-/}" \
+            --dart-define=PEER_PORT="${PEER_PORT:--1}" \
+            --dart-define=PEER_SECURE="$PEER_SECURE" \
+            --dart-define=PEER_SECURE_SET="${PEER_SECURE:+true}"
+          test -x build/linux/x64/release/bundle/orbits_flutter \
+            -o -x build/linux/arm64/release/bundle/orbits_flutter
+          echo "linux desktop linked; kBareBinaryShipped stays false"
+
   # ────────────────────────────────────────────────────────────────────
   # Windows. Flutter's raw `Release/` folder contains an exe plus DLLs and
   # data files, so shipping only that runner exe would not start on a user's

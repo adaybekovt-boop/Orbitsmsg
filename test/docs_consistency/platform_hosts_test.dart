@@ -108,5 +108,15 @@ void main() {
     expect(ci, isNot(contains('tool/bare/embed.sh linux-arm64')));
     expect(ci, isNot(contains('tool/bare/embed.sh darwin-x64')));
     expect(ci, contains('kBareBinaryShipped stays false'));
+    expect(ci, contains('flutter build linux --release'));
+    expect(ci, contains('Build Linux'));
+    expect(
+      File('linux/flutter/generated_plugin_registrant.cc').readAsStringSync(),
+      contains('orbits_transport_plugin_register_with_registrar'),
+    );
+    expect(
+      File('windows/flutter/generated_plugin_registrant.cc').readAsStringSync(),
+      contains('OrbitsTransportPluginRegisterWithRegistrar'),
+    );
   });
 }
