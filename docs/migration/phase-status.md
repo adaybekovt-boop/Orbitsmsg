@@ -16,7 +16,7 @@ still PeerJS.
 | 6 | Native `call` channel + CallKit / Telecom in-app sheet (opaque handle, name “Orbits”); iOS remote-notification *handlers* (no PushKit) | No PushKit / `voip` background; registration gated; no physical call |
 | 7 | File journal + Hypercore local store + worklet Corestore journal (`useCorestoreIfPresent`); addon manifest | Not a Holepunch Corestore native addon |
 | 8 | Blind mailbox + HTTP `StoragePeerClient` + local loopback fleet (3/2/2 health + unsigned directory rows) + opaque wake HTTP intake; `PushSender` refuses APNs/FCM; Android `DEVICE_IDLE` → Doze | No deployed public fleet / APNs/FCM send / live signed directory |
-| 9 | Drop packets on native `attachment` channel; 10–50 MiB resume tests; path-streamed native `sendFileFromPath` | In-memory Drop still used when PeerJS |
+| 9 | Drop packets on native `attachment` channel; 10–50 MiB resume tests; path-streamed native `sendFileFromPath`; Drop UI tries path before bytes | In-memory Drop still used when PeerJS |
 | 10 | Device-link QR + revoke journal events + per-identity fan-out + three-device RatchetState isolation test | No live multi-device ratchet sessions on hardware |
 | 11–12 | Room maps on native carrier; Autobase writers converge | Live rooms still PeerJS host-plaintext |
 | 13 | Sender-key epoch tests + [phase13-group-e2e-review.md](phase13-group-e2e-review.md) | Flag false; no independent audit |
@@ -41,6 +41,8 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
   never downloads. `kBareBinaryShipped` is false until every OS slot is in
   the app bundle. `kBareWorkletRunsOnBareRuntime` is true: spawn uses Bare
   when the local binary and `bare-fs` are present, otherwise Node.
+  CI vendors linux-x64 at **build time** via `vendor.sh` (pinned sha256);
+  that still does not set `kBareBinaryShipped`.
 - Holepunch Corestore native addon: `kHolepunchCorestoreAddonLinked` is
   false. JS `corestore` may load on Node when locally installed, else
   memory. Bare must not `require('corestore')` (Node's addon hangs Bare

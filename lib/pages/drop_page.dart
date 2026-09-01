@@ -45,33 +45,46 @@ class _DropPageState extends ConsumerState<DropPage> {
     if (_sendingToPeer != null) return;
     FilePickerResult? picked;
     try {
-      picked = await FilePicker.platform
-          .pickFiles(type: FileType.any, allowMultiple: false, withData: true);
+      picked = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        allowMultiple: false,
+        withData: kIsWeb,
+      );
     } catch (_) {
       _toast('Не удалось открыть файловый выбор');
       return;
     }
     if (picked == null || picked.files.isEmpty) return;
     final pf = picked.files.single;
-
-    Uint8List? bytes = pf.bytes;
-    if ((bytes == null || bytes.isEmpty) && pf.path != null) {
-      try {
-        bytes = await File(pf.path!).readAsBytes();
-      } catch (_) {
-        bytes = null;
-      }
-    }
-    if (bytes == null || bytes.isEmpty) {
-      _toast('Не удалось прочитать файл');
-      return;
-    }
-
     final name = pf.name;
     final mime = lookupMimeType(name) ?? 'application/octet-stream';
 
     setState(() => _sendingToPeer = peerId);
     try {
+      if (!kIsWeb && pf.path != null && pf.path!.isNotEmpty) {
+        final nativeId = await ref.read(dropNotifierProvider.notifier).sendFileFromPath(
+              peerId,
+              path: pf.path!,
+              name: name,
+              mime: mime,
+              sizeBytes: pf.size,
+            );
+        if (nativeId != null) return;
+      }
+
+      Uint8List? bytes = pf.bytes;
+      if ((bytes == null || bytes.isEmpty) && pf.path != null) {
+        try {
+          bytes = await File(pf.path!).readAsBytes();
+        } catch (_) {
+          bytes = null;
+        }
+      }
+      if (bytes == null || bytes.isEmpty) {
+        _toast('Не удалось прочитать файл');
+        return;
+      }
+
       final id = await ref
           .read(dropNotifierProvider.notifier)
           .sendFile(peerId, bytes, name: name, mime: mime);

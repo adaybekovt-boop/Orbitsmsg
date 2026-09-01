@@ -21,7 +21,7 @@ independent room-E2E audit stay **blocked** until the user is free.
 | 1 | Loopback + JS harness echo/file/suspend | Live NAT matrix |
 | 2 | `src/stand.js` metrics schema | Live KZ operators |
 | 3 | Plugin lifecycle + IPC + OS hosts refuse remote JS; per-OS Bare slots; `vendor.sh` / `embed.sh` / `vendor-bare-modules.sh`; all vendor tarball sha256 pins; worklet import maps; path-streamed `sendFile` | Bare binary embed per OS |
-| 4 | `dual_stack_bridge_test` two natives, `v2:` / wireHello; `preferredWorkletBackend` | Two physical devices |
+| 4 | `dual_stack_bridge_test` two natives, `v2:` / wireHello; `preferredWorkletBackend`; `rollbackNativeToPeerjs` | Two physical devices |
 | 5 | Signed caps on native connect and PeerJS `wireHello.caps`; vault-wrapped discovery persist | Physical pair |
 | 6 | `NativeCallSession` + CallKit/Telecom opaque handle; iOS remote-notification handlers | PushKit / physical devices |
 | 7 | Memory + file journal, identical projector, worklet `useCorestoreIfPresent` | Holepunch Corestore addon |

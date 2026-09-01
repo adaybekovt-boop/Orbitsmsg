@@ -13,6 +13,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/orbits_drop.dart';
 import '../peer/helpers.dart';
 import '../storage/db.dart' as db;
+import '../transport/transport_api.dart';
 import 'auth_notifier.dart';
 import 'connections_notifier.dart';
 
@@ -163,6 +164,49 @@ class DropNotifier extends StateNotifier<DropState> {
     } catch (e) {
       _patch(id, (t) => t.copyWith(status: DropStatus.failed, error: '$e'));
     }
+    return id;
+  }
+
+  /// Native carrier: stream from a path. Returns null when native is not
+  /// bound so the caller can fall back to PeerJS [sendFile] with bytes.
+  Future<String?> sendFileFromPath(
+    String peerId, {
+    required String path,
+    required String name,
+    required String mime,
+    required int sizeBytes,
+  }) async {
+    if (path.isEmpty) return null;
+    final pid = normalizePeerId(peerId);
+    final conns = _ref.read(connectionsNotifierProvider.notifier);
+
+    if (!conns.hasReliable(pid)) {
+      conns.openReliable(pid);
+      final ok = await _waitForReliable(pid);
+      if (!ok) return null;
+    }
+
+    final id = dropNewFileId();
+    final ok = await conns.sendFileFromPath(
+      pid,
+      TransportFileDescriptor(
+        path: path,
+        sizeBytes: sizeBytes,
+        fileName: name,
+        mime: mime,
+      ),
+    );
+    if (!ok) return null;
+    _upsert(DropTransfer(
+      id: id,
+      name: name,
+      size: sizeBytes,
+      mime: mime,
+      peerId: pid,
+      direction: DropDirection.outgoing,
+      transferred: sizeBytes,
+      status: DropStatus.completed,
+    ));
     return id;
   }
 

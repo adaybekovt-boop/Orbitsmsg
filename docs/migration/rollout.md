@@ -35,6 +35,10 @@ Drop to PeerJS (or fail visibly if fallback is off) when:
 - journal replay does not match live projection
 
 `logDowngrade` records `pwa` vs `remote-missing-hyperswarm-v1`.
+`rollbackNativeToPeerjs` in `lib/transport/native_rollback.dart` forces
+`HyperswarmRollout.off`. `NativeTransportHost` calls it when a Hyperswarm
+start fails. It never enables native transport. The default product
+rollout is already off.
 
 ## Hardware
 

@@ -21,6 +21,7 @@ import 'device_binding.dart';
 import 'discovery_secret_store.dart';
 import 'journal_file_io.dart' if (dart.library.html) 'journal_file_stub.dart';
 import 'loopback_transport.dart';
+import 'native_rollback.dart';
 import 'signed_capabilities.dart';
 import 'transport_api.dart';
 import 'transport_lifecycle.dart';
@@ -61,6 +62,10 @@ class NativeTransportHost {
       );
     } catch (_) {
       if (backend == 'hyperswarm') {
+        rollbackNativeToPeerjs(
+          reason: NativeRollbackReason.nativeConnectFailed,
+          detail: 'hyperswarm start failed',
+        );
         await _respawnLoopback();
         await transport!.start(
           TransportLocalConfiguration(

@@ -32,6 +32,7 @@ void main() {
     expect(src, contains('PushGateway'));
     expect(src, contains('ingestFcm'));
     expect(src, contains('onDoze'));
+    expect(src, contains('rollbackNativeToPeerjs'));
     expect(
       File('tool/connectivity_harness/src/swarm.js').readAsStringSync(),
       contains('refusing public DHT default'),

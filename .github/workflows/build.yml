@@ -79,6 +79,9 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Vendor linux-x64 Bare at build time (not shipped in the app)
+        run: tool/bare/vendor.sh linux-x64
+
       - name: Connectivity harness (loopback, no hardware)
         working-directory: tool/connectivity_harness
         run: |
