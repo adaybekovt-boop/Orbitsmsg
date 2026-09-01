@@ -22,5 +22,9 @@ void main() {
       isTrue,
     );
     expect(manifest['linked'], isFalse);
+    expect(
+      File('tool/connectivity_harness/src/corestore_journal.js').readAsStringSync(),
+      contains("typeof Bare !== 'undefined'"),
+    );
   });
 }

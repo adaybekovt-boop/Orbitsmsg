@@ -41,7 +41,14 @@ class CorestoreJournal {
   }
 
   // Try to open Holepunch Corestore. Missing module → memory.
+  // Node's `corestore` addon must not be required from Bare: it hangs
+  // the 1.31 runtime instead of throwing. The native Bare addon is a
+  // separate slot (`kHolepunchCorestoreAddonLinked`).
   async useCorestoreIfPresent(dir) {
+    if (typeof Bare !== 'undefined') {
+      this.backend = 'memory'
+      return false
+    }
     let Corestore
     try {
       Corestore = require('corestore')

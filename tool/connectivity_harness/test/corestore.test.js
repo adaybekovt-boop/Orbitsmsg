@@ -21,3 +21,12 @@ test('journal stores encrypted envelopes and rejects plaintext', async () => {
   )
   assert.throws(() => journal.append({ fields: { kek: 'nope' } }), /secret field|encryptedEnvelope/)
 })
+
+test('Bare must not require Node corestore (hangs the runtime)', () => {
+  const src = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '..', 'src', 'corestore_journal.js'),
+    'utf8',
+  )
+  assert.match(src, /typeof Bare !== 'undefined'/)
+  assert.match(src, /must not be required from Bare/)
+})

@@ -42,7 +42,9 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
   `kBareWorkletRunsOnBareRuntime` is true: spawn uses Bare when the local
   binary and `bare-fs` are present, otherwise Node.
 - Holepunch Corestore native addon: `kHolepunchCorestoreAddonLinked` is
-  false. JS `corestore` is used when locally installed, else memory.
+  false. JS `corestore` may load on Node when locally installed, else
+  memory. Bare must not `require('corestore')` (Node's addon hangs Bare
+  1.31).
 - Store review: [app-review-notes.md](app-review-notes.md) is a checklist,
   not a filed review.
 - Phase 14 isolation stays `default-live`. Do not remove PeerJS.
