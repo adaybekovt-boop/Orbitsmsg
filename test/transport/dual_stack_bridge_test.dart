@@ -163,7 +163,16 @@ void main() {
     );
     expect(
       a.sendRoomPacket('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'room_join',
+        'guestPeerId': 'ORBIT-AAAAAAAAAAAAAAAA',
+        'guestName': 'A',
+      }),
+      isTrue,
+    );
+    expect(
+      a.sendRoomPacket('ORBIT-BBBBBBBBBBBBBBBB', {
         'type': 'room_msg',
+        'id': 'm-host',
         'text': 'host-plaintext',
       }),
       isTrue,
@@ -190,6 +199,16 @@ void main() {
     );
     expect(
       rooms.any((r) => r['type'] == 'room_msg' && r['text'] == 'host-plaintext'),
+      isTrue,
+    );
+    expect(a.rooms.state.members['ORBIT-AAAAAAAAAAAAAAAA'], 'A');
+    expect(b.rooms.state.members['ORBIT-AAAAAAAAAAAAAAAA'], 'A');
+    expect(
+      b.rooms.state.messages.any((m) => m['text'] == 'host-plaintext'),
+      isTrue,
+    );
+    expect(
+      a.journal.records.every((r) => !r.fields.containsKey('text')),
       isTrue,
     );
     expect(hangup?.type, CallSignalType.hangup);
@@ -338,6 +357,10 @@ void main() {
     expect(
       File('lib/state/connections_notifier.dart').readAsStringSync(),
       contains('sendFileFromPath'),
+    );
+    expect(
+      File('lib/state/connections_notifier.dart').readAsStringSync(),
+      contains('sendAutobaseEvent'),
     );
   });
 

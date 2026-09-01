@@ -71,6 +71,7 @@ class DualStackBridge {
   Future<void> _durable = Future<void>.value();
   final AutobaseProjection rooms = AutobaseProjection();
   final List<RoomEvent> roomLog = <RoomEvent>[];
+  int _roomSeq = 0;
 
   final Set<String> connected = <String>{};
   final List<CapabilityRecord> remoteCapabilities = <CapabilityRecord>[];
@@ -398,8 +399,16 @@ class DualStackBridge {
   bool sendRoomPacket(String peerId, Map<String, Object?> packet) {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return false;
+    final framed = Map<String, Object?>.from(packet)
+      ..putIfAbsent('abWriter', () => selfDeviceId)
+      ..putIfAbsent('abSeq', () => _roomSeq++);
+    final event = roomEventFromNativePacket(
+      framed,
+      fallbackWriter: selfDeviceId,
+    );
+    if (event != null) _applyRoom(event);
     unawaited(
-      transport.send(norm, TransportChannel.control, jsonPayload(packet)),
+      transport.send(norm, TransportChannel.control, jsonPayload(framed)),
     );
     return true;
   }
@@ -600,10 +609,11 @@ class DualStackBridge {
       } else {
         final decoded = decodeJsonPayload(bytes);
         data = decoded;
-        if (decoded['type'] == 'autobase-event') {
-          final event = RoomEvent.fromWire(decoded);
-          if (event != null) _applyRoom(event);
-        }
+        final roomEvent = roomEventFromNativePacket(
+          decoded,
+          fallbackWriter: norm,
+        );
+        if (roomEvent != null) _applyRoom(roomEvent);
         if (decoded['type'] == 'capabilities' || decoded['type'] == 'wireHello') {
           try {
             if (decoded['type'] == 'capabilities') {

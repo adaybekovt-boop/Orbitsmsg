@@ -39,6 +39,68 @@ class RoomEvent {
   }
 }
 
+/// Map the live host-plaintext room protocol onto Autobase events.
+/// Message bodies stay in the local projection — never Hypercore.
+RoomEvent? roomEventFromNativePacket(
+  Map<String, Object?> packet, {
+  required String fallbackWriter,
+}) {
+  if (packet['type'] == 'autobase-event') return RoomEvent.fromWire(packet);
+  final writer = packet['abWriter'] as String? ?? fallbackWriter;
+  final seq = (packet['abSeq'] as num?)?.toInt() ?? 0;
+  switch (packet['type']) {
+    case 'room_join':
+      final peer =
+          packet['guestPeerId'] as String? ?? packet['peerId'] as String?;
+      if (peer == null) return null;
+      return RoomEvent(
+        writerId: writer,
+        seq: seq,
+        kind: 'membership',
+        payload: {
+          'peerId': peer,
+          'action': 'join',
+          'displayName': packet['guestName'] as String? ?? peer,
+        },
+      );
+    case 'room_leave':
+    case 'room_destroy':
+      final peer =
+          packet['guestPeerId'] as String? ?? packet['peerId'] as String?;
+      if (peer == null) return null;
+      return RoomEvent(
+        writerId: writer,
+        seq: seq,
+        kind: 'membership',
+        payload: {'peerId': peer, 'action': 'leave'},
+      );
+    case 'room_channel_create':
+      final raw = packet['channel'];
+      final channel = raw is Map ? Map<String, Object?>.from(raw) : packet;
+      final id = channel['id'] as String?;
+      final name = channel['name'] as String?;
+      if (id == null || name == null) return null;
+      return RoomEvent(
+        writerId: writer,
+        seq: seq,
+        kind: 'channel',
+        payload: {'id': id, 'name': name},
+      );
+    case 'room_msg':
+      return RoomEvent(
+        writerId: writer,
+        seq: seq,
+        kind: 'message',
+        payload: {
+          'id': packet['id'],
+          'text': packet['text'],
+        },
+      );
+    default:
+      return null;
+  }
+}
+
 class RoomState {
   RoomState();
 

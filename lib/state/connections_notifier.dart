@@ -50,6 +50,7 @@ import '../mailbox/blind_store.dart';
 import '../mailbox/storage_peer_client.dart';
 import '../replication/file_journal.dart';
 import '../replication/memory_journal.dart';
+import '../rooms/autobase_log.dart';
 import '../storage/db.dart' as db;
 import '../transport/dual_stack_bridge.dart';
 import '../transport/signed_capabilities.dart';
@@ -392,6 +393,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       connected: conn != null && conn.open,
       send: (p) => conn!.send(p),
     );
+  }
+
+  Future<bool> sendAutobaseEvent(String remoteId, RoomEvent event) async {
+    final dual = _dual;
+    if (dual == null || !dual.canUseNative(remoteId)) return false;
+    return dual.sendAutobaseEvent(remoteId, event);
   }
 
   Future<void> sendCallSignal(String remoteId, CallSignal signal) async {

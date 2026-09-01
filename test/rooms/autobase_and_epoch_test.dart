@@ -44,6 +44,19 @@ void main() {
       RoomEvent.fromWire(events.last.toWire())?.kind,
       'message',
     );
+    expect(
+      roomEventFromNativePacket(
+        {
+          'type': 'room_join',
+          'abWriter': 'a',
+          'abSeq': 0,
+          'guestPeerId': 'p1',
+          'guestName': 'Pat',
+        },
+        fallbackWriter: 'x',
+      )?.kind,
+      'membership',
+    );
   });
 
   test('epoch rotate excludes the removed device', () {
