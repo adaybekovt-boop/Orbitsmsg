@@ -137,7 +137,7 @@ test(
   },
 )
 
-test('relayThrough skips unsound key lengths', () {
+test('relayThrough skips unsound key lengths', () => {
   const { parseRelayThroughKeys } = require('../src/swarm')
   const keys = parseRelayThroughKeys([
     'aa',
