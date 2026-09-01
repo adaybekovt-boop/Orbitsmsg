@@ -9,6 +9,7 @@ independent room-E2E audit stay **blocked** until the user is free.
 |------|----------------|---------|
 | Dart unit | Contracts, flags, discovery, dual-stack, journal, mailbox, devices, rooms, push | `flutter test` (pinned 3.44.7) |
 | JS harness | Echo, file stream, suspend/resume, stand metrics schema | `node --test` in `tool/connectivity_harness` |
+| JS mailbox | Local HTTP storage peer grant/reject | `node --test tool/storage_peer/test.js` |
 | Plugin | Federated facade + in-process lifecycle | `flutter test` in `packages/orbits_transport` |
 | IPC | `orbits-bare-ipc-v1` request/response | `test/transport/bare_ipc_client_test.dart` |
 

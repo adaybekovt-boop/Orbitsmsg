@@ -31,8 +31,9 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
 - Public fleet (3 bootstrap / 2 relay / 2 storage) is **not** deployed.
   `kLiveStorageFleet` and `kLiveSignedRelayDirectory` are false. Local
   HTTP mailbox + identity-signed directory *fixtures* exist for tests.
-- APNs / FCM: `PushGateway` intake is in-tree; `kLiveApnsGateway` and
-  `kLiveFcmGateway` stay false. No production push send.
+- APNs / FCM: `PushGateway` intake is bound on `NativeTransportHost`
+  (`ingestApns` / `ingestFcm`). `kLiveApnsGateway` and `kLiveFcmGateway`
+  stay false. No production push send.
 - Bare: per-OS slots are listed; `kBareBinaryShipped` is false.
 - Holepunch Corestore native addon: `kHolepunchCorestoreAddonLinked` is
   false. Local journal stand-in only.

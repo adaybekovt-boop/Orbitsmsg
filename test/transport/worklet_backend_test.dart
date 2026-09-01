@@ -29,5 +29,7 @@ void main() {
     expect(src, contains('spawnWorkletTransport(backend: preferred)'));
     expect(src, contains("backend == 'hyperswarm'"));
     expect(src, contains('httpStoragePeerClient'));
+    expect(src, contains('PushGateway'));
+    expect(src, contains('ingestFcm'));
   });
 }

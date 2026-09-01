@@ -11,7 +11,7 @@ import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
 import '../mailbox/storage_peer_client.dart';
 import '../mailbox/storage_peer_http.dart';
-import '../push/opaque_wake.dart';
+import '../push/push_gateway.dart';
 import '../push/wake_service.dart';
 import '../replication/memory_journal.dart';
 import '../state/auth_notifier.dart';
@@ -36,6 +36,7 @@ class NativeTransportHost {
   bool attached = false;
   TransportLifecycle? lifecycle;
   OpaqueWakeService? wake;
+  PushGateway? push;
   StoragePeerHttp? storageHttp;
 
   Future<void> ensureStarted() async {
@@ -137,6 +138,7 @@ class NativeTransportHost {
       },
     );
     wake = OpaqueWakeService(onAccepted: (_) => lifecycle!.onOpaqueWake());
+    push = PushGateway(wake!);
     attached = true;
   }
 
@@ -200,14 +202,19 @@ class NativeTransportHost {
   }
 
   Future<WakeOutcome> handleWake(Map<String, Object?> payload) async {
-    final service = wake;
-    if (service == null) {
+    final gateway = push;
+    if (gateway == null) {
       return const WakeOutcome(accepted: false, reason: 'not-started');
     }
-    if (!OpaqueWake.isSafe(payload)) {
-      return const WakeOutcome(accepted: false, reason: 'unsafe-keys');
+    return gateway.ingestApns(payload);
+  }
+
+  Future<WakeOutcome> handleFcmWake(Map<String, Object?> payload) async {
+    final gateway = push;
+    if (gateway == null) {
+      return const WakeOutcome(accepted: false, reason: 'not-started');
     }
-    return service.handle(payload);
+    return gateway.ingestFcm(payload);
   }
 }
 

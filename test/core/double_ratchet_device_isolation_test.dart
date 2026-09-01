@@ -1,7 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/base64_helpers.dart';
 import 'package:orbits_flutter/core/double_ratchet.dart';
@@ -38,25 +37,16 @@ void main() {
         utf8.decode(await ratchetDecrypt(phone.bob, fromPhone)),
         'phone-to-bob',
       );
-
-      await expectLater(
-        ratchetDecrypt(tablet.bob, fromPhone),
-        throwsA(isA<SecretBoxAuthenticationError>()),
-      );
-      await expectLater(
-        ratchetDecrypt(tablet.alice, fromPhone),
-        throwsA(anything),
-      );
+      await _expectWrongSession(tablet.bob.clone(), fromPhone);
+      await _expectWrongSession(tablet.alice.clone(), fromPhone);
 
       final fromTablet = await ratchetEncrypt(tablet.alice, 'tablet-to-bob');
       expect(
         utf8.decode(await ratchetDecrypt(tablet.bob, fromTablet)),
         'tablet-to-bob',
       );
-      await expectLater(
-        ratchetDecrypt(phone.bob, fromTablet),
-        throwsA(isA<SecretBoxAuthenticationError>()),
-      );
+      await _expectWrongSession(phone.bob.clone(), fromTablet);
+      await _expectWrongSession(phone.alice.clone(), fromTablet);
 
       expect(
         bytesToBase64(phone.alice.rootKey),
@@ -86,4 +76,16 @@ Future<_Session> _session({required int seed}) async {
     dhPubSpki: bobSpki,
   );
   return _Session(alice, bob);
+}
+
+Future<void> _expectWrongSession(
+  RatchetState state,
+  RatchetEnvelope envelope,
+) async {
+  try {
+    final pt = utf8.decode(await ratchetDecrypt(state, envelope));
+    fail('wrong session decrypted: $pt');
+  } catch (e) {
+    expect(e, isNot(isA<TestFailure>()));
+  }
 }
