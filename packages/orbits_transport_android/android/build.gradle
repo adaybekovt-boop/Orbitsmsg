@@ -37,36 +37,46 @@ def orbitsBareAsset = file("${orbitsBareAssetDir}/bare")
 def orbitsStdlibZip = file("${project.projectDir}/../../../tool/connectivity_harness/bare_stdlib.zip")
 def orbitsStdlibAsset = file("${orbitsBareAssetDir}/bare_stdlib.zip")
 
+// Copy into a generated dir, never into src/main/assets. Writing the
+// Copy outputs over the source-set directory makes generateReleaseLintModel
+// consume those files without a declared dependency (AGP 8 fails the
+// assemble). CI already places assets via embed.sh / embed-bare-stdlib.sh;
+// these tasks are the local-dev fallback when those files are absent.
+def generatedBareAssets = file("${project.buildDir}/generated/orbitsBareAssets")
+generatedBareAssets.mkdirs()
+
 tasks.register("copyOrbitsBareAsset", Copy) {
-    description = "Copy a local android-arm64 Bare slot into plugin assets. Never downloads."
-    onlyIf { orbitsBareSlot.exists() }
+    description = "Copy a local android-arm64 Bare slot into generated assets. Never downloads."
+    onlyIf { orbitsBareSlot.exists() && !orbitsBareAsset.exists() }
     from(orbitsBareSlot)
-    into(orbitsBareAssetDir)
+    into(generatedBareAssets)
     rename { "bare" }
 }
 
 tasks.register("copyOrbitsBareStdlibAsset", Copy) {
-    description = "Copy a local bare-* stdlib zip into plugin assets. Never downloads."
-    onlyIf { orbitsStdlibZip.exists() }
+    description = "Copy a local bare-* stdlib zip into generated assets. Never downloads."
+    onlyIf { orbitsStdlibZip.exists() && !orbitsStdlibAsset.exists() }
     from(orbitsStdlibZip)
-    into(orbitsBareAssetDir)
+    into(generatedBareAssets)
     rename { "bare_stdlib.zip" }
 }
 
+android.sourceSets.main.assets.srcDir(generatedBareAssets)
+
 afterEvaluate {
     tasks.matching {
-        it.name != "copyOrbitsBareAsset" &&
-            it.name != "copyOrbitsBareStdlibAsset" &&
-            it.name.contains("Assets") &&
-            (it.name.startsWith("merge") || it.name.startsWith("package"))
+        def n = it.name
+        n != "copyOrbitsBareAsset" &&
+            n != "copyOrbitsBareStdlibAsset" &&
+            (
+                (n.contains("Assets") &&
+                    (n.startsWith("merge") || n.startsWith("package"))) ||
+                n.contains("LintModel") ||
+                (n.startsWith("generate") && n.contains("Lint"))
+            )
     }.configureEach {
         dependsOn("copyOrbitsBareAsset", "copyOrbitsBareStdlibAsset")
     }
-}
-
-if (orbitsBareSlot.exists() || orbitsBareAsset.exists() ||
-        orbitsStdlibZip.exists() || orbitsStdlibAsset.exists()) {
-    android.sourceSets.main.assets.srcDirs += ["src/main/assets"]
 }
 
 dependencies {

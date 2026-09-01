@@ -124,6 +124,12 @@ void main() {
           .readAsStringSync(),
       contains('copyOrbitsBareStdlibAsset'),
     );
+    final androidGradle =
+        File('packages/orbits_transport_android/android/build.gradle')
+            .readAsStringSync();
+    expect(androidGradle, contains('generated/orbitsBareAssets'));
+    expect(androidGradle, contains('LintModel'));
+    expect(androidGradle, isNot(contains('into(orbitsBareAssetDir)')));
     expect(
       File('packages/orbits_transport_linux/linux/CMakeLists.txt')
           .readAsStringSync(),
@@ -173,6 +179,11 @@ void main() {
     expect(ci, contains('assets/bare'));
     expect(ci, contains('assets/bare_stdlib.zip'));
     expect(ci, contains('tool/ci/vendor_bare_stdlib.sh'));
+    expect(ci, contains('libsecret-1-dev'));
+    expect(
+      File('tool/ci/retry_flutter_apk.sh').readAsStringSync(),
+      contains('else'),
+    );
     expect(ci, contains("find build/ios/iphoneos/Runner.app -name 'bare'"));
     expect(
       File('linux/flutter/generated_plugin_registrant.cc').readAsStringSync(),
