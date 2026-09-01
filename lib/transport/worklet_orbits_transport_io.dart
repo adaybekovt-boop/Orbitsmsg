@@ -6,7 +6,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter/services.dart' show rootBundle;
+import 'package:flutter/services.dart'
+    show MissingPluginException, PlatformException, rootBundle;
 import 'package:orbits_transport/orbits_transport.dart';
 import 'package:path_provider/path_provider.dart';
 
@@ -33,6 +34,7 @@ Future<WorkletOrbitsTransport?> spawnWorkletTransport({
 }) async {
   final script = _resolveWorklet() ?? await extractBundledWorklet();
   if (script == null) return null;
+  if (!await _nativeHostAllowsLocalWorklet()) return null;
   File? bundled;
   try {
     final pluginPath = await OrbitsTransportPlatform.instance.barePath();
@@ -55,6 +57,22 @@ Future<WorkletOrbitsTransport?> spawnWorkletTransport({
     );
   }
   return null;
+}
+
+/// Ask the federated plugin to refuse remote JS before a local spawn.
+/// Missing registrars (unit tests) are skipped. A native REMOTE_JS
+/// error fails closed and does not start Node/Bare.
+Future<bool> _nativeHostAllowsLocalWorklet() async {
+  try {
+    await OrbitsTransportPlatform.instance.start({'remoteJs': false});
+    return true;
+  } on UnimplementedError {
+    return true;
+  } on MissingPluginException {
+    return true;
+  } on PlatformException catch (e) {
+    return e.code != 'REMOTE_JS';
+  }
 }
 
 Future<WorkletOrbitsTransport?> _spawnLaunch(

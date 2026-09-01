@@ -118,5 +118,10 @@ void main() {
       File('windows/flutter/generated_plugin_registrant.cc').readAsStringSync(),
       contains('OrbitsTransportPluginRegisterWithRegistrar'),
     );
+    expect(ci, contains('flutter build macos --release'));
+    expect(
+      File('macos/Flutter/GeneratedPluginRegistrant.swift').readAsStringSync(),
+      contains('OrbitsTransportPlugin.register'),
+    );
   });
 }

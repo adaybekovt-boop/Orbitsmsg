@@ -72,6 +72,8 @@ void main() {
       expect(workflow, contains('/Applications/Xcode_26.5.app'));
       expect(workflow, contains('flutter build ios --release --no-codesign'));
       expect(workflow, contains('flutter build ios --simulator --debug'));
+      expect(workflow, contains('flutter build macos --release'));
+      expect(workflow, contains('kBareBinaryShipped stays false'));
     });
   });
 }

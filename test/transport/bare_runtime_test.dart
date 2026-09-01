@@ -20,6 +20,8 @@ void main() {
     expect(src, contains('resolveBareRuntime'));
     expect(src, contains('barePath'));
     expect(src, contains('bundledBare'));
+    expect(src, contains("'remoteJs': false"));
+    expect(src, contains('REMOTE_JS'));
     expect(src, isNot(contains('http://')));
     expect(src, isNot(contains('https://')));
     expect(src, contains("executable: 'node'"));
