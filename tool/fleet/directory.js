@@ -17,7 +17,7 @@ function peersToDirectoryRows(fleet) {
     seen[p.kind] = idx + 1
     const region = (regions[p.kind] || ['lab'])[idx] || 'lab'
     const protocol = p.protocol || (p.kind === 'bootstrap' ? 'hyperdht' : 'http')
-    return {
+    const row = {
       id: `${p.kind}-${idx + 1}`,
       kind: p.kind,
       host: p.host || '127.0.0.1',
@@ -29,6 +29,8 @@ function peersToDirectoryRows(fleet) {
       live: false,
       protocol,
     }
+    if (p.publicKey) row.publicKey = p.publicKey
+    return row
   })
 }
 

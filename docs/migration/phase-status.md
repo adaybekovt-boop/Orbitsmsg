@@ -15,7 +15,7 @@ still PeerJS.
 | 5 | Identity-signed caps on native connect and as a PeerJS `wireHello.caps` sibling; contact QR may carry discovery secret `d=`; secrets persist vault-wrapped | Physical pair not run |
 | 6 | Native `call` channel + CallKit / Telecom in-app sheet (opaque handle, name “Orbits”); iOS remote-notification *handlers* (no PushKit) | No PushKit / `voip` background; registration gated; no physical call |
 | 7 | File journal + Hypercore local store + worklet Corestore journal (`useCorestoreIfPresent`); Bare probes a **local** `corestore.bare` via `Bare.Addon.load` (never `require('corestore')` on Bare) and otherwise writes encrypted-envelope JSONL (`backend = 'fs'`); live vs replay projector fingerprint; DualStackBridge ingest of replication frames into the journal; boot replays the file journal into memory + Drift after block-then-decrypt | Not a Holepunch Corestore native addon |
-| 8 | Blind mailbox + HTTP `StoragePeerClient` + local loopback fleet (3/2/2; HyperDHT bootstrap when the module is present, else HTTP marked `protocol: http`) + opaque wake HTTP intake; `PushSender` refuses APNs/FCM; APNs/FCM request builders stay opaque; Android `DEVICE_IDLE` → Doze; drain tombstones ciphertext; block list before mailbox decrypt/persist; backlog rollback | No deployed public fleet / APNs/FCM send / live signed directory |
+| 8 | Blind mailbox + HTTP `StoragePeerClient` + local loopback fleet (3/2/2; HyperDHT bootstrap when the module is present, else HTTP marked `protocol: http`) + HyperDHT `relayThrough` keys on extra testnet relay rows + opaque wake HTTP intake; `PushSender` refuses APNs/FCM; APNs/FCM request builders stay opaque; Android `DEVICE_IDLE` → Doze; drain tombstones ciphertext; block list before mailbox decrypt/persist; backlog rollback | No deployed public fleet / APNs/FCM send / live signed directory |
 | 9 | Drop packets on native `attachment` channel; 10–50 MiB resume tests; path-streamed native `sendFileFromPath`; receiver writes chunks at offset to a path (never a growing Dart `Uint8List`); `harness-file-resume` handshake so an interrupted send continues from the contiguous offset; PeerJS Drop `sendFileRanged` / `PathDropChunkStore` so the default live path also streams from disk; Drop UI never `readAsBytes` of the picked file on native | Web Drop still uses picker bytes |
 | 10 | Device-link QR + revoke journal events + per-identity fan-out + three-device RatchetState isolation test; QR keys from Noise seed (not dummy bytes); native `dial` passes Noise public key; revoke drops that device's transport ratchet only | No live multi-device ratchet sessions on hardware |
 | 11–12 | Room maps on native carrier; live `room_join` / `room_msg` project into Autobase; Autobase writers converge over DualStackBridge (`autobase-event`); membership is journaled without message plaintext | Live rooms still PeerJS host-plaintext |
@@ -33,7 +33,11 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
   loopback-only (3 bootstrap / 2 relay / 2 storage). Bootstrap is a
   local HyperDHT testnet when `hyperdht` is installed; otherwise HTTP
   health with `protocol: http`, which Dart **does not** use as DHT.
-  Relay rows stay HTTP health (not Hyperswarm `relayThrough`).
+  When the local testnet has extra nodes, relay rows carry a HyperDHT
+  node public key for Hyperswarm `relayThrough` (never identity keys).
+  Without `hyperdht`, those rows stay HTTP health. Loopback may still
+  connect `path: direct`. This is not a public fleet or a live NAT
+  relay, and `kLiveSignedRelayDirectory` stays false.
 - APNs / FCM: local opaque wake HTTP + `PushGateway` intake + `PushSender`
   which **refuses** Apple/Google send. `kLiveApnsGateway` / `kLiveFcmGateway`
   stay false. iOS/Android hosts can register only after those flags flip.

@@ -189,6 +189,7 @@ class WorkletOrbitsTransport implements OrbitsTransport {
       'peerId': config.peerId,
       'discoverySecret': config.discoverySecret,
       'relayForced': config.relayForced,
+      if (config.relayThrough.isNotEmpty) 'relayThrough': config.relayThrough,
       'bootstrap': [
         for (final node in config.bootstrap) node.toJson(),
       ],

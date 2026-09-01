@@ -37,6 +37,16 @@ test('local fleet has 3 bootstrap / 2 relay / 2 storage and is not public', asyn
   assert.equal(counts.storage, 2)
 })
 
+test('skipDht fleet stays HTTP health including relays', async (t) => {
+  const fleet = await startLocalFleet({ skipDht: true })
+  t.after(() => fleet.close())
+  assert.equal(fleet.dht, null)
+  for (const p of fleet.peers) {
+    assert.equal(p.protocol, 'http')
+    assert.equal(p.publicKey, undefined)
+  }
+})
+
 test('local fleet maps to unsigned directory rows and is not live', async (t) => {
   const { peersToDirectoryRows, meetsFleetMinimum } = require('./directory.js')
   const fleet = await startLocalFleet()
@@ -60,7 +70,22 @@ test('local fleet maps to unsigned directory rows and is not live', async (t) =>
       assert.equal(row.protocol, 'http')
     }
   }
-  for (const row of rows.filter((r) => r.kind !== 'bootstrap')) {
+  for (const row of rows.filter((r) => r.kind === 'storage')) {
     assert.equal(row.protocol, 'http')
+    assert.equal(row.publicKey, undefined)
+  }
+  const relays = rows.filter((r) => r.kind === 'relay')
+  assert.equal(relays.length, 2)
+  if (fleet.dht) {
+    for (const row of relays) {
+      assert.equal(row.protocol, 'hyperdht')
+      assert.equal(row.publicKey.length, 64)
+      assert.notEqual(row.port, row.healthPort)
+    }
+  } else {
+    for (const row of relays) {
+      assert.equal(row.protocol, 'http')
+      assert.equal(row.publicKey, undefined)
+    }
   }
 })

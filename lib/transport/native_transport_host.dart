@@ -83,6 +83,7 @@ class NativeTransportHost {
           bootstrap: bootstrap,
           transportSeed: seed,
           relayForced: isHyperswarmRelayForced(),
+          relayThrough: relayThroughKeysFromDirectory(directory),
           diagnosticsEnabled: isHyperswarmDiagnosticsEnabled(),
           allowPeerjsFallback: isPeerjsFallbackEnabled(),
         ),

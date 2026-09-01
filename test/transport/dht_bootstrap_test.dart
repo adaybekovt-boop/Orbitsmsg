@@ -113,6 +113,90 @@ void main() {
     expect(storageOriginFromPeer(directory.peers.single), 'http://10.3.0.1:8787');
   });
 
+  test('relayThrough keys come from HyperDHT relay rows only', () {
+    const good =
+        '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+    final directory = RelayDirectory(
+      issuedAt: 1,
+      expiresAt: 10,
+      signature: Uint8List(0),
+      identityPublicKey: Uint8List(0),
+      peers: const [
+        DirectoryPeer(
+          id: 'r-fast',
+          kind: DirectoryPeerKind.relay,
+          host: '10.2.0.1',
+          port: 49737,
+          region: 'eu',
+          rttMs: 8,
+          protocol: 'hyperdht',
+          publicKey: good,
+        ),
+        DirectoryPeer(
+          id: 'r-http',
+          kind: DirectoryPeerKind.relay,
+          host: '10.2.0.2',
+          port: 9,
+          region: 'lab',
+          rttMs: 1,
+          protocol: 'http',
+          publicKey: good,
+        ),
+        DirectoryPeer(
+          id: 'r-unsound',
+          kind: DirectoryPeerKind.relay,
+          host: '10.2.0.3',
+          port: 49737,
+          region: 'eu',
+          rttMs: 2,
+          unsound: true,
+          protocol: 'hyperdht',
+          publicKey: good,
+        ),
+        DirectoryPeer(
+          id: 'r-public',
+          kind: DirectoryPeerKind.relay,
+          host: 'bootstrap1.hyperdht.org',
+          port: 49737,
+          region: 'x',
+          protocol: 'hyperdht',
+          publicKey: good,
+        ),
+        DirectoryPeer(
+          id: 'r-short',
+          kind: DirectoryPeerKind.relay,
+          host: '10.2.0.4',
+          port: 49737,
+          region: 'eu',
+          protocol: 'hyperdht',
+          publicKey: 'abcd',
+        ),
+        DirectoryPeer(
+          id: 'r-badhex',
+          kind: DirectoryPeerKind.relay,
+          host: '10.2.0.5',
+          port: 49737,
+          region: 'eu',
+          protocol: 'hyperdht',
+          publicKey:
+              'zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz',
+        ),
+        DirectoryPeer(
+          id: 's1',
+          kind: DirectoryPeerKind.storage,
+          host: '10.3.0.1',
+          port: 8787,
+          region: 'eu',
+          protocol: 'http',
+          publicKey: good,
+        ),
+      ],
+    );
+    expect(relayThroughKeysFromDirectory(null), isEmpty);
+    expect(relayThroughKeysFromDirectory(directory), [good]);
+    expect(kLiveSignedRelayDirectory, isFalse);
+  });
+
   test('HTTP lab bootstrap rows are not HyperDHT addresses', () {
     final directory = RelayDirectory(
       issuedAt: 1,

@@ -112,6 +112,8 @@ class Worklet {
         bootstrap: config.bootstrap,
         keyPair: config.keyPair,
         firewall: config.firewall,
+        relayForced: Boolean(config.relayForced),
+        relayThrough: config.relayThrough,
       }
       if (config.seed) {
         swarmOpts.seed = Buffer.isBuffer(config.seed)

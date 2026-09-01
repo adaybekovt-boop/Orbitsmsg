@@ -55,7 +55,10 @@ void main() {
     expect(worklet, contains('harness-file-resume'));
     expect(worklet, contains('fs.writeSync'));
     expect(worklet, contains('file-send interrupted'));
+    expect(worklet, contains('relayThrough'));
     expect(worklet, isNot(contains('readFileSync(file.path)')));
+    expect(worklet, isNot(contains('http://')));
+    expect(worklet, isNot(contains('https://')));
     expect(
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
       contains("'path': file.path"),

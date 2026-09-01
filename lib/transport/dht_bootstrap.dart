@@ -79,6 +79,16 @@ List<DhtBootstrapNode> resolveDhtBootstrap({
   return parseDhtBootstrapEnv(env?[kDhtBootstrapEnv]);
 }
 
+/// Hyperswarm `relayThrough` keys from directory relay rows. HTTP health
+/// relays are not DHT public keys. Never identity keys.
+List<String> relayThroughKeysFromDirectory(RelayDirectory? directory) {
+  if (directory == null) return const [];
+  return [
+    for (final peer in directory.pick(DirectoryPeerKind.relay))
+      if (peer.isHyperdhtRelay && !isDeniedPublicDhtHost(peer.host)) peer.publicKey,
+  ];
+}
+
 String? storageOriginFromPeer(DirectoryPeer peer) {
   if (peer.kind != DirectoryPeerKind.storage) return null;
   if (peer.unsound || peer.host.isEmpty || peer.port <= 0) return null;

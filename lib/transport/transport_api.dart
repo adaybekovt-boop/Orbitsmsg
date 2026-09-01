@@ -93,6 +93,7 @@ class TransportLocalConfiguration {
     this.relayForced = false,
     this.diagnosticsEnabled = false,
     this.bootstrap = const [],
+    this.relayThrough = const [],
     this.transportSeed,
   });
 
@@ -107,6 +108,10 @@ class TransportLocalConfiguration {
 
   /// Explicit HyperDHT bootstrap. Required for the Hyperswarm backend.
   final List<DhtBootstrapNode> bootstrap;
+
+  /// HyperDHT node public keys (hex) for Hyperswarm `relayThrough`.
+  /// Empty means the swarm may still go direct. Not identity keys.
+  final List<String> relayThrough;
 
   /// 32-byte Hyperswarm Noise seed. Not the identity key, KEK, or
   /// discovery secret.

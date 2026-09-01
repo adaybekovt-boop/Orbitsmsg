@@ -26,9 +26,19 @@ async function createHyperswarmBackend(opts = {}) {
     swarmOpts.seed = Buffer.isBuffer(opts.seed) ? opts.seed : Buffer.from(opts.seed)
   }
   if (opts.firewall) swarmOpts.firewall = opts.firewall
+  const keys = parseRelayThroughKeys(opts.relayThrough)
+  if (keys.length > 0) {
+    swarmOpts.relayThrough = (force) => {
+      if (opts.relayForced || force) {
+        return keys[Math.floor(Math.random() * keys.length)]
+      }
+      return null
+    }
+  }
   const swarm = new Hyperswarm(swarmOpts)
   return {
     swarm,
+    relayThroughCount: keys.length,
     async join(topic) {
       const discovery = swarm.join(topic, { server: true, client: true })
       await discovery.flushed()
@@ -81,17 +91,38 @@ async function createHyperswarmBackend(opts = {}) {
   }
 }
 
-async function createLocalBootstrap() {
+function parseRelayThroughKeys(raw) {
+  const keys = []
+  if (!Array.isArray(raw)) return keys
+  for (const k of raw) {
+    const buf = parseRelayThroughKey(k)
+    if (buf) keys.push(buf)
+  }
+  return keys
+}
+
+function parseRelayThroughKey(k) {
+  if (!k) return null
+  if (Buffer.isBuffer(k)) return k.length === 32 ? k : null
+  const s = String(k).trim()
+  if (!/^[0-9a-fA-F]{64}$/.test(s)) return null
+  const buf = Buffer.from(s, 'hex')
+  return buf.length === 32 ? buf : null
+}
+
+async function createLocalBootstrap(size = 3) {
   let createTestnet
   try {
     createTestnet = require('hyperdht/testnet')
   } catch (err) {
     throw new Error('hyperdht is not installed: ' + err.message)
   }
-  const testnet = await createTestnet(3, { host: '127.0.0.1' })
+  const n = Number(size) > 0 ? Number(size) : 3
+  const testnet = await createTestnet(n, { host: '127.0.0.1' })
   return {
     node: testnet,
     bootstrap: testnet.bootstrap,
+    nodes: testnet.nodes || [],
     async destroy() {
       const nodes = testnet.nodes || []
       for (let i = nodes.length - 1; i >= 0; i--) {
@@ -105,4 +136,8 @@ async function createLocalBootstrap() {
   }
 }
 
-module.exports = { createHyperswarmBackend, createLocalBootstrap }
+module.exports = {
+  createHyperswarmBackend,
+  createLocalBootstrap,
+  parseRelayThroughKeys,
+}

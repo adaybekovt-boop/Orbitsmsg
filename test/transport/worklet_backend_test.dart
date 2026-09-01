@@ -127,5 +127,29 @@ void main() {
       File('tool/connectivity_harness/src/swarm.js').readAsStringSync(),
       contains('refusing public DHT default'),
     );
+    expect(
+      File('tool/connectivity_harness/src/swarm.js').readAsStringSync(),
+      contains('relayThrough'),
+    );
+    expect(
+      File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
+      contains('relayThrough'),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'relayThrough': config.relayThrough"),
+    );
+    expect(
+      File('lib/transport/native_transport_host.dart').readAsStringSync(),
+      contains('relayThroughKeysFromDirectory'),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      isNot(contains('http://')),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      isNot(contains('https://')),
+    );
   });
 }

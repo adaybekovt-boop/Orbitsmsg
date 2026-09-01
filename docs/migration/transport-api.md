@@ -63,8 +63,12 @@ list means the host must stay on loopback (or PeerJS) — it must not
 open Hyperswarm against the public DHT. Lab override:
 `ORBITS_DHT_BOOTSTRAP=127.0.0.1:port,…`. A local
 `ORBITS_RELAY_DIRECTORY` file may supply identity-signed or unsigned lab
-rows. `kLiveSignedRelayDirectory` stays false until a public directory
-is actually deployed.
+rows. Relay rows with `protocol: hyperdht` and a 32-byte hex
+`publicKey` become Hyperswarm `relayThrough` keys (DHT node keys, not
+identity). HTTP health relays are skipped. `kLiveSignedRelayDirectory`
+stays false until a public directory is actually deployed.
+`hyperswarmRelayForced` stays false by default so the swarm may still
+go direct.
 
 `transportSeed` is a 32-byte Hyperswarm Noise seed. It is not the
 identity key, not a discovery secret, and not stored in Hypercore.

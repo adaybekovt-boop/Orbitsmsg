@@ -6,8 +6,10 @@
  *
  * Bootstrap is a local HyperDHT testnet when `hyperdht` is installed
  * next to the connectivity harness. HTTP health ports are never used as
- * HyperDHT addresses. Relays stay HTTP health (not Hyperswarm
- * `relayThrough`). Storage is the blind HTTP mailbox.
+ * HyperDHT addresses. Extra testnet nodes (4 and 5) are relay rows with
+ * DHT public keys for Hyperswarm `relayThrough`. Without hyperdht,
+ * relays stay HTTP health. Storage is the blind HTTP mailbox. This is
+ * not a public fleet.
  */
 
 const http = require('node:http')
@@ -47,7 +49,26 @@ function loadHyperDhtTestnet() {
   return null
 }
 
-async function startLocalDht(count = 3) {
+function dhtPublicKeyHex(node) {
+  const pk =
+    (node && node.defaultKeyPair && node.defaultKeyPair.publicKey) ||
+    (node && node._keyPair && node._keyPair.publicKey)
+  if (!pk) return ''
+  const hex = Buffer.from(pk).toString('hex')
+  return hex.length === 64 ? hex : ''
+}
+
+function dhtListenPort(node, row) {
+  if (row && row.port) return row.port
+  try {
+    const addr = node && typeof node.address === 'function' ? node.address() : null
+    return addr && addr.port ? addr.port : 0
+  } catch {
+    return 0
+  }
+}
+
+async function startLocalDht(count = 5) {
   const createTestnet = loadHyperDhtTestnet()
   if (!createTestnet) return null
   const testnet = await createTestnet(count, { host: '127.0.0.1' })
@@ -67,7 +88,7 @@ async function destroyTestnet(testnet) {
 }
 
 async function startLocalFleet(opts = {}) {
-  const testnet = opts.skipDht ? null : await startLocalDht(3)
+  const testnet = opts.skipDht ? null : await startLocalDht(5)
   const bootstrapHealth = [
     healthServer('bootstrap', 'b-ca'),
     healthServer('bootstrap', 'b-eu'),
@@ -103,16 +124,35 @@ async function startLocalFleet(opts = {}) {
       })
     }
   }
-  for (const s of relay) {
-    const port = await listen(s)
-    peers.push({
-      kind: 'relay',
-      protocol: 'http',
-      host: '127.0.0.1',
-      port,
-      healthPort: port,
-      server: s,
-    })
+  const dhtNodes = Array.isArray(testnet && testnet.nodes) ? testnet.nodes : []
+  for (let i = 0; i < relay.length; i++) {
+    const s = relay[i]
+    const healthPort = await listen(s)
+    const node = dhtNodes[bootstrapHealth.length + i]
+    const dht = dhtRows[bootstrapHealth.length + i]
+    const publicKey = dhtPublicKeyHex(node)
+    const port = dhtListenPort(node, dht)
+    const host = (dht && dht.host) || '127.0.0.1'
+    if (publicKey && port) {
+      peers.push({
+        kind: 'relay',
+        protocol: 'hyperdht',
+        host,
+        port,
+        healthPort,
+        publicKey,
+        server: s,
+      })
+    } else {
+      peers.push({
+        kind: 'relay',
+        protocol: 'http',
+        host: '127.0.0.1',
+        port: healthPort,
+        healthPort,
+        server: s,
+      })
+    }
   }
   for (const s of storage) {
     const port = await listen(s)
@@ -138,7 +178,12 @@ async function startLocalFleet(opts = {}) {
   }
 }
 
-module.exports = { startLocalFleet, healthServer, loadHyperDhtTestnet }
+module.exports = {
+  startLocalFleet,
+  healthServer,
+  loadHyperDhtTestnet,
+  dhtPublicKeyHex,
+}
 
 if (require.main === module) {
   startLocalFleet().then((fleet) => {

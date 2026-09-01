@@ -23,6 +23,7 @@ class DirectoryPeer {
     this.rttMs = 0,
     this.unsound = false,
     this.protocol = '',
+    this.publicKey = '',
   });
 
   final String id;
@@ -35,8 +36,13 @@ class DirectoryPeer {
 
   /// `hyperdht` for bootstrap rows that may join a swarm; `http` for
   /// health / storage / lab HTTP. Empty means bootstrap→hyperdht,
-  /// other kinds→http.
+  /// other kinds→http. Relay rows may be `hyperdht` when they carry a
+  /// DHT node public key for Hyperswarm `relayThrough`.
   final String protocol;
+
+  /// 32-byte HyperDHT node public key as hex. Empty for HTTP-only rows.
+  /// Not an identity key.
+  final String publicKey;
 
   String get wireProtocol => protocol.isNotEmpty
       ? protocol
@@ -44,6 +50,11 @@ class DirectoryPeer {
 
   bool get isHyperdhtBootstrap =>
       kind == DirectoryPeerKind.bootstrap && wireProtocol != 'http';
+
+  bool get isHyperdhtRelay =>
+      kind == DirectoryPeerKind.relay &&
+      wireProtocol != 'http' &&
+      isHyperdhtPublicKeyHex(publicKey);
 
   Map<String, Object?> toJson() => <String, Object?>{
         'id': id,
@@ -54,6 +65,7 @@ class DirectoryPeer {
         'rttMs': rttMs,
         'unsound': unsound,
         'protocol': wireProtocol,
+        if (publicKey.isNotEmpty) 'publicKey': publicKey,
       };
 
   static DirectoryPeer fromJson(Map<String, Object?> json) {
@@ -74,8 +86,22 @@ class DirectoryPeer {
           : (json['rttMs'] as num?)?.toInt() ?? 0,
       unsound: json['unsound'] == true,
       protocol: json['protocol'] as String? ?? '',
+      publicKey: json['publicKey'] as String? ?? '',
     );
   }
+}
+
+/// 32-byte HyperDHT node public key as lowercase/upper hex. Not identity.
+bool isHyperdhtPublicKeyHex(String value) {
+  if (value.length != 64) return false;
+  for (var i = 0; i < value.length; i++) {
+    final c = value.codeUnitAt(i);
+    final hex = (c >= 48 && c <= 57) ||
+        (c >= 97 && c <= 102) ||
+        (c >= 65 && c <= 70);
+    if (!hex) return false;
+  }
+  return true;
 }
 
 const String kRelayDirectoryInfo = 'orbits-relay-directory-v1';
