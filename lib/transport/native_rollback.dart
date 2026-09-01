@@ -10,6 +10,10 @@ enum NativeRollbackReason {
   bareWorkletCrash,
   relayMailboxBacklog,
   journalReplayMismatch,
+  /// Low battery / `ACTION_BATTERY_LOW`. Never re-enables native on okay.
+  battery,
+  /// Sound relays dropped below fleet minimum or RTT exploded.
+  relayBlowUp,
 }
 
 class NativeRollbackEvent {

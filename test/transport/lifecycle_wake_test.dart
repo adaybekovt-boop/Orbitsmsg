@@ -61,4 +61,31 @@ void main() {
     expect(drained, 2);
     expect(life.lastDrained, 2);
   });
+
+  test('low battery suspends; battery-okay does not resume native', () async {
+    final transport = LoopbackOrbitsTransport();
+    final life = TransportLifecycle(transport: transport);
+    await transport.start(
+      const TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: [1, 2, 3],
+      ),
+    );
+    await life.onLowBattery();
+    expect(life.lowBattery, isTrue);
+    expect(life.suspended, isTrue);
+    await expectLater(
+      transport.send(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        TransportChannel.message,
+        const [1],
+      ),
+      throwsStateError,
+    );
+    await life.onForeground();
+    expect(life.suspended, isTrue);
+    await life.onBatteryOkay();
+    expect(life.lowBattery, isFalse);
+    expect(life.suspended, isTrue);
+  });
 }

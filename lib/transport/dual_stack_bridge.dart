@@ -24,6 +24,7 @@ import 'discovery_secret_store.dart';
 import 'hello_capabilities.dart';
 import 'mux_frames.dart';
 import 'native_rollback.dart';
+import 'relay_directory.dart';
 import 'signed_capabilities.dart';
 import 'transport_api.dart';
 
@@ -298,6 +299,22 @@ class DualStackBridge {
     );
   }
 
+  /// Relay set collapsed (unsound / RTT blow-up). Distinct from mailbox
+  /// backlog. Never enables native.
+  bool noteRelayBlowUp({String detail = 'relay blow-up'}) {
+    return rollbackNativeToPeerjs(
+      reason: NativeRollbackReason.relayBlowUp,
+      detail: detail,
+    );
+  }
+
+  bool checkRelayDirectory(RelayDirectory directory) {
+    if (!directory.relayBlownUp) return false;
+    return noteRelayBlowUp(
+      detail: 'relay directory unsound or RTT blown up',
+    );
+  }
+
   Future<void> _persistDurable(JournalRecord record) {
     final durable = durableJournal;
     if (durable == null) return Future<void>.value();
@@ -566,6 +583,10 @@ class DualStackBridge {
         onPresence?.call(peerId, false);
       case TransportFrame(:final peerId, :final channel, :final bytes):
         _onFrame(peerId, channel, bytes);
+      case TransportError(:final code, :final message):
+        if (code == 'relay-blow-up') {
+          noteRelayBlowUp(detail: message);
+        }
       default:
         break;
     }

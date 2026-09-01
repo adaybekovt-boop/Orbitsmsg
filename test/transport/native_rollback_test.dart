@@ -48,4 +48,46 @@ void main() {
       expect(isHyperswarmTransportEnabled(), isFalse);
     }
   });
+
+  test('battery rollback never re-enables native when battery recovers', () {
+    expect(
+      NativeRollbackReason.values,
+      containsAll([
+        NativeRollbackReason.battery,
+        NativeRollbackReason.relayBlowUp,
+      ]),
+    );
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    expect(
+      rollbackNativeToPeerjs(
+        reason: NativeRollbackReason.battery,
+        detail: 'ACTION_BATTERY_LOW',
+      ),
+      isTrue,
+    );
+    expect(hyperswarmRollout(), HyperswarmRollout.off);
+    setHyperswarmRollout(HyperswarmRollout.off);
+    expect(
+      rollbackNativeToPeerjs(
+        reason: NativeRollbackReason.battery,
+        detail: 'ACTION_BATTERY_OKAY must not enable native',
+      ),
+      isFalse,
+    );
+    expect(hyperswarmRollout(), HyperswarmRollout.off);
+    expect(isHyperswarmTransportEnabled(), isFalse);
+  });
+
+  test('relay blow-up is distinct from mailbox backlog', () {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    expect(
+      rollbackNativeToPeerjs(
+        reason: NativeRollbackReason.relayBlowUp,
+        detail: 'all relays unsound',
+      ),
+      isTrue,
+    );
+    expect(nativeRollbackLog.last.reason, NativeRollbackReason.relayBlowUp);
+    expect(hyperswarmRollout(), HyperswarmRollout.off);
+  });
 }

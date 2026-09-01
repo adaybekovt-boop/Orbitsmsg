@@ -17,6 +17,14 @@ void main() {
             .readAsStringSync();
     expect(android, contains('must not receive a peer id'));
     expect(android, contains('ACTION_DEVICE_IDLE_MODE_CHANGED'));
+    expect(android, contains('ACTION_BATTERY_LOW'));
+    expect(android, contains('ACTION_BATTERY_OKAY'));
+    expect(android, contains('"battery"'));
+
+    expect(ios, contains('app.orbits/lifecycle'));
+    expect(ios, contains('batteryStateDidChangeNotification'));
+    expect(ios, contains('batteryLevelDidChangeNotification'));
+    expect(ios, contains('isBatteryMonitoringEnabled'));
 
     final wake = File(
       'android/app/src/main/kotlin/com/orbits/orbits_flutter/OrbitsWakeReceiver.kt',
@@ -49,5 +57,15 @@ void main() {
         File('docs/migration/peerjs-support-window.md').readAsStringSync();
     expect(window, contains('not started'));
     expect(window, contains('default-live'));
+
+    final scope =
+        File('lib/transport/transport_lifecycle_scope.dart').readAsStringSync();
+    expect(scope, contains("'battery'"));
+    expect(scope, contains('onLowBattery'));
+    expect(scope, contains('onBatteryOkay'));
+    expect(
+      File('lib/transport/native_transport_host_stub.dart').readAsStringSync(),
+      contains('onLowBattery'),
+    );
   });
 }

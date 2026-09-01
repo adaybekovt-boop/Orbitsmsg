@@ -51,6 +51,7 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   TransportLocalConfiguration? _config;
   DeviceBinding? _binding;
   String? topicHex;
+  PeerDescriptor? lastConnect;
   bool _started = false;
   bool _suspended = false;
   bool _published = false;
@@ -99,6 +100,7 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
 
   @override
   Future<void> connect(PeerDescriptor peer) async {
+    lastConnect = peer;
     _ensureStarted();
     if (_suspended) {
       throw StateError('transport is suspended');
@@ -221,6 +223,9 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   Future<void> refreshNetwork() async {
     _events.add(const TransportNetworkChanged('loopback'));
   }
+
+  /// Harness helper: inject a carrier event (relay blow-up, crash, …).
+  void emitEvent(TransportEvent event) => _events.add(event);
 
   void _ensureStarted() {
     if (!_started || _config == null) {

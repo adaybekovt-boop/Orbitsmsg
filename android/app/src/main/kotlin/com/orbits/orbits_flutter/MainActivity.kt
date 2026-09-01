@@ -21,6 +21,15 @@ class MainActivity : FlutterActivity() {
             )
         }
     }
+    private val batteryReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            val low = intent?.action == Intent.ACTION_BATTERY_LOW
+            lifecycleChannel?.invokeMethod(
+                "battery",
+                mapOf("low" to low),
+            )
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -50,17 +59,28 @@ class MainActivity : FlutterActivity() {
                 result.notImplemented()
             }
         val filter = IntentFilter(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)
+        val batteryFilter = IntentFilter().apply {
+            addAction(Intent.ACTION_BATTERY_LOW)
+            addAction(Intent.ACTION_BATTERY_OKAY)
+        }
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(dozeReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            registerReceiver(batteryReceiver, batteryFilter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(dozeReceiver, filter)
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(batteryReceiver, batteryFilter)
         }
     }
 
     override fun onDestroy() {
         try {
             unregisterReceiver(dozeReceiver)
+        } catch (_: IllegalArgumentException) {
+        }
+        try {
+            unregisterReceiver(batteryReceiver)
         } catch (_: IllegalArgumentException) {
         }
         super.onDestroy()

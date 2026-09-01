@@ -37,6 +37,14 @@ enabled — do not promise always-on P2P.
   and forwards `{idle: true|false}` on `app.orbits/lifecycle`. Dart calls
   `TransportLifecycle.onDoze` / `onDozeExit`. This is not a messaging
   foreground service.
+- `MainActivity` also listens for `Intent.ACTION_BATTERY_LOW` /
+  `ACTION_BATTERY_OKAY` and forwards `{low: true|false}` on the same
+  channel. Dart calls `NativeTransportHost.onLowBattery` which suspends,
+  rolls back to PeerJS (`NativeRollbackReason.battery`), and abandons
+  the native carrier. `onBatteryOkay` must **not** re-enable native.
+- iOS `AppDelegate` mirrors low-battery onto `app.orbits/lifecycle`
+  from `UIDevice.batteryStateDidChangeNotification` /
+  `batteryLevelDidChangeNotification` (level ≤ 0.20 while unplugged).
 - FCM SDK is not a required dependency. `OpaqueWakeService` accepts only
   an opaque token. `OrbitsWakeReceiver` drops extras that carry text,
   names, or peer IDs. A public push gateway is still not deployed.

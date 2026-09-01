@@ -109,6 +109,31 @@ void main() {
     }
     expect(kBareBinaryShipped, isFalse);
 
+    final iosPod = File(
+      'packages/orbits_transport_ios/ios/orbits_transport_ios.podspec',
+    ).readAsStringSync();
+    final macPod = File(
+      'packages/orbits_transport_macos/macos/orbits_transport_macos.podspec',
+    ).readAsStringSync();
+    for (final pod in [iosPod, macPod]) {
+      expect(pod, contains('prepare_command'));
+      expect(pod, contains('kBareBinaryShipped stays false'));
+      expect(pod, contains('tool/bare/'));
+      final prepare = pod.split('s.prepare_command').last;
+      expect(prepare, isNot(contains('curl')));
+      expect(prepare, isNot(contains('wget')));
+      expect(prepare, isNot(contains('http://')));
+      expect(prepare, isNot(contains('https://')));
+    }
+    expect(iosPod, contains('ios-arm64'));
+    expect(macPod, contains('darwin-arm64'));
+    expect(File('tool/bare/embed.sh').readAsStringSync(), contains(
+      'packages/orbits_transport_macos/macos/bare',
+    ));
+    expect(File('tool/bare/embed.sh').readAsStringSync(), contains(
+      'packages/orbits_transport_ios/ios/bare',
+    ));
+
     final launch = resolveBareRuntime(worklet);
     final haveBin = File(bareOsSlot()).existsSync();
     final haveGraph = bareWorkletGraphPresent(worklet);

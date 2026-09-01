@@ -57,6 +57,13 @@ class NativeTransportHost {
     await transportNoiseSeedStore.hydrate();
 
     directory = await loadRelayDirectoryFromEnv();
+    if (directory != null && directory!.relayBlownUp) {
+      rollbackNativeToPeerjs(
+        reason: NativeRollbackReason.relayBlowUp,
+        detail: 'relay directory unsound or RTT blown up',
+      );
+      return;
+    }
     final bootstrap = resolveDhtBootstrap(
       env: Platform.environment,
       directory: directory,
@@ -219,6 +226,13 @@ class NativeTransportHost {
         );
         unawaited(_abandonNativeCarrier());
       }
+      if (event is TransportError && event.code == 'relay-blow-up') {
+        rollbackNativeToPeerjs(
+          reason: NativeRollbackReason.relayBlowUp,
+          detail: event.message,
+        );
+        unawaited(_abandonNativeCarrier());
+      }
     });
   }
 
@@ -226,6 +240,9 @@ class NativeTransportHost {
     attached = false;
     await _carrierEvents?.cancel();
     _carrierEvents = null;
+    lifecycle = null;
+    wake = null;
+    push = null;
     try {
       await _ref.read(connectionsNotifierProvider.notifier).unbindNativeTransport();
     } catch (_) {}
@@ -234,6 +251,10 @@ class NativeTransportHost {
     } catch (_) {}
     transport = null;
     backend = 'none';
+    try {
+      await storageHttp?.stop();
+    } catch (_) {}
+    storageHttp = null;
   }
 
   /// Local HTTP mailbox when possible; env origin for a desktop peer.
@@ -278,6 +299,20 @@ class NativeTransportHost {
 
   Future<void> onDozeExit() async {
     await lifecycle?.onDozeExit();
+  }
+
+  Future<void> onLowBattery() async {
+    await lifecycle?.onLowBattery();
+    rollbackNativeToPeerjs(
+      reason: NativeRollbackReason.battery,
+      detail: 'low battery',
+    );
+    await _abandonNativeCarrier();
+  }
+
+  /// Battery recovered. Do not re-enable native; PeerJS stays the live path.
+  Future<void> onBatteryOkay() async {
+    await lifecycle?.onBatteryOkay();
   }
 
   Future<WakeOutcome> handleWake(Map<String, Object?> payload) async {

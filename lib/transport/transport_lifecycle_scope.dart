@@ -52,6 +52,16 @@ class _TransportLifecycleScopeState
       } else {
         await host.onDozeExit();
       }
+      return;
+    }
+    if (call.method == 'battery') {
+      final args = call.arguments;
+      final low = args is Map && args['low'] == true;
+      if (low) {
+        await host.onLowBattery();
+      } else {
+        await host.onBatteryOkay();
+      }
     }
   }
 

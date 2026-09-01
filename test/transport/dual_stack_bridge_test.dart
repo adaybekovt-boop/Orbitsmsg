@@ -19,6 +19,7 @@ import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
 import 'package:orbits_flutter/transport/native_rollback.dart';
+import 'package:orbits_flutter/transport/relay_directory.dart';
 import 'package:orbits_flutter/transport/transport_api.dart';
 
 DeviceBinding _bind(String id) => DeviceBinding(
@@ -798,5 +799,117 @@ void main() {
       ),
       isFalse,
     );
+  });
+
+  test('dial forwards recipient Noise public key, not identity', () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(_bind('a'));
+    await pair.$2.publish(_bind('b'));
+    final noise = List<int>.generate(32, (i) => 11);
+    final devices = DeviceRegistry()
+      ..authorize(
+        AuthorizedDevice(
+          deviceId: 'bob-phone',
+          transportPublicKey: noise,
+          hypercorePublicKey: List<int>.generate(32, (i) => 12),
+          name: 'Bob',
+          kind: 'phone',
+          createdAt: 1,
+          status: DeviceStatus.active,
+          ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+          transportPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        ),
+      );
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    final a = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: secrets,
+      devices: devices,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    await a.dial('ORBIT-BBBBBBBBBBBBBBBB');
+    expect(pair.$1.lastConnect?.peerId, 'ORBIT-BBBBBBBBBBBBBBBB');
+    expect(pair.$1.lastConnect?.noisePublicKey, noise);
+    expect(pair.$1.lastConnect?.discoverySecret, secret);
+    await a.detach();
+  });
+
+  test('relay blow-up and carrier error roll back to PeerJS', () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    clearNativeRollbackLogForTests();
+    final pair = loopbackPair();
+    final a = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: DiscoverySecretStore(),
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    final empty = RelayDirectory(
+      issuedAt: 1,
+      expiresAt: 2,
+      peers: const [],
+      signature: Uint8List(0),
+      identityPublicKey: Uint8List(0),
+    );
+    expect(a.checkRelayDirectory(empty), isFalse);
+    expect(hyperswarmRollout(), HyperswarmRollout.internal);
+
+    final blown = RelayDirectory(
+      issuedAt: 1,
+      expiresAt: 2,
+      peers: const [
+        DirectoryPeer(
+          id: 'r1',
+          kind: DirectoryPeerKind.relay,
+          host: '10.0.0.1',
+          port: 1,
+          region: 'eu',
+          unsound: true,
+        ),
+        DirectoryPeer(
+          id: 'r2',
+          kind: DirectoryPeerKind.relay,
+          host: '10.0.0.2',
+          port: 1,
+          region: 'eu',
+          unsound: true,
+        ),
+      ],
+      signature: Uint8List(0),
+      identityPublicKey: Uint8List(0),
+    );
+    expect(a.checkRelayDirectory(blown), isTrue);
+    expect(hyperswarmRollout(), HyperswarmRollout.off);
+    expect(nativeRollbackLog.last.reason, NativeRollbackReason.relayBlowUp);
+
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    pair.$1.emitEvent(const TransportError('relay-blow-up', 'rtt exploded'));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(hyperswarmRollout(), HyperswarmRollout.off);
+    expect(nativeRollbackLog.last.reason, NativeRollbackReason.relayBlowUp);
+    expect(nativeRollbackLog.last.detail, 'rtt exploded');
+    await a.detach();
   });
 }

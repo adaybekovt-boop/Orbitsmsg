@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/spki_codec.dart';
@@ -225,6 +226,122 @@ void main() {
     (tampered['peers'] as List).first['host'] = 'evil.example';
     await file.writeAsString(jsonEncode(tampered));
     expect(await loadRelayDirectoryFile(file.path), isNull);
+  });
+
+  test('relayBlownUp is false without relays and true when the set collapses',
+      () {
+    final empty = RelayDirectory(
+      issuedAt: 1,
+      expiresAt: 2,
+      peers: const [],
+      signature: Uint8List(0),
+      identityPublicKey: Uint8List(0),
+    );
+    expect(empty.relayBlownUp, isFalse);
+
+    final healthy = RelayDirectory(
+      issuedAt: 1,
+      expiresAt: 2,
+      peers: const [
+        DirectoryPeer(
+          id: 'r1',
+          kind: DirectoryPeerKind.relay,
+          host: '10.0.0.1',
+          port: 1,
+          region: 'eu',
+          rttMs: 12,
+        ),
+        DirectoryPeer(
+          id: 'r2',
+          kind: DirectoryPeerKind.relay,
+          host: '10.0.0.2',
+          port: 1,
+          region: 'eu',
+          rttMs: 20,
+        ),
+      ],
+      signature: Uint8List(0),
+      identityPublicKey: Uint8List(0),
+    );
+    expect(healthy.relayBlownUp, isFalse);
+
+    final unsound = RelayDirectory(
+      issuedAt: 1,
+      expiresAt: 2,
+      peers: const [
+        DirectoryPeer(
+          id: 'r1',
+          kind: DirectoryPeerKind.relay,
+          host: '10.0.0.1',
+          port: 1,
+          region: 'eu',
+          unsound: true,
+        ),
+        DirectoryPeer(
+          id: 'r2',
+          kind: DirectoryPeerKind.relay,
+          host: '10.0.0.2',
+          port: 1,
+          region: 'eu',
+          unsound: true,
+        ),
+      ],
+      signature: Uint8List(0),
+      identityPublicKey: Uint8List(0),
+    );
+    expect(unsound.relayBlownUp, isTrue);
+
+    final belowMin = RelayDirectory(
+      issuedAt: 1,
+      expiresAt: 2,
+      peers: const [
+        DirectoryPeer(
+          id: 'r1',
+          kind: DirectoryPeerKind.relay,
+          host: '10.0.0.1',
+          port: 1,
+          region: 'eu',
+          rttMs: 8,
+        ),
+        DirectoryPeer(
+          id: 'r2',
+          kind: DirectoryPeerKind.relay,
+          host: '10.0.0.2',
+          port: 1,
+          region: 'eu',
+          unsound: true,
+        ),
+      ],
+      signature: Uint8List(0),
+      identityPublicKey: Uint8List(0),
+    );
+    expect(belowMin.relayBlownUp, isTrue);
+
+    final slow = RelayDirectory(
+      issuedAt: 1,
+      expiresAt: 2,
+      peers: const [
+        DirectoryPeer(
+          id: 'r1',
+          kind: DirectoryPeerKind.relay,
+          host: '10.0.0.1',
+          port: 1,
+          region: 'eu',
+          rttMs: kRelayBlowUpRttMs,
+        ),
+        DirectoryPeer(
+          id: 'r2',
+          kind: DirectoryPeerKind.relay,
+          host: '10.0.0.2',
+          port: 1,
+          region: 'eu',
+          rttMs: kRelayBlowUpRttMs + 1,
+        ),
+      ],
+      signature: Uint8List(0),
+      identityPublicKey: Uint8List(0),
+    );
+    expect(slow.relayBlownUp, isTrue);
   });
 }
 

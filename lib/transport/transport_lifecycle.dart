@@ -14,6 +14,7 @@ class TransportLifecycle {
   final Future<int> Function()? onResumeDrain;
 
   bool suspended = false;
+  bool lowBattery = false;
   int lastDrained = 0;
 
   Future<void> onBackground() async {
@@ -22,6 +23,7 @@ class TransportLifecycle {
   }
 
   Future<void> onForeground() async {
+    if (lowBattery) return;
     await transport.resume();
     await transport.refreshNetwork();
     suspended = false;
@@ -38,6 +40,18 @@ class TransportLifecycle {
   /// Wake from APNs / FCM. Caller must already have rejected unsafe
   /// payloads. This only resumes transport and drains ciphertext.
   Future<void> onOpaqueWake() => onForeground();
+
+  /// Low battery: park the native carrier. The host rolls back to PeerJS
+  /// and must not re-enable native when the battery recovers.
+  Future<void> onLowBattery() async {
+    lowBattery = true;
+    await onBackground();
+  }
+
+  /// Battery recovered. Do not resume native — rollback owns the live path.
+  Future<void> onBatteryOkay() async {
+    lowBattery = false;
+  }
 }
 
 /// Android Doze policy. Not proven on hardware; this is the in-tree

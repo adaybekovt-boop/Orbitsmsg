@@ -35,6 +35,7 @@ Drop to PeerJS (or fail visibly if fallback is off) when:
 - Bare / worklet crashes
 - relay or mailbox backlog blows up
 - journal replay does not match live projection
+- battery is low (`ACTION_BATTERY_LOW` / iOS battery notifications)
 
 `logDowngrade` records `pwa` vs `remote-missing-hyperswarm-v1`.
 `rollbackNativeToPeerjs` in `lib/transport/native_rollback.dart` forces
@@ -43,6 +44,14 @@ Drop to PeerJS (or fail visibly if fallback is off) when:
 - `NativeTransportHost` — Hyperswarm `start` failure and worklet
   `worklet-exit` (unexpected Bare/Node process death). After rollback the
   native carrier is unbound so PeerJS stays the live path.
+- `NativeTransportHost.onLowBattery` / `TransportLifecycle.onLowBattery`
+  — suspend, force PeerJS, abandon the carrier. `onBatteryOkay` does
+  **not** turn native back on.
+- `NativeTransportHost` and `DualStackBridge.checkRelayDirectory` —
+  configured relays all unsound, below fleet-minimum sound relays, or
+  every remaining relay RTT ≥ `kRelayBlowUpRttMs`. Empty directories
+  (no public fleet) are not a blow-up. Carrier `relay-blow-up` errors
+  take the same path. Distinct from mailbox backlog/quota.
 - `DualStackBridge.verifyLiveMatchesReplay` — live projector vs durable
   replay, and Hypercore envelope ids vs the journal.
 - `DualStackBridge.checkMailboxBacklog` / quota — mailbox ciphertext
@@ -50,8 +59,8 @@ Drop to PeerJS (or fail visibly if fallback is off) when:
 - `DualStackBridge.noteMessagesLost` — explicit lost-message path.
 
 It never enables native transport. The default product rollout is already
-off. Other operational triggers (battery, relay blow-up) still need a
-fleet before they can fire in production.
+off. A live signed directory / public fleet is still not deployed, so
+relay blow-up cannot fire in production until ops publishes one.
 
 ## Hardware
 

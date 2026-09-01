@@ -52,8 +52,14 @@ void main() {
     expect(src, contains('PushGateway'));
     expect(src, contains('ingestFcm'));
     expect(src, contains('onDoze'));
+    expect(src, contains('onLowBattery'));
+    expect(src, contains('onBatteryOkay'));
+    expect(src, contains('NativeRollbackReason.battery'));
+    expect(src, contains('NativeRollbackReason.relayBlowUp'));
+    expect(src, contains('relayBlownUp'));
     expect(src, contains('rollbackNativeToPeerjs'));
     expect(src, contains('_abandonNativeCarrier'));
+    expect(src, contains('lifecycle = null'));
     expect(src, contains('restoreReadModelFromJournal'));
     expect(src, contains('verifyLiveMatchesReplay'));
     expect(src, contains('unbindNativeTransport'));
@@ -72,6 +78,10 @@ void main() {
     expect(
       File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
       contains('noisePublicKeyFor'),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('noteRelayBlowUp'),
     );
     expect(
       File('lib/ui/profile/device_link_page.dart').readAsStringSync(),

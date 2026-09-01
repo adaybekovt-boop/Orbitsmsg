@@ -26,7 +26,8 @@ Node. `ORBITS_BARE_BIN` remains an explicit experimental override.
   gitignored; CI uses Node unless an operator vendors locally.
 - `tool/bare/embed.sh <slot>` copies a **local** slot into federated
   plugin native dirs (also gitignored). Linux/Windows CMake bundles it
-  only when that file exists.
+  only when that file exists. iOS/macOS CocoaPods `prepare_command`
+  copies the same local slot if present and never curl/wget/http.
 - The worklet stays `require('node:fs')`; Bare resolves those specifiers
   through `package.json` import maps to `bare-*`. `worklet.js` loads
   `bare-process` only when the `process` global is missing.

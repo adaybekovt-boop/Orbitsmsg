@@ -5,7 +5,11 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'fleet_status.dart';
 import 'signed_capabilities.dart';
+
+/// Every remaining sound relay at or above this RTT is a blow-up.
+const int kRelayBlowUpRttMs = 8000;
 
 enum DirectoryPeerKind { bootstrap, relay, storage }
 
@@ -100,9 +104,23 @@ class RelayDirectory {
   }
 
   bool get meetsFleetMinimum =>
-      pick(DirectoryPeerKind.bootstrap).length >= 3 &&
-      pick(DirectoryPeerKind.relay).length >= 2 &&
-      pick(DirectoryPeerKind.storage).length >= 2;
+      pick(DirectoryPeerKind.bootstrap).length >= kFleetMinBootstrap &&
+      pick(DirectoryPeerKind.relay).length >= kFleetMinRelay &&
+      pick(DirectoryPeerKind.storage).length >= kFleetMinStorage;
+
+  /// Operational collapse of a configured relay set. An empty directory
+  /// (no public fleet) is not a blow-up.
+  bool get relayBlownUp {
+    final allRelays =
+        peers.where((p) => p.kind == DirectoryPeerKind.relay).toList();
+    if (allRelays.isEmpty) return false;
+    final live = pick(DirectoryPeerKind.relay);
+    if (live.isEmpty) return true;
+    if (live.length < kFleetMinRelay && allRelays.length >= kFleetMinRelay) {
+      return true;
+    }
+    return live.every((p) => p.rttMs >= kRelayBlowUpRttMs);
+  }
 }
 
 Future<RelayDirectory> issueRelayDirectory({

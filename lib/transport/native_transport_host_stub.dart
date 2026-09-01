@@ -10,6 +10,8 @@ class NativeTransportHost {
   Future<void> onForeground() async {}
   Future<void> onDoze() async {}
   Future<void> onDozeExit() async {}
+  Future<void> onLowBattery() async {}
+  Future<void> onBatteryOkay() async {}
   Future<WakeOutcome> handleWake(Map<String, Object?> payload) async =>
       const WakeOutcome(accepted: false, reason: 'web');
   Future<WakeOutcome> handleFcmWake(Map<String, Object?> payload) async =>

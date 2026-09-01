@@ -6,6 +6,7 @@ import UIKit
 @objc class AppDelegate: FlutterAppDelegate, CXProviderDelegate {
   private var callProvider: CXProvider?
   private var pushChannel: FlutterMethodChannel?
+  private var lifecycleChannel: FlutterMethodChannel?
 
   override func application(
     _ application: UIApplication,
@@ -36,6 +37,26 @@ import UIKit
       }
       pushChannel = channel
     }
+    if let lifeRegistrar = self.registrar(forPlugin: "OrbitsLifecycle") {
+      let channel = FlutterMethodChannel(
+        name: "app.orbits/lifecycle",
+        binaryMessenger: lifeRegistrar.messenger()
+      )
+      lifecycleChannel = channel
+    }
+    UIDevice.current.isBatteryMonitoringEnabled = true
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(batteryDidChange),
+      name: UIDevice.batteryStateDidChangeNotification,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(batteryDidChange),
+      name: UIDevice.batteryLevelDidChangeNotification,
+      object: nil
+    )
     if let registrar = self.registrar(forPlugin: "OrbitsCallKit") {
       let channel = FlutterMethodChannel(
         name: "app.orbits/calling",
@@ -96,6 +117,18 @@ import UIKit
     }
     pushChannel?.invokeMethod("wake", arguments: userInfo)
     completionHandler(.newData)
+  }
+
+  @objc private func batteryDidChange(_ notification: Notification) {
+    let device = UIDevice.current
+    let level = device.batteryLevel
+    let low: Bool
+    if level < 0 {
+      low = false
+    } else {
+      low = level <= 0.20 && device.batteryState == .unplugged
+    }
+    lifecycleChannel?.invokeMethod("battery", arguments: ["low": low])
   }
 
   func providerDidReset(_ provider: CXProvider) {}
