@@ -19,9 +19,26 @@ target_include_directories(${PLUGIN_NAME} INTERFACE
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::GTK)
 
-set(ORBITS_BARE_SLOT "${CMAKE_CURRENT_SOURCE_DIR}/bare")
-if(NOT EXISTS "${ORBITS_BARE_SLOT}")
-  set(ORBITS_BARE_SLOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../tool/bare/linux-x64/bare")
+# Prefer the matching CPU slot. `bare` is the host-arch copy from embed.sh
+# (linux-x64 on amd64 CI). `bare-arm64` is vendored beside it and must not
+# overwrite the runnable host binary. Never downloads.
+set(_PLUGIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+set(_TOOL_BARE_X64 "${CMAKE_CURRENT_SOURCE_DIR}/../../../../tool/bare/linux-x64/bare")
+set(_TOOL_BARE_ARM64 "${CMAKE_CURRENT_SOURCE_DIR}/../../../../tool/bare/linux-arm64/bare")
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64|arm64")
+  if(EXISTS "${_PLUGIN_DIR}/bare-arm64")
+    set(ORBITS_BARE_SLOT "${_PLUGIN_DIR}/bare-arm64")
+  elseif(EXISTS "${_PLUGIN_DIR}/bare")
+    set(ORBITS_BARE_SLOT "${_PLUGIN_DIR}/bare")
+  else()
+    set(ORBITS_BARE_SLOT "${_TOOL_BARE_ARM64}")
+  endif()
+else()
+  if(EXISTS "${_PLUGIN_DIR}/bare")
+    set(ORBITS_BARE_SLOT "${_PLUGIN_DIR}/bare")
+  else()
+    set(ORBITS_BARE_SLOT "${_TOOL_BARE_X64}")
+  endif()
 endif()
 
 set(orbits_transport_linux_bundled_libraries "")

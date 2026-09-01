@@ -84,4 +84,27 @@ void main() {
       List<int>.filled(32, 1),
     );
   });
+
+  test('revoke drops only that device transport ratchet key', () {
+    final phone = AuthorizedDevice(
+      deviceId: 'phone',
+      transportPublicKey: List<int>.filled(32, 1),
+      hypercorePublicKey: List<int>.filled(32, 2),
+      name: 'phone',
+      kind: 'phone',
+      createdAt: 1,
+      status: DeviceStatus.active,
+      ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+      transportPeerId: 'ORBIT-B1B1B1B1B1B1B1B1',
+    );
+    expect(
+      ratchetKeysForRevokedDevice(phone),
+      ['ORBIT-B1B1B1B1B1B1B1B1'],
+    );
+    expect(
+      ratchetKeysForRevokedDevice(phone),
+      isNot(contains('ORBIT-BBBBBBBBBBBBBBBB')),
+    );
+    expect(ratchetKeysForRevokedDevice(dev('a1')), isEmpty);
+  });
 }

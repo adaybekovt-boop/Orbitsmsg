@@ -35,7 +35,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/bundle_cache.dart';
 import '../core/wire_crypto.dart'
-    show decryptWirePayload, initWireSession, isWireCiphertext, isWireReady;
+    show
+        decryptWirePayload,
+        initWireSession,
+        isWireCiphertext,
+        isWireReady,
+        teardownWireSession;
 import '../core/wire_session.dart' show isVerified;
 import '../messaging/message_protocol.dart';
 import '../core/orbits_drop.dart' show dropMaxBufferSize;
@@ -269,6 +274,21 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         _drop.handleInbound(peerId, packet);
       }
       ..attach();
+  }
+
+  /// Phase 10: revoke a linked device, journal it on the native carrier
+  /// when bound, and drop that device's own RatchetState only.
+  void revokeLinkedDevice(String deviceId) {
+    final bridge = _dual;
+    if (bridge != null) {
+      bridge.revokeDevice(deviceId);
+      return;
+    }
+    final before = deviceRegistry.getDevice(deviceId);
+    deviceRegistry.revoke(deviceId);
+    for (final key in ratchetKeysForRevokedDevice(before)) {
+      unawaited(teardownWireSession(key));
+    }
   }
 
   /// Replay the native journal into Drift after decrypt. Block list runs

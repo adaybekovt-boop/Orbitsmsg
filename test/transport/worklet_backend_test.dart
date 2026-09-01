@@ -64,6 +64,18 @@ void main() {
     expect(src, contains('verifyLiveMatchesReplay'));
     expect(src, contains('unbindNativeTransport'));
     expect(
+      File('lib/state/connections_notifier.dart').readAsStringSync(),
+      contains('revokeLinkedDevice'),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('teardownWireSession'),
+    );
+    expect(
+      File('lib/transport/transport_lifecycle.dart').readAsStringSync(),
+      contains('dozing'),
+    );
+    expect(
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
       contains('worklet-exit'),
     );
@@ -86,6 +98,10 @@ void main() {
     expect(
       File('lib/ui/profile/device_link_page.dart').readAsStringSync(),
       contains('localDeviceBindingKeys'),
+    );
+    expect(
+      File('lib/ui/profile/device_link_page.dart').readAsStringSync(),
+      contains('revokeLinkedDevice'),
     );
     expect(
       File('lib/ui/profile/device_link_page.dart').readAsStringSync(),

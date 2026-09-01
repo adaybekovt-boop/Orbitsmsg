@@ -100,6 +100,8 @@ class DeviceRegistry {
       .where((d) => d.status == DeviceStatus.active)
       .toList(growable: false);
 
+  AuthorizedDevice? getDevice(String deviceId) => _devices[deviceId];
+
   void authorize(AuthorizedDevice device) {
     final existing = _devices[device.deviceId];
     if (existing?.status == DeviceStatus.revoked) {
@@ -109,11 +111,13 @@ class DeviceRegistry {
     unawaited(persist());
   }
 
-  void revoke(String deviceId) {
+  AuthorizedDevice? revoke(String deviceId) {
     final existing = _devices[deviceId];
-    if (existing == null) return;
-    _devices[deviceId] = existing.revoke();
+    if (existing == null) return null;
+    final revoked = existing.revoke();
+    _devices[deviceId] = revoked;
     unawaited(persist());
+    return revoked;
   }
 
   bool acceptsWriter(String deviceId) {
@@ -209,6 +213,16 @@ class DeviceRegistry {
   Map<String, Object?> toJson() => <String, Object?>{
         'devices': all.map((d) => d.toJson()).toList(),
       };
+}
+
+/// Transport ids that hold a distinct Double Ratchet snapshot for this
+/// device. Never the owner identity peer id — revoking a tablet must
+/// not tear down the phone's conversation ratchet.
+List<String> ratchetKeysForRevokedDevice(AuthorizedDevice? device) {
+  if (device == null) return const [];
+  final tid = device.transportPeerId;
+  if (tid == null || tid.isEmpty) return const [];
+  return [normalizePeerId(tid)];
 }
 
 final deviceRegistry = DeviceRegistry();

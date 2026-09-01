@@ -80,6 +80,9 @@ class DualStackBridge {
   void Function(CallSignal signal, String from)? onCallSignal;
   void Function(String peerId, bool connected)? onPresence;
 
+  /// Test / host hook: the transport id whose RatchetState was dropped.
+  void Function(String peerId)? onRatchetDropped;
+
   void attach() {
     _sub ??= transport.events.listen(_onEvent);
   }
@@ -206,7 +209,10 @@ class DualStackBridge {
   }
 
   /// Authorization log: revoked writers are ignored on the next fan-out.
+  /// Drops that device's own RatchetState (transportPeerId), never a
+  /// sibling device's rootKey.
   void revokeDevice(String deviceId) {
+    final before = devices?.getDevice(deviceId);
     devices?.revoke(deviceId);
     final record = journal.append(
       ReplicationEventKind.deviceRevoked,
@@ -217,6 +223,10 @@ class DualStackBridge {
     );
     unawaited(_persistDurable(record));
     hypercore.append(record);
+    for (final key in ratchetKeysForRevokedDevice(before)) {
+      onRatchetDropped?.call(key);
+      unawaited(teardownWireSession(key));
+    }
   }
 
   void authorizeDevice(AuthorizedDevice device) {

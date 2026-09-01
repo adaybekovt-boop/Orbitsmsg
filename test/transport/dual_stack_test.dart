@@ -76,4 +76,74 @@ void main() {
       isFalse,
     );
   });
+
+  test('isolation fallback-only does not override rollout off', () {
+    final decision = decideDualStack(
+      local: both,
+      remote: both,
+      isolationMode: kPeerjsIsolationFallbackOnly,
+    );
+    expect(decision.route, TransportRoute.peerjs);
+    expect(decision.isolationMode, kPeerjsIsolationFallbackOnly);
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(peerjsIsProductPath(), isTrue);
+  });
+
+  test('isolation fallback-only prefers Hyperswarm once rollout is on', () {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final decision = decideDualStack(
+      local: both,
+      remote: both,
+      isolationMode: kPeerjsIsolationFallbackOnly,
+      preferHyperswarm: false,
+    );
+    expect(decision.route, TransportRoute.hyperswarm);
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+  });
+
+  test('isolation web-only and removed refuse PeerJS on native', () {
+    expect(
+      decideDualStack(
+        local: both,
+        remote: both,
+        isolationMode: kPeerjsIsolationWebOnly,
+      ).route,
+      TransportRoute.unavailable,
+    );
+    expect(
+      decideDualStack(
+        local: both,
+        remote: both,
+        isolationMode: kPeerjsIsolationRemoved,
+      ).route,
+      TransportRoute.unavailable,
+    );
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    expect(
+      decideDualStack(
+        local: both,
+        remote: both,
+        isolationMode: kPeerjsIsolationWebOnly,
+      ).route,
+      TransportRoute.hyperswarm,
+    );
+    expect(
+      decideDualStack(
+        local: both,
+        remote: both,
+        isolationMode: kPeerjsIsolationRemoved,
+      ).route,
+      TransportRoute.hyperswarm,
+    );
+    expect(
+      decideDualStack(
+        local: both,
+        remote: both,
+        isolationMode: kPeerjsIsolationWebOnly,
+        localIsPwa: true,
+      ).route,
+      TransportRoute.peerjs,
+    );
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+  });
 }

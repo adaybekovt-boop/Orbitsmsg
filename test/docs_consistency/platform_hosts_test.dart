@@ -44,6 +44,11 @@ void main() {
       isNot(contains('http')),
     );
     expect(
+      File('packages/orbits_transport_linux/linux/CMakeLists.txt')
+          .readAsStringSync(),
+      contains('linux-arm64'),
+    );
+    expect(
       File('packages/orbits_transport_windows/windows/CMakeLists.txt')
           .readAsStringSync(),
       isNot(contains('http')),
@@ -71,6 +76,12 @@ void main() {
     expect(ci, contains('tool/bare/embed.sh darwin-arm64'));
     expect(ci, contains('tool/bare/embed.sh android-arm64'));
     expect(ci, contains('tool/bare/embed.sh windows-x64'));
+    expect(ci, contains('tool/bare/vendor.sh linux-arm64'));
+    expect(ci, contains('tool/bare/vendor.sh darwin-x64'));
+    expect(ci, contains('bare-arm64'));
+    expect(ci, contains('bare-x64'));
+    expect(ci, isNot(contains('tool/bare/embed.sh linux-arm64')));
+    expect(ci, isNot(contains('tool/bare/embed.sh darwin-x64')));
     expect(ci, contains('kBareBinaryShipped stays false'));
   });
 }

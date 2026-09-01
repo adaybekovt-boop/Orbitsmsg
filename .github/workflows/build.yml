@@ -89,6 +89,17 @@ jobs:
           test -x packages/orbits_transport_linux/linux/bare
           echo "plugin host has a local linux-x64 binary; kBareBinaryShipped stays false"
 
+      - name: Vendor linux-arm64 Bare beside the x64 host (do not overwrite)
+        run: |
+          set -euo pipefail
+          tool/bare/vendor.sh linux-arm64
+          test -x tool/bare/linux-arm64/bare
+          mkdir -p packages/orbits_transport_linux/linux
+          cp -f tool/bare/linux-arm64/bare packages/orbits_transport_linux/linux/bare-arm64
+          test -x packages/orbits_transport_linux/linux/bare
+          test -x packages/orbits_transport_linux/linux/bare-arm64
+          echo "linux-arm64 vendored beside x64 host; kBareBinaryShipped stays false"
+
       - name: Connectivity harness (loopback, no hardware)
         working-directory: tool/connectivity_harness
         run: |
@@ -205,7 +216,13 @@ jobs:
           tool/bare/vendor.sh darwin-arm64
           tool/bare/embed.sh darwin-arm64
           test -f packages/orbits_transport_macos/macos/bare
-          echo "kBareBinaryShipped stays false"
+          tool/bare/vendor.sh darwin-x64
+          test -f tool/bare/darwin-x64/bare
+          mkdir -p packages/orbits_transport_macos/macos
+          cp -f tool/bare/darwin-x64/bare packages/orbits_transport_macos/macos/bare-x64
+          test -f packages/orbits_transport_macos/macos/bare
+          test -f packages/orbits_transport_macos/macos/bare-x64
+          echo "darwin-x64 vendored beside arm64 host; kBareBinaryShipped stays false"
 
       - name: Generate and verify iOS assets
         run: |

@@ -23,10 +23,21 @@ void main() {
     );
     await life.onDoze();
     expect(life.suspended, isTrue);
+    expect(life.dozing, isTrue);
+    await life.onForeground();
+    expect(life.suspended, isTrue);
     expect(AndroidDozePolicy.keepMessagingSocketAlive, isFalse);
     expect(AndroidDozePolicy.foregroundServiceForMessaging, isFalse);
     expect(AndroidDozePolicy.reconnectOnResume, isTrue);
-    await life.onDozeExit();
+
+    final wake = OpaqueWakeService(onAccepted: (_) => life.onOpaqueWake());
+    final fromDoze = await wake.handle({
+      'opaqueWakeToken': 'tok',
+      'collapseId': 'c',
+      'protocolVersion': 1,
+    });
+    expect(fromDoze.accepted, isTrue);
+    expect(life.dozing, isFalse);
     expect(life.suspended, isFalse);
     expect(drained, 1);
 
@@ -41,7 +52,6 @@ void main() {
       throwsStateError,
     );
 
-    final wake = OpaqueWakeService(onAccepted: (_) => life.onOpaqueWake());
     final bad = await wake.handle({
       'opaqueWakeToken': 'tok',
       'collapseId': 'c',
@@ -87,5 +97,21 @@ void main() {
     await life.onBatteryOkay();
     expect(life.lowBattery, isFalse);
     expect(life.suspended, isTrue);
+  });
+
+  test('Doze exit resumes when battery is fine', () async {
+    final transport = LoopbackOrbitsTransport();
+    final life = TransportLifecycle(transport: transport);
+    await transport.start(
+      const TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: [1, 2, 3],
+      ),
+    );
+    await life.onDoze();
+    expect(life.dozing, isTrue);
+    await life.onDozeExit();
+    expect(life.dozing, isFalse);
+    expect(life.suspended, isFalse);
   });
 }

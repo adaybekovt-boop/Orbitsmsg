@@ -20,17 +20,17 @@ independent room-E2E audit stay **blocked** until the user is free.
 | 0 | `test/docs_consistency/migration_phase0_test.dart` | — |
 | 1 | Loopback + JS harness echo/file/suspend | Live NAT matrix |
 | 2 | `src/stand.js` metrics schema | Live KZ operators |
-| 3 | Plugin lifecycle + IPC + OS hosts refuse remote JS; federated plugin is an app dependency (no web); per-OS Bare slots; `vendor.sh` / `embed.sh` / `vendor-bare-modules.sh`; all vendor tarball sha256 pins; worklet import maps; path-streamed `sendFile`; CI embeds linux-x64, ios-arm64, darwin-arm64, android-arm64, windows-x64 | Bare binary embed per OS product flag |
+| 3 | Plugin lifecycle + IPC + OS hosts refuse remote JS; federated plugin is an app dependency (no web); per-OS Bare slots; `vendor.sh` / `embed.sh` / `vendor-bare-modules.sh`; all vendor tarball sha256 pins; worklet import maps; path-streamed `sendFile`; CI embeds linux-x64, ios-arm64, darwin-arm64, android-arm64, windows-x64 and vendors linux-arm64 / darwin-x64 beside the host binary | Bare binary embed per OS product flag |
 | 4 | `dual_stack_bridge_test` two natives, `v2:` / wireHello; `preferredWorkletBackend`; `rollbackNativeToPeerjs` on start fail / worklet-exit / journal / mailbox / lost messages / battery / relay blow-up | Two physical devices |
 | 5 | Signed caps on native connect and PeerJS `wireHello.caps`; vault-wrapped discovery persist | Physical pair |
 | 6 | `NativeCallSession` + CallKit/Telecom opaque handle; iOS remote-notification handlers | PushKit / physical devices |
 | 7 | Memory + file journal, identical projector fingerprint, Hypercore ingest into journal, boot restore into Drift after block-then-decrypt, worklet `useCorestoreIfPresent` | Holepunch Corestore addon |
 | 8 | Mailbox + HTTP storage peer + tombstone/stats + local loopback fleet (HyperDHT bootstrap when present) + unsigned directory rows + `OpaqueWakeService` + `PushSender` refuse + opaque APNs/FCM builders + resume drain + signed RelayDirectory tests + Android Doze intent + block-before-drain | Public storage fleet / APNs send / live signed directory |
 | 9 | 10 and 50 MiB chunk/resume; `chunkFromByteStream`; native `sendFileFromPath` | Default PeerJS Drop |
-| 10 | Three-device fan-out + QR + revoke journal + RatchetState isolation | Live hardware sessions |
+| 10 | Three-device fan-out + QR + revoke journal + RatchetState isolation; revoke drops that device's transport ratchet only | Live hardware sessions |
 | 11–12 | Rooms on native carrier + Autobase converge over `autobase-event` | Live rooms on Hyperswarm |
 | 13 | Epoch revoke/rejoin; E2E flag stays false | Independent audit |
-| 14 | PeerJS still default live path | Support window + removal |
+| 14 | Isolation table wired through `decideDualStack`; product mode `default-live` | Support window + removal |
 
 ## Chaos / security (local)
 

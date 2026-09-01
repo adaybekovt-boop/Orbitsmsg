@@ -93,6 +93,14 @@ void main() {
     );
     expect(
       File('.github/workflows/build.yml').readAsStringSync(),
+      contains('tool/bare/vendor.sh linux-arm64'),
+    );
+    expect(
+      File('.github/workflows/build.yml').readAsStringSync(),
+      contains('tool/bare/vendor.sh darwin-x64'),
+    );
+    expect(
+      File('.github/workflows/build.yml').readAsStringSync(),
       contains('kBareBinaryShipped stays false'),
     );
     final assets = (manifest['vendor'] as Map)['assets'] as Map;

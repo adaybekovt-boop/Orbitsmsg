@@ -399,12 +399,16 @@ void main() {
       devices.transportTargets('ORBIT-BBBBBBBBBBBBBBBB'),
       contains('ORBIT-B2B2B2B2B2B2B2B2'),
     );
+    final dropped = <String>[];
+    a.onRatchetDropped = dropped.add;
     a.revokeDevice('phone-2');
     expect(devices.acceptsWriter('phone-2'), isFalse);
     expect(
       devices.transportTargets('ORBIT-BBBBBBBBBBBBBBBB'),
       isNot(contains('ORBIT-B2B2B2B2B2B2B2B2')),
     );
+    expect(dropped, ['ORBIT-B2B2B2B2B2B2B2B2']);
+    expect(dropped, isNot(contains('ORBIT-BBBBBBBBBBBBBBBB')));
     expect(
       a.journal.records.any((r) => r.kind == ReplicationEventKind.deviceRevoked),
       isTrue,
