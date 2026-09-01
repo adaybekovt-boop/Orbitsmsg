@@ -14,7 +14,7 @@ void main() {
   test('identity-signed directory verifies; Noise is not used', () async {
     final pair = await generateP256EcdsaKey();
     final spki = buildP256Spki(x: pair.x, y: pair.y);
-    final now = 1;
+    const now = 1;
     final directory = await issueRelayDirectory(
       issuedAt: now,
       expiresAt: now + 60,

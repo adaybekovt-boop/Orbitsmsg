@@ -17,7 +17,6 @@ import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
-import 'package:orbits_flutter/transport/mux_frames.dart';
 import 'package:orbits_flutter/transport/transport_api.dart';
 
 DeviceBinding _bind(String id) => DeviceBinding(

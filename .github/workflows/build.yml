@@ -108,7 +108,10 @@ jobs:
 
       - name: Transport plugin lifecycle
         working-directory: packages/orbits_transport
-        run: flutter test
+        run: |
+          flutter pub get
+          flutter analyze --no-fatal-infos
+          flutter test
 
   # ────────────────────────────────────────────────────────────────────
   # Native platform folders are committed and must not be regenerated with

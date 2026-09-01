@@ -253,7 +253,7 @@ class CallsNotifier extends StateNotifier<CallState> {
       final conn = await peer!.callPeer(remotePeerId, local);
       if (!mounted) {
         try {
-          await conn?.close();
+          await conn.close();
         } catch (_) {}
         try {
           local.getTracks().forEach((t) => t.stop());
@@ -484,7 +484,7 @@ class CallsNotifier extends StateNotifier<CallState> {
     _closeSub = null;
     if (conn != null) {
       try {
-        await conn?.close();
+        await conn.close();
       } catch (_) {}
     }
     if (stream != null) {
