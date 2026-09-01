@@ -75,5 +75,15 @@ dist/
 # Claude Code worktrees / local agent scratch
 .claude/
 
-# Holepunch harness
+# Holepunch harness / Bare vendor output (build-time only)
 tool/connectivity_harness/node_modules/
+tool/bare/**/bare
+tool/bare/**/bare.exe
+tool/bare/**/*.tgz
+tool/bare/**/_extract/
+tool/bare/**/*.node
+packages/orbits_transport_linux/linux/bare
+packages/orbits_transport_windows/windows/bare.exe
+packages/orbits_transport_macos/macos/bare
+packages/orbits_transport_ios/ios/bare
+packages/orbits_transport_android/android/src/main/assets/bare

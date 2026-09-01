@@ -8,6 +8,8 @@ class NativeTransportHost {
   Future<void> ensureStarted() async {}
   Future<void> onBackground() async {}
   Future<void> onForeground() async {}
+  Future<void> onDoze() async {}
+  Future<void> onDozeExit() async {}
   Future<WakeOutcome> handleWake(Map<String, Object?> payload) async =>
       const WakeOutcome(accepted: false, reason: 'web');
   Future<WakeOutcome> handleFcmWake(Map<String, Object?> payload) async =>

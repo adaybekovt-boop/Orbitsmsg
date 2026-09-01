@@ -5,6 +5,7 @@ import UIKit
 @main
 @objc class AppDelegate: FlutterAppDelegate, CXProviderDelegate {
   private var callProvider: CXProvider?
+  private var pushChannel: FlutterMethodChannel?
 
   override func application(
     _ application: UIApplication,
@@ -19,6 +20,21 @@ import UIKit
     let provider = CXProvider(configuration: config)
     provider.setDelegate(self, queue: nil)
     callProvider = provider
+    if let pushRegistrar = self.registrar(forPlugin: "OrbitsPush") {
+      let channel = FlutterMethodChannel(
+        name: "app.orbits/push",
+        binaryMessenger: pushRegistrar.messenger()
+      )
+      channel.setMethodCallHandler { call, result in
+        if call.method == "register" {
+          UIApplication.shared.registerForRemoteNotifications()
+          result(nil)
+          return
+        }
+        result(FlutterMethodNotImplemented)
+      }
+      pushChannel = channel
+    }
     if let registrar = self.registrar(forPlugin: "OrbitsCallKit") {
       let channel = FlutterMethodChannel(
         name: "app.orbits/calling",
@@ -48,6 +64,37 @@ import UIKit
       }
     }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  override func application(
+    _ application: UIApplication,
+    didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+  ) {
+    let hex = deviceToken.map { String(format: "%02x", $0) }.joined()
+    pushChannel?.invokeMethod("token", arguments: ["apns": hex])
+  }
+
+  override func application(
+    _ application: UIApplication,
+    didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+    fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+  ) {
+    let forbidden = [
+      "text", "body", "title", "senderName", "displayName",
+      "peerId", "conversationId", "attachment", "mime", "fileName",
+    ]
+    for key in forbidden {
+      if userInfo[key] != nil {
+        completionHandler(.noData)
+        return
+      }
+    }
+    guard userInfo["opaqueWakeToken"] != nil else {
+      completionHandler(.noData)
+      return
+    }
+    pushChannel?.invokeMethod("wake", arguments: userInfo)
+    completionHandler(.newData)
   }
 
   func providerDidReset(_ provider: CXProvider) {}

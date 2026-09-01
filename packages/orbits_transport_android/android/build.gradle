@@ -27,6 +27,13 @@ android {
     }
 }
 
+// Optional local Bare binary as an asset. Never downloaded.
+def orbitsBareSlot = file("${project.projectDir}/../../../../tool/bare/android-arm64/bare")
+def orbitsBareAsset = file("${project.projectDir}/src/main/assets/bare")
+if (orbitsBareSlot.exists() || orbitsBareAsset.exists()) {
+    android.sourceSets.main.assets.srcDirs += ["src/main/assets"]
+}
+
 dependencies {
     implementation("androidx.annotation:annotation:1.9.1")
 }

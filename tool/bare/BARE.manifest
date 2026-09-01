@@ -13,5 +13,21 @@
     "android-arm64": "tool/bare/android-arm64/bare",
     "ios-arm64": "tool/bare/ios-arm64/bare"
   },
-  "note": "Drop a local Bare binary in the matching OS slot. Production must not download it. None of these files ship in this tree yet."
+  "vendor": {
+    "version": "1.31.0",
+    "note": "tool/bare/vendor.sh is build-time only. Dart/Flutter must never fetch these URLs.",
+    "assets": {
+      "linux-x64": {
+        "name": "bare-runtime-linux-x64-1.31.0.tgz",
+        "sha256": "9408f82dd1344d7403acb93a0c66b50a4b2cc63c483c6bf48ef8df67203b6ec7"
+      },
+      "linux-arm64": { "name": "bare-runtime-linux-arm64-1.31.0.tgz" },
+      "darwin-x64": { "name": "bare-runtime-darwin-x64-1.31.0.tgz" },
+      "darwin-arm64": { "name": "bare-runtime-darwin-arm64-1.31.0.tgz" },
+      "windows-x64": { "name": "bare-runtime-win32-x64-1.31.0.tgz" },
+      "android-arm64": { "name": "bare-runtime-android-arm64-1.31.0.tgz" },
+      "ios-arm64": { "name": "bare-runtime-ios-arm64-1.31.0.tgz" }
+    }
+  },
+  "note": "Drop a local Bare binary in the matching OS slot, or run tool/bare/vendor.sh. Production must not download it. shipped=false until every OS slot is in the app bundle."
 }

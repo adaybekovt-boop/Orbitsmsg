@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
 import 'package:orbits_flutter/transport/capabilities.dart';
 import 'package:orbits_flutter/transport/dual_stack.dart';
+import 'package:orbits_flutter/transport/peerjs_window.dart';
 import 'package:orbits_flutter/transport/signed_capabilities.dart';
 
 void main() {
@@ -17,6 +18,10 @@ void main() {
     final decision = decideDualStack(local: both, remote: both);
     expect(decision.rollout, HyperswarmRollout.off);
     expect(decision.route, TransportRoute.peerjs);
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(peerjsIsProductPath(), isTrue);
+    expect(peerjsAllowedOnNative(), isTrue);
+    expect(isolationForcesHyperswarmFirst(), isFalse);
   });
 
   test('internal rollout prefers Hyperswarm for native pairs', () {
@@ -41,6 +46,34 @@ void main() {
         remoteIsPwa: true,
       )?.reason,
       'pwa',
+    );
+  });
+
+  test('isolation table does not start the support window', () {
+    expect(
+      peerjsAllowedOnNativeFor(kPeerjsIsolationDefaultLive),
+      isTrue,
+    );
+    expect(
+      peerjsAllowedOnNativeFor(kPeerjsIsolationFallbackOnly),
+      isTrue,
+    );
+    expect(
+      peerjsAllowedOnNativeFor(kPeerjsIsolationWebOnly, isWeb: false),
+      isFalse,
+    );
+    expect(
+      peerjsAllowedOnNativeFor(kPeerjsIsolationWebOnly, isWeb: true),
+      isTrue,
+    );
+    expect(peerjsAllowedOnNativeFor(kPeerjsIsolationRemoved), isFalse);
+    expect(
+      isolationForcesHyperswarmFirstFor(kPeerjsIsolationFallbackOnly),
+      isTrue,
+    );
+    expect(
+      isolationForcesHyperswarmFirstFor(kPeerjsIsolationDefaultLive),
+      isFalse,
     );
   });
 }

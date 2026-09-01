@@ -1,0 +1,9 @@
+{
+  "name": "orbits-corestore-addon",
+  "remoteFetch": false,
+  "downloadUrl": null,
+  "bundleUrl": null,
+  "linked": false,
+  "slot": "tool/bare/addons/corestore.node",
+  "note": "Link a local Holepunch Corestore native addon at build time. Production must not download a remote .node. JS require('corestore') is optional and is not this flag."
+}

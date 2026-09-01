@@ -28,7 +28,23 @@ class TransportLifecycle {
     lastDrained = await onResumeDrain?.call() ?? 0;
   }
 
+  /// Android Doze / OEM kill: the socket is mortal. Drop discovery.
+  Future<void> onDoze() => onBackground();
+
+  /// After Doze or a network change while the UI is visible, rebuild
+  /// UDP and drain mailbox ciphertext. Do not keep a messaging FGS.
+  Future<void> onDozeExit() => onForeground();
+
   /// Wake from APNs / FCM. Caller must already have rejected unsafe
   /// payloads. This only resumes transport and drains ciphertext.
   Future<void> onOpaqueWake() => onForeground();
+}
+
+/// Android Doze policy. Not proven on hardware; this is the in-tree
+/// contract so a later FGS cannot silently keep P2P alive.
+class AndroidDozePolicy {
+  static const bool keepMessagingSocketAlive = false;
+  static const bool reconnectOnResume = true;
+  static const bool dropDiscoveryOnBackground = true;
+  static const bool foregroundServiceForMessaging = false;
 }

@@ -2,8 +2,9 @@
 
 /**
  * Bare-side append-only journal. Encrypted envelopes only.
- * This is the local Corestore writer stand-in until a Holepunch
- * Corestore native addon is linked. Never stores plaintext.
+ * Prefers Holepunch Corestore when the module is linked locally.
+ * Falls back to an in-memory stand-in. Never stores plaintext.
+ * Never fetches a remote .node addon.
  */
 
 const FORBIDDEN = new Set([
@@ -34,6 +35,35 @@ class CorestoreJournal {
   constructor(writerDeviceId) {
     this.writerDeviceId = writerDeviceId || 'local-device'
     this.blocks = []
+    this.backend = 'memory'
+    this._core = null
+    this._store = null
+  }
+
+  // Try to open Holepunch Corestore. Missing module → memory.
+  async useCorestoreIfPresent(dir) {
+    let Corestore
+    try {
+      Corestore = require('corestore')
+    } catch {
+      this.backend = 'memory'
+      return false
+    }
+    const path = require('node:path')
+    const os = require('node:os')
+    const root = dir || path.join(os.tmpdir(), 'orbits-corestore-' + this.writerDeviceId)
+    this._store = new Corestore(root)
+    await this._store.ready()
+    this._core = this._store.get({ name: 'orbits-journal-v1' })
+    await this._core.ready()
+    this.backend = 'corestore'
+    return true
+  }
+
+  async close() {
+    if (this._store && this._store.close) await this._store.close()
+    this._core = null
+    this._store = null
   }
 
   append(record) {
@@ -51,6 +81,12 @@ class CorestoreJournal {
       fields,
     }
     this.blocks.push(stored)
+    if (this._core) {
+      const pending = this._core.append(Buffer.from(JSON.stringify(stored)))
+      if (pending && typeof pending.then === 'function') {
+        pending.catch(() => {})
+      }
+    }
     return stored
   }
 

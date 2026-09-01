@@ -21,6 +21,15 @@ void main() {
         discoverySecret: [1, 2, 3],
       ),
     );
+    await life.onDoze();
+    expect(life.suspended, isTrue);
+    expect(AndroidDozePolicy.keepMessagingSocketAlive, isFalse);
+    expect(AndroidDozePolicy.foregroundServiceForMessaging, isFalse);
+    expect(AndroidDozePolicy.reconnectOnResume, isTrue);
+    await life.onDozeExit();
+    expect(life.suspended, isFalse);
+    expect(drained, 1);
+
     await life.onBackground();
     expect(life.suspended, isTrue);
     await expectLater(
@@ -49,7 +58,7 @@ void main() {
     });
     expect(ok.accepted, isTrue);
     expect(life.suspended, isFalse);
-    expect(drained, 1);
+    expect(drained, 2);
     expect(life.lastDrained, 2);
   });
 }

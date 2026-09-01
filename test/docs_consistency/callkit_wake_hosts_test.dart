@@ -14,12 +14,22 @@ void main() {
         File('android/app/src/main/kotlin/com/orbits/orbits_flutter/MainActivity.kt')
             .readAsStringSync();
     expect(android, contains('must not receive a peer id'));
+    expect(android, contains('ACTION_DEVICE_IDLE_MODE_CHANGED'));
 
     final wake = File(
       'android/app/src/main/kotlin/com/orbits/orbits_flutter/OrbitsWakeReceiver.kt',
     ).readAsStringSync();
     expect(wake, contains('opaqueWakeToken'));
     expect(wake, contains('peerId'));
+
+    final androidManifest =
+        File('android/app/src/main/AndroidManifest.xml').readAsStringSync();
+    expect(androidManifest, contains('FOREGROUND_SERVICE_PHONE_CALL'));
+    expect(androidManifest, isNot(contains('FOREGROUND_SERVICE_DATA_SYNC')));
+
+    expect(ios, contains('registerForRemoteNotifications'));
+    expect(ios, contains('opaqueWakeToken'));
+    expect(ios, contains('didReceiveRemoteNotification'));
 
     final phase13 = File('docs/migration/phase13-group-e2e-review.md')
         .readAsStringSync();

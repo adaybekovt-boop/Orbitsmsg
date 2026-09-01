@@ -35,6 +35,7 @@ void main() {
       'docs/migration/peerjs-support-window.md',
       'tool/connectivity_harness/BUNDLE.manifest',
       'tool/bare/BARE.manifest',
+      'tool/bare/addons/CORESTORE.manifest',
     ]) {
       expect(File(rel).existsSync(), isTrue, reason: '$rel missing');
     }

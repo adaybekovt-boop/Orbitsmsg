@@ -25,9 +25,28 @@ void main() {
         File('tool/connectivity_harness/src/corestore_journal.js').readAsStringSync();
     expect(journal, contains('encryptedEnvelope'));
     expect(journal, contains('plaintext'));
+    expect(journal, contains('useCorestoreIfPresent'));
+    expect(
+      File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
+      contains('useCorestoreIfPresent'),
+    );
     expect(
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
       contains('extractBundledWorklet'),
+    );
+    expect(
+      File('packages/orbits_transport_linux/linux/CMakeLists.txt').existsSync(),
+      isTrue,
+    );
+    expect(
+      File('packages/orbits_transport_linux/linux/CMakeLists.txt')
+          .readAsStringSync(),
+      isNot(contains('http')),
+    );
+    expect(
+      File('packages/orbits_transport_windows/windows/CMakeLists.txt')
+          .readAsStringSync(),
+      isNot(contains('http')),
     );
   });
 }

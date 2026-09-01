@@ -31,5 +31,6 @@ void main() {
     expect(src, contains('httpStoragePeerClient'));
     expect(src, contains('PushGateway'));
     expect(src, contains('ingestFcm'));
+    expect(src, contains('onDoze'));
   });
 }

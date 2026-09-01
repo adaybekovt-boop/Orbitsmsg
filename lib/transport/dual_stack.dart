@@ -3,6 +3,7 @@
 
 import '../core/feature_flags.dart';
 import 'capabilities.dart';
+import 'peerjs_window.dart';
 
 class DualStackDecision {
   const DualStackDecision({
@@ -25,7 +26,12 @@ DualStackDecision decideDualStack({
   bool preferHyperswarm = true,
 }) {
   final rollout = hyperswarmRollout();
-  final fallback = isPeerjsFallbackEnabled();
+  final isolationAllowsPeerjs = peerjsAllowedOnNative(
+    isWeb: localIsPwa || remoteIsPwa,
+  );
+  final fallback = isPeerjsFallbackEnabled() && isolationAllowsPeerjs;
+  // Isolation must not override HyperswarmRollout.off. Default-live
+  // keeps PeerJS as the product path until rollout is explicitly on.
   if (rollout == HyperswarmRollout.off || !perContactEnabled) {
     return DualStackDecision(
       route: selectTransportRoute(

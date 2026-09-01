@@ -33,9 +33,15 @@ enabled — do not promise always-on P2P.
 - Foreground service only where a live call or an explicit user-visible
   transfer justifies it.
 - Doze: treat the socket as mortal; reconnect on resume / wake.
+- `MainActivity` listens for `PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED`
+  and forwards `{idle: true|false}` on `app.orbits/lifecycle`. Dart calls
+  `TransportLifecycle.onDoze` / `onDozeExit`. This is not a messaging
+  foreground service.
 - FCM SDK is not a required dependency. `OpaqueWakeService` accepts only
   an opaque token. `OrbitsWakeReceiver` drops extras that carry text,
   names, or peer IDs. A public push gateway is still not deployed.
+  `PushSender.sendApns` / `sendFcm` refuse while `kLiveApnsGateway` /
+  `kLiveFcmGateway` are false.
 - Foreground service is for an in-app Telecom call, not for keeping a
   messaging socket alive.
 

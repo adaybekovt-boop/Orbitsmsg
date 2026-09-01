@@ -201,6 +201,14 @@ class NativeTransportHost {
     await lifecycle?.onForeground();
   }
 
+  Future<void> onDoze() async {
+    await lifecycle?.onDoze();
+  }
+
+  Future<void> onDozeExit() async {
+    await lifecycle?.onDozeExit();
+  }
+
   Future<WakeOutcome> handleWake(Map<String, Object?> payload) async {
     final gateway = push;
     if (gateway == null) {

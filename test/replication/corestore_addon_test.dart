@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -10,5 +11,16 @@ void main() {
     expect(corestoreAddonPresent(), isFalse);
     expect(corestoreAddonIsProductionReady(), isFalse);
     expect(File(kCorestoreAddonSlot).existsSync(), isFalse);
+    expect(File(kCorestoreAddonManifestPath).existsSync(), isTrue);
+    final manifest = jsonDecode(
+      File(kCorestoreAddonManifestPath).readAsStringSync(),
+    ) as Map<String, dynamic>;
+    expect(
+      corestoreAddonManifestForbidsRemoteFetch(
+        Map<String, Object?>.from(manifest),
+      ),
+      isTrue,
+    );
+    expect(manifest['linked'], isFalse);
   });
 }

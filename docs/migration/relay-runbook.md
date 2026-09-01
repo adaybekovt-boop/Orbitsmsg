@@ -26,3 +26,11 @@ Not deployed. This is the ops checklist for the public fleet.
 
 Hardware placement, DDoS contracts, and volume backups are filled when
 the fleet exists.
+
+## Local loopback (CI only)
+
+`tool/fleet/local_fleet.js` starts 3 bootstrap + 2 relay + 2 storage
+health servers on 127.0.0.1. `tool/fleet/directory.js` maps those ports
+to unsigned directory rows (`live: false`). Identity-signed directories
+are Dart fixtures (`kLiveSignedRelayDirectory` stays false).
+

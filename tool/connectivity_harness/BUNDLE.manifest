@@ -3,6 +3,6 @@
   "ipc": "orbits-bare-ipc-v1",
   "transportFrame": "orbits-transport-v1",
   "remoteJs": false,
-  "workletSha256": "aa4899a97f4122153bb559c0740a2bb069ebe819162b234aa9699685e8ed9c95",
+  "workletSha256": "e70a7dbff78bc83b556ffd3fa27e82d735d63997033623244e1afaf068e8dd69",
   "note": "Production Bare must ship this tree hashed with the app. Do not fetch executable JS."
 }

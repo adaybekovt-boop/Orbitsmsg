@@ -25,12 +25,14 @@ void main() {
     expect(kRoomsApplicationE2eImplemented, isFalse);
     expect(kPeerjsSupportWindowOpen, isTrue);
     expect(kPeerjsIsolationMode, 'default-live');
+    expect(peerjsIsProductPath(), isTrue);
     expect(kLiveSignedRelayDirectory, isFalse);
     expect(kLiveStorageFleet, isFalse);
     expect(kLiveApnsGateway, isFalse);
     expect(kLiveFcmGateway, isFalse);
     expect(kBareBinaryShipped, isFalse);
     expect(kHolepunchCorestoreAddonLinked, isFalse);
+    expect(kCorestoreJsModuleOptional, isTrue);
   });
 
   test('connect checks keep block before TOFU', () {

@@ -1,4 +1,6 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'native_transport_host.dart'
@@ -17,16 +19,47 @@ class TransportLifecycleScope extends ConsumerStatefulWidget {
 
 class _TransportLifecycleScopeState
     extends ConsumerState<TransportLifecycleScope> with WidgetsBindingObserver {
+  static const _lifecycle = MethodChannel('app.orbits/lifecycle');
+  static const _push = MethodChannel('app.orbits/push');
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (!kIsWeb) {
+      _lifecycle.setMethodCallHandler(_onNativeLifecycle);
+      _push.setMethodCallHandler(_onNativePush);
+    }
   }
 
   @override
   void dispose() {
+    if (!kIsWeb) {
+      _lifecycle.setMethodCallHandler(null);
+      _push.setMethodCallHandler(null);
+    }
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  Future<void> _onNativeLifecycle(MethodCall call) async {
+    final host = ref.read(nativeTransportHostProvider);
+    if (call.method == 'doze') {
+      final args = call.arguments;
+      final idle = args is Map && args['idle'] == true;
+      if (idle) {
+        await host.onDoze();
+      } else {
+        await host.onDozeExit();
+      }
+    }
+  }
+
+  Future<void> _onNativePush(MethodCall call) async {
+    final host = ref.read(nativeTransportHostProvider);
+    if (call.method != 'wake' || call.arguments is! Map) return;
+    final payload = Map<String, Object?>.from(call.arguments as Map);
+    await host.handleWake(payload);
   }
 
   @override

@@ -34,6 +34,11 @@ class Worklet {
   async start(config) {
     this._config = config
     this._started = true
+    try {
+      await this._journal.useCorestoreIfPresent()
+    } catch {
+      this._journal.backend = 'memory'
+    }
     if (this.backend === 'loopback') {
       await this._loop.listen()
       this._loop.on('connection', (sock, info) => this._onConn(sock, info))

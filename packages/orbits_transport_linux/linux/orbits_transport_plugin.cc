@@ -1,5 +1,6 @@
 // Linux Bare host. The worklet bundle is embedded at build time.
-// Production must not fetch remote JS.
+// Production must not fetch remote JS. CMakeLists.txt may bundle a local
+// bare binary when present; it never downloads one.
 
 #include <string.h>
 

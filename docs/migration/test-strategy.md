@@ -9,7 +9,7 @@ independent room-E2E audit stay **blocked** until the user is free.
 |------|----------------|---------|
 | Dart unit | Contracts, flags, discovery, dual-stack, journal, mailbox, devices, rooms, push | `flutter test` (pinned 3.44.7) |
 | JS harness | Echo, file stream, suspend/resume, stand metrics schema | `node --test` in `tool/connectivity_harness` |
-| JS mailbox | Local HTTP storage peer grant/reject | `node --test tool/storage_peer/test.js` |
+| JS mailbox / fleet / wake | Local HTTP storage, 3/2/2 fleet health, opaque wake | `node --test tool/storage_peer/test.js tool/fleet/test.js tool/push_gateway/test.js` |
 | Plugin | Federated facade + in-process lifecycle | `flutter test` in `packages/orbits_transport` |
 | IPC | `orbits-bare-ipc-v1` request/response | `test/transport/bare_ipc_client_test.dart` |
 
@@ -20,12 +20,12 @@ independent room-E2E audit stay **blocked** until the user is free.
 | 0 | `test/docs_consistency/migration_phase0_test.dart` | — |
 | 1 | Loopback + JS harness echo/file/suspend | Live NAT matrix |
 | 2 | `src/stand.js` metrics schema | Live KZ operators |
-| 3 | Plugin lifecycle + IPC + OS hosts refuse remote JS; per-OS Bare slots | Bare binary embed per OS |
+| 3 | Plugin lifecycle + IPC + OS hosts refuse remote JS; per-OS Bare slots; `vendor.sh` / `embed.sh` | Bare binary embed per OS |
 | 4 | `dual_stack_bridge_test` two natives, `v2:` / wireHello; `preferredWorkletBackend` | Two physical devices |
 | 5 | Signed caps on native connect and PeerJS `wireHello.caps`; vault-wrapped discovery persist | Physical pair |
-| 6 | `NativeCallSession` + CallKit/Telecom opaque handle | PushKit / physical devices |
-| 7 | Memory + file journal, identical projector, worklet Corestore journal | Holepunch Corestore addon |
-| 8 | Mailbox + HTTP storage peer + `OpaqueWakeService` + resume drain + signed RelayDirectory tests | Public storage fleet / APNs gateway / live signed directory |
+| 6 | `NativeCallSession` + CallKit/Telecom opaque handle; iOS remote-notification handlers | PushKit / physical devices |
+| 7 | Memory + file journal, identical projector, worklet `useCorestoreIfPresent` | Holepunch Corestore addon |
+| 8 | Mailbox + HTTP storage peer + local loopback fleet + unsigned directory rows + `OpaqueWakeService` + `PushSender` refuse + resume drain + signed RelayDirectory tests + Android Doze intent | Public storage fleet / APNs send / live signed directory |
 | 9 | 10 and 50 MiB chunk/resume; native Drop when flag on | Default PeerJS Drop |
 | 10 | Three-device fan-out + QR + revoke journal + RatchetState isolation | Live hardware sessions |
 | 11–12 | Rooms on native carrier + Autobase converge | Live rooms on Hyperswarm |
