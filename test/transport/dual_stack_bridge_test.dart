@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -6,6 +7,8 @@ import 'package:orbits_flutter/calls/hyperswarm_signaling.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
 import 'package:orbits_flutter/devices/device_registry.dart';
 import 'package:orbits_flutter/mailbox/blind_store.dart';
+import 'package:orbits_flutter/mailbox/storage_peer_client.dart';
+import 'package:orbits_flutter/mailbox/storage_peer_http.dart';
 import 'package:orbits_flutter/transport/replication_schema.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
@@ -344,6 +347,149 @@ void main() {
       isTrue,
     );
     await a.detach();
+  });
+
+  test('recipient reads mailbox over HTTP after the sender is gone', () async {
+    final http = StoragePeerHttp(BlindMailboxStore());
+    await http.start();
+    addTearDown(http.stop);
+    final client = httpStoragePeerClient(http.origin);
+    await client.grant(
+      MailboxCapability(
+        token: 'cap-http',
+        quotaBytes: 4096,
+        retentionMs: 60 * 1000,
+        expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+      ),
+    );
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    final seen = <Object?>[];
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(_bind('a'));
+    await pair.$2.publish(_bind('b'));
+    final a = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: secrets,
+      isBlocked: (_) => false,
+      storagePeer: client,
+      mailboxToken: 'cap-http',
+      mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      onPacket: (peer, data) async {},
+    )..attach();
+    final b = DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'b',
+      secrets: secrets,
+      isBlocked: (_) => false,
+      storagePeer: client,
+      mailboxToken: 'cap-http',
+      mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      onPacket: (peer, data) async => seen.add(data),
+    )..attach();
+    expect(a.hasMailbox, isTrue);
+    expect(
+      await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'wireHello',
+        'v': 4,
+      }),
+      isTrue,
+    );
+    await pair.$1.stop();
+    final n = await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA');
+    expect(n, greaterThan(0));
+    expect(
+      seen.whereType<Map>().any((m) => m['type'] == 'wireHello'),
+      isTrue,
+    );
+    await a.detach();
+    await b.detach();
+  });
+
+  test('HTTP storage peer rejects plaintext and anonymous writes', () async {
+    final http = StoragePeerHttp(BlindMailboxStore());
+    await http.start();
+    addTearDown(http.stop);
+    expect(
+      storagePeerBodyIsSafe({
+        'token': 'cap',
+        'writerKey': 'w',
+        'b64': 'YQ==',
+        'plaintext': 'nope',
+      }),
+      isFalse,
+    );
+    expect(
+      storagePeerBodyIsSafe({
+        'token': '',
+        'writerKey': 'w',
+        'b64': 'YQ==',
+      }),
+      isFalse,
+    );
+    expect(storagePeerGrantIsSafe({'token': ''}), isFalse);
+    expect(
+      storagePeerGrantIsSafe({'token': 'cap', 'plaintext': 'x'}),
+      isFalse,
+    );
+
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    Future<int> post(String path, Map<String, Object?> body) async {
+      final req = await client.postUrl(Uri.parse('${http.origin}$path'));
+      req.headers.contentType = ContentType.json;
+      req.write(jsonEncode(body));
+      final res = await req.close();
+      await res.drain<void>();
+      return res.statusCode;
+    }
+
+    expect(
+      await post('/v1/grant', {'token': '', 'quotaBytes': 10}),
+      400,
+    );
+    expect(
+      await post('/v1/grant', {'token': 'cap', 'plaintext': 'hi'}),
+      400,
+    );
+    expect(
+      await post('/v1/blocks', {
+        'token': 'cap',
+        'writerKey': 'w',
+        'seq': 0,
+        'b64': 'YQ==',
+        'plaintext': 'secret',
+      }),
+      400,
+    );
+    expect(
+      await post('/v1/blocks', {
+        'token': '',
+        'writerKey': 'w',
+        'seq': 0,
+        'b64': 'YQ==',
+      }),
+      400,
+    );
   });
 
   test('room_msg is blocked without the plaintext ack', () {

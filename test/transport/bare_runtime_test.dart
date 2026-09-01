@@ -23,4 +23,16 @@ void main() {
     expect(launch.kind, anyOf('bare', 'node'));
     expect(launch.arguments, isNotEmpty);
   });
+
+  test('Bare manifest lists per-OS slots and does not claim a shipped binary', () {
+    final manifest = jsonDecode(
+      File('tool/bare/BARE.manifest').readAsStringSync(),
+    ) as Map<String, dynamic>;
+    expect(bareManifestHasOsSlots(Map<String, Object?>.from(manifest)), isTrue);
+    expect(manifest['shipped'], isFalse);
+    expect(kBareBinaryShipped, isFalse);
+    expect(bareOsSlot(osArch: 'linux-x64'), 'tool/bare/linux-x64/bare');
+    expect(bareOsSlot(osArch: 'windows-x64'), 'tool/bare/windows-x64/bare.exe');
+    expect(File(bareOsSlot()).existsSync(), isFalse);
+  });
 }

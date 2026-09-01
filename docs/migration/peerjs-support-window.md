@@ -22,4 +22,4 @@ The window has **not started**. Default live path is PeerJS.
 | `removed` | No PeerJS in any artifact |
 
 Do not set `removed` or `web-only` from this tree until the window
-closes in writing.
+closes in writing. Isolation stays `default-live` (`kPeerjsIsolationMode`).

@@ -12,6 +12,7 @@ import '../core/wire_crypto.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
 import '../mailbox/mailbox_pump.dart';
+import '../mailbox/storage_peer_client.dart';
 import '../peer/helpers.dart';
 import '../replication/file_journal.dart';
 import '../replication/hypercore_store.dart';
@@ -37,6 +38,7 @@ class DualStackBridge {
     DiscoverySecretStore? secrets,
     this.durableJournal,
     this.mailbox,
+    this.storagePeer,
     this.mailboxToken,
     this.mailboxWriterKey,
     this.localCapabilities,
@@ -54,6 +56,7 @@ class DualStackBridge {
   final DiscoverySecretStore secrets;
   final FileJournal? durableJournal;
   final BlindMailboxStore? mailbox;
+  final StoragePeerClient? storagePeer;
   final String? mailboxToken;
   final String? mailboxWriterKey;
   final CapabilityRecord? localCapabilities;
@@ -79,6 +82,8 @@ class DualStackBridge {
   }
 
   bool get nativeEnabled => isHyperswarmTransportEnabled();
+
+  bool get hasMailbox => storagePeer != null || mailbox != null;
 
   bool isNativeConnected(String peerId) =>
       connected.contains(normalizePeerId(peerId));
@@ -117,11 +122,11 @@ class DualStackBridge {
     if (!isNativeConnected(norm)) {
       if (msg is Map &&
           (msg['type'] == 'wireHello' || msg['type'] == 'wireRekey')) {
-        return depositMailbox(jsonPayload(Map<String, Object?>.from(msg)));
+        return await depositMailbox(jsonPayload(Map<String, Object?>.from(msg)));
       }
       if (!isWireReady(norm)) return false;
       final queued = await encryptWirePayload(norm, msg);
-      return depositMailbox(utf8.encode(queued));
+      return await depositMailbox(utf8.encode(queued));
     }
     if (msg is Map &&
         (msg['type'] == 'wireHello' || msg['type'] == 'wireRekey')) {
@@ -147,11 +152,22 @@ class DualStackBridge {
 
   /// Offline deposit: encrypted bytes only. Used when the recipient is not
   /// currently connected. The storage peer never sees keys.
-  bool depositMailbox(List<int> encryptedEnvelope) {
-    final store = mailbox;
+  Future<bool> depositMailbox(List<int> encryptedEnvelope) async {
     final token = mailboxToken;
     final writer = mailboxWriterKey;
-    if (store == null || token == null || writer == null) return false;
+    if (token == null || writer == null) return false;
+    final client = storagePeer;
+    if (client != null) {
+      await _mailboxPump.depositClient(
+        client: client,
+        token: token,
+        writerKey: writer,
+        encryptedEnvelope: encryptedEnvelope,
+      );
+      return true;
+    }
+    final store = mailbox;
+    if (store == null) return false;
     _mailboxPump.deposit(
       store: store,
       token: token,
@@ -189,15 +205,26 @@ class DualStackBridge {
   }
 
   Future<int> drainMailbox({String? fromPeerId}) async {
-    final store = mailbox;
     final token = mailboxToken;
     final writer = mailboxWriterKey;
-    if (store == null || token == null || writer == null) return 0;
-    final blocks = _mailboxPump.collect(
-      store: store,
-      token: token,
-      writerKey: writer,
-    );
+    if (token == null || writer == null) return 0;
+    final List<EncryptedBlock> blocks;
+    final client = storagePeer;
+    if (client != null) {
+      blocks = await _mailboxPump.collectClient(
+        client: client,
+        token: token,
+        writerKey: writer,
+      );
+    } else {
+      final store = mailbox;
+      if (store == null) return 0;
+      blocks = _mailboxPump.collect(
+        store: store,
+        token: token,
+        writerKey: writer,
+      );
+    }
     final from = normalizePeerId(fromPeerId ?? writer);
     for (final block in blocks) {
       _appendEnvelope(from, block.bytes);

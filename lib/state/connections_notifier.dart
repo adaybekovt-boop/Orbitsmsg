@@ -47,6 +47,7 @@ import '../core/feature_flags.dart';
 import '../peer/wire_transport.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
+import '../mailbox/storage_peer_client.dart';
 import '../replication/file_journal.dart';
 import '../replication/memory_journal.dart';
 import '../storage/db.dart' as db;
@@ -230,6 +231,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     String deviceId = 'local-device',
     FileJournal? durableJournal,
     BlindMailboxStore? mailbox,
+    StoragePeerClient? storagePeer,
     String? mailboxToken,
     String? mailboxWriterKey,
     CapabilityRecord? localCapabilities,
@@ -243,6 +245,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       selfDeviceId: deviceId,
       durableJournal: durableJournal,
       mailbox: mailbox,
+      storagePeer: storagePeer,
       mailboxToken: mailboxToken,
       mailboxWriterKey: mailboxWriterKey,
       localCapabilities: localCapabilities,
@@ -299,7 +302,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         } catch (_) {
           if (!isPeerjsFallbackEnabled()) return false;
         }
-      } else if (dual.mailbox != null && dual.secrets.get(remoteId) != null) {
+      } else if (dual.hasMailbox && dual.secrets.get(remoteId) != null) {
         try {
           return await dual.sendEncrypted(remoteId, msg);
         } catch (_) {

@@ -3,5 +3,15 @@
   "remoteFetch": false,
   "downloadUrl": null,
   "bundleUrl": null,
-  "note": "Drop a local Bare binary here as bare or bare.exe. Production must not download it."
+  "shipped": false,
+  "binaries": {
+    "linux-x64": "tool/bare/linux-x64/bare",
+    "linux-arm64": "tool/bare/linux-arm64/bare",
+    "darwin-x64": "tool/bare/darwin-x64/bare",
+    "darwin-arm64": "tool/bare/darwin-arm64/bare",
+    "windows-x64": "tool/bare/windows-x64/bare.exe",
+    "android-arm64": "tool/bare/android-arm64/bare",
+    "ios-arm64": "tool/bare/ios-arm64/bare"
+  },
+  "note": "Drop a local Bare binary in the matching OS slot. Production must not download it. None of these files ship in this tree yet."
 }

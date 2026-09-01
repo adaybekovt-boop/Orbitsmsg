@@ -57,6 +57,9 @@ class DirectoryPeer {
 
 const String kRelayDirectoryInfo = 'orbits-relay-directory-v1';
 
+/// No public signed directory is deployed. Tests sign local fixtures only.
+const bool kLiveSignedRelayDirectory = false;
+
 class RelayDirectory {
   const RelayDirectory({
     required this.issuedAt,

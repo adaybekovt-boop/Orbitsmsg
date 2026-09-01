@@ -7,6 +7,7 @@ class StoragePeerClient {
     required this.putRemote,
     required this.getRemote,
     this.tombstoneRemote,
+    this.grantRemote,
   });
 
   final Future<void> Function({
@@ -24,11 +25,16 @@ class StoragePeerClient {
   final Future<void> Function(String token, String writerKey, int seq)?
       tombstoneRemote;
 
+  final Future<void> Function(MailboxCapability cap)? grantRemote;
+
   Future<void> put({
     required String token,
     required String writerKey,
     required EncryptedBlock block,
   }) {
+    if (token.isEmpty) {
+      throw StateError('anonymous writes are rejected');
+    }
     return putRemote(token: token, writerKey: writerKey, block: block);
   }
 
@@ -37,11 +43,25 @@ class StoragePeerClient {
     required String writerKey,
     int fromSeq = 0,
   }) {
+    if (token.isEmpty) {
+      throw StateError('anonymous reads are rejected');
+    }
     return getRemote(token: token, writerKey: writerKey, fromSeq: fromSeq);
   }
 
   Future<void> tombstone(String token, String writerKey, int seq) async {
+    if (token.isEmpty) {
+      throw StateError('anonymous writes are rejected');
+    }
     await tombstoneRemote?.call(token, writerKey, seq);
+  }
+
+  Future<void> grant(MailboxCapability cap) async {
+    final fn = grantRemote;
+    if (fn == null) {
+      throw StateError('storage peer cannot grant');
+    }
+    await fn(cap);
   }
 
   /// In-process peer used by tests and desktop mailbox mode.
@@ -68,6 +88,9 @@ class StoragePeerClient {
       tombstoneRemote: (token, writerKey, seq) async {
         store.tombstone(token, writerKey, seq);
       },
+      grantRemote: (cap) async {
+        store.grant(cap);
+      },
     );
   }
 }
@@ -81,11 +104,24 @@ const Set<String> kStoragePeerForbiddenKeys = {
   'rootKey',
 };
 
-bool storagePeerBodyIsSafe(Map<String, Object?> body) {
+bool storagePeerKeysAreSafe(Map<String, Object?> body) {
   for (final key in body.keys) {
     if (kStoragePeerForbiddenKeys.contains(key)) return false;
   }
-  return body.containsKey('token') &&
-      body.containsKey('writerKey') &&
-      (body.containsKey('b64') || body.containsKey('seq'));
+  return true;
+}
+
+bool storagePeerBodyIsSafe(Map<String, Object?> body) {
+  if (!storagePeerKeysAreSafe(body)) return false;
+  final token = body['token'];
+  final writer = body['writerKey'];
+  if (token is! String || token.isEmpty) return false;
+  if (writer is! String || writer.isEmpty) return false;
+  return body.containsKey('b64') || body.containsKey('seq');
+}
+
+bool storagePeerGrantIsSafe(Map<String, Object?> body) {
+  if (!storagePeerKeysAreSafe(body)) return false;
+  final token = body['token'];
+  return token is String && token.isNotEmpty;
 }

@@ -3,9 +3,14 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
+import 'package:orbits_flutter/push/push_gateway.dart';
+import 'package:orbits_flutter/replication/corestore_addon.dart';
+import 'package:orbits_flutter/transport/bare_runtime.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
+import 'package:orbits_flutter/transport/fleet_status.dart';
 import 'package:orbits_flutter/transport/layers.dart';
 import 'package:orbits_flutter/transport/peerjs_window.dart';
+import 'package:orbits_flutter/transport/relay_directory.dart';
 import 'package:orbits_flutter/transport/replication_schema.dart';
 
 void main() {
@@ -20,6 +25,12 @@ void main() {
     expect(kRoomsApplicationE2eImplemented, isFalse);
     expect(kPeerjsSupportWindowOpen, isTrue);
     expect(kPeerjsIsolationMode, 'default-live');
+    expect(kLiveSignedRelayDirectory, isFalse);
+    expect(kLiveStorageFleet, isFalse);
+    expect(kLiveApnsGateway, isFalse);
+    expect(kLiveFcmGateway, isFalse);
+    expect(kBareBinaryShipped, isFalse);
+    expect(kHolepunchCorestoreAddonLinked, isFalse);
   });
 
   test('connect checks keep block before TOFU', () {

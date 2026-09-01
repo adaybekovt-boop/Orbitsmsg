@@ -68,6 +68,30 @@ function createServer(opts = {}) {
         res.end(JSON.stringify({ ok: true, role: 'storage', plaintext: false }))
         return
       }
+      if (req.method === 'POST' && url.pathname === '/v1/grant') {
+        const body = JSON.parse((await readBody(req)).toString('utf8'))
+        for (const key of Object.keys(body)) {
+          if (FORBIDDEN.has(key)) {
+            res.writeHead(400)
+            res.end()
+            return
+          }
+        }
+        if (!body.token) {
+          res.writeHead(400)
+          res.end()
+          return
+        }
+        grant(
+          body.token,
+          body.quotaBytes || 64 * 1024 * 1024,
+          body.retentionMs || 30 * 24 * 3600 * 1000,
+          body.expiresAt || Date.now() + 86400000 * 30,
+        )
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ ok: true }))
+        return
+      }
       if (req.method === 'POST' && url.pathname === '/v1/blocks') {
         const body = JSON.parse((await readBody(req)).toString('utf8'))
         for (const key of Object.keys(body)) {
@@ -77,15 +101,27 @@ function createServer(opts = {}) {
             return
           }
         }
+        if (!body.token || !body.writerKey) {
+          res.writeHead(400)
+          res.end()
+          return
+        }
         put(body.token, body.writerKey, body.seq, Buffer.from(body.b64 || '', 'base64'))
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ ok: true }))
         return
       }
       if (req.method === 'GET' && url.pathname === '/v1/blocks') {
+        const token = url.searchParams.get('token') || ''
+        const writerKey = url.searchParams.get('writerKey') || ''
+        if (!token || !writerKey) {
+          res.writeHead(400)
+          res.end()
+          return
+        }
         const blocks = get(
-          url.searchParams.get('token') || '',
-          url.searchParams.get('writerKey') || '',
+          token,
+          writerKey,
           Number(url.searchParams.get('fromSeq') || 0),
         )
         res.writeHead(200, { 'content-type': 'application/json' })

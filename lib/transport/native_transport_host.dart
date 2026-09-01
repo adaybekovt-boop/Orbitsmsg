@@ -1,6 +1,7 @@
 // Starts the native carrier and binds it into ConnectionsNotifier.
 // Default product path stays PeerJS until rollout != off.
 
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -8,6 +9,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/feature_flags.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
+import '../mailbox/storage_peer_client.dart';
+import '../mailbox/storage_peer_http.dart';
 import '../push/opaque_wake.dart';
 import '../push/wake_service.dart';
 import '../replication/memory_journal.dart';
@@ -21,6 +24,7 @@ import 'loopback_transport.dart';
 import 'signed_capabilities.dart';
 import 'transport_api.dart';
 import 'transport_lifecycle.dart';
+import 'worklet_backend.dart';
 import 'worklet_orbits_transport.dart';
 
 class NativeTransportHost {
@@ -32,6 +36,7 @@ class NativeTransportHost {
   bool attached = false;
   TransportLifecycle? lifecycle;
   OpaqueWakeService? wake;
+  StoragePeerHttp? storageHttp;
 
   Future<void> ensureStarted() async {
     if (!isHyperswarmTransportEnabled()) return;
@@ -42,18 +47,30 @@ class NativeTransportHost {
     await discoverySecretStore.hydrate();
     await deviceRegistry.hydrate();
 
-    final worklet = await spawnWorkletTransport(backend: 'loopback');
-    transport = worklet ?? LoopbackOrbitsTransport();
-    backend = worklet != null ? 'worklet' : 'loopback';
+    await _openCarrier();
 
     final journal = await openLocalFileJournal('local-device');
     final secret = discoverySecretStore.getOrCreateLocal();
-    await transport!.start(
-      TransportLocalConfiguration(
-        peerId: auth.user.peerId,
-        discoverySecret: secret,
-      ),
-    );
+    try {
+      await transport!.start(
+        TransportLocalConfiguration(
+          peerId: auth.user.peerId,
+          discoverySecret: secret,
+        ),
+      );
+    } catch (_) {
+      if (backend == 'hyperswarm') {
+        await _respawnLoopback();
+        await transport!.start(
+          TransportLocalConfiguration(
+            peerId: auth.user.peerId,
+            discoverySecret: secret,
+          ),
+        );
+      } else {
+        rethrow;
+      }
+    }
 
     CapabilityRecord? caps;
     try {
@@ -88,15 +105,14 @@ class NativeTransportHost {
       );
     } catch (_) {}
 
-    final mailbox = BlindMailboxStore()
-      ..grant(
-        MailboxCapability(
-          token: 'local-mailbox',
-          quotaBytes: 64 * 1024 * 1024,
-          retentionMs: 30 * 24 * 3600 * 1000,
-          expiresAt: DateTime.now().millisecondsSinceEpoch + 86400000 * 30,
-        ),
-      );
+    final cap = MailboxCapability(
+      token: 'local-mailbox',
+      quotaBytes: 64 * 1024 * 1024,
+      retentionMs: 30 * 24 * 3600 * 1000,
+      expiresAt: DateTime.now().millisecondsSinceEpoch + 86400000 * 30,
+    );
+    final mailbox = BlindMailboxStore()..grant(cap);
+    final storagePeer = await _bindStoragePeer(mailbox, cap);
 
     _ref.read(connectionsNotifierProvider.notifier).bindNativeTransport(
           transport!,
@@ -104,6 +120,7 @@ class NativeTransportHost {
           deviceId: 'local-device',
           durableJournal: journal,
           mailbox: mailbox,
+          storagePeer: storagePeer,
           mailboxToken: 'local-mailbox',
           mailboxWriterKey: auth.user.peerId,
           localCapabilities: caps,
@@ -121,6 +138,57 @@ class NativeTransportHost {
     );
     wake = OpaqueWakeService(onAccepted: (_) => lifecycle!.onOpaqueWake());
     attached = true;
+  }
+
+  Future<void> _openCarrier() async {
+    final preferred = preferredWorkletBackend();
+    var worklet = await spawnWorkletTransport(backend: preferred);
+    if (worklet != null) {
+      transport = worklet;
+      backend = preferred == 'hyperswarm' ? 'hyperswarm' : 'worklet';
+      return;
+    }
+    if (preferred == 'hyperswarm') {
+      worklet = await spawnWorkletTransport(backend: 'loopback');
+      if (worklet != null) {
+        transport = worklet;
+        backend = 'worklet';
+        return;
+      }
+    }
+    transport = LoopbackOrbitsTransport();
+    backend = 'loopback';
+  }
+
+  Future<void> _respawnLoopback() async {
+    try {
+      await transport?.stop();
+    } catch (_) {}
+    final worklet = await spawnWorkletTransport(backend: 'loopback');
+    transport = worklet ?? LoopbackOrbitsTransport();
+    backend = worklet != null ? 'worklet' : 'loopback';
+  }
+
+  /// Local HTTP mailbox when possible; env origin for a desktop peer.
+  /// Not a public fleet.
+  Future<StoragePeerClient> _bindStoragePeer(
+    BlindMailboxStore mailbox,
+    MailboxCapability cap,
+  ) async {
+    final origin = Platform.environment['ORBITS_STORAGE_PEER_ORIGIN'];
+    if (origin != null && origin.isNotEmpty) {
+      final client = httpStoragePeerClient(origin);
+      await client.grant(cap);
+      return client;
+    }
+    try {
+      final http = StoragePeerHttp(mailbox);
+      await http.start();
+      storageHttp = http;
+      return httpStoragePeerClient(http.origin);
+    } catch (_) {
+      return StoragePeerClient.local(mailbox);
+    }
   }
 
   Future<void> onBackground() async {

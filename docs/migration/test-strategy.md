@@ -19,14 +19,14 @@ independent room-E2E audit stay **blocked** until the user is free.
 | 0 | `test/docs_consistency/migration_phase0_test.dart` | — |
 | 1 | Loopback + JS harness echo/file/suspend | Live NAT matrix |
 | 2 | `src/stand.js` metrics schema | Live KZ operators |
-| 3 | Plugin lifecycle + IPC + OS hosts refuse remote JS | Bare binary embed per OS |
-| 4 | `dual_stack_bridge_test` two natives, `v2:` / wireHello | Two physical devices |
+| 3 | Plugin lifecycle + IPC + OS hosts refuse remote JS; per-OS Bare slots | Bare binary embed per OS |
+| 4 | `dual_stack_bridge_test` two natives, `v2:` / wireHello; `preferredWorkletBackend` | Two physical devices |
 | 5 | Signed caps on native connect and PeerJS `wireHello.caps`; vault-wrapped discovery persist | Physical pair |
 | 6 | `NativeCallSession` + CallKit/Telecom opaque handle | PushKit / physical devices |
 | 7 | Memory + file journal, identical projector, worklet Corestore journal | Holepunch Corestore addon |
-| 8 | Mailbox + `OpaqueWakeService` + resume drain | Public storage fleet / APNs gateway |
+| 8 | Mailbox + HTTP storage peer + `OpaqueWakeService` + resume drain + signed RelayDirectory tests | Public storage fleet / APNs gateway / live signed directory |
 | 9 | 10 and 50 MiB chunk/resume; native Drop when flag on | Default PeerJS Drop |
-| 10 | Three-device fan-out + QR + revoke journal | Live hardware sessions |
+| 10 | Three-device fan-out + QR + revoke journal + RatchetState isolation | Live hardware sessions |
 | 11–12 | Rooms on native carrier + Autobase converge | Live rooms on Hyperswarm |
 | 13 | Epoch revoke/rejoin; E2E flag stays false | Independent audit |
 | 14 | PeerJS still default live path | Support window + removal |
