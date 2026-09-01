@@ -276,6 +276,21 @@ class WorkletOrbitsTransport implements OrbitsTransport {
   @override
   Future<void> refreshNetwork() => _client.request('refreshNetwork');
 
+  @override
+  Future<void> appendJournal(Map<String, Object?> record) {
+    return _client.request('journal.append', record);
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> listJournal() async {
+    final result = await _client.request('journal.list');
+    final blocks = result['blocks'] as List? ?? const [];
+    return [
+      for (final block in blocks)
+        if (block is Map) Map<String, Object?>.from(block),
+    ];
+  }
+
   void _onIpcEvent(Map<String, Object?> event) {
     final name = event['name'] as String? ?? '';
     final payload = (event['payload'] as Map?)?.cast<String, Object?>() ??

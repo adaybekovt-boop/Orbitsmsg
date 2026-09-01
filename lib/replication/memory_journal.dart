@@ -2,6 +2,8 @@
 // events; this memory log lets the projector and mailbox be tested
 // without a Bare Corestore yet.
 
+import 'dart:convert';
+
 import '../transport/layers.dart';
 import '../transport/replication_schema.dart';
 
@@ -85,6 +87,28 @@ class MemoryJournal {
     return false;
   }
 }
+
+/// IPC / worklet shape. `encryptedEnvelope` bytes become base64.
+Map<String, Object?> journalRecordToWorklet(JournalRecord record) {
+  final fields = <String, Object?>{};
+  record.fields.forEach((k, v) {
+    if (v is List<int>) {
+      fields[k] = base64Encode(v);
+    } else {
+      fields[k] = v;
+    }
+  });
+  return <String, Object?>{
+    'seq': record.seq,
+    'writerDeviceId': record.writerDeviceId,
+    'kind': record.kind.name,
+    'fields': fields,
+  };
+}
+
+bool journalKindRequiresEnvelope(String kind) =>
+    kind == ReplicationEventKind.messageEnvelopeCreated.name ||
+    kind == ReplicationEventKind.attachmentPublished.name;
 
 bool encryptedEnvelopeEquals(Object? stored, List<int> bytes) {
   if (stored is! List<int> || stored.length != bytes.length) return false;

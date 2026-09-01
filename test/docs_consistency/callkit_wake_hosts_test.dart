@@ -93,5 +93,17 @@ void main() {
       File('lib/transport/native_transport_host_stub.dart').readAsStringSync(),
       contains('acceptPushToken'),
     );
+    expect(
+      File('lib/push/push_send.dart').readAsStringSync(),
+      contains('apns-not-deployed'),
+    );
+    expect(
+      File('lib/push/apns_provider_jwt.dart').existsSync(),
+      isTrue,
+    );
+    expect(
+      File('lib/push/apns_provider_jwt.dart').readAsStringSync(),
+      contains('Not identity-signing-v1'),
+    );
   });
 }

@@ -7,6 +7,8 @@ import 'package:orbits_flutter/push/push_gateway.dart';
 import 'package:orbits_flutter/push/push_registration.dart';
 import 'package:orbits_flutter/push/push_send.dart';
 
+import '../helpers/pointycastle_ecdh.dart';
+
 void main() {
   test('production APNs/FCM send is refused while flags are off', () async {
     expect(kLiveApnsGateway, isFalse);
@@ -91,6 +93,7 @@ void main() {
     expect(apns.body.containsKey('peerId'), isFalse);
     expect(apns.body.containsKey('text'), isFalse);
     expect((apns.body['aps'] as Map)['content-available'], 1);
+    expect(apns.headers.containsKey('authorization'), isFalse);
 
     final fcm = buildFcmRequest(deviceToken: 'ftok', wake: wake)!;
     expect(fcm.host, kFcmSendHost);
@@ -117,6 +120,74 @@ void main() {
         wake: wake,
       ),
       isNull,
+    );
+  });
+
+  test('APNs provider JWT is ES256, opaque, and still not sent', () async {
+    installPointyCastleEcdh();
+    final pair = await generateP256EcdsaKey();
+    final key = ApnsProviderKey(
+      teamId: 'TEAMID1234',
+      keyId: 'KEYID12345',
+      privateKeyD: pair.d,
+    );
+    const wake = OpaqueWake(
+      opaqueWakeToken: 'tok',
+      collapseId: 'c1',
+      protocolVersion: 1,
+    );
+    final req = buildApnsRequest(
+      deviceToken: 'devtoken',
+      wake: wake,
+      providerKey: key,
+      iatSeconds: 1700000000,
+    )!;
+    final auth = req.headers['authorization']!;
+    expect(auth.startsWith('bearer '), isTrue);
+    final jwt = auth.substring(7);
+    expect(
+      verifyApnsProviderJwt(
+        jwt: jwt,
+        publicX: pair.x,
+        publicY: pair.y,
+        teamId: 'TEAMID1234',
+        keyId: 'KEYID12345',
+      ),
+      isTrue,
+    );
+    expect(jwt.split('.'), hasLength(3));
+    expect(jwt, isNot(contains('peerId')));
+    expect(jwt, isNot(contains('opaqueWakeToken')));
+    expect(req.body.containsKey('authorization'), isFalse);
+    expect(OpaqueWake.isSafe(req.body), isTrue);
+
+    const sender = PushSender();
+    final result = await sender.sendApns(
+      deviceToken: 'devtoken',
+      wake: wake,
+      providerKey: key,
+    );
+    expect(result.sent, isFalse);
+    expect(result.reason, 'apns-not-deployed');
+    expect(kLiveApnsGateway, isFalse);
+
+    expect(
+      buildApnsProviderJwt(
+        const ApnsProviderKey(
+          teamId: '',
+          keyId: 'KEYID12345',
+          privateKeyD: <int>[1],
+        ),
+      ),
+      isNull,
+    );
+    expect(
+      File('lib/push/apns_provider_jwt.dart').readAsStringSync(),
+      isNot(contains('identity_key')),
+    );
+    expect(
+      File('lib/push/apns_provider_jwt.dart').readAsStringSync(),
+      contains('Not identity-signing-v1'),
     );
   });
 }

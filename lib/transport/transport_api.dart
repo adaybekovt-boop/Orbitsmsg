@@ -200,4 +200,11 @@ abstract class OrbitsTransport {
   Future<void> suspend();
   Future<void> resume();
   Future<void> refreshNetwork();
+
+  /// Encrypted envelopes / metadata only. No-op on carriers without a
+  /// Bare journal. Never plaintext, KEK, or ratchet scalars.
+  Future<void> appendJournal(Map<String, Object?> record) async {}
+
+  Future<List<Map<String, Object?>>> listJournal() async =>
+      const <Map<String, Object?>>[];
 }

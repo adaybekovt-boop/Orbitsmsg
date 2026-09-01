@@ -222,6 +222,45 @@ void main() {
     kRoomPlaintextSessionAck.reset();
   });
 
+  test('DualStackBridge persists ciphertext onto the carrier journal', () async {
+    final (a, b, _) = await linked();
+    a.revokeDevice('gone-device');
+    await a.verifyLiveMatchesReplay();
+    await a.transport.send(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      TransportChannel.message,
+      utf8.encode('v2:aaa:bbb:ccc'),
+    );
+    List<Map<String, Object?>> envelopes = const [];
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(deadline)) {
+      await b.verifyLiveMatchesReplay();
+      envelopes = await b.transport.listJournal();
+      if (envelopes.any((row) {
+        final fields = row['fields'];
+        return fields is Map && fields['encryptedEnvelope'] != null;
+      })) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    final revoked = await a.transport.listJournal();
+    expect(
+      revoked.any((row) => row['kind'] == 'deviceRevoked'),
+      isTrue,
+    );
+    expect(jsonEncode(revoked), isNot(contains('rootKey')));
+    expect(jsonEncode(revoked), isNot(contains('plaintext')));
+    expect(
+      envelopes.any((row) {
+        final fields = row['fields'];
+        return fields is Map && fields['encryptedEnvelope'] != null;
+      }),
+      isTrue,
+    );
+    expect(jsonEncode(envelopes), isNot(contains('plaintext')));
+  });
+
   test('recipient reads mailbox after the sender is gone', () async {
     final store = BlindMailboxStore()
       ..grant(

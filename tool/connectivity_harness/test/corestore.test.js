@@ -131,3 +131,21 @@ test('useCorestoreIfPresent without journalDir stays memory', async () => {
   assert.equal(journal.list().length, 1)
   await journal.close()
 })
+
+test('deviceRevoked metadata is journaled without an envelope', async () => {
+  const journal = new CorestoreJournal('dev-a')
+  await journal.append({
+    kind: 'deviceRevoked',
+    fields: { deviceId: 'dev-x', createdAt: 1 },
+  })
+  const blocks = journal.list()
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].kind, 'deviceRevoked')
+  assert.equal(blocks[0].fields.deviceId, 'dev-x')
+  assert.equal(blocks[0].fields.encryptedEnvelope, undefined)
+  await assert.rejects(
+    () => journal.append({ kind: 'messageEnvelopeCreated', fields: { eventId: 'e' } }),
+    /encryptedEnvelope/,
+  )
+  await journal.close()
+})

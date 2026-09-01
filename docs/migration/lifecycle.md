@@ -52,7 +52,8 @@ enabled — do not promise always-on P2P.
   tokens arrive as `token` on the same channel and stay on-device.
   A public push gateway is still not deployed.
   `PushSender.sendApns` / `sendFcm` refuse while `kLiveApnsGateway` /
-  `kLiveFcmGateway` are false.
+  `kLiveFcmGateway` are false. An APNs provider ES256 JWT may be built
+  (Apple p8 scalar, not the identity key) and is still not sent.
 - Foreground service is for an in-app Telecom call, not for keeping a
   messaging socket alive.
 

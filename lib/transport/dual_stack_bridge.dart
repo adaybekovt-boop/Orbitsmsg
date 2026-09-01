@@ -326,10 +326,20 @@ class DualStackBridge {
   }
 
   Future<void> _persistDurable(JournalRecord record) {
-    final durable = durableJournal;
-    if (durable == null) return Future<void>.value();
-    _durable = _durable.then((_) => durable.append(record));
+    _durable = _durable.then((_) async {
+      await _persistWorklet(record);
+      final durable = durableJournal;
+      if (durable != null) await durable.append(record);
+    });
     return _durable;
+  }
+
+  Future<void> _persistWorklet(JournalRecord record) async {
+    try {
+      await transport.appendJournal(journalRecordToWorklet(record));
+    } catch (_) {
+      // Dart FileJournal remains the live/replay source.
+    }
   }
 
   Future<bool> verifyLiveMatchesReplay({EnvelopeDecrypt? decrypt}) async {

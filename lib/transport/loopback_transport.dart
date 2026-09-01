@@ -7,8 +7,10 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import '../attachments/path_attachment.dart';
+import '../replication/memory_journal.dart';
 import 'device_binding.dart';
 import 'discovery.dart';
+import 'layers.dart';
 import 'mux_frames.dart';
 import 'transport_api.dart';
 
@@ -50,6 +52,7 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   final Map<String, int> _resumeOffsets = <String, int>{};
   final Map<String, Completer<int>> _resumeWaiters = <String, Completer<int>>{};
   Future<void> _attachmentIo = Future<void>.value();
+  final List<Map<String, Object?>> _journal = <Map<String, Object?>>[];
 
   /// Test hook: stop [sendFile] after this many payload bytes from the
   /// agreed offset, without sending `harness-file-end`.
@@ -252,6 +255,27 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   Future<void> refreshNetwork() async {
     _events.add(const TransportNetworkChanged('loopback'));
   }
+
+  @override
+  Future<void> appendJournal(Map<String, Object?> record) async {
+    final fields = record['fields'];
+    if (fields is Map) {
+      final keys = fields.keys.map((k) => '$k');
+      if (!replicationFieldsAreSafe(keys)) {
+        throw ArgumentError('refusing secret field in journal');
+      }
+      final kind = record['kind'] as String? ?? 'messageEnvelopeCreated';
+      if (journalKindRequiresEnvelope(kind) &&
+          fields['encryptedEnvelope'] == null) {
+        throw ArgumentError('journal requires encryptedEnvelope');
+      }
+    }
+    _journal.add(Map<String, Object?>.from(record));
+  }
+
+  @override
+  Future<List<Map<String, Object?>>> listJournal() async =>
+      List<Map<String, Object?>>.from(_journal);
 
   /// Harness helper: inject a carrier event (relay blow-up, crash, …).
   void emitEvent(TransportEvent event) => _events.add(event);

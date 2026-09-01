@@ -26,6 +26,11 @@ const FORBIDDEN = new Set([
   'privBytes',
 ])
 
+const ENVELOPE_KINDS = new Set([
+  'messageEnvelopeCreated',
+  'attachmentPublished',
+])
+
 function fieldsAreSafe(fields) {
   if (!fields || typeof fields !== 'object') return false
   for (const key of Object.keys(fields)) {
@@ -61,7 +66,8 @@ function parseStored(raw) {
   const fields = rec.fields
   if (!fields || typeof fields !== 'object') return null
   if (!fieldsAreSafe(fields)) return null
-  if (!fields.encryptedEnvelope) return null
+  const kind = rec.kind || 'messageEnvelopeCreated'
+  if (ENVELOPE_KINDS.has(kind) && !fields.encryptedEnvelope) return null
   return rec
 }
 
@@ -227,13 +233,14 @@ class CorestoreJournal {
     if (!fieldsAreSafe(fields)) {
       throw new Error('refusing secret field in corestore journal')
     }
-    if (!fields.encryptedEnvelope) {
+    const kind = record.kind || 'messageEnvelopeCreated'
+    if (ENVELOPE_KINDS.has(kind) && !fields.encryptedEnvelope) {
       throw new Error('journal requires encryptedEnvelope')
     }
     const stored = {
       seq: record.seq == null ? this.blocks.length + 1 : record.seq,
       writerDeviceId: record.writerDeviceId || this.writerDeviceId,
-      kind: record.kind || 'messageEnvelopeCreated',
+      kind,
       fields,
     }
     if (this._core) {
@@ -262,6 +269,7 @@ module.exports = {
   CorestoreJournal,
   fieldsAreSafe,
   FORBIDDEN,
+  ENVELOPE_KINDS,
   parseStored,
   safeJournalDir,
 }

@@ -6,6 +6,9 @@ import 'dart:io';
 
 import 'opaque_wake.dart';
 import 'push_gateway.dart';
+import 'apns_provider_jwt.dart';
+
+export 'apns_provider_jwt.dart';
 
 /// iOS APNs topic. Must match the Runner bundle id. Never a Peer ID.
 const String kApnsTopic = 'com.orbits.orbitsFlutter';
@@ -31,11 +34,13 @@ class PushSender {
     required String deviceToken,
     required OpaqueWake wake,
     bool sandbox = false,
+    ApnsProviderKey? providerKey,
   }) async {
     final request = buildApnsRequest(
       deviceToken: deviceToken,
       wake: wake,
       sandbox: sandbox,
+      providerKey: providerKey,
     );
     if (request == null) {
       return const PushSendResult(sent: false, reason: 'unsafe-keys');
@@ -127,17 +132,26 @@ ApnsOpaqueRequest? buildApnsRequest({
   required String deviceToken,
   required OpaqueWake wake,
   bool sandbox = false,
+  ApnsProviderKey? providerKey,
+  int? iatSeconds,
 }) {
   final payload = wake.toJson();
   if (deviceToken.isEmpty || !OpaqueWake.isSafe(payload)) return null;
+  final headers = <String, String>{
+    'apns-push-type': 'background',
+    'apns-priority': '5',
+    'apns-topic': kApnsTopic,
+  };
+  final jwt = providerKey == null
+      ? null
+      : buildApnsProviderJwt(providerKey, iatSeconds: iatSeconds);
+  if (jwt != null) {
+    headers['authorization'] = 'bearer $jwt';
+  }
   return ApnsOpaqueRequest(
     host: sandbox ? kApnsSandboxHost : kApnsProductionHost,
     path: '/3/device/$deviceToken',
-    headers: const {
-      'apns-push-type': 'background',
-      'apns-priority': '5',
-      'apns-topic': kApnsTopic,
-    },
+    headers: headers,
     body: <String, Object?>{
       'aps': <String, Object?>{'content-available': 1},
       ...payload,
