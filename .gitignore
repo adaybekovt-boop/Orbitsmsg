@@ -83,7 +83,9 @@ tool/bare/**/*.tgz
 tool/bare/**/_extract/
 tool/bare/**/*.node
 packages/orbits_transport_linux/linux/bare
+packages/orbits_transport_linux/linux/bare-arm64
 packages/orbits_transport_windows/windows/bare.exe
 packages/orbits_transport_macos/macos/bare
+packages/orbits_transport_macos/macos/bare-x64
 packages/orbits_transport_ios/ios/bare
 packages/orbits_transport_android/android/src/main/assets/bare

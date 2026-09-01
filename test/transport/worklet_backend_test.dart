@@ -89,6 +89,10 @@ void main() {
     );
     expect(
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'worklet': script.path"),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
       contains("'bootstrap':"),
     );
     expect(

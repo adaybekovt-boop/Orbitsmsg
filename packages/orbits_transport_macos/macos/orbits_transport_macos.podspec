@@ -41,6 +41,7 @@ Production must not fetch remote executable JS or binaries.
   CMD
 
   if File.exist?(File.join(__dir__, 'bare'))
+    s.resource_bundles = { 'OrbitsTransportBare' => ['bare'] }
     s.resources = 'bare'
   end
 end

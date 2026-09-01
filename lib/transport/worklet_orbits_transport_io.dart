@@ -34,7 +34,7 @@ Future<WorkletOrbitsTransport?> spawnWorkletTransport({
 }) async {
   final script = _resolveWorklet() ?? await extractBundledWorklet();
   if (script == null) return null;
-  if (!await _nativeHostAllowsLocalWorklet()) return null;
+  if (!await _nativeHostAllowsLocalWorklet(script)) return null;
   File? bundled;
   try {
     final pluginPath = await OrbitsTransportPlatform.instance.barePath();
@@ -62,9 +62,12 @@ Future<WorkletOrbitsTransport?> spawnWorkletTransport({
 /// Ask the federated plugin to refuse remote JS before a local spawn.
 /// Missing registrars (unit tests) are skipped. A native REMOTE_JS
 /// error fails closed and does not start Node/Bare.
-Future<bool> _nativeHostAllowsLocalWorklet() async {
+Future<bool> _nativeHostAllowsLocalWorklet(File script) async {
   try {
-    await OrbitsTransportPlatform.instance.start({'remoteJs': false});
+    await OrbitsTransportPlatform.instance.start({
+      'remoteJs': false,
+      'worklet': script.path,
+    });
     return true;
   } on UnimplementedError {
     return true;
@@ -116,11 +119,11 @@ Map<String, String> _corestoreAddonEnv() {
 
 File? _resolveWorklet() {
   final fromEnv = Platform.environment['ORBITS_WORKLET_JS'];
-  if (fromEnv != null && File(fromEnv).existsSync()) {
+  if (fromEnv != null && isLocalBarePath(fromEnv)) {
     return File(fromEnv);
   }
   const relative = 'tool/connectivity_harness/src/worklet.js';
-  if (File(relative).existsSync()) return File(relative);
+  if (isLocalBarePath(relative)) return File(relative);
   return null;
 }
 

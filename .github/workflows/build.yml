@@ -254,6 +254,12 @@ jobs:
             --dart-define=PEER_SECURE_SET="${PEER_SECURE:+true}"
           test -d build/ios/iphoneos/Runner.app
           test -f build/ios/iphoneos/Runner.app/PrivacyInfo.xcprivacy
+          if ! find build/ios/iphoneos/Runner.app -name 'bare' -type f | grep -q .; then
+            echo "::error::iOS app bundle missing local Bare slot"
+            find build/ios/iphoneos/Runner.app -maxdepth 4 -type f | head -n 40
+            exit 1
+          fi
+          echo "ios app bundle has local Bare; kBareBinaryShipped stays false"
 
       - name: Build iOS Simulator debug app
         run: flutter build ios --simulator --debug
@@ -282,6 +288,11 @@ jobs:
             --dart-define=PEER_SECURE="$PEER_SECURE" \
             --dart-define=PEER_SECURE_SET="${PEER_SECURE:+true}"
           test -d build/macos/Build/Products/Release/orbits_flutter.app
+          if ! find build/macos/Build/Products/Release/orbits_flutter.app -name 'bare' -type f | grep -q .; then
+            echo "::error::macOS app bundle missing local Bare slot"
+            find build/macos/Build/Products/Release/orbits_flutter.app -maxdepth 5 -type f | head -n 40
+            exit 1
+          fi
           echo "macos desktop linked; kBareBinaryShipped stays false"
 
   # Android release signing (GH-C01 / U-5) never uses the SDK debug key.
@@ -437,6 +448,25 @@ jobs:
             exit 1
           fi
           bash tool/ci/verify_apk_not_debug_signed.sh "${apks[@]}"
+          python3 - <<'PY'
+          import zipfile
+          from pathlib import Path
+          apks = sorted(Path('dist').glob('*.apk'))
+          if not apks:
+              raise SystemExit('no APKs in dist/')
+          found = False
+          for apk in apks:
+              with zipfile.ZipFile(apk) as z:
+                  names = z.namelist()
+              if any(n.endswith('assets/bare') for n in names):
+                  found = True
+                  print(f'{apk.name} contains assets/bare')
+                  break
+              print(f'{apk.name} bare-like entries:', [n for n in names if 'bare' in n.lower()][:20])
+          if not found:
+              raise SystemExit('apk missing assets/bare')
+          print('apk has local Bare asset; kBareBinaryShipped stays false')
+          PY
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -619,7 +649,14 @@ jobs:
             --dart-define=PEER_SECURE_SET="${PEER_SECURE:+true}"
           test -x build/linux/x64/release/bundle/orbits_flutter \
             -o -x build/linux/arm64/release/bundle/orbits_flutter
-          echo "linux desktop linked; kBareBinaryShipped stays false"
+          if [ -x build/linux/x64/release/bundle/lib/bare ] || \
+             [ -x build/linux/arm64/release/bundle/lib/bare ]; then
+            echo "linux app bundle has local Bare; kBareBinaryShipped stays false"
+          else
+            echo "::error::linux app bundle missing lib/bare"
+            find build/linux -name 'bare' -o -name 'bare-arm64' || true
+            exit 1
+          fi
 
   # ────────────────────────────────────────────────────────────────────
   # Windows. Flutter's raw `Release/` folder contains an exe plus DLLs and
@@ -726,6 +763,10 @@ jobs:
             "--dart-define=PEER_SECURE_SET=$(if ($env:PEER_SECURE) { 'true' } else { 'false' })"
           )
           flutter build windows --release @defines
+          if (-not (Test-Path "build/windows/x64/runner/Release/bare.exe")) {
+            throw "windows app folder missing bare.exe"
+          }
+          Write-Host "windows app folder has local Bare; kBareBinaryShipped stays false"
 
       - name: Install Inno Setup
         shell: pwsh

@@ -21,6 +21,37 @@ bool file_exists(const std::string& path) {
   return in.good();
 }
 
+bool string_has_scheme(const std::string& s) {
+  return s.find("://") != std::string::npos;
+}
+
+bool start_config_wants_remote_js(const flutter::EncodableMap* args) {
+  if (args == nullptr) return false;
+  const auto flag = args->find(flutter::EncodableValue("remoteJs"));
+  if (flag != args->end()) {
+    if (const auto* b = std::get_if<bool>(&flag->second)) {
+      if (*b) return true;
+    }
+  }
+  const char* remote_keys[] = {"remoteJsUrl", "bundleUrl", "scriptUrl"};
+  for (const char* key : remote_keys) {
+    const auto it = args->find(flutter::EncodableValue(key));
+    if (it == args->end()) continue;
+    if (const auto* s = std::get_if<std::string>(&it->second)) {
+      if (!s->empty()) return true;
+    }
+  }
+  const char* path_keys[] = {"worklet", "workletPath"};
+  for (const char* key : path_keys) {
+    const auto it = args->find(flutter::EncodableValue(key));
+    if (it == args->end()) continue;
+    if (const auto* s = std::get_if<std::string>(&it->second)) {
+      if (string_has_scheme(*s)) return true;
+    }
+  }
+  return false;
+}
+
 std::string dirname_of(const std::string& path) {
   const auto pos = path.find_last_of("\\/");
   if (pos == std::string::npos) return ".";
@@ -72,24 +103,9 @@ class OrbitsTransportPlugin : public flutter::Plugin {
       const flutter::MethodCall<flutter::EncodableValue>& call,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
     if (call.method_name() == "start") {
-      bool remote_js = false;
-      std::string remote_js_url;
-      if (const auto* args =
-              std::get_if<flutter::EncodableMap>(call.arguments())) {
-        const auto flag = args->find(flutter::EncodableValue("remoteJs"));
-        if (flag != args->end()) {
-          if (const auto* b = std::get_if<bool>(&flag->second)) {
-            remote_js = *b;
-          }
-        }
-        const auto url = args->find(flutter::EncodableValue("remoteJsUrl"));
-        if (url != args->end()) {
-          if (const auto* s = std::get_if<std::string>(&url->second)) {
-            remote_js_url = *s;
-          }
-        }
-      }
-      if (remote_js || !remote_js_url.empty()) {
+      const auto* args =
+          std::get_if<flutter::EncodableMap>(call.arguments());
+      if (start_config_wants_remote_js(args)) {
         result->Error("REMOTE_JS", "production Bare must not fetch remote JS");
         return;
       }

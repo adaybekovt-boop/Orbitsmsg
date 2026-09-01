@@ -57,6 +57,20 @@ void main() {
       }),
       throwsStateError,
     );
+    await expectLater(
+      host.start({
+        'peerId': 'ORBIT-AA',
+        'worklet': 'https://example.invalid/worklet.js',
+      }),
+      throwsStateError,
+    );
+    expect(
+      () => assertNoRemoteBareJs({
+        'worklet': '/tmp/orbits-worklet.js',
+        'remoteJs': false,
+      }),
+      returnsNormally,
+    );
     expect(
       () => assertNoRemoteBareJs({
         'bundleUrl': 'http://127.0.0.1/evil.js',

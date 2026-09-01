@@ -15,8 +15,16 @@ public class OrbitsTransportPlugin: NSObject, FlutterPlugin {
     if call.method == "start" {
       let args = call.arguments as? [String: Any]
       let remoteJs = args?["remoteJs"] as? Bool ?? false
-      let remoteJsUrl = args?["remoteJsUrl"] as? String ?? ""
-      if remoteJs || !remoteJsUrl.isEmpty {
+      func nonempty(_ key: String) -> Bool {
+        let s = args?[key] as? String ?? ""
+        return !s.isEmpty
+      }
+      func hasScheme(_ key: String) -> Bool {
+        let s = args?[key] as? String ?? ""
+        return s.contains("://")
+      }
+      if remoteJs || nonempty("remoteJsUrl") || nonempty("bundleUrl") ||
+          nonempty("scriptUrl") || hasScheme("worklet") || hasScheme("workletPath") {
         result(
           FlutterError(
             code: "REMOTE_JS",
@@ -41,13 +49,29 @@ public class OrbitsTransportPlugin: NSObject, FlutterPlugin {
   }
 
   static func bundledBarePath() -> String? {
-    let bundle = Bundle(for: OrbitsTransportPlugin.self)
-    let candidates = [
-      bundle.path(forResource: "bare", ofType: nil),
+    let fm = FileManager.default
+    var dirs: [String] = []
+    let plugin = Bundle(for: OrbitsTransportPlugin.self)
+    if let path = plugin.resourcePath { dirs.append(path) }
+    dirs.append(plugin.bundlePath)
+    if let nested = plugin.url(forResource: "OrbitsTransportBare", withExtension: "bundle"),
+       let rb = Bundle(url: nested), let path = rb.resourcePath {
+      dirs.append(path)
+    }
+    if let path = Bundle.main.resourcePath { dirs.append(path) }
+    dirs.append(Bundle.main.bundlePath)
+    for dir in dirs {
+      let candidate = (dir as NSString).appendingPathComponent("bare")
+      if fm.fileExists(atPath: candidate) {
+        return candidate
+      }
+    }
+    let named = [
+      plugin.path(forResource: "bare", ofType: nil),
       Bundle.main.path(forResource: "bare", ofType: nil),
     ]
-    for path in candidates {
-      if let path, FileManager.default.fileExists(atPath: path) {
+    for path in named {
+      if let path, fm.fileExists(atPath: path) {
         return path
       }
     }

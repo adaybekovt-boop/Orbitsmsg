@@ -11,8 +11,12 @@ void assertNoRemoteBareJs(Map<String, Object?> config) {
   }
   for (final key in const ['remoteJsUrl', 'bundleUrl', 'scriptUrl']) {
     final value = config[key];
-    if (value is String &&
-        (value.startsWith('http://') || value.startsWith('https://'))) {
+    if (value is String && value.isNotEmpty) {
+      throw StateError('production Bare must not fetch remote JS');
+    }
+  }
+  for (final value in config.values) {
+    if (value is String && value.contains('://')) {
       throw StateError('production Bare must not fetch remote JS');
     }
   }

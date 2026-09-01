@@ -23,9 +23,11 @@ target_link_libraries(${PLUGIN_NAME} PRIVATE ${CMAKE_DL_LIBS})
 # Prefer the matching CPU slot. `bare` is the host-arch copy from embed.sh
 # (linux-x64 on amd64 CI). `bare-arm64` is vendored beside it and must not
 # overwrite the runnable host binary. Never downloads.
+# CMAKE_CURRENT_SOURCE_DIR is packages/orbits_transport_linux/linux — three
+# parents reach the repo root (not four).
 set(_PLUGIN_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
-set(_TOOL_BARE_X64 "${CMAKE_CURRENT_SOURCE_DIR}/../../../../tool/bare/linux-x64/bare")
-set(_TOOL_BARE_ARM64 "${CMAKE_CURRENT_SOURCE_DIR}/../../../../tool/bare/linux-arm64/bare")
+set(_TOOL_BARE_X64 "${CMAKE_CURRENT_SOURCE_DIR}/../../../tool/bare/linux-x64/bare")
+set(_TOOL_BARE_ARM64 "${CMAKE_CURRENT_SOURCE_DIR}/../../../tool/bare/linux-arm64/bare")
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64|arm64")
   if(EXISTS "${_PLUGIN_DIR}/bare-arm64")
     set(ORBITS_BARE_SLOT "${_PLUGIN_DIR}/bare-arm64")
@@ -42,8 +44,12 @@ else()
   endif()
 endif()
 
+# Always install as `bare` so the host (dladdr / lib/bare) finds it even
+# when the source slot was named bare-arm64.
 set(orbits_transport_linux_bundled_libraries "")
 if(EXISTS "${ORBITS_BARE_SLOT}")
-  list(APPEND orbits_transport_linux_bundled_libraries "${ORBITS_BARE_SLOT}")
+  set(_ORBITS_BARE_BUNDLE "${CMAKE_CURRENT_BINARY_DIR}/bare")
+  configure_file("${ORBITS_BARE_SLOT}" "${_ORBITS_BARE_BUNDLE}" COPYONLY)
+  list(APPEND orbits_transport_linux_bundled_libraries "${_ORBITS_BARE_BUNDLE}")
 endif()
 set(orbits_transport_linux_bundled_libraries ${orbits_transport_linux_bundled_libraries} PARENT_SCOPE)

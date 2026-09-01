@@ -64,6 +64,7 @@ class MethodChannelOrbitsTransport extends OrbitsTransportPlatform {
   Future<String?> barePath() async {
     final path = await _channel.invokeMethod<String>('barePath');
     if (path == null || path.isEmpty) return null;
+    if (path.contains('://')) return null;
     if (path.startsWith('http://') || path.startsWith('https://')) {
       return null;
     }

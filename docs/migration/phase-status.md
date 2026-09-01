@@ -10,7 +10,7 @@ still PeerJS.
 | 0 | ADRs, contracts, tests | Closed |
 | 1 | Harness + loopback echo/file/suspend | NAT matrix **blocked** |
 | 2 | Stand runner + metrics schema | Live KZ matrix **blocked** |
-| 3 | Plugin + worklet IPC + OS hosts refuse remote JS; federated `orbits_transport` is an app dependency with per-OS `default_package` (no web — PWA stays PeerJS); Linux/Windows C plugin registrars (`orbits_transport_plugin_register_with_registrar` / `OrbitsTransportPluginRegisterWithRegistrar`) plus `barePath` on every host; spawn asks the native host `start(remoteJs: false)` before Node/Bare; spawn prefers plugin-bundled local `bare` then `tool/bare/` then Node when stdlib is present; per-OS Bare slots + build-time `vendor.sh` / `embed.sh` / `vendor-bare-modules.sh`; iOS/macOS podspecs copy a local slot and never curl; **all** vendor tarball sha256 pins; CI vendors+embeds linux-x64, ios-arm64, darwin-arm64, android-arm64, windows-x64 into plugin hosts **and vendors** linux-arm64 / darwin-x64 beside the host-arch binary (never overwriting it); CI `flutter build linux` and `flutter build macos` link desktop registrars; worklet import maps; path-streamed `sendFile` | Bare binary not shipped as the product flag (`kBareBinaryShipped` false) |
+| 3 | Plugin + worklet IPC + OS hosts refuse remote JS (any `://` worklet path); federated `orbits_transport` is an app dependency with per-OS `default_package` (no web — PWA stays PeerJS); Linux/Windows C plugin registrars (`orbits_transport_plugin_register_with_registrar` / `OrbitsTransportPluginRegisterWithRegistrar`) plus `barePath` on every host; spawn asks the native host `start(remoteJs: false, worklet: localPath)` before Node/Bare; spawn prefers plugin-bundled local `bare` then `tool/bare/` then Node when stdlib is present; per-OS Bare slots + build-time `vendor.sh` / `embed.sh` / `vendor-bare-modules.sh`; iOS/macOS podspecs copy a local slot into `OrbitsTransportBare` and never curl; **all** vendor tarball sha256 pins; CI vendors+embeds linux-x64, ios-arm64, darwin-arm64, android-arm64, windows-x64 into plugin hosts **and vendors** linux-arm64 / darwin-x64 beside the host-arch binary (never overwriting it); CMake/Gradle copy the matching slot into the **app bundle** as `bare` / `bare.exe` / `assets/bare` (plugin-dir fallback is three parents to repo root, not four); CI `flutter build linux` / `macos` / Windows / iOS / APK **assert the bundled binary is present**; worklet import maps; path-streamed `sendFile` | Bare binary not shipped as the product flag (`kBareBinaryShipped` false) |
 | 4 | App boot binds native host when rollout ≠ off; prefers Hyperswarm **only** with module + explicit HyperDHT bootstrap (`ORBITS_DHT_BOOTSTRAP` / directory rows), else loopback; Noise seed ≠ identity; loopback natives exchange `v2:` / wireHello | Default still PeerJS; two physical natives not run |
 | 5 | Identity-signed caps on native connect and as a PeerJS `wireHello.caps` sibling; contact QR may carry discovery secret `d=`; secrets persist vault-wrapped | Physical pair not run |
 | 6 | Native `call` channel + CallKit / Telecom in-app sheet (opaque handle, name “Orbits”); iOS remote-notification *handlers* (no PushKit) | No PushKit / `voip` background; registration gated; no physical call |
@@ -54,8 +54,14 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
   those slots are pin-checked without overwriting the runner's executable.
   The app depends on the federated plugin so those binaries can land in native
   builds. Linux and Windows hosts now register a real Flutter plugin and
-  report `barePath` for a local bundled copy when present. Dart spawn asks
+  report `barePath` for a local bundled copy when present. CMake copies the
+  matching slot into the app as `bare` / `bare.exe` (always that name, even
+  when the source was `bare-arm64`). Android Gradle copies
+  `tool/bare/android-arm64/bare` into plugin assets. iOS/macOS podspecs put
+  the slot in an `OrbitsTransportBare` resource bundle. Dart spawn asks
   the plugin first, then plugin native dirs / `tool/bare/` slots, then Node.
+  Native `start` refuses any worklet path with `://`. CI asserts the binary
+  is inside the linux/macOS/Windows/iOS/APK artifacts after `flutter build`.
   That still does
   not set `kBareBinaryShipped` — not every OS slot is in every app bundle.
 - Holepunch Corestore native addon: `kHolepunchCorestoreAddonLinked` is

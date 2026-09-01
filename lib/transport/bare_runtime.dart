@@ -162,6 +162,7 @@ List<String> bundledBareCandidates({String? osArch}) {
 bool isLocalBarePath(String path) {
   final p = path.trim();
   if (p.isEmpty) return false;
+  if (p.contains('://')) return false;
   if (p.startsWith('http://') || p.startsWith('https://')) return false;
   return File(p).existsSync();
 }

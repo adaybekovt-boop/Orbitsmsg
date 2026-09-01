@@ -28,8 +28,30 @@ android {
 }
 
 // Optional local Bare binary as an asset. Never downloaded.
-def orbitsBareSlot = file("${project.projectDir}/../../../../tool/bare/android-arm64/bare")
-def orbitsBareAsset = file("${project.projectDir}/src/main/assets/bare")
+// projectDir is packages/orbits_transport_android/android — three parents
+// reach the repo root (not four).
+def orbitsBareSlot = file("${project.projectDir}/../../../tool/bare/android-arm64/bare")
+def orbitsBareAssetDir = file("${project.projectDir}/src/main/assets")
+def orbitsBareAsset = file("${orbitsBareAssetDir}/bare")
+
+tasks.register("copyOrbitsBareAsset", Copy) {
+    description = "Copy a local android-arm64 Bare slot into plugin assets. Never downloads."
+    onlyIf { orbitsBareSlot.exists() }
+    from(orbitsBareSlot)
+    into(orbitsBareAssetDir)
+    rename { "bare" }
+}
+
+afterEvaluate {
+    tasks.matching {
+        it.name != "copyOrbitsBareAsset" &&
+            it.name.contains("Assets") &&
+            (it.name.startsWith("merge") || it.name.startsWith("package"))
+    }.configureEach {
+        dependsOn("copyOrbitsBareAsset")
+    }
+}
+
 if (orbitsBareSlot.exists() || orbitsBareAsset.exists()) {
     android.sourceSets.main.assets.srcDirs += ["src/main/assets"]
 }

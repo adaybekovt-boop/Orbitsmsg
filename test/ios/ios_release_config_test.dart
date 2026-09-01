@@ -73,6 +73,7 @@ void main() {
       expect(workflow, contains('flutter build ios --release --no-codesign'));
       expect(workflow, contains('flutter build ios --simulator --debug'));
       expect(workflow, contains('flutter build macos --release'));
+      expect(workflow, contains("find build/ios/iphoneos/Runner.app -name 'bare'"));
       expect(workflow, contains('kBareBinaryShipped stays false'));
     });
   });

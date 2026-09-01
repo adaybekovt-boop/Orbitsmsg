@@ -40,6 +40,38 @@ static gboolean file_is_executable(const gchar* path) {
   return path != NULL && access(path, X_OK) == 0;
 }
 
+static gboolean string_has_scheme(const gchar* s) {
+  return s != NULL && strstr(s, "://") != NULL;
+}
+
+static gboolean start_config_wants_remote_js(FlValue* args) {
+  if (args == NULL || fl_value_get_type(args) != FL_VALUE_TYPE_MAP) {
+    return FALSE;
+  }
+  FlValue* flag = fl_value_lookup_string(args, "remoteJs");
+  if (flag != NULL && fl_value_get_type(flag) == FL_VALUE_TYPE_BOOL &&
+      fl_value_get_bool(flag)) {
+    return TRUE;
+  }
+  const gchar* remote_keys[] = {"remoteJsUrl", "bundleUrl", "scriptUrl", NULL};
+  for (int i = 0; remote_keys[i] != NULL; i++) {
+    FlValue* v = fl_value_lookup_string(args, remote_keys[i]);
+    if (v != NULL && fl_value_get_type(v) == FL_VALUE_TYPE_STRING) {
+      const gchar* s = fl_value_get_string(v);
+      if (s != NULL && s[0] != '\0') return TRUE;
+    }
+  }
+  const gchar* path_keys[] = {"worklet", "workletPath", NULL};
+  for (int i = 0; path_keys[i] != NULL; i++) {
+    FlValue* v = fl_value_lookup_string(args, path_keys[i]);
+    if (v != NULL && fl_value_get_type(v) == FL_VALUE_TYPE_STRING &&
+        string_has_scheme(fl_value_get_string(v))) {
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
 // Look next to this .so (Flutter bundled_libraries) then next to the exe.
 static gchar* bundled_bare_path() {
   Dl_info info;
@@ -49,9 +81,15 @@ static gchar* bundled_bare_path() {
     gchar* dir = dirname_of(info.dli_fname);
     if (dir != NULL) {
       gchar* candidate = g_build_filename(dir, "bare", NULL);
+      gchar* candidate_arm = g_build_filename(dir, "bare-arm64", NULL);
       g_free(dir);
-      if (file_is_executable(candidate)) return candidate;
+      if (file_is_executable(candidate)) {
+        g_free(candidate_arm);
+        return candidate;
+      }
       g_free(candidate);
+      if (file_is_executable(candidate_arm)) return candidate_arm;
+      g_free(candidate_arm);
     }
   }
   gchar* exe = g_file_read_link("/proc/self/exe", NULL);
@@ -81,19 +119,7 @@ static void orbits_transport_plugin_handle_method_call(
 
   if (strcmp(method, "start") == 0) {
     FlValue* args = fl_method_call_get_args(method_call);
-    gboolean remote_js = FALSE;
-    const gchar* remote_js_url = "";
-    if (fl_value_get_type(args) == FL_VALUE_TYPE_MAP) {
-      FlValue* flag = fl_value_lookup_string(args, "remoteJs");
-      if (flag != NULL && fl_value_get_type(flag) == FL_VALUE_TYPE_BOOL) {
-        remote_js = fl_value_get_bool(flag);
-      }
-      FlValue* url = fl_value_lookup_string(args, "remoteJsUrl");
-      if (url != NULL && fl_value_get_type(url) == FL_VALUE_TYPE_STRING) {
-        remote_js_url = fl_value_get_string(url);
-      }
-    }
-    if (remote_js || (remote_js_url != NULL && remote_js_url[0] != '\0')) {
+    if (start_config_wants_remote_js(args)) {
       response = FL_METHOD_RESPONSE(fl_method_error_response_new(
           "REMOTE_JS", "production Bare must not fetch remote JS", nullptr));
     } else {

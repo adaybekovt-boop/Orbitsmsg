@@ -15,6 +15,7 @@ void main() {
       final text = File(path).readAsStringSync();
       expect(text, contains('must not fetch remote JS'), reason: path);
       expect(text, contains('barePath'), reason: path);
+      expect(text, contains('://'), reason: path);
       expect(text, isNot(contains('http://')));
       expect(text, isNot(contains('https://')));
     }
@@ -74,9 +75,54 @@ void main() {
       contains('linux-arm64'),
     );
     expect(
+      File('packages/orbits_transport_linux/linux/CMakeLists.txt')
+          .readAsStringSync(),
+      contains('configure_file'),
+    );
+    expect(
+      File('packages/orbits_transport_linux/linux/CMakeLists.txt')
+          .readAsStringSync(),
+      contains('CMAKE_CURRENT_BINARY_DIR}/bare'),
+    );
+    expect(
+      File('packages/orbits_transport_linux/linux/CMakeLists.txt')
+          .readAsStringSync(),
+      contains('../../../tool/bare/linux-x64/bare'),
+    );
+    expect(
+      File('packages/orbits_transport_linux/linux/CMakeLists.txt')
+          .readAsStringSync(),
+      isNot(contains('../../../../tool/bare')),
+    );
+    expect(
       File('packages/orbits_transport_windows/windows/CMakeLists.txt')
           .readAsStringSync(),
       isNot(contains('http')),
+    );
+    expect(
+      File('packages/orbits_transport_windows/windows/CMakeLists.txt')
+          .readAsStringSync(),
+      contains('CMAKE_CURRENT_BINARY_DIR}/bare.exe'),
+    );
+    expect(
+      File('packages/orbits_transport_windows/windows/CMakeLists.txt')
+          .readAsStringSync(),
+      contains('../../../tool/bare/windows-x64/bare.exe'),
+    );
+    expect(
+      File('packages/orbits_transport_android/android/build.gradle')
+          .readAsStringSync(),
+      contains('../../../tool/bare/android-arm64/bare'),
+    );
+    expect(
+      File('packages/orbits_transport_android/android/build.gradle')
+          .readAsStringSync(),
+      contains('copyOrbitsBareAsset'),
+    );
+    expect(
+      File('packages/orbits_transport_android/android/build.gradle')
+          .readAsStringSync(),
+      isNot(contains('../../../../tool/bare')),
     );
 
     final appPub = File('pubspec.yaml').readAsStringSync();
@@ -110,6 +156,10 @@ void main() {
     expect(ci, contains('kBareBinaryShipped stays false'));
     expect(ci, contains('flutter build linux --release'));
     expect(ci, contains('Build Linux'));
+    expect(ci, contains('bundle/lib/bare'));
+    expect(ci, contains('runner/Release/bare.exe'));
+    expect(ci, contains('assets/bare'));
+    expect(ci, contains("find build/ios/iphoneos/Runner.app -name 'bare'"));
     expect(
       File('linux/flutter/generated_plugin_registrant.cc').readAsStringSync(),
       contains('orbits_transport_plugin_register_with_registrar'),

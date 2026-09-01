@@ -28,7 +28,15 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     if (call.method == "start") {
       val remoteJs = call.argument<Boolean>("remoteJs")
       val remoteJsUrl = call.argument<String>("remoteJsUrl")
-      if (remoteJs == true || !remoteJsUrl.isNullOrEmpty()) {
+      val bundleUrl = call.argument<String>("bundleUrl")
+      val scriptUrl = call.argument<String>("scriptUrl")
+      val worklet = call.argument<String>("worklet") ?: call.argument<String>("workletPath")
+      val remote = remoteJs == true ||
+          !remoteJsUrl.isNullOrEmpty() ||
+          !bundleUrl.isNullOrEmpty() ||
+          !scriptUrl.isNullOrEmpty() ||
+          (worklet != null && worklet.contains("://"))
+      if (remote) {
         result.error("REMOTE_JS", "production Bare must not fetch remote JS", null)
         return
       }

@@ -17,13 +17,17 @@ target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
 
+# CMAKE_CURRENT_SOURCE_DIR is packages/orbits_transport_windows/windows —
+# three parents reach the repo root (not four). Never downloads.
 set(ORBITS_BARE_SLOT "${CMAKE_CURRENT_SOURCE_DIR}/bare.exe")
 if(NOT EXISTS "${ORBITS_BARE_SLOT}")
-  set(ORBITS_BARE_SLOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../../tool/bare/windows-x64/bare.exe")
+  set(ORBITS_BARE_SLOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../tool/bare/windows-x64/bare.exe")
 endif()
 
 set(orbits_transport_windows_bundled_libraries "")
 if(EXISTS "${ORBITS_BARE_SLOT}")
-  list(APPEND orbits_transport_windows_bundled_libraries "${ORBITS_BARE_SLOT}")
+  set(_ORBITS_BARE_BUNDLE "${CMAKE_CURRENT_BINARY_DIR}/bare.exe")
+  configure_file("${ORBITS_BARE_SLOT}" "${_ORBITS_BARE_BUNDLE}" COPYONLY)
+  list(APPEND orbits_transport_windows_bundled_libraries "${_ORBITS_BARE_BUNDLE}")
 endif()
 set(orbits_transport_windows_bundled_libraries ${orbits_transport_windows_bundled_libraries} PARENT_SCOPE)

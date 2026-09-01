@@ -21,6 +21,7 @@ void main() {
     expect(src, contains('barePath'));
     expect(src, contains('bundledBare'));
     expect(src, contains("'remoteJs': false"));
+    expect(src, contains("'worklet': script.path"));
     expect(src, contains('REMOTE_JS'));
     expect(src, isNot(contains('http://')));
     expect(src, isNot(contains('https://')));
@@ -151,6 +152,8 @@ void main() {
     }
     expect(iosPod, contains('ios-arm64'));
     expect(macPod, contains('darwin-arm64'));
+    expect(iosPod, contains('OrbitsTransportBare'));
+    expect(macPod, contains('OrbitsTransportBare'));
     expect(File('tool/bare/embed.sh').readAsStringSync(), contains(
       'packages/orbits_transport_macos/macos/bare',
     ));
@@ -187,6 +190,7 @@ void main() {
     );
     expect(isLocalBarePath('http://example.invalid/bare'), isFalse);
     expect(isLocalBarePath('https://example.invalid/bare'), isFalse);
+    expect(isLocalBarePath('file://tmp/bare'), isFalse);
     expect(isLocalBarePath(''), isFalse);
     expect(isLocalBarePath(worklet.path), isTrue);
 
