@@ -12,8 +12,9 @@ import UIKit
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     GeneratedPluginRegistrant.register(with: self)
+    // Provider UI name is the bundle product name. `localizedName` is
+    // get-only on the iOS 26 SDK.
     let config = CXProviderConfiguration()
-    config.localizedName = "Orbits"
     config.supportsVideo = true
     config.maximumCallsPerCallGroup = 1
     config.supportedHandleTypes = [.generic]

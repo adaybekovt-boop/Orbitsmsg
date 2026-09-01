@@ -8,6 +8,8 @@ void main() {
     expect(ios, contains('CallKit'));
     expect(ios, contains('must not receive a peer id'));
     expect(ios, contains('localizedCallerName = "Orbits"'));
+    expect(ios, contains('CXProviderConfiguration()'));
+    expect(ios, isNot(contains('localizedName =')));
     expect(ios, isNot(contains('voip')));
 
     final android =
@@ -26,6 +28,13 @@ void main() {
         File('android/app/src/main/AndroidManifest.xml').readAsStringSync();
     expect(androidManifest, contains('FOREGROUND_SERVICE_PHONE_CALL'));
     expect(androidManifest, isNot(contains('FOREGROUND_SERVICE_DATA_SYNC')));
+
+    final telecom = File(
+      'android/app/src/main/kotlin/com/orbits/orbits_flutter/OrbitsConnectionService.kt',
+    ).readAsStringSync();
+    expect(telecom, contains('class OrbitsConnection : Connection()'));
+    expect(telecom, isNot(contains('val conn = Connection()')));
+    expect(telecom, contains('Must not be given a Peer ID'));
 
     expect(ios, contains('registerForRemoteNotifications'));
     expect(ios, contains('opaqueWakeToken'));
