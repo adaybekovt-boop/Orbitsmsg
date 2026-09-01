@@ -103,3 +103,10 @@ Allowlisted on purpose (these are not credentials):
 A token that is not an `orbits.*` / `orbits_*` identifier is still a
 finding. Do not store live API keys, PFX material, or GitHub tokens in
 the tree.
+
+## Planned Holepunch migration
+
+Not shipped. The default transport remains PeerJS. See
+[docs/migration/](migration/). Hyperswarm Noise keys are not identity
+keys. Hypercore will not store plaintext. Rooms stay host-plaintext
+until a reviewed group protocol exists.

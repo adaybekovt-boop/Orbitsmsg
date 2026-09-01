@@ -25,11 +25,15 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Orbits uses the camera to scan contact QR codes and for optional video calls.</string>
+	<string>Orbits uses the camera only when you scan a contact QR code or start a video call.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Orbits uses the microphone for voice messages and optional voice or video calls.</string>
+	<string>Orbits uses the microphone only when you record a voice message or join a voice or video call.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>Orbits reads photos you choose to send as attachments.</string>
+	<string>Orbits reads only the photos you choose to send as attachments.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Orbits uses Face ID to unlock the encryption keys stored on this device.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Orbits uses the local network to connect directly to your contacts and local rooms.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>

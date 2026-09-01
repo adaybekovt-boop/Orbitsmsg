@@ -1,4 +1,4 @@
-# Native app-icon generation for Orbits (Android + Windows).
+# Native app-icon generation for Orbits (Android + iOS + Windows).
 #
 # Web / PWA / Safari "Add to Home Screen" icons are NOT generated here — they
 # are hand-tuned, opaque, and committed under web/ (regenerate with
@@ -10,12 +10,10 @@
 #   dart run flutter_launcher_icons -f flutter_launcher_icons.yaml
 #
 # This IS wired into .github/workflows/build.yml: a "Generate & verify Orbits
-# launcher icons" step runs right after `flutter create` in both the Android and
-# Windows jobs and fails the build if generation didn't actually replace the
-# stock Flutter icon. `flutter_launcher_icons` is a dev_dependency (pubspec.yaml)
-# and test/branding/launcher_icons_config_test.dart guards this config. iOS has
-# no CI build job in this repo; iOS users get the icon via the web PWA path
-# (web/).
+# launcher icons" step runs in each native CI job and fails if generation did
+# not replace the stock Flutter icon. `flutter_launcher_icons` is a
+# dev_dependency and test/branding/launcher_icons_config_test.dart guards this
+# config.
 flutter_launcher_icons:
   image_path: "tool/branding/orbits_icon_source.png"
 
@@ -26,6 +24,10 @@ flutter_launcher_icons:
   # rides on top, so the circular/squircle adaptive mask never clips the ring.
   adaptive_icon_background: "#0A0E16"
   adaptive_icon_foreground: "tool/branding/orbits_icon_source.png"
+
+  # ── iOS: complete iPhone/iPad/App Store asset catalog ─────────────────
+  ios: true
+  remove_alpha_ios: true
 
   # ── Windows: app_icon.ico ──────────────────────────────────────────────
   windows:

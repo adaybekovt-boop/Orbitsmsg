@@ -1,0 +1,8 @@
+{
+  "name": "orbits-connectivity-harness",
+  "ipc": "orbits-bare-ipc-v1",
+  "transportFrame": "orbits-transport-v1",
+  "remoteJs": false,
+  "workletSha256": "a79ddb2a1eb6ca69224e9589a382708c27049e97e3505cce338de77e73f8387d",
+  "note": "Production Bare must ship this tree hashed with the app. Do not fetch executable JS."
+}

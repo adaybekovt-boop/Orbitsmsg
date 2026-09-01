@@ -8,8 +8,7 @@ const String kLegalPendingPlaceholder = '[TEXT PENDING LEGAL REVIEW]';
 const String kComplaintChannelUrl =
     'https://github.com/adaybekovt-boop/tkmessenger/issues/new';
 
-const String kAgeConfirmLabelRu =
-    'Мне есть 18 лет [TEXT PENDING LEGAL REVIEW]';
+const String kAgeConfirmLabelRu = 'Мне исполнилось 18 лет';
 
 const Key kLegalOfferBodyKey = Key('legal-offer-pending-body');
 const Key kComplaintOpenChannelKey = Key('legal-complaint-open-channel');
@@ -19,5 +18,4 @@ const Key kAgeConfirmCheckboxKey = Key('onboarding-age-confirm');
 bool canCompleteOnboarding({
   required bool termsAccepted,
   required bool ageConfirmed,
-}) =>
-    termsAccepted && ageConfirmed;
+}) => termsAccepted && ageConfirmed;

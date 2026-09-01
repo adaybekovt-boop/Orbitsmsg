@@ -29,7 +29,13 @@ void main() {
     expect(router, contains('ctx.dropAllowed?.call(remoteId) == true'));
 
     final conns = read('lib/state/connections_notifier.dart');
-    expect(conns, contains('dropAllowed: isVerified'));
+    expect(
+      conns,
+      contains(
+        'dropAllowed: (rid) => isVerified(rid) && '
+        '!_messaging.isPeerBlocked(rid)',
+      ),
+    );
 
     final drop = read('lib/core/orbits_drop.dart');
     expect(drop, contains('kMaxDropFileBytes'));

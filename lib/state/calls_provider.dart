@@ -36,7 +36,11 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
+import '../calls/hyperswarm_signaling.dart';
+import '../calls/system_calling.dart';
+import '../core/feature_flags.dart';
 import '../peer/peerjs_client.dart';
+import 'connections_notifier.dart';
 import 'peer_connection_provider.dart';
 
 /// Lifecycle phases the UI needs to disambiguate. Names kept aligned
@@ -139,6 +143,9 @@ const Object _unset = Object();
 
 class CallsNotifier extends StateNotifier<CallState> {
   CallsNotifier(this._ref) : super(const CallState.idle()) {
+    _ref.read(connectionsNotifierProvider.notifier).bindCallHandler(
+          _onNativeCallSignal,
+        );
     _ref.listen<PeerConnectionState>(
       peerConnectionProvider,
       (_, __) => _bindToCurrentPeer(),
@@ -166,6 +173,7 @@ class CallsNotifier extends StateNotifier<CallState> {
   /// captures `this`) can be detached on hangup / restore — otherwise it
   /// leaks the notifier and can fire after dispose (audit M7).
   MediaStreamTrack? _shareTrack;
+  NativeCallSession? _nativeSession;
 
   // ─── Public API ───────────────────────────────────────────────
 
@@ -178,7 +186,8 @@ class CallsNotifier extends StateNotifier<CallState> {
   }) async {
     if (state.status != CallStatus.idle) return;
     final peer = _boundPeer;
-    if (peer == null) {
+    final conns = _ref.read(connectionsNotifierProvider.notifier);
+    if (peer == null && !conns.canUseNative(remotePeerId)) {
       state = state.copyWith(lastError: 'Нет активного P2P-соединения');
       return;
     }
@@ -214,11 +223,37 @@ class CallsNotifier extends StateNotifier<CallState> {
     }
     state = state.copyWith(localStream: local);
 
+    if (conns.canUseNative(remotePeerId)) {
+      _nativeSession = NativeCallSession(
+        send: (signal) => conns.sendCallSignal(remotePeerId, signal),
+      );
+      String sdp = 'v=0';
+      try {
+        final pc = await createPeerConnection(<String, dynamic>{
+          'sdpSemantics': 'unified-plan',
+        });
+        for (final track in local.getTracks()) {
+          await pc.addTrack(track, local);
+        }
+        final offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        sdp = offer.sdp ?? sdp;
+      } catch (_) {
+        // Signaling still proceeds; media attach can use PeerJS fallback.
+      }
+      await _nativeSession!.startOutgoing(
+        callId: remotePeerId,
+        sdp: sdp,
+        media: {'video': video},
+      );
+      if (!isPeerjsFallbackEnabled() || peer == null) return;
+    }
+
     try {
-      final conn = await peer.callPeer(remotePeerId, local);
+      final conn = await peer!.callPeer(remotePeerId, local);
       if (!mounted) {
         try {
-          await conn.close();
+          await conn?.close();
         } catch (_) {}
         try {
           local.getTracks().forEach((t) => t.stop());
@@ -239,7 +274,8 @@ class CallsNotifier extends StateNotifier<CallState> {
   /// optionally video) and feeds it back to the connection.
   Future<void> acceptCurrent({bool video = false}) async {
     final conn = _conn;
-    if (state.status != CallStatus.ringing || conn == null) return;
+    if (state.status != CallStatus.ringing) return;
+    if (conn == null && _nativeSession == null) return;
     state = state.copyWith(
       video: video,
       videoEnabled: video,
@@ -253,7 +289,7 @@ class CallsNotifier extends StateNotifier<CallState> {
       });
     } catch (e) {
       try {
-        await conn.close();
+        await conn?.close();
       } catch (_) {}
       _resetIdleWithError('Нет доступа к микрофону${video ? '/камере' : ''}');
       return;
@@ -263,13 +299,29 @@ class CallsNotifier extends StateNotifier<CallState> {
         local.getTracks().forEach((t) => t.stop());
       } catch (_) {}
       try {
-        await conn.close();
+        await conn?.close();
       } catch (_) {}
       return;
     }
     state = state.copyWith(localStream: local);
+    if (_nativeSession != null) {
+      String sdp = 'v=0';
+      try {
+        final pc = await createPeerConnection(<String, dynamic>{
+          'sdpSemantics': 'unified-plan',
+        });
+        for (final track in local.getTracks()) {
+          await pc.addTrack(track, local);
+        }
+        final answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        sdp = answer.sdp ?? sdp;
+      } catch (_) {}
+      await _nativeSession!.accept(sdp: sdp);
+      if (!isPeerjsFallbackEnabled()) return;
+    }
     try {
-      await conn.answer(local);
+      await conn?.answer(local);
       // Status flips to inCall once the peer's track lands (see
       // `_attachConnection.onStream`). Until then we stay in `ringing`
       // visually — but the remote's "calling" pill should already be
@@ -401,9 +453,22 @@ class CallsNotifier extends StateNotifier<CallState> {
   /// End the active call (or cancel a still-dialing one). Both sides
   /// return to idle.
   Future<void> hangUp() async {
+    final remote = state.remotePeerId;
+    if (remote != null) {
+      unawaited(
+        _ref.read(connectionsNotifierProvider.notifier).sendCallSignal(
+              remote,
+              CallSignal(type: CallSignalType.hangup, callId: remote),
+            ),
+      );
+    }
     final conn = _conn;
     final stream = state.localStream;
     _conn = null;
+    if (remote != null) {
+      unawaited(systemCalling.endCall(remote));
+    }
+    _nativeSession = null;
     _cameraTrackBackup = null;
     try {
       _shareTrack?.onEnded = null;
@@ -419,7 +484,7 @@ class CallsNotifier extends StateNotifier<CallState> {
     _closeSub = null;
     if (conn != null) {
       try {
-        await conn.close();
+        await conn?.close();
       } catch (_) {}
     }
     if (stream != null) {
@@ -478,6 +543,38 @@ class CallsNotifier extends StateNotifier<CallState> {
     state = const CallState.idle().copyWith(lastError: message);
   }
 
+  void _onNativeCallSignal(String from, CallSignal signal) {
+    _nativeSession ??= NativeCallSession(
+      send: (next) =>
+          _ref.read(connectionsNotifierProvider.notifier).sendCallSignal(from, next),
+    );
+    _nativeSession!.applyRemote(signal);
+    if (!mounted) return;
+    if (signal.type == CallSignalType.hangup ||
+        signal.type == CallSignalType.reject) {
+      unawaited(hangUp());
+      return;
+    }
+    if (signal.type == CallSignalType.offer && !state.isActive) {
+      state = state.copyWith(
+        status: CallStatus.ringing,
+        remotePeerId: from,
+        video: signal.media?['video'] == true,
+        lastError: null,
+      );
+      unawaited(
+        systemCalling.reportIncoming(
+          callId: signal.callId.isNotEmpty ? signal.callId : from,
+          video: signal.media?['video'] == true,
+        ),
+      );
+    }
+    if (signal.type == CallSignalType.answer &&
+        state.status == CallStatus.calling) {
+      state = state.copyWith(status: CallStatus.inCall);
+    }
+  }
+
   // ─── PeerJS binding ───────────────────────────────────────────
 
   void _bindToCurrentPeer() {
@@ -521,6 +618,9 @@ class CallsNotifier extends StateNotifier<CallState> {
       _callSub?.cancel();
     } catch (_) {}
     _callSub = null;
+    try {
+      _ref.read(connectionsNotifierProvider.notifier).bindCallHandler(null);
+    } catch (_) {}
     // Best-effort: tear down any active call on dispose. We don't
     // await — the provider container is going away regardless.
     if (_conn != null || state.localStream != null) {

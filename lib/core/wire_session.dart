@@ -32,6 +32,7 @@ import 'peer_pins.dart';
 import 'spki_codec.dart';
 import 'vault_kek.dart';
 import 'x3dh_session.dart';
+import '../transport/hello_capabilities.dart';
 
 const String _hkdfSaltTag = 'orbits-wire-v2';
 const String _ratchetTable = 'ratchets';
@@ -391,6 +392,13 @@ Future<Map<String, Object?>> _buildSignedHello({
       hello['opkId'] = x3dhExtras.opkId;
     }
   }
+  // Separately signed; not part of the identity hello blob. Old clients
+  // ignore unknown keys. Missing identity key leaves this omitted.
+  final caps = await localHelloCapabilities(
+    peerId: myPeerId,
+    deviceId: 'local-device',
+  );
+  if (caps != null) hello['caps'] = caps;
   return hello;
 }
 
@@ -647,6 +655,7 @@ Future<AcceptHelloResult> acceptHello({
     firstContact = v.pinStatus == PinStatus.newPin;
     remoteIdSpki = v.idSpki;
     remoteFingerprint = v.fingerprint;
+    await rememberHelloCapabilities(peerId, hello);
   }
 
   // Validation passed вЂ” now it's safe to allocate (or reuse) session state.

@@ -21,6 +21,7 @@ import '../../ui/primitives/adaptive_page_frame.dart';
 import '../../ui/primitives/orbits_glass_app_bar.dart';
 import '../../ui/primitives/orbits_glass_surface.dart';
 import '../../ui/primitives/orbs_card.dart';
+import '../../ui/profile/device_link_page.dart';
 import '../../ui/profile/my_qr_page.dart';
 
 class NetworkPage extends ConsumerWidget {
@@ -137,6 +138,25 @@ class NetworkPage extends ConsumerWidget {
               ),
             ),
           ),
+
+          if (user != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                title: const Text('Привязка устройства'),
+                subtitle: const Text(
+                  'QR для второго устройства. Ratchet на каждом свой.',
+                ),
+                onTap: () {
+                  hapticTap();
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => DeviceLinkPage(peerId: user.peerId),
+                    ),
+                  );
+                },
+              ),
+            ),
 
           // ── Status ───────────────────────────────────────────
           const OrbsSectionTitle('Статус'),

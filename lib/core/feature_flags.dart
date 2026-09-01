@@ -13,9 +13,21 @@
 /// unsigned peer, accepting the loss of authentication.
 const int defaultMinProtocolVersion = 3;
 
+/// Dual-stack rollout. Default [off] keeps the live PeerJS path unchanged.
+enum HyperswarmRollout {
+  off,
+  internal,
+  beta,
+  percentage,
+}
+
 class _Flags {
   bool x3dhEnabled = true;
   int minProtocolVersion = defaultMinProtocolVersion;
+  HyperswarmRollout hyperswarmRollout = HyperswarmRollout.off;
+  bool peerjsFallbackEnabled = true;
+  bool hyperswarmRelayForced = false;
+  bool hyperswarmDiagnosticsEnabled = false;
 }
 
 final _Flags _flags = _Flags();
@@ -42,8 +54,40 @@ void setMinProtocolVersion(int value) {
 /// Whether unsigned legacy v2 hellos are permitted at all.
 bool isLegacyV2Allowed() => _flags.minProtocolVersion <= 2;
 
+HyperswarmRollout hyperswarmRollout() => _flags.hyperswarmRollout;
+
+void setHyperswarmRollout(HyperswarmRollout value) {
+  _flags.hyperswarmRollout = value;
+}
+
+bool isPeerjsFallbackEnabled() => _flags.peerjsFallbackEnabled;
+
+void setPeerjsFallbackEnabled(bool value) {
+  _flags.peerjsFallbackEnabled = value;
+}
+
+bool isHyperswarmRelayForced() => _flags.hyperswarmRelayForced;
+
+void setHyperswarmRelayForced(bool value) {
+  _flags.hyperswarmRelayForced = value;
+}
+
+bool isHyperswarmDiagnosticsEnabled() => _flags.hyperswarmDiagnosticsEnabled;
+
+void setHyperswarmDiagnosticsEnabled(bool value) {
+  _flags.hyperswarmDiagnosticsEnabled = value;
+}
+
+/// Live native path is still PeerJS. Hyperswarm stays off until Phase 4.
+bool isHyperswarmTransportEnabled() =>
+    _flags.hyperswarmRollout != HyperswarmRollout.off;
+
 /// Test-only reset. Do not call from production code.
 void resetFlagsForTests() {
   _flags.x3dhEnabled = true;
   _flags.minProtocolVersion = defaultMinProtocolVersion;
+  _flags.hyperswarmRollout = HyperswarmRollout.off;
+  _flags.peerjsFallbackEnabled = true;
+  _flags.hyperswarmRelayForced = false;
+  _flags.hyperswarmDiagnosticsEnabled = false;
 }

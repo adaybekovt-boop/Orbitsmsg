@@ -1,0 +1,24 @@
+name: orbits_transport_linux
+description: Linux Bare worklet host for Orbits transport. Bundle is embedded; remote JS is forbidden.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ">=3.12.0 <3.13.0"
+  flutter: ">=3.44.7 <3.45.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  orbits_transport:
+    path: ../orbits_transport
+  orbits_transport_platform_interface:
+    path: ../orbits_transport_platform_interface
+
+flutter:
+  plugin:
+    implements: orbits_transport
+    platforms:
+      linux:
+        pluginClass: OrbitsTransportPlugin
+        dartPluginClass: OrbitsTransportLinux

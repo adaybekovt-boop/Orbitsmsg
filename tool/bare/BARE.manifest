@@ -1,0 +1,7 @@
+{
+  "name": "orbits-bare-runtime",
+  "remoteFetch": false,
+  "downloadUrl": null,
+  "bundleUrl": null,
+  "note": "Drop a local Bare binary here as bare or bare.exe. Production must not download it."
+}

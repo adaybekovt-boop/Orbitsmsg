@@ -3,7 +3,7 @@
 // Keep behavior identical to the JS module; the UI relies on these exact
 // strings and on the set of accepted id shapes.
 
-import 'dart:convert' show jsonDecode;
+import 'dart:convert' show jsonDecode, base64Url;
 
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -45,8 +45,34 @@ bool isValidPeerId(String? raw) {
 /// The stable QR/deep-link payload for sharing a contact. The reader
 /// ([parseContactQrPayload]) also accepts a bare peerId and the legacy
 /// shapes, so changing the *writer* to this form is backward-compatible.
-String contactQrPayload(String peerId) =>
-    'orbits://contact/${normalizePeerId(peerId)}';
+String contactQrPayload(String peerId, {List<int>? discoverySecret}) {
+  final base = 'orbits://contact/${normalizePeerId(peerId)}';
+  if (discoverySecret == null || discoverySecret.isEmpty) return base;
+  return '$base?d=${base64Url.encode(discoverySecret).replaceAll('=', '')}';
+}
+
+/// Shared contact-discovery secret from a QR query `d=`. Never the Peer ID.
+List<int>? parseContactDiscoverySecret(String? raw) {
+  if (raw == null) return null;
+  final q = raw.trim().indexOf('?');
+  if (q < 0) return null;
+  final query = raw.trim().substring(q + 1);
+  for (final part in query.split('&')) {
+    final eq = part.indexOf('=');
+    if (eq <= 0) continue;
+    if (part.substring(0, eq) != 'd') continue;
+    var v = part.substring(eq + 1);
+    final pad = (4 - v.length % 4) % 4;
+    v = v + ('=' * pad);
+    try {
+      final bytes = base64Url.decode(v);
+      return bytes.isEmpty ? null : bytes;
+    } catch (_) {
+      return null;
+    }
+  }
+  return null;
+}
 
 /// Extract a canonical peerId from whatever a contact QR / pasted code holds,
 /// or null if it doesn't look like an Orbits contact. Tolerant of:

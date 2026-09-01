@@ -27,6 +27,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../../safety/content_safety_filter.dart';
 import '../../themes/orbits_tokens.dart';
 import '../primitives/orbits_glass_button.dart';
 import '../primitives/orbits_glass_surface.dart';
@@ -164,6 +165,29 @@ class _ChatComposerState extends State<ChatComposer> {
   Future<void> _handleSend() async {
     final text = _ctl.text.trim();
     if (text.isEmpty) return;
+
+    final blockedReason = ContentSafetyFilter.blockedReason(text);
+    if (blockedReason != null) {
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Сообщение не отправлено'),
+          content: Text(
+            'Локальный фильтр обнаружил: $blockedReason. '
+            'Измените текст. Черновик не покидал это устройство.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Изменить'),
+            ),
+          ],
+        ),
+      );
+      if (mounted) _focus.requestFocus();
+      return;
+    }
+
     _stopTyping();
     final ok = await widget.actions.onSend(text);
     if (ok && mounted) {
@@ -246,8 +270,10 @@ class _ChatComposerState extends State<ChatComposer> {
                         ],
                         decoration: InputDecoration(
                           hintText: 'Сообщение',
-                          hintStyle:
-                              TextStyle(color: t.muted, fontFamily: t.fontBody),
+                          hintStyle: TextStyle(
+                            color: t.muted,
+                            fontFamily: t.fontBody,
+                          ),
                           isDense: true,
                           contentPadding: const EdgeInsets.symmetric(
                             horizontal: 14,
@@ -280,8 +306,10 @@ class _ChatComposerState extends State<ChatComposer> {
                     transitionBuilder: (child, anim) => FadeTransition(
                       opacity: anim,
                       child: ScaleTransition(
-                        scale: Tween<double>(begin: 0.85, end: 1.0)
-                            .animate(anim),
+                        scale: Tween<double>(
+                          begin: 0.85,
+                          end: 1.0,
+                        ).animate(anim),
                         child: child,
                       ),
                     ),
@@ -358,10 +386,7 @@ class _ReplyPreviewRow extends StatelessWidget {
                   preview.preview.isEmpty ? '…' : preview.preview,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: t.muted,
-                  ),
+                  style: TextStyle(fontSize: 12, color: t.muted),
                 ),
               ],
             ),

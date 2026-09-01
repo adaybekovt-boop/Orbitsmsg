@@ -66,73 +66,90 @@ class SettingsPage extends ConsumerWidget {
             bottom: 32,
           ),
           children: [
-          // ── Аккаунт ──
-          if (user != null) ...[
-            _SectionLabel(text: 'Аккаунт', tokens: tokens),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: _ProfileCard(user: user, tokens: tokens),
+            // ── Аккаунт ──
+            if (user != null) ...[
+              _SectionLabel(text: 'Аккаунт', tokens: tokens),
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
+                child: _ProfileCard(user: user, tokens: tokens),
+              ),
+            ],
+
+            // ── Основное ── (technical screens live deeper under "Дополнительно")
+            _SectionLabel(text: 'Основное', tokens: tokens),
+            _ActionRow(
+              icon: Icons.palette,
+              title: 'Внешний вид',
+              subtitle: 'Тема оформления',
+              onTap: () => _push(context, const ThemesPage()),
             ),
-          ],
+            _ActionRow(
+              icon: Icons.chat_bubble,
+              title: 'Чаты',
+              subtitle: 'Поведение, форма сообщений, шрифт',
+              onTap: () => _push(context, const ChatPrefsPage()),
+            ),
+            _ActionRow(
+              icon: Icons.notifications,
+              title: 'Уведомления',
+              subtitle: 'Пока недоступны',
+              onTap: () => _push(context, const NotificationsPage()),
+            ),
+            _ActionRow(
+              icon: Icons.lock,
+              title: 'Безопасность',
+              subtitle: 'Блокировка, пароль, проверка контактов',
+              onTap: () => _push(context, const SecurityPage()),
+            ),
+            _ActionRow(
+              icon: Icons.system_update_alt,
+              title: 'Обновления',
+              subtitle: 'Проверить и установить новую версию',
+              onTap: () => _push(context, const UpdatesPage()),
+            ),
+            const SizedBox(height: 8),
+            _ActionRow(
+              icon: Icons.tune,
+              title: 'Дополнительно',
+              subtitle: 'Соединение, микрофон, диагностика',
+              onTap: () => _push(context, const AdvancedPage()),
+            ),
 
-          // ── Основное ── (technical screens live deeper under "Дополнительно")
-          _SectionLabel(text: 'Основное', tokens: tokens),
-          _ActionRow(
-            icon: Icons.palette,
-            title: 'Внешний вид',
-            subtitle: 'Тема оформления',
-            onTap: () => _push(context, const ThemesPage()),
-          ),
-          _ActionRow(
-            icon: Icons.chat_bubble,
-            title: 'Чаты',
-            subtitle: 'Поведение, форма сообщений, шрифт',
-            onTap: () => _push(context, const ChatPrefsPage()),
-          ),
-          _ActionRow(
-            icon: Icons.notifications,
-            title: 'Уведомления',
-            subtitle: 'Пока недоступны',
-            onTap: () => _push(context, const NotificationsPage()),
-          ),
-          _ActionRow(
-            icon: Icons.lock,
-            title: 'Безопасность',
-            subtitle: 'Блокировка, пароль, проверка контактов',
-            onTap: () => _push(context, const SecurityPage()),
-          ),
-          _ActionRow(
-            icon: Icons.system_update_alt,
-            title: 'Обновления',
-            subtitle: 'Проверить и установить новую версию',
-            onTap: () => _push(context, const UpdatesPage()),
-          ),
-          const SizedBox(height: 8),
-          _ActionRow(
-            icon: Icons.tune,
-            title: 'Дополнительно',
-            subtitle: 'Соединение, микрофон, диагностика',
-            onTap: () => _push(context, const AdvancedPage()),
-          ),
-
-          // Logout
-          if (user != null) ...[
-            const SizedBox(height: 18),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Center(
-                child: OrbitsGlassButton(
-                  label: 'Выйти из профиля',
-                  icon: Icons.logout,
-                  onPressed: () => _confirmLogout(context, ref),
-                  // Neutral in the settings list — the alarming red lives only
-                  // inside the confirm dialog (showOrbitsConfirm danger: true).
-                  variant: OrbitsGlassVariant.subtle,
-                  size: OrbitsGlassSize.medium,
+            // Logout
+            if (user != null) ...[
+              const SizedBox(height: 18),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Center(
+                  child: OrbitsGlassButton(
+                    label: 'Выйти из профиля',
+                    icon: Icons.logout,
+                    onPressed: () => _confirmLogout(context, ref),
+                    // Neutral in the settings list — the alarming red lives only
+                    // inside the confirm dialog (showOrbitsConfirm danger: true).
+                    variant: OrbitsGlassVariant.subtle,
+                    size: OrbitsGlassSize.medium,
+                  ),
                 ),
               ),
-            ),
-          ],
+              const SizedBox(height: 10),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24),
+                child: Center(
+                  child: OrbitsGlassButton(
+                    key: const Key('delete-local-profile'),
+                    label: 'Удалить локальный профиль',
+                    icon: Icons.delete_forever_outlined,
+                    onPressed: () => _confirmDeleteProfile(context, ref),
+                    variant: OrbitsGlassVariant.danger,
+                    size: OrbitsGlassSize.medium,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -147,7 +164,8 @@ class SettingsPage extends ConsumerWidget {
     final ok = await showOrbitsConfirm(
       context: context,
       title: 'Выйти из профиля?',
-      message: 'Локальные ключи останутся на устройстве. Войти можно будет '
+      message:
+          'Локальные ключи останутся на устройстве. Войти можно будет '
           'паролем — пароль не сбрасывается.',
       confirmLabel: 'Выйти',
       confirmIcon: Icons.logout,
@@ -155,6 +173,25 @@ class SettingsPage extends ConsumerWidget {
     );
     if (!ok) return;
     await ref.read(authNotifierProvider.notifier).logout();
+  }
+
+  Future<void> _confirmDeleteProfile(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final ok = await showOrbitsConfirm(
+      context: context,
+      title: 'Удалить локальный профиль?',
+      message:
+          'Будут безвозвратно удалены ключи, история, контакты, '
+          'файлы и настройки с этого устройства. Orbits не хранит копию '
+          'профиля на своём сервере.',
+      confirmLabel: 'Удалить навсегда',
+      confirmIcon: Icons.delete_forever_outlined,
+      danger: true,
+    );
+    if (!ok) return;
+    await ref.read(authNotifierProvider.notifier).wipeLocal();
   }
 }
 
@@ -167,18 +204,18 @@ class _SectionLabel extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(24, 18, 24, 6),
-        child: Text(
-          text.toUpperCase(),
-          style: TextStyle(
-            fontFamily: tokens.fontHeading,
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.8,
-            color: tokens.muted,
-          ),
-        ),
-      );
+    padding: const EdgeInsets.fromLTRB(24, 18, 24, 6),
+    child: Text(
+      text.toUpperCase(),
+      style: TextStyle(
+        fontFamily: tokens.fontHeading,
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0.8,
+        color: tokens.muted,
+      ),
+    ),
+  );
 }
 
 // ─── Profile card ──────────────────────────────────────────
@@ -200,86 +237,86 @@ class _ProfileCard extends StatelessWidget {
         color: Colors.transparent,
         child: InkWell(
           onTap: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(builder: (_) => const ProfileEditPage()),
-            );
+            Navigator.of(
+              context,
+            ).push(MaterialPageRoute(builder: (_) => const ProfileEditPage()));
           },
           borderRadius: radius,
           child: Padding(
             padding: const EdgeInsets.all(14),
             child: Row(
-        children: [
-          OrbsAvatar(
-            fallbackInitial: user.displayName.isNotEmpty
-                ? user.displayName.characters.first.toUpperCase()
-                : '?',
-            imageBytes: avatarBytes,
-            size: 56,
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  user.displayName,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 17,
-                    fontWeight: FontWeight.w600,
-                    fontFamily: tokens.fontHeading,
-                    color: tokens.text,
+                OrbsAvatar(
+                  fallbackInitial: user.displayName.isNotEmpty
+                      ? user.displayName.characters.first.toUpperCase()
+                      : '?',
+                  imageBytes: avatarBytes,
+                  size: 56,
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        user.displayName,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w600,
+                          fontFamily: tokens.fontHeading,
+                          color: tokens.text,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Код профиля: ${user.peerId}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontFamily: tokens.fontMono,
+                          color: tokens.muted,
+                        ),
+                      ),
+                      if (user.bio.trim().isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          user.bio,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontFamily: tokens.fontBody,
+                            color: tokens.muted,
+                          ),
+                        ),
+                      ],
+                    ],
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  'Код профиля: ${user.peerId}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontFamily: tokens.fontMono,
-                    color: tokens.muted,
-                  ),
+                OrbitsGlassIconButton(
+                  icon: Icons.qr_code_2,
+                  tooltip: 'QR-код',
+                  variant: OrbitsGlassVariant.subtle,
+                  size: OrbitsGlassSize.small,
+                  onPressed: () {
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => MyQrPage(peerId: user.peerId),
+                      ),
+                    );
+                  },
                 ),
-                if (user.bio.trim().isNotEmpty) ...[
-                  const SizedBox(height: 4),
-                  Text(
-                    user.bio,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 13,
-                      fontFamily: tokens.fontBody,
-                      color: tokens.muted,
-                    ),
-                  ),
-                ],
+                Icon(Icons.chevron_right, color: tokens.muted),
               ],
             ),
           ),
-          OrbitsGlassIconButton(
-            icon: Icons.qr_code_2,
-            tooltip: 'QR-код',
-            variant: OrbitsGlassVariant.subtle,
-            size: OrbitsGlassSize.small,
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => MyQrPage(peerId: user.peerId),
-                ),
-              );
-            },
-          ),
-          Icon(Icons.chevron_right, color: tokens.muted),
-                ],
-              ),
-            ),
-          ),
         ),
-      );
+      ),
+    );
   }
 
   Uint8List? _decodeAvatar(String? url) {

@@ -17,12 +17,10 @@ permissions:
 
 # Pin Flutter once so all jobs agree.
 #
-# 3.32.0 (stable, May 2025) is the first Flutter release whose
-# `flutter create` android template ships with Kotlin Gradle plugin
-# 2.1.x and AGP 8.7.x out of the box. Earlier 3.27.x stuck at Kotlin
-# 1.8.22, which mobile_scanner ^6 refuses to compile against.
+# 3.44.7 is the project baseline validated for Xcode 26 / iOS 26 SDK uploads.
+# Keep this in sync with .flutter-version, .fvmrc, and pubspec.yaml.
 env:
-  FLUTTER_VERSION: '3.32.0'
+  FLUTTER_VERSION: '3.44.7'
   FLUTTER_CHANNEL: 'stable'
   PROJECT_NAME: 'orbits_flutter'
   PROJECT_ORG: 'com.orbits'
@@ -77,17 +75,107 @@ jobs:
       - name: flutter test
         run: flutter test --reporter expanded
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Connectivity harness (loopback, no hardware)
+        working-directory: tool/connectivity_harness
+        run: node --test test/*.test.js
+
+      - name: Pin worklet bundle hash (no remote JS)
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          worklet = Path("tool/connectivity_harness/src/worklet.js").read_bytes()
+          digest = hashlib.sha256(worklet).hexdigest()
+          manifest = json.loads(Path("tool/connectivity_harness/BUNDLE.manifest").read_text())
+          if manifest.get("remoteJs") is not False:
+              raise SystemExit("BUNDLE.manifest must set remoteJs=false")
+          pinned = manifest.get("workletSha256")
+          if pinned != digest:
+              raise SystemExit(f"worklet hash {digest} != pinned {pinned}")
+          print(f"worklet.js sha256={digest}")
+          PY
+
+      - name: Transport plugin lifecycle
+        working-directory: packages/orbits_transport
+        run: flutter test
+
   # ────────────────────────────────────────────────────────────────────
-  # Android. Platform folders ARE committed (network_security_config,
-  # backup rules). Do not `flutter create --overwrite` — that clobbers
-  # those files. Icon generation still runs so the APK never ships the
-  # stock Flutter logo.
+  # Native platform folders are committed and must not be regenerated with
+  # `flutter create --overwrite`; that would clobber reviewed security files.
+  # Icon generation runs in every native job.
   #
-  # Release signing (GH-C01 / U-5): never the Android debug keystore.
-  # Tags and main decode secrets.ANDROID_UPLOAD_KEYSTORE_BASE64.
-  # PRs get a cached CI sideload key (CN=Orbits,OU=CI) so artifacts stay
-  # installable without being universally forgeable from an SDK debug key.
+  #
   # ────────────────────────────────────────────────────────────────────
+  # iOS. macOS 26 carries Xcode 26 and an iOS 26 SDK, which App Store
+  # Connect requires for uploads after 2026-04-28. This verifies device-release
+  # and simulator builds without requiring distribution signing secrets.
+  build-ios:
+    name: Build iOS (Xcode 26)
+    needs: analyze
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - name: Select Xcode 26 and verify SDK
+        run: |
+          set -euo pipefail
+          sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer
+          xcodebuild -version
+          sdk="$(xcrun --sdk iphoneos --show-sdk-version)"
+          case "$sdk" in 26.*) ;; *) echo "::error::expected iOS 26 SDK, got $sdk"; exit 1 ;; esac
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Resolve dependencies and generate Drift code
+        run: |
+          flutter pub get
+          dart run build_runner build --delete-conflicting-outputs
+
+      - name: Generate and verify iOS assets
+        run: |
+          set -euo pipefail
+          dart run flutter_launcher_icons -f flutter_launcher_icons.yaml
+          test -s ios/Runner/Assets.xcassets/AppIcon.appiconset/Icon-App-1024x1024@1x.png
+          test -s ios/Runner/PrivacyInfo.xcprivacy
+          grep -q NSFaceIDUsageDescription ios/Runner/Info.plist
+          grep -q NSLocalNetworkUsageDescription ios/Runner/Info.plist
+
+      - name: Build iOS release without signing
+        env:
+          TURN_URL: ${{ secrets.TURN_URL }}
+          RELAY_ONLY: ${{ vars.RELAY_ONLY }}
+          PEER_SERVER: ${{ vars.PEER_SERVER }}
+          PEER_HOST: ${{ vars.PEER_HOST }}
+          PEER_PATH: ${{ vars.PEER_PATH }}
+          PEER_PORT: ${{ vars.PEER_PORT }}
+          PEER_SECURE: ${{ vars.PEER_SECURE }}
+        run: |
+          flutter build ios --release --no-codesign \
+            --dart-define=TURN_URL="$TURN_URL" \
+            --dart-define=RELAY_ONLY="${RELAY_ONLY:-false}" \
+            --dart-define=PEER_SERVER="$PEER_SERVER" \
+            --dart-define=PEER_HOST="$PEER_HOST" \
+            --dart-define=PEER_PATH="${PEER_PATH:-/}" \
+            --dart-define=PEER_PORT="${PEER_PORT:--1}" \
+            --dart-define=PEER_SECURE="$PEER_SECURE" \
+            --dart-define=PEER_SECURE_SET="${PEER_SECURE:+true}"
+          test -d build/ios/iphoneos/Runner.app
+          test -f build/ios/iphoneos/Runner.app/PrivacyInfo.xcprivacy
+
+      - name: Build iOS Simulator debug app
+        run: flutter build ios --simulator --debug
+
+  # Android release signing (GH-C01 / U-5) never uses the SDK debug key.
+  # Tags/main use owner secrets; PRs use a cached CI sideload key.
   build-android:
     name: Build Android (APK)
     needs: analyze

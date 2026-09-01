@@ -7,9 +7,12 @@ import '../../ui/primitives/adaptive_page_frame.dart';
 import '../../ui/primitives/orbits_glass_app_bar.dart';
 import '../../ui/primitives/orbits_glass_button.dart';
 
-/// Complaint slot. Channel and policy text are pending counsel.
+/// Abuse-report flow required for user-generated messaging content.
 class ComplaintPage extends StatefulWidget {
-  const ComplaintPage({super.key, this.launchUri});
+  const ComplaintPage({super.key, this.peerId, this.messageId, this.launchUri});
+
+  final String? peerId;
+  final String? messageId;
 
   /// Tests can inject a no-op. Production opens [kComplaintChannelUrl].
   final Future<bool> Function(Uri uri)? launchUri;
@@ -28,10 +31,20 @@ class _ComplaintPageState extends State<ComplaintPage> {
   }
 
   Future<void> _openChannel() async {
-    final uri = Uri.parse(kComplaintChannelUrl);
-    final launch = widget.launchUri ??
+    final uri = buildComplaintUri(
+      peerId: widget.peerId,
+      messageId: widget.messageId,
+      note: _note.text,
+    );
+    final launch =
+        widget.launchUri ??
         ((u) => launchUrl(u, mode: LaunchMode.externalApplication));
-    await launch(uri);
+    final opened = await launch(uri);
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Не удалось открыть канал жалоб')),
+      );
+    }
   }
 
   @override
@@ -52,7 +65,9 @@ class _ComplaintPageState extends State<ComplaintPage> {
           padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
           children: [
             Text(
-              kLegalPendingPlaceholder,
+              'Жалоба откроется в GitHub Issues проекта. '
+              'Не вставляйте ключи, пароли или личные данные. '
+              'Код собеседника будет добавлен автоматически.',
               style: TextStyle(
                 fontFamily: tokens.fontMono,
                 fontSize: 13,
@@ -74,7 +89,7 @@ class _ComplaintPageState extends State<ComplaintPage> {
             const SizedBox(height: 16),
             OrbitsGlassButton(
               key: kComplaintOpenChannelKey,
-              label: 'Открыть внешний канал',
+              label: 'Отправить жалобу',
               icon: Icons.open_in_new,
               onPressed: _openChannel,
               variant: OrbitsGlassVariant.primary,
@@ -86,4 +101,27 @@ class _ComplaintPageState extends State<ComplaintPage> {
       ),
     );
   }
+}
+
+Uri buildComplaintUri({String? peerId, String? messageId, String note = ''}) {
+  final details = <String>[
+    '## Жалоба на нарушение',
+    '',
+    if (peerId != null && peerId.trim().isNotEmpty)
+      '- Код собеседника: `${peerId.trim()}`',
+    if (messageId != null && messageId.trim().isNotEmpty)
+      '- ID сообщения: `${messageId.trim()}`',
+    '- Платформа: Orbits',
+    '',
+    '## Описание',
+    note.trim().isEmpty ? 'Опишите нарушение.' : note.trim(),
+  ].join('\n');
+
+  final base = Uri.parse(kComplaintChannelUrl);
+  return base.replace(
+    queryParameters: <String, String>{
+      'title': '[Abuse report] Orbits',
+      'body': details,
+    },
+  );
 }

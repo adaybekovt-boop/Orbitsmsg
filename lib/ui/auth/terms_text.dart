@@ -22,7 +22,6 @@
 
 import 'package:flutter/material.dart';
 
-import '../../legal/legal_placeholders.dart';
 import '../../themes/orbits_tokens.dart';
 
 /// One unit of the policy. Use [TermsBlock.h1] for top-level section
@@ -73,7 +72,8 @@ const List<TermsBlock> kTermsRu = [
   TermsHeading('2. Термины и определения'),
   TermsBullet('Пользователь — физическое лицо, использующее Сервис.'),
   TermsBullet(
-      'Сервис / Мессенджер — приложение Orbits и связанная инфраструктура.'),
+    'Сервис / Мессенджер — приложение Orbits и связанная инфраструктура.',
+  ),
   TermsBullet(
     'Контент — любые сообщения, изображения, аудио, видео, файлы и иные '
     'данные, передаваемые Пользователями через Сервис.',
@@ -141,7 +141,8 @@ const List<TermsBlock> kTermsRu = [
   TermsBullet('Не нарушать тайну переписки других лиц.'),
   TermsBullet('Незамедлительно уведомлять Владельца о выявленных нарушениях.'),
   TermsBullet(
-      'Удалить любой Запрещённый контент, оказавшийся в его распоряжении.'),
+    'Удалить любой Запрещённый контент, оказавшийся в его распоряжении.',
+  ),
 
   TermsHeading('4. Права и обязанности Владельца'),
   TermsBullet(
@@ -201,10 +202,10 @@ const List<TermsBlock> kTermsRu = [
     'контакты. Эти данные не передаются на серверы Владельца.',
   ),
   TermsBullet(
-    'На серверах Владельца хранятся технические данные, необходимые для '
-    'установления P2P-соединения (сигналинг): Peer ID, IP-адрес во время '
-    'сессии, метаданные сетевого соединения. Содержимое сообщений на '
-    'серверах не хранится.',
+    'Для установления P2P-соединения приложение использует публичные '
+    'сторонние сервисы PeerJS и STUN. Их операторы могут видеть Peer ID, '
+    'IP-адрес и сетевые метаданные. Содержимое личных сообщений им не '
+    'передаётся.',
   ),
   TermsBullet(
     'Передача данных третьим лицам осуществляется только в случаях, '
@@ -247,23 +248,9 @@ class TermsView extends StatelessWidget {
     final tokens = OrbitsTokens.of(context);
     return ListView.builder(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
-      itemCount: blocks.length + 1,
+      itemCount: blocks.length,
       itemBuilder: (context, i) {
-        if (i == 0) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 16),
-            child: Text(
-              kLegalPendingPlaceholder,
-              style: TextStyle(
-                fontFamily: tokens.fontMono,
-                fontSize: 13,
-                height: 1.4,
-                color: tokens.danger,
-              ),
-            ),
-          );
-        }
-        final block = blocks[i - 1];
+        final block = blocks[i];
         if (block is TermsHeading) {
           return Padding(
             padding: EdgeInsets.only(top: i == 0 ? 0 : 18, bottom: 8),

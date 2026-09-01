@@ -5,6 +5,13 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  // The signing policy is implemented in Bash and is exercised by the Linux
+  // analyze job. A stock Windows host does not provide a `bash` executable.
+  if (Platform.isWindows) {
+    test('Windows signing Bash gate runs on Linux CI', () {}, skip: true);
+    return;
+  }
+
   Map<String, String> env(Map<String, String> extra) {
     final out = Map<String, String>.from(Platform.environment);
     out.remove('WINDOWS_CERT_PFX_BASE64');

@@ -25,6 +25,7 @@ import '../../core/haptics.dart';
 import '../../pages/chat_view_page.dart';
 import '../../peer/helpers.dart';
 import '../../state/local_profile_provider.dart';
+import '../../transport/discovery_secret_store.dart';
 import '../../storage/db.dart' as db;
 import '../../themes/orbits_tokens.dart';
 import '../primitives/orbits_glass_button.dart';
@@ -90,6 +91,10 @@ class _AddContactPageState extends ConsumerState<AddContactPage>
     if (pid == null) {
       _toast('QR не похож на контакт Orbits');
       return false;
+    }
+    final disco = parseContactDiscoverySecret(raw);
+    if (disco != null) {
+      discoverySecretStore.put(pid, disco);
     }
     final selfId = normalizePeerId(ref.read(currentPeerIdProvider) ?? '');
     if (pid == selfId) {

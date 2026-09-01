@@ -5,7 +5,7 @@ import '../../themes/orbits_tokens.dart';
 import '../primitives/orbits_glass_button.dart';
 import 'terms_text.dart';
 
-/// Final onboarding step: pending offer body + terms ack + 18+ stub.
+/// Final onboarding step: terms acknowledgement and age confirmation.
 class OnboardingAgreementStep extends StatelessWidget {
   const OnboardingAgreementStep({
     super.key,
@@ -35,7 +35,8 @@ class OnboardingAgreementStep extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
-    final canFinish = canCompleteOnboarding(
+    final canFinish =
+        canCompleteOnboarding(
           termsAccepted: termsAccepted,
           ageConfirmed: ageConfirmed,
         ) &&
@@ -55,8 +56,8 @@ class OnboardingAgreementStep extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         Text(
-          'Оферта ещё не прошла юридическую проверку. '
-          'Плейсхолдер ниже — не текст юриста.',
+          'Прочитайте условия и описание обработки данных перед '
+          'созданием локального профиля.',
           style: TextStyle(
             fontFamily: tokens.fontBody,
             fontSize: 13,
@@ -80,7 +81,8 @@ class OnboardingAgreementStep extends StatelessWidget {
           checked: termsAccepted,
           tokens: tokens,
           onTap: () => onToggleTerms(!termsAccepted),
-          label: 'Я ознакомился и принимаю условия Соглашения и '
+          label:
+              'Я ознакомился и принимаю условия Соглашения и '
               'Политики конфиденциальности',
         ),
         const SizedBox(height: 10),

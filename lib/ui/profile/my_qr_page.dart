@@ -15,6 +15,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../core/haptics.dart';
 import '../../peer/helpers.dart' show contactQrPayload;
+import '../../transport/discovery_secret_store.dart';
 import '../../themes/orbits_tokens.dart';
 import '../primitives/orbits_glass_button.dart';
 import '../primitives/orbits_glass_app_bar.dart';
@@ -81,7 +82,10 @@ class MyQrPage extends StatelessWidget {
                       borderRadius: BorderRadius.circular(tokens.radiusCard),
                     ),
                     child: QrImageView(
-                      data: contactQrPayload(peerId),
+                      data: contactQrPayload(
+                        peerId,
+                        discoverySecret: discoverySecretStore.getOrCreateLocal(),
+                      ),
                       version: QrVersions.auto,
                       size: 240,
                       backgroundColor: Colors.white,

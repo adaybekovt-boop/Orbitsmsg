@@ -5,13 +5,13 @@
 //   • phone  → a floating glass bottom nav bar (OrbitsGlassSurface navBar)
 //   • desktop→ a glass left sidebar + centered, max-width content panel
 //     (fixes the Windows "stretched-mobile / drifts-left" layout).
-// Icons are Phosphor (Light weight idle, Fill for the active tab). The accent
-// appears only on the active item — everything else is black/white/gray glass.
+// Navigation uses Material's bundled outline/filled pairs. Keeping these icons
+// in the Flutter SDK avoids an obsolete IconData subclass that prevented the
+// project from moving to the Xcode-26-compatible Flutter toolchain.
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:phosphor_flutter/phosphor_flutter.dart';
 
 import 'core/haptics.dart';
 import 'pages/chats_page.dart';
@@ -22,6 +22,9 @@ import 'pages/settings_page.dart';
 import 'state/calls_provider.dart';
 import 'state/drop_provider.dart';
 import 'state/messaging_notifier.dart';
+import 'transport/native_transport_host.dart'
+    if (dart.library.html) 'transport/native_transport_host_stub.dart';
+import 'transport/transport_lifecycle_scope.dart';
 import 'themes/orbits_tokens.dart';
 import 'ui/calls/call_overlay_mount.dart';
 import 'ui/peer/peer_status_pill.dart';
@@ -33,21 +36,26 @@ final activeTabProvider = StateProvider<AppTab>((ref) => AppTab.chats);
 
 enum AppTab { chats, drop, games, rooms, settings }
 
-/// One navigation destination. `iconFor` returns the Phosphor glyph at the
-/// requested weight so idle = Light, active = Fill.
+/// One navigation destination with an outline/filled icon pair.
 class _NavDest {
-  const _NavDest(this.tab, this.iconFor, this.label);
+  const _NavDest(this.tab, this.icon, this.activeIcon, this.label);
   final AppTab tab;
-  final PhosphorIconData Function(PhosphorIconsStyle) iconFor;
+  final IconData icon;
+  final IconData activeIcon;
   final String label;
 }
 
 const List<_NavDest> _destinations = [
-  _NavDest(AppTab.chats, PhosphorIcons.chatCircle, 'Чаты'),
-  _NavDest(AppTab.drop, PhosphorIcons.arrowsDownUp, 'Drop'),
-  _NavDest(AppTab.games, PhosphorIcons.gameController, 'Игры'),
-  _NavDest(AppTab.rooms, PhosphorIcons.usersThree, 'Серверы'),
-  _NavDest(AppTab.settings, PhosphorIcons.slidersHorizontal, 'Ещё'),
+  _NavDest(AppTab.chats, Icons.chat_bubble_outline, Icons.chat_bubble, 'Чаты'),
+  _NavDest(AppTab.drop, Icons.swap_vert, Icons.swap_vertical_circle, 'Drop'),
+  _NavDest(
+    AppTab.games,
+    Icons.sports_esports_outlined,
+    Icons.sports_esports,
+    'Игры',
+  ),
+  _NavDest(AppTab.rooms, Icons.groups_outlined, Icons.groups, 'Серверы'),
+  _NavDest(AppTab.settings, Icons.tune_outlined, Icons.tune, 'Ещё'),
 ];
 
 class AppShell extends ConsumerWidget {
@@ -66,6 +74,7 @@ class AppShell extends ConsumerWidget {
     ref.listen(messagingNotifierProvider, (_, __) {});
     ref.listen(callsNotifierProvider, (_, __) {});
     ref.listen(dropNotifierProvider, (_, __) {});
+    ref.listen(nativeTransportHostProvider, (_, __) {});
 
     final shellBody = Stack(
       children: [
@@ -97,15 +106,17 @@ class AppShell extends ConsumerWidget {
       // the margin transparent so it shows through. Elsewhere fill with bg.
       final onWindows =
           !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
-      return Scaffold(
+      return TransportLifecycleScope(
+        child: Scaffold(
         backgroundColor: onWindows ? Colors.transparent : null,
         body: ColoredBox(
           color: onWindows ? Colors.transparent : tokens.bg,
           child: SafeArea(
             child: Center(
               child: ConstrainedBox(
-                constraints:
-                    const BoxConstraints(maxWidth: _desktopShellMaxWidth),
+                constraints: const BoxConstraints(
+                  maxWidth: _desktopShellMaxWidth,
+                ),
                 child: Padding(
                   padding: const EdgeInsets.all(18),
                   child: Row(
@@ -118,8 +129,9 @@ class AppShell extends ConsumerWidget {
                       Expanded(
                         child: OrbitsGlassSurface(
                           role: OrbitsGlassRole.card,
-                          borderRadius:
-                              BorderRadius.circular(tokens.radiusModal),
+                          borderRadius: BorderRadius.circular(
+                            tokens.radiusModal,
+                          ),
                           child: shellBody,
                         ),
                       ),
@@ -130,12 +142,15 @@ class AppShell extends ConsumerWidget {
             ),
           ),
         ),
+      ),
       );
     }
 
-    return Scaffold(
-      body: shellBody,
-      bottomNavigationBar: _GlassBottomNav(active: active, onTap: go),
+    return TransportLifecycleScope(
+      child: Scaffold(
+        body: shellBody,
+        bottomNavigationBar: _GlassBottomNav(active: active, onTap: go),
+      ),
     );
   }
 
@@ -147,8 +162,9 @@ class AppShell extends ConsumerWidget {
     if (width < 900) return false;
     if (kIsWeb) return true;
     return switch (defaultTargetPlatform) {
-      TargetPlatform.macOS || TargetPlatform.windows || TargetPlatform.linux =>
-        true,
+      TargetPlatform.macOS ||
+      TargetPlatform.windows ||
+      TargetPlatform.linux => true,
       _ => false,
     };
   }
@@ -213,8 +229,7 @@ class _NavItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = OrbitsTokens.of(context);
     final fg = active ? t.accent : t.muted;
-    final icon = dest.iconFor(
-        active ? PhosphorIconsStyle.fill : PhosphorIconsStyle.light);
+    final icon = active ? dest.activeIcon : dest.icon;
 
     return Semantics(
       button: true,
@@ -232,7 +247,10 @@ class _NavItem extends StatelessWidget {
             children: [
               // Active items get a faint accent halo behind the glyph.
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 5,
+                ),
                 decoration: BoxDecoration(
                   color: active ? t.accentAlpha(0.14) : Colors.transparent,
                   borderRadius: BorderRadius.circular(999),
@@ -283,8 +301,7 @@ class _GlassSidebar extends StatelessWidget {
             role: OrbitsGlassRole.card,
             borderRadius: BorderRadius.circular(16),
             padding: const EdgeInsets.all(11),
-            child: Icon(PhosphorIcons.planet(PhosphorIconsStyle.fill),
-                color: t.accent, size: 24),
+            child: Icon(Icons.public, color: t.accent, size: 24),
           ),
           const SizedBox(height: 20),
           for (final d in _destinations.where((d) => d.tab != AppTab.settings))
@@ -316,8 +333,7 @@ class _SidebarItem extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = OrbitsTokens.of(context);
     final fg = active ? t.accent : t.muted;
-    final icon = dest.iconFor(
-        active ? PhosphorIconsStyle.fill : PhosphorIconsStyle.light);
+    final icon = active ? dest.activeIcon : dest.icon;
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Semantics(

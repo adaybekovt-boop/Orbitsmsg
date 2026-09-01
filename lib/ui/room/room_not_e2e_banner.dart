@@ -59,19 +59,22 @@ class RoomNotE2eBanner extends StatelessWidget {
               ),
               if (onAcknowledged != null) ...[
                 const SizedBox(height: 6),
-                CheckboxListTile(
-                  key: kRoomPlaintextAckKey,
-                  value: acknowledged,
-                  onChanged: (v) => onAcknowledged!(v ?? false),
-                  controlAffinity: ListTileControlAffinity.leading,
-                  contentPadding: EdgeInsets.zero,
-                  dense: true,
-                  title: Text(
-                    kRoomPlaintextAckLabelRu,
-                    style: TextStyle(
-                      color: tokens.text,
-                      fontSize: 12.5,
-                      fontFamily: tokens.fontBody,
+                Material(
+                  type: MaterialType.transparency,
+                  child: CheckboxListTile(
+                    key: kRoomPlaintextAckKey,
+                    value: acknowledged,
+                    onChanged: (v) => onAcknowledged!(v ?? false),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    title: Text(
+                      kRoomPlaintextAckLabelRu,
+                      style: TextStyle(
+                        color: tokens.text,
+                        fontSize: 12.5,
+                        fontFamily: tokens.fontBody,
+                      ),
                     ),
                   ),
                 ),

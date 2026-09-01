@@ -18,8 +18,10 @@ import 'package:yaml/yaml.dart';
 void main() {
   final repoRoot = Directory.current;
 
-  File file(String rel) => File('${repoRoot.path}${Platform.pathSeparator}'
-      '${rel.replaceAll('/', Platform.pathSeparator)}');
+  File file(String rel) => File(
+    '${repoRoot.path}${Platform.pathSeparator}'
+    '${rel.replaceAll('/', Platform.pathSeparator)}',
+  );
 
   String read(String rel) {
     final f = file(rel);
@@ -46,9 +48,9 @@ void main() {
   });
 
   group('toolchain pin (GH-0.6)', () {
-    test('.flutter-version, .fvmrc, CI, and pubspec agree on 3.32.x', () {
+    test('.flutter-version, .fvmrc, CI, and pubspec agree on 3.44.x', () {
       final pinned = read('.flutter-version').trim();
-      expect(pinned, '3.32.0');
+      expect(pinned, '3.44.7');
 
       final fvm = loadYaml(read('.fvmrc')) as YamlMap;
       expect(fvm['flutter'].toString(), pinned);
@@ -56,12 +58,11 @@ void main() {
       final pubspec = loadYaml(read('pubspec.yaml')) as YamlMap;
       final env = pubspec['environment'] as YamlMap;
       final flutterConstraint = env['flutter'].toString();
-      expect(flutterConstraint, contains('3.32.0'));
-      expect(flutterConstraint, contains('<3.33.0'),
-          reason: 'must reject Flutter 3.44+ (phosphor_flutter IconData break)');
+      expect(flutterConstraint, contains('3.44.7'));
+      expect(flutterConstraint, contains('<3.45.0'));
       final sdkConstraint = env['sdk'].toString();
-      expect(sdkConstraint, contains('3.8.0'));
-      expect(sdkConstraint, contains('<3.9.0'));
+      expect(sdkConstraint, contains('3.12.0'));
+      expect(sdkConstraint, contains('<3.13.0'));
 
       final buildYml = read('.github/workflows/build.yml');
       expect(buildYml, contains("FLUTTER_VERSION: '$pinned'"));
@@ -87,8 +88,11 @@ void main() {
         'web/drift_worker.js.deps',
       ]);
       expect(tracked.exitCode, 0);
-      expect(tracked.stdout.toString().trim(), isEmpty,
-          reason: 'absolute-path .deps file must not be in git');
+      expect(
+        tracked.stdout.toString().trim(),
+        isEmpty,
+        reason: 'absolute-path .deps file must not be in git',
+      );
     });
 
     test('no tracked file contains a Windows developer pub-cache path', () {
@@ -130,48 +134,64 @@ void main() {
   });
 
   group('native security configs (GH-0.1 / U-6)', () {
-    test('Android denies cleartext, backup, and ships network-security XML', () {
-      final manifest = read('android/app/src/main/AndroidManifest.xml');
-      expect(manifest, contains('android:allowBackup="false"'));
-      expect(manifest,
-          contains('android:fullBackupContent="@xml/backup_rules"'));
-      expect(
-        manifest,
-        contains(
-            'android:dataExtractionRules="@xml/data_extraction_rules"'),
-      );
-      expect(
-        manifest,
-        contains(
-            'android:networkSecurityConfig="@xml/network_security_config"'),
-      );
-      expect(manifest, contains('android:usesCleartextTraffic="false"'));
-      expect(manifest, isNot(contains('android:usesCleartextTraffic="true"')));
+    test(
+      'Android denies cleartext, backup, and ships network-security XML',
+      () {
+        final manifest = read('android/app/src/main/AndroidManifest.xml');
+        expect(manifest, contains('android:allowBackup="false"'));
+        expect(
+          manifest,
+          contains('android:fullBackupContent="@xml/backup_rules"'),
+        );
+        expect(
+          manifest,
+          contains('android:dataExtractionRules="@xml/data_extraction_rules"'),
+        );
+        expect(
+          manifest,
+          contains(
+            'android:networkSecurityConfig="@xml/network_security_config"',
+          ),
+        );
+        expect(manifest, contains('android:usesCleartextTraffic="false"'));
+        expect(
+          manifest,
+          isNot(contains('android:usesCleartextTraffic="true"')),
+        );
 
-      final nsc = read(
-          'android/app/src/main/res/xml/network_security_config.xml');
-      expect(nsc, contains('cleartextTrafficPermitted="false"'));
-      expect(nsc, contains('localhost'));
+        final nsc = read(
+          'android/app/src/main/res/xml/network_security_config.xml',
+        );
+        expect(nsc, contains('cleartextTrafficPermitted="false"'));
+        expect(nsc, contains('localhost'));
 
-      final backup = read('android/app/src/main/res/xml/backup_rules.xml');
-      expect(backup, contains('exclude domain="database"'));
+        final backup = read('android/app/src/main/res/xml/backup_rules.xml');
+        expect(backup, contains('exclude domain="database"'));
 
-      final extract =
-          read('android/app/src/main/res/xml/data_extraction_rules.xml');
-      expect(extract, contains('cloud-backup'));
-      expect(extract, contains('device-transfer'));
+        final extract = read(
+          'android/app/src/main/res/xml/data_extraction_rules.xml',
+        );
+        expect(extract, contains('cloud-backup'));
+        expect(extract, contains('device-transfer'));
 
-      final png = file('android/app/src/main/res/mipmap-hdpi/ic_launcher.png');
-      expect(png.existsSync(), isTrue);
-      final hash = sha256.convert(png.readAsBytesSync()).toString();
-      final defaults = file('tool/branding/flutter_default_android_hdpi.sha256')
-          .readAsLinesSync()
-          .map((l) => l.trim())
-          .where((l) => l.isNotEmpty && !l.startsWith('#'))
-          .toSet();
-      expect(defaults.contains(hash), isFalse,
-          reason: 'Android hdpi launcher is the flutter-create default logo');
-    });
+        final png = file(
+          'android/app/src/main/res/mipmap-hdpi/ic_launcher.png',
+        );
+        expect(png.existsSync(), isTrue);
+        final hash = sha256.convert(png.readAsBytesSync()).toString();
+        final defaults =
+            file('tool/branding/flutter_default_android_hdpi.sha256')
+                .readAsLinesSync()
+                .map((l) => l.trim())
+                .where((l) => l.isNotEmpty && !l.startsWith('#'))
+                .toSet();
+        expect(
+          defaults.contains(hash),
+          isFalse,
+          reason: 'Android hdpi launcher is the flutter-create default logo',
+        );
+      },
+    );
 
     test('iOS ATS is fail-closed and entitlements exist', () {
       final plist = read('ios/Runner/Info.plist');
@@ -213,10 +233,7 @@ void main() {
 
   group('CI supply-chain hygiene (U-3 / GH-0.7)', () {
     final shaPin = RegExp(r'^[0-9a-f]{40}$');
-    final usesLine = RegExp(
-      r'^\s*-?\s*uses:\s+(\S+)',
-      multiLine: true,
-    );
+    final usesLine = RegExp(r'^\s*-?\s*uses:\s+(\S+)', multiLine: true);
 
     Iterable<File> workflowFiles() =>
         Directory('${repoRoot.path}/.github/workflows')
@@ -242,25 +259,31 @@ void main() {
           }
         }
       }
-      expect(unpinned, isEmpty,
-          reason: 'mutable action tags are supply-chain risk (U-3): $unpinned');
+      expect(
+        unpinned,
+        isEmpty,
+        reason: 'mutable action tags are supply-chain risk (U-3): $unpinned',
+      );
     });
 
     test('workflows declare least-privilege permissions', () {
       for (final f in workflowFiles()) {
         final text = f.readAsStringSync();
-        expect(text, contains('\npermissions:'),
-            reason: '${f.path} must set permissions:');
+        expect(
+          text,
+          contains('\npermissions:'),
+          reason: '${f.path} must set permissions:',
+        );
         expect(text, contains('contents: read'));
       }
     });
 
     test('analyze is not run with --no-fatal-warnings', () {
       final build = read('.github/workflows/build.yml');
-      final analyzeRuns = RegExp(r'^\s+run:\s+flutter analyze.*$', multiLine: true)
-          .allMatches(build)
-          .map((m) => m.group(0)!)
-          .toList();
+      final analyzeRuns = RegExp(
+        r'^\s+run:\s+flutter analyze.*$',
+        multiLine: true,
+      ).allMatches(build).map((m) => m.group(0)!).toList();
       expect(analyzeRuns, isNotEmpty);
       for (final line in analyzeRuns) {
         expect(line, isNot(contains('--no-fatal-warnings')));
@@ -270,7 +293,9 @@ void main() {
     test('Dependabot watches Actions and pub', () {
       final dep = loadYaml(read('.github/dependabot.yml')) as YamlMap;
       final updates = dep['updates'] as YamlList;
-      final ecosystems = updates.map((e) => (e as YamlMap)['package-ecosystem']).toSet();
+      final ecosystems = updates
+          .map((e) => (e as YamlMap)['package-ecosystem'])
+          .toSet();
       expect(ecosystems, contains('github-actions'));
       expect(ecosystems, contains('pub'));
     });
@@ -280,7 +305,9 @@ void main() {
       expect(build, contains('runs-on: windows-2022'));
       expect(
         build,
-        isNot(contains(RegExp(r'build-windows:[\s\S]*?runs-on: windows-latest'))),
+        isNot(
+          contains(RegExp(r'build-windows:[\s\S]*?runs-on: windows-latest')),
+        ),
       );
     });
 
@@ -299,7 +326,8 @@ void main() {
           expect(
             pr.containsKey('branches'),
             isFalse,
-            reason: '$rel pull_request.branches skips PRs stacked on a phase branch',
+            reason:
+                '$rel pull_request.branches skips PRs stacked on a phase branch',
           );
         }
       }

@@ -56,13 +56,13 @@ void main() {
       hold.execute('BEGIN EXCLUSIVE;');
       try {
         final r = await ensureDatabaseHealthy(directory: tmp.path);
-        expect(r.status, isNot(DbHealthStatus.quarantined),
-            reason: 'lock/busy must not move a healthy file');
-        expect(f.existsSync(), isTrue);
         expect(
           r.status,
-          anyOf(DbHealthStatus.ok, DbHealthStatus.unavailable),
+          isNot(DbHealthStatus.quarantined),
+          reason: 'lock/busy must not move a healthy file',
         );
+        expect(f.existsSync(), isTrue);
+        expect(r.status, anyOf(DbHealthStatus.ok, DbHealthStatus.unavailable));
       } finally {
         try {
           hold.execute('COMMIT;');
@@ -72,14 +72,22 @@ void main() {
     });
 
     test('permission / I/O errors do not quarantine', () async {
-      expect(isTransientDbHealthError('SqliteException: database is locked'),
-          isTrue);
-      expect(isTransientDbHealthError('SqliteException(5): database is busy'),
-          isTrue);
-      expect(isTransientDbHealthError('error 8: attempt to write a readonly'),
-          isTrue);
-      expect(isTransientDbHealthError('PathAccessException: Permission denied'),
-          isTrue);
+      expect(
+        isTransientDbHealthError('SqliteException: database is locked'),
+        isTrue,
+      );
+      expect(
+        isTransientDbHealthError('SqliteException(5): database is busy'),
+        isTrue,
+      );
+      expect(
+        isTransientDbHealthError('error 8: attempt to write a readonly'),
+        isTrue,
+      );
+      expect(
+        isTransientDbHealthError('PathAccessException: Permission denied'),
+        isTrue,
+      );
       expect(isTransientDbHealthError('Input/output error'), isTrue);
       expect(isConfirmedDbCorruption('file is not a database'), isTrue);
       expect(
@@ -95,6 +103,14 @@ void main() {
       final raw = sqlite3.sqlite3.open(f.path);
       raw.execute('CREATE TABLE t (x);');
       raw.dispose();
+
+      // Windows has no chmod utility or POSIX permission bits. The transient
+      // error classification above is still covered on every platform; the
+      // real unreadable-file integration check runs on Linux/macOS CI.
+      if (Platform.isWindows) {
+        return;
+      }
+
       await Process.run('chmod', ['000', f.path]);
       try {
         final r = await ensureDatabaseHealthy(directory: tmp.path);
@@ -109,16 +125,22 @@ void main() {
       // Real SQLite header + garbage body — opens as SQLite but fails
       // integrity checks / reads.
       final f = File('${tmp.path}/orbits.sqlite');
-      final bytes = <int>[ ...utf8Header, ...List<int>.filled(4096, 0xFF) ];
+      final bytes = <int>[...utf8Header, ...List<int>.filled(4096, 0xFF)];
       f.writeAsBytesSync(bytes);
 
       final r = await ensureDatabaseHealthy(directory: tmp.path);
       expect(r.status, DbHealthStatus.quarantined);
       expect(r.quarantinePath, isNotNull);
-      expect(File(r.quarantinePath!).existsSync(), isTrue,
-          reason: 'quarantined file preserved for forensics');
-      expect(f.existsSync(), isFalse,
-          reason: 'original path freed so Drift can recreate');
+      expect(
+        File(r.quarantinePath!).existsSync(),
+        isTrue,
+        reason: 'quarantined file preserved for forensics',
+      );
+      expect(
+        f.existsSync(),
+        isFalse,
+        reason: 'original path freed so Drift can recreate',
+      );
       expect(lastDatabaseHealthCheck?.status, DbHealthStatus.quarantined);
     });
   });
@@ -136,8 +158,7 @@ void main() {
       await closeOrbitsDatabase();
     });
 
-    test('old messages deleted, recent kept, VACUUM does not throw',
-        () async {
+    test('old messages deleted, recent kept, VACUUM does not throw', () async {
       final nowMs = DateTime.now().millisecondsSinceEpoch;
       await db.saveMessage({
         'id': 'm-old',
@@ -158,10 +179,16 @@ void main() {
 
       await db.runRetentionSweep(retention: const Duration(days: 90));
 
-      expect(await db.getMessageById('m-old'), isNull,
-          reason: 'past-retention messages must be pruned');
-      expect(await db.getMessageById('m-new'), isNotNull,
-          reason: 'recent history must survive');
+      expect(
+        await db.getMessageById('m-old'),
+        isNull,
+        reason: 'past-retention messages must be pruned',
+      );
+      expect(
+        await db.getMessageById('m-new'),
+        isNotNull,
+        reason: 'recent history must survive',
+      );
     });
   });
 
@@ -197,7 +224,8 @@ void main() {
           .toList();
       expect(bundles.length, kMaxCachedBundles);
       // Oldest evicted: storedAt=1000000 row gone; newest survives.
-      final storedAts = bundles.map((b) => b['storedAt'] as int).toList()..sort();
+      final storedAts = bundles.map((b) => b['storedAt'] as int).toList()
+        ..sort();
       expect(storedAts.first, 1_000_000 + 20);
     });
 

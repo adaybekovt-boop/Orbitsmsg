@@ -39,6 +39,7 @@ orbit.zip
 .fvm/flutter_sdk
 .fvm/versions
 .fvm/release
+.toolchains/
 
 # IDE
 .idea/
@@ -73,3 +74,6 @@ dist/
 
 # Claude Code worktrees / local agent scratch
 .claude/
+
+# Holepunch harness
+tool/connectivity_harness/node_modules/

@@ -21,6 +21,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/identity_key.dart' as identity_key;
 import '../../core/peer_pins.dart' as peer_pins;
+import '../../pages/settings/complaint_page.dart';
 import '../../state/chat_list_provider.dart';
 import '../../storage/db.dart' as db;
 import '../../state/peers_provider.dart';
@@ -103,9 +104,9 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
       ..clearSnackBars()
       ..showSnackBar(
         SnackBar(
-          content: Text(next.isEmpty
-              ? 'Локальное имя сброшено'
-              : 'Имя сохранено: $next'),
+          content: Text(
+            next.isEmpty ? 'Локальное имя сброшено' : 'Имя сохранено: $next',
+          ),
           duration: const Duration(seconds: 2),
         ),
       );
@@ -114,16 +115,18 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
   Future<void> _copyFingerprints() async {
     final mine = _localFp ?? '';
     final theirs = _remoteFp ?? '';
-    await Clipboard.setData(ClipboardData(
-      text: 'Мой код:\n$mine\n\nКод собеседника:\n$theirs',
-    ));
+    await Clipboard.setData(
+      ClipboardData(text: 'Мой код:\n$mine\n\nКод собеседника:\n$theirs'),
+    );
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
-      ..showSnackBar(const SnackBar(
-        content: Text('Код скопирован'),
-        duration: Duration(seconds: 2),
-      ));
+      ..showSnackBar(
+        const SnackBar(
+          content: Text('Код скопирован'),
+          duration: Duration(seconds: 2),
+        ),
+      );
   }
 
   Future<void> _handleClearHistory() async {
@@ -132,7 +135,8 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
     final ok = await showOrbitsConfirm(
       context: context,
       title: 'Очистить историю?',
-      message: 'Все сообщения в этом чате будут удалены только на этом '
+      message:
+          'Все сообщения в этом чате будут удалены только на этом '
           'устройстве. Собеседник сохранит свою копию.',
       confirmLabel: 'Удалить',
       confirmIcon: Icons.delete_outline,
@@ -175,7 +179,8 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
     final headerName = customName.isNotEmpty
         ? customName
         : (displayName.isNotEmpty ? displayName : widget.peerId);
-    final isBlocked = peer['blocked'] == true ||
+    final isBlocked =
+        peer['blocked'] == true ||
         (peer['blocked'] is num && (peer['blocked'] as num).toInt() == 1);
     final trust = _decodeTrust(peer['trustLevel']);
 
@@ -356,7 +361,7 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
                 subtitle: Text(
                   isBlocked
                       ? 'Сообщения от этого собеседника не будут '
-                          'приниматься и отправляться.'
+                            'приниматься и отправляться.'
                       : 'Принимать входящие и отправлять сообщения.',
                   style: TextStyle(
                     fontSize: 12,
@@ -374,6 +379,20 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
             const SizedBox(height: 20),
 
             // ── Destructive: clear history ──────────────────────────
+            OrbitsGlassButton(
+              label: 'Пожаловаться на собеседника',
+              icon: Icons.report_outlined,
+              variant: OrbitsGlassVariant.subtle,
+              expand: true,
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => ComplaintPage(peerId: widget.peerId),
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 20),
+
             OrbitsGlassButton(
               label: _clearing ? 'Удаление...' : 'Очистить историю',
               icon: Icons.delete_outline,

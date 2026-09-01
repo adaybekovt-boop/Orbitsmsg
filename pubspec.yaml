@@ -4,12 +4,11 @@ publish_to: 'none'
 version: 9.0.7+907
 
 environment:
-  # Pinned to the Flutter 3.32.x / Dart 3.8.x line declared in
-  # `.flutter-version` and `.fvmrc`. Fresh Flutter (3.44+) rejects
-  # `phosphor_flutter`'s `IconData` subclass and breaks `flutter build web`.
-  # CI must use this same SDK — see `.github/workflows/build.yml`.
-  sdk: ">=3.8.0 <3.9.0"
-  flutter: ">=3.32.0 <3.33.0"
+  # Flutter 3.44 is the first project-pinned line validated against the 2026
+  # App Store requirement (Xcode 26 / iOS 26 SDK). CI, FVM and this manifest
+  # intentionally agree on the same patch release.
+  sdk: ">=3.12.0 <3.13.0"
+  flutter: ">=3.44.7 <3.45.0"
 
 dependencies:
   flutter:
@@ -114,9 +113,6 @@ dependencies:
   flutter_animate: ^4.5.0
   animations: ^2.0.11
 
-  # Apple-thin icon set (Light weight default, Fill for active/selected).
-  phosphor_flutter: ^2.1.0
-
   # Windows-only: real Mica/acrylic at the OS window level so the in-app
   # fake-glass panels rest on a true translucent backdrop. No-op / guarded
   # off-Windows; the Dart call is gated by platform in main.dart.
@@ -160,6 +156,16 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - tool/connectivity_harness/BUNDLE.manifest
+    - tool/connectivity_harness/src/worklet.js
+    - tool/connectivity_harness/src/mux.js
+    - tool/connectivity_harness/src/discovery.js
+    - tool/connectivity_harness/src/loopback.js
+    - tool/connectivity_harness/src/ipc.js
+    - tool/connectivity_harness/src/swarm.js
+    - tool/connectivity_harness/src/stand.js
+    - tool/connectivity_harness/src/corestore_journal.js
 
   fonts:
     - family: Manrope

@@ -93,5 +93,15 @@ void main() {
       const id = 'ORBIT-0F9D2A';
       expect(parseContactQrPayload(contactQrPayload(id)), id);
     });
+
+    test('optional discovery secret is not the peer id', () {
+      const id = 'ORBIT-AAAAAAAAAAAAAAAA';
+      final secret = List<int>.generate(32, (i) => i + 1);
+      final qr = contactQrPayload(id, discoverySecret: secret);
+      expect(parseContactQrPayload(qr), id);
+      expect(parseContactDiscoverySecret(qr), secret);
+      expect(qr.contains(id.substring(6)), isTrue);
+      expect(parseContactDiscoverySecret(contactQrPayload(id)), isNull);
+    });
   });
 }

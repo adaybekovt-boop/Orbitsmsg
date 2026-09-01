@@ -107,6 +107,23 @@ BigInt _bytesToBigInt(List<int> bytes) {
   return v;
 }
 
+/// IEEE P1363 R||S signature. Matches [signBytes] on the identity key.
+Uint8List signP256Ecdsa(EcKeyPairData pair, List<int> data) {
+  final priv = pc.ECPrivateKey(_bytesToBigInt(pair.d), _p256);
+  final signer = pc.ECDSASigner(pc.SHA256Digest())
+    ..init(true, pc.ParametersWithRandom(pc.PrivateKeyParameter(priv), _seededRandom()));
+  final sig = signer.generateSignature(Uint8List.fromList(data)) as pc.ECSignature;
+  final out = Uint8List(64);
+  out.setAll(0, _bigIntToBytes(sig.r, 32));
+  out.setAll(32, _bigIntToBytes(sig.s, 32));
+  return out;
+}
+
+Future<EcKeyPairData> generateP256EcdsaKey() async {
+  final pair = await const PointyCastleP256Ecdh().newKeyPair();
+  return pair as EcKeyPairData;
+}
+
 Uint8List _bigIntToBytes(BigInt value, int length) {
   final out = Uint8List(length);
   var n = value;

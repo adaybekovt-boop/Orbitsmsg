@@ -11,7 +11,6 @@ import '../../ui/primitives/orbits_glass_list_tile.dart';
 import '../../ui/primitives/orbits_glass_app_bar.dart';
 import 'complaint_page.dart';
 import 'diagnostics_page.dart';
-import 'legal_offer_page.dart';
 import 'mic_page.dart';
 import 'network_page.dart';
 import 'power_saver_page.dart';
@@ -78,15 +77,9 @@ class AdvancedPage extends StatelessWidget {
             ),
             const _AdvancedRow(
               icon: Icons.gavel,
-              title: 'Соглашение (черновик)',
-              subtitle: 'Непроверенный текст — не оферта юриста',
+              title: 'Соглашение и конфиденциальность',
+              subtitle: 'Условия и обработка данных',
               page: TermsPage(),
-            ),
-            const _AdvancedRow(
-              icon: Icons.article_outlined,
-              title: 'Оферта',
-              subtitle: '[TEXT PENDING LEGAL REVIEW]',
-              page: LegalOfferPage(),
             ),
             const _AdvancedRow(
               icon: Icons.report_gmailerrorred_outlined,
@@ -120,9 +113,9 @@ class _AdvancedRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: OrbitsGlassListTile(
-        onTap: () => Navigator.of(context).push(
-          MaterialPageRoute<void>(builder: (_) => page),
-        ),
+        onTap: () => Navigator.of(
+          context,
+        ).push(MaterialPageRoute<void>(builder: (_) => page)),
         leading: Container(
           width: 36,
           height: 36,

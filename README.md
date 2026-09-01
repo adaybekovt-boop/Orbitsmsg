@@ -12,6 +12,8 @@ GitHub Releases. Theme fonts are bundled — the app does not fetch Google Fonts
 at runtime.
 
 See [docs/rooms.md](docs/rooms.md) and [docs/privacy.md](docs/privacy.md).
+The Holepunch / Hyperswarm move is planned, not shipped:
+[docs/migration/](docs/migration/).
 
 ## Features
 

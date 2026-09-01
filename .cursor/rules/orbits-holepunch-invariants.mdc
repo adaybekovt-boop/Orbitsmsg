@@ -1,0 +1,19 @@
+---
+description: Orbits Holepunch migration invariants — do not collapse layers
+alwaysApply: true
+---
+
+# Orbits Holepunch invariants
+
+Phase 0 is locked in `docs/migration/`. Default transport is still PeerJS.
+
+- Identity (`identity-signing-v1`, X3DH, Double Ratchet) is not the Hyperswarm Noise key.
+- Hypercore stores encrypted envelopes only — never plaintext, KEK, ratchet scalars, or discovery secrets.
+- Drift is a local read-model after decrypt. Do not make it the sync source of truth.
+- Discovery topic is `HASH("orbits-contact-discovery-v1" || sharedSecret)`. Never `HASH(peerId)`.
+- Block list runs before decrypt and before Drift persist.
+- Rooms stay host-plaintext. Do not flip `kRoomsApplicationE2eImplemented` or add `room_crypto.dart`.
+- `HyperswarmRollout` defaults to `off`. Do not wire Hyperswarm into `ConnectionsNotifier` until Phase 4.
+- Production Bare must not fetch remote executable JS.
+- Do not run device / NAT / Kazakhstan hardware matrices unless the user is free and asks.
+- Large files go to Bare as a path/descriptor, not as a Dart `Uint8List` over IPC.

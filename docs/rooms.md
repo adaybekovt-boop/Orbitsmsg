@@ -76,3 +76,6 @@ stays `false`.
 - 1:1 wire path: `lib/core/double_ratchet.dart`, `lib/core/wire_session.dart`
 - Room relay: `lib/peer/room_manager.dart`, `lib/state/connections_notifier.dart`
   (`sendRoomPacket`)
+- Holepunch migration: [docs/migration/README.md](migration/README.md).
+  Rooms stay host-plaintext through Phase 11. Do not call rooms E2E until
+  Phase 13 and an independent review.

@@ -1,0 +1,20 @@
+{
+  "name": "orbits-connectivity-harness",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Phase 1 headless Bare/Hyperswarm connectivity harness. No UI, Drift, Hypercore, or rooms.",
+  "type": "commonjs",
+  "main": "src/worklet.js",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "start": "node src/worklet.js",
+    "stand": "node src/stand.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "hyperdht": "^6.20.0",
+    "hyperswarm": "^4.11.0"
+  }
+}
