@@ -310,7 +310,11 @@ void main() {
       TransportChannel.message,
       utf8.encode('v2:aaa:bbb:ccc'),
     );
-    await Future<void>.delayed(const Duration(milliseconds: 30));
+    final dropDeadline = DateTime.now().add(const Duration(seconds: 3));
+    while (DateTime.now().isBefore(dropDeadline) &&
+        !dropped.whereType<Map>().any((m) => m['type'] == 'file-start')) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
     expect(
       dropped.whereType<Map>().any((m) => m['type'] == 'file-start'),
       isTrue,
@@ -327,9 +331,9 @@ void main() {
     final (a, b, _) = await linked();
     final dropped = <Object>[];
     b.onDrop = (peer, packet) => dropped.add(packet);
-    final src = File(
-      '${Directory.systemTemp.path}${Platform.pathSeparator}native-path.bin',
-    );
+    final dir = await Directory.systemTemp.createTemp('orbits-path-');
+    addTearDown(() => dir.delete(recursive: true));
+    final src = File('${dir.path}${Platform.pathSeparator}native-path.bin');
     await src.writeAsBytes(List<int>.generate(80 * 1024, (i) => i % 251));
     expect(
       await a.sendFileFromPath(
@@ -342,7 +346,11 @@ void main() {
       ),
       isTrue,
     );
-    await Future<void>.delayed(const Duration(milliseconds: 80));
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    while (DateTime.now().isBefore(deadline) &&
+        !dropped.whereType<Map>().any((m) => m['type'] == 'harness-file-received')) {
+      await Future<void>.delayed(const Duration(milliseconds: 15));
+    }
     expect(
       dropped.whereType<Map>().any((m) => m['type'] == 'harness-file-start'),
       isTrue,
