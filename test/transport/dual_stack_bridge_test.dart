@@ -297,6 +297,44 @@ void main() {
     );
   });
 
+  test('native sendFileFromPath streams from a path, not bytes', () async {
+    final (a, b, _) = await linked();
+    final dropped = <Object>[];
+    b.onDrop = (peer, packet) => dropped.add(packet);
+    final src = File(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}native-path.bin',
+    );
+    await src.writeAsBytes(List<int>.generate(80 * 1024, (i) => i % 251));
+    expect(
+      await a.sendFileFromPath(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        TransportFileDescriptor(
+          path: src.path,
+          sizeBytes: src.lengthSync(),
+          fileName: 'native-path.bin',
+        ),
+      ),
+      isTrue,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect(
+      dropped.whereType<Map>().any((m) => m['type'] == 'harness-file-start'),
+      isTrue,
+    );
+    expect(
+      dropped.whereType<Map>().any((m) => m['type'] == 'harness-file-received'),
+      isTrue,
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('transport.sendFile'),
+    );
+    expect(
+      File('lib/state/connections_notifier.dart').readAsStringSync(),
+      contains('sendFileFromPath'),
+    );
+  });
+
   test('device revoke is journaled and drops that writer from fan-out', () async {
     setHyperswarmRollout(HyperswarmRollout.internal);
     final pair = loopbackPair();

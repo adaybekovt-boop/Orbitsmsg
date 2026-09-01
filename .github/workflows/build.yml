@@ -140,6 +140,9 @@ jobs:
           print("bare vendor hashes pinned for", ", ".join(slots))
           PY
 
+      - name: Pin in-tree SBOM against worklet and Bare hashes
+        run: python3 tool/sbom/generate.py --check
+
       - name: Transport plugin lifecycle
         working-directory: packages/orbits_transport
         run: |

@@ -1,6 +1,7 @@
 // Content-addressed chunked attachment. Per-file key wraps bytes;
 // the mailbox/journal only store ciphertext + hashes.
 
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show sha256;
@@ -62,6 +63,42 @@ class ResumableAttachment {
       );
     }
     return out;
+  }
+
+  /// Stream plaintext from disk (or any source) without requiring a single
+  /// in-memory `Uint8List` of the whole file.
+  static Future<List<AttachmentChunk>> chunkFromByteStream(
+    Stream<List<int>> incoming,
+    List<int> fileKey,
+  ) async {
+    final out = <AttachmentChunk>[];
+    final pending = BytesBuilder(copy: false);
+    var offset = 0;
+    await for (final piece in incoming) {
+      pending.add(piece);
+      while (pending.length >= kAttachmentChunkSize) {
+        final buf = pending.takeBytes();
+        final slice = buf.sublist(0, kAttachmentChunkSize);
+        pending.add(buf.sublist(kAttachmentChunkSize));
+        out.add(_oneChunk(offset, slice, fileKey));
+        offset += slice.length;
+      }
+    }
+    final tail = pending.takeBytes();
+    if (tail.isNotEmpty) {
+      out.add(_oneChunk(offset, tail, fileKey));
+    }
+    return out;
+  }
+
+  static AttachmentChunk _oneChunk(int offset, List<int> slice, List<int> fileKey) {
+    final ct = _xor(slice, fileKey);
+    return AttachmentChunk(
+      index: offset ~/ kAttachmentChunkSize,
+      offset: offset,
+      ciphertext: Uint8List.fromList(ct),
+      hash: sha256.convert(ct).toString(),
+    );
   }
 
   static Uint8List decrypt(List<AttachmentChunk> chunks, List<int> fileKey) {

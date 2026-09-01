@@ -298,6 +298,21 @@ class DualStackBridge {
     return false;
   }
 
+  /// Large files ride a path/descriptor into Bare. Never a Dart byte array
+  /// over IPC. Control-plane Drop packets still use [sendDrop].
+  Future<bool> sendFileFromPath(
+    String peerId,
+    TransportFileDescriptor file,
+  ) async {
+    final norm = normalizePeerId(peerId);
+    if (isBlocked(norm) || !isNativeConnected(norm)) return false;
+    if (file.path.isEmpty) {
+      throw StateError('sendFileFromPath needs a path');
+    }
+    await transport.sendFile(norm, file);
+    return true;
+  }
+
   void _appendEnvelope(String peerId, List<int> encrypted) {
     final id =
         '${DateTime.now().millisecondsSinceEpoch}-$peerId-${encrypted.length}';

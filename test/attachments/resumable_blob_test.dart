@@ -88,4 +88,22 @@ void main() {
     expect(resumed.isComplete, isTrue);
     expect(ResumableAttachment.decrypt(resumed.chunks, key), plain);
   }, timeout: const Timeout(Duration(minutes: 2)));
+
+  test('chunkFromByteStream matches chunk() without a single plaintext buffer',
+      () async {
+    final key = List<int>.generate(32, (i) => i + 7);
+    final plain = List<int>.generate(70 * 1024, (i) => i % 251);
+    final pieces = <List<int>>[];
+    for (var i = 0; i < plain.length; i += 8000) {
+      final end = i + 8000 > plain.length ? plain.length : i + 8000;
+      pieces.add(plain.sublist(i, end));
+    }
+    final streamed = await ResumableAttachment.chunkFromByteStream(
+      Stream<List<int>>.fromIterable(pieces),
+      key,
+    );
+    final bulk = ResumableAttachment.chunk(plain, key);
+    expect(streamed.length, bulk.length);
+    expect(ResumableAttachment.decrypt(streamed, key), plain);
+  });
 }

@@ -353,6 +353,18 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     return conn.send(packet);
   }
 
+  /// Native large-file path. PeerJS Drop still uses [sendDrop] with bytes.
+  Future<bool> sendFileFromPath(
+    String remoteId,
+    TransportFileDescriptor file,
+  ) async {
+    final dual = _dual;
+    if (dual != null && dual.canUseNative(remoteId)) {
+      return dual.sendFileFromPath(remoteId, file);
+    }
+    return false;
+  }
+
   /// Send a plaintext room-protocol control [packet] on the reliable channel.
   /// Like [sendDrop] it bypasses the per-message ratchet by design: room
   /// traffic is DTLS-protected in transit and must NOT go through the wire

@@ -37,6 +37,7 @@ void main() {
       'tool/connectivity_harness/BARE_MODULES.manifest',
       'tool/bare/BARE.manifest',
       'tool/bare/addons/CORESTORE.manifest',
+      'tool/sbom/ORBITS.sbom.json',
     ]) {
       expect(File(rel).existsSync(), isTrue, reason: '$rel missing');
     }
