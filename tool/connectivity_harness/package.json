@@ -6,7 +6,7 @@
   "type": "commonjs",
   "main": "src/worklet.js",
   "scripts": {
-    "test": "node --test test/*.test.js",
+    "test": "node --test --test-force-exit test/*.test.js",
     "start": "node src/worklet.js",
     "stand": "node src/stand.js"
   },

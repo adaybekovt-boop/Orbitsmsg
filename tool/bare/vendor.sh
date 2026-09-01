@@ -36,7 +36,9 @@ print(f"fetch {url}", flush=True)
 urllib.request.urlretrieve(url, tgz)
 digest = hashlib.sha256(tgz.read_bytes()).hexdigest()
 expected = asset.get("sha256")
-if expected and digest != expected:
+if not expected:
+    raise SystemExit(f"no sha256 pin for {slot} in BARE.manifest")
+if digest != expected:
     raise SystemExit(f"sha256 mismatch for {slot}: {digest} != {expected}")
 print(f"sha256 {digest}", flush=True)
 with tarfile.open(tgz, "r:gz") as tar:

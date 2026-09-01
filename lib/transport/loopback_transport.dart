@@ -150,45 +150,59 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
 
   @override
   Future<void> sendFile(String peerId, TransportFileDescriptor file) async {
-    final bytes = await File(file.path).readAsBytes();
-    if (bytes.length != file.sizeBytes && file.sizeBytes > 0) {
-      // size is advisory; stream whatever is on disk
+    if (file.path.isEmpty) {
+      throw StateError('sendFile needs a path');
     }
-    final digest = sha256.convert(bytes).toString();
-    final id = digest.substring(0, 16);
-    await send(
-      peerId,
-      TransportChannel.attachment,
-      jsonPayload({
-        'type': 'harness-file-start',
-        'id': id,
-        'name': file.fileName ?? File(file.path).uri.pathSegments.last,
-        'size': bytes.length,
-        'sha256': digest,
-        'mime': file.mime,
-      }),
-    );
-    for (var offset = 0; offset < bytes.length; offset += kFileChunkSize) {
-      final end = offset + kFileChunkSize > bytes.length
-          ? bytes.length
-          : offset + kFileChunkSize;
-      final chunk = bytes.sublist(offset, end);
+    final onDisk = File(file.path);
+    final digest = (await sha256.bind(onDisk.openRead()).first).toString();
+    final raf = await onDisk.open();
+    try {
+      final size = await raf.length();
+      final resumeOffset = file.resumeOffset;
+      if (resumeOffset < 0 || resumeOffset > size) {
+        throw StateError('sendFile resumeOffset out of range');
+      }
+      final id = digest.substring(0, 16);
       await send(
         peerId,
         TransportChannel.attachment,
         jsonPayload({
-          'type': 'harness-file-chunk',
+          'type': 'harness-file-start',
           'id': id,
-          'offset': offset,
-          'b64': base64Encode(chunk),
+          'name': file.fileName ?? File(file.path).uri.pathSegments.last,
+          'size': size,
+          'sha256': digest,
+          'mime': file.mime,
         }),
       );
+      var offset = resumeOffset;
+      final chunk = Uint8List(kFileChunkSize);
+      while (offset < size) {
+        await raf.setPosition(offset);
+        final remaining = size - offset;
+        final want = remaining < kFileChunkSize ? remaining : kFileChunkSize;
+        final n = await raf.readInto(chunk, 0, want);
+        if (n <= 0) break;
+        await send(
+          peerId,
+          TransportChannel.attachment,
+          jsonPayload({
+            'type': 'harness-file-chunk',
+            'id': id,
+            'offset': offset,
+            'b64': base64Encode(chunk.sublist(0, n)),
+          }),
+        );
+        offset += n;
+      }
+      await send(
+        peerId,
+        TransportChannel.attachment,
+        jsonPayload({'type': 'harness-file-end', 'id': id}),
+      );
+    } finally {
+      await raf.close();
     }
-    await send(
-      peerId,
-      TransportChannel.attachment,
-      jsonPayload({'type': 'harness-file-end', 'id': id}),
-    );
   }
 
   @override

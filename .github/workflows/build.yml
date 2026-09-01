@@ -81,7 +81,9 @@ jobs:
 
       - name: Connectivity harness (loopback, no hardware)
         working-directory: tool/connectivity_harness
-        run: node --test test/*.test.js
+        run: |
+          npm ci --omit=dev --no-fund --no-audit
+          node --test --test-force-exit test/*.test.js
 
       - name: Local mailbox, fleet, and opaque wake (not public)
         run: |
@@ -110,6 +112,32 @@ jobs:
               raise SystemExit(f"package.json hash {pkg_digest} != pinned {pkg_pin}")
           print(f"worklet.js sha256={digest}")
           print(f"package.json sha256={pkg_digest}")
+          PY
+
+      - name: Pin Bare vendor tarball hashes (Dart never fetches)
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path("tool/bare/BARE.manifest").read_text())
+          if manifest.get("remoteFetch") is not False:
+              raise SystemExit("BARE.manifest must set remoteFetch=false")
+          if manifest.get("downloadUrl") is not None or manifest.get("bundleUrl") is not None:
+              raise SystemExit("BARE.manifest downloadUrl/bundleUrl must stay null")
+          if manifest.get("shipped") is not False:
+              raise SystemExit("BARE.manifest shipped must stay false until every OS slot is in the app bundle")
+          slots = [
+              "linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64",
+              "windows-x64", "android-arm64", "ios-arm64",
+          ]
+          assets = (manifest.get("vendor") or {}).get("assets") or {}
+          for slot in slots:
+              asset = assets.get(slot) or {}
+              digest = asset.get("sha256")
+              if not isinstance(digest, str) or len(digest) != 64:
+                  raise SystemExit(f"missing sha256 pin for {slot}")
+          print("bare vendor hashes pinned for", ", ".join(slots))
           PY
 
       - name: Transport plugin lifecycle

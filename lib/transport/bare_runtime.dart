@@ -143,3 +143,18 @@ bool bareManifestHasOsSlots(Map<String, Object?> manifest) {
   }
   return true;
 }
+
+/// Every vendor tarball must have a sha256 pin. Dart still never fetches.
+bool bareManifestPinsAllVendorHashes(Map<String, Object?> manifest) {
+  final vendor = manifest['vendor'];
+  if (vendor is! Map) return false;
+  final assets = vendor['assets'];
+  if (assets is! Map) return false;
+  for (final key in kBareOsSlots.keys) {
+    final asset = assets[key];
+    if (asset is! Map) return false;
+    final hash = asset['sha256'];
+    if (hash is! String || hash.length != 64) return false;
+  }
+  return true;
+}

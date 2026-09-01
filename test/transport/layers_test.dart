@@ -46,11 +46,20 @@ void main() {
       contains('"bare": "bare-fs"'),
     );
     final worklet = File('tool/connectivity_harness/src/worklet.js').readAsStringSync();
-    expect(worklet, contains('fs.readFileSync(file.path)'));
-    expect(worklet, isNot(contains('file.bytes')));
+    expect(worklet, contains('function hashPath'));
+    expect(worklet, contains('hashPath(file.path)'));
+    expect(worklet, contains('fs.openSync(file.path'));
+    expect(worklet, contains('fs.readSync'));
+    expect(worklet, contains('sendFile takes a path, not bytes'));
+    expect(worklet, contains('resumeOffset'));
+    expect(worklet, isNot(contains('readFileSync(file.path)')));
     expect(
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
       contains("'path': file.path"),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'resumeOffset': file.resumeOffset"),
     );
     expect(kHolepunchCorestoreAddonLinked, isFalse);
     expect(kCorestoreJsModuleOptional, isTrue);

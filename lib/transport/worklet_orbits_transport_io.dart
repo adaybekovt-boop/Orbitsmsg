@@ -190,6 +190,7 @@ class WorkletOrbitsTransport implements OrbitsTransport {
         'sizeBytes': file.sizeBytes,
         'fileName': file.fileName,
         'mime': file.mime,
+        'resumeOffset': file.resumeOffset,
       },
     });
   }

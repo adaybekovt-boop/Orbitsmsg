@@ -21,8 +21,9 @@ Node. `ORBITS_BARE_BIN` remains an explicit experimental override.
   `orbits-bare-ipc-v1` worklet.
 - This tree does **not** ship OS binaries in the app bundle yet
   (`shipped: false`, `kBareBinaryShipped = false`).
-- linux-x64 tarball sha256 is pinned in `BARE.manifest`. The extracted
-  binary is gitignored; CI uses Node unless an operator vendors locally.
+- Every OS-slot tarball sha256 is pinned in `BARE.manifest`. `vendor.sh`
+  refuses to extract without a matching pin. The extracted binary is
+  gitignored; CI uses Node unless an operator vendors locally.
 - `tool/bare/embed.sh <slot>` copies a **local** slot into federated
   plugin native dirs (also gitignored). Linux/Windows CMake bundles it
   only when that file exists.

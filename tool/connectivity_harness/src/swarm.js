@@ -8,6 +8,12 @@
  */
 
 async function createHyperswarmBackend(opts = {}) {
+  const bootstrap = opts.bootstrap
+  if (!Array.isArray(bootstrap) || bootstrap.length === 0) {
+    throw new Error(
+      'hyperswarm backend requires explicit bootstrap; refusing public DHT default',
+    )
+  }
   let Hyperswarm
   try {
     Hyperswarm = require('hyperswarm')
@@ -15,7 +21,7 @@ async function createHyperswarmBackend(opts = {}) {
     throw new Error('hyperswarm is not installed: ' + err.message)
   }
   const swarm = new Hyperswarm({
-    bootstrap: opts.bootstrap,
+    bootstrap,
     keyPair: opts.keyPair,
     seed: opts.seed,
     firewall: opts.firewall,
@@ -24,7 +30,7 @@ async function createHyperswarmBackend(opts = {}) {
     swarm,
     async join(topic) {
       const discovery = swarm.join(topic, { server: true, client: true })
-      await swarm.flush()
+      await discovery.flushed()
       return discovery
     },
     async leave(topic) {
@@ -43,10 +49,26 @@ async function createHyperswarmBackend(opts = {}) {
       }
     },
     async destroy() {
-      await swarm.destroy()
+      try {
+        for (const conn of swarm.connections) {
+          try {
+            conn.destroy()
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+      try {
+        await swarm.dht.destroy({ force: true })
+      } catch {
+        /* ignore */
+      }
     },
     onConnection(fn) {
       swarm.on('connection', (conn, info) => {
+        conn.on('error', () => {})
         const relayed = Boolean(info && (info.relayed || info.client === false && conn.rawStream && conn.rawStream.relayed))
         fn(conn, {
           publicKey: info.publicKey,
@@ -59,15 +81,25 @@ async function createHyperswarmBackend(opts = {}) {
 }
 
 async function createLocalBootstrap() {
-  const DHT = require('hyperdht')
-  const node = new DHT({ ephemeral: true, bootstrap: [] })
-  await node.ready()
-  const { host, port } = node.address()
+  let createTestnet
+  try {
+    createTestnet = require('hyperdht/testnet')
+  } catch (err) {
+    throw new Error('hyperdht is not installed: ' + err.message)
+  }
+  const testnet = await createTestnet(3, { host: '127.0.0.1' })
   return {
-    node,
-    bootstrap: [{ host: host || '127.0.0.1', port }],
+    node: testnet,
+    bootstrap: testnet.bootstrap,
     async destroy() {
-      await node.destroy()
+      const nodes = testnet.nodes || []
+      for (let i = nodes.length - 1; i >= 0; i--) {
+        try {
+          await nodes[i].destroy({ force: true })
+        } catch {
+          /* ignore */
+        }
+      }
     },
   }
 }

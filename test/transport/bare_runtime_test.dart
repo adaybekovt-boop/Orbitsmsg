@@ -65,6 +65,7 @@ void main() {
     expect(File('tool/bare/vendor.sh').existsSync(), isTrue);
     final vendor = File('tool/bare/vendor.sh').readAsStringSync();
     expect(vendor, contains('NEVER invoked from Dart'));
+    expect(vendor, contains('no sha256 pin for'));
     expect(
       File('lib/transport/bare_runtime.dart').readAsStringSync(),
       isNot(contains('github.com')),
@@ -74,11 +75,30 @@ void main() {
       File('tool/bare/embed.sh').readAsStringSync(),
       contains('NEVER downloads'),
     );
-    final linux64 = (manifest['vendor'] as Map)['assets'] as Map;
+    final assets = (manifest['vendor'] as Map)['assets'] as Map;
     expect(
-      (linux64['linux-x64'] as Map)['sha256'],
-      '9408f82dd1344d7403acb93a0c66b50a4b2cc63c483c6bf48ef8df67203b6ec7',
+      bareManifestPinsAllVendorHashes(Map<String, Object?>.from(manifest)),
+      isTrue,
     );
+    const expected = {
+      'linux-x64':
+          '9408f82dd1344d7403acb93a0c66b50a4b2cc63c483c6bf48ef8df67203b6ec7',
+      'linux-arm64':
+          'dedaeb43fb3315e69d215b262a02c7f74fcdc354076df363905c73fec3cc7119',
+      'darwin-x64':
+          '5efb7c26b5a95b5bfba3aa0d1177709dd9d71ba90096ccd50f62a04fc6e69cd1',
+      'darwin-arm64':
+          '3c0bbb33eab8c5147bb4af80366815c1d9c58015043d721c67f13a7d20b8d5f2',
+      'windows-x64':
+          'd31c7c79b445546416d37462808616482993bc85460856ff23a772fe2ed97527',
+      'android-arm64':
+          'f80ff745710fd82bc2f5f68016c7e2375a8e0d0254a2270db36ae2e7e55cd3e6',
+      'ios-arm64':
+          '5a19737fd26279ef57756cea4e40325be02967599952c569d3b46d1a6f2776b6',
+    };
+    for (final slot in kBareOsSlots.keys) {
+      expect((assets[slot] as Map)['sha256'], expected[slot], reason: slot);
+    }
     expect(kBareBinaryShipped, isFalse);
 
     final launch = resolveBareRuntime(worklet);

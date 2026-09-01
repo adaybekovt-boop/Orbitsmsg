@@ -134,6 +134,27 @@ void main() {
     await b.stop();
   });
 
+  test('sendFile resumeOffset out of range is rejected', () async {
+    final (a, b) = await paired();
+    final src = File(
+      '${Directory.systemTemp.path}${Platform.pathSeparator}harness-resume.bin',
+    );
+    await src.writeAsBytes(List<int>.filled(1024, 1));
+    await expectLater(
+      a.sendFile(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        TransportFileDescriptor(
+          path: src.path,
+          sizeBytes: 1024,
+          resumeOffset: 2048,
+        ),
+      ),
+      throwsStateError,
+    );
+    await a.stop();
+    await b.stop();
+  });
+
   test('suspend blocks send and resume restores it', () async {
     final (a, b) = await paired();
     await a.suspend();

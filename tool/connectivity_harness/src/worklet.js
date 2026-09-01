@@ -24,6 +24,25 @@ const { CorestoreJournal } = require('./corestore_journal')
 
 const FILE_CHUNK = 64 * 1024
 
+// Stream a file for hashing. Never load the whole blob into one buffer.
+function hashPath(filePath) {
+  const hash = createHash('sha256')
+  const fd = fs.openSync(filePath, 'r')
+  try {
+    const buf = Buffer.alloc(FILE_CHUNK)
+    let size = 0
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, size)
+      if (!n) break
+      hash.update(buf.subarray(0, n))
+      size += n
+    }
+    return { digest: hash.digest('hex'), size }
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
 class Worklet {
   constructor(opts = {}) {
     this.backend = opts.backend || 'loopback'
@@ -52,7 +71,12 @@ class Worklet {
       this._loop.on('connection', (sock, info) => this._onConn(sock, info))
     } else {
       const { createHyperswarmBackend } = require('./swarm')
-      this._swarm = await createHyperswarmBackend(config)
+      this._swarm = await createHyperswarmBackend({
+        bootstrap: config.bootstrap,
+        keyPair: config.keyPair,
+        seed: config.seed,
+        firewall: config.firewall,
+      })
       this._swarm.onConnection((sock, info) => this._onConn(sock, info))
     }
     this._emit('started', { backend: this.backend, port: this._loop.port })
@@ -88,24 +112,43 @@ class Worklet {
   }
 
   async sendFile(peerId, file) {
-    const bytes = fs.readFileSync(file.path)
-    const digest = createHash('sha256').update(bytes).digest('hex')
+    // Stream from a path. Never take a Dart Uint8List over IPC.
+    if (!file || typeof file.path !== 'string' || file.path.length === 0) {
+      throw new Error('sendFile needs a path')
+    }
+    if (file.bytes != null) {
+      throw new Error('sendFile takes a path, not bytes')
+    }
+    const { digest, size } = hashPath(file.path)
     const id = digest.slice(0, 16)
+    const resumeOffset = Number(file.resumeOffset) || 0
+    if (resumeOffset < 0 || resumeOffset > size) {
+      throw new Error('sendFile resumeOffset out of range')
+    }
     await this.send(peerId, 'attachment', {
       type: 'harness-file-start',
       id,
       name: file.fileName || path.basename(file.path),
-      size: bytes.length,
+      size,
       sha256: digest,
     })
-    for (let offset = 0; offset < bytes.length; offset += FILE_CHUNK) {
-      const chunk = bytes.subarray(offset, offset + FILE_CHUNK)
-      await this.send(peerId, 'attachment', {
-        type: 'harness-file-chunk',
-        id,
-        offset,
-        b64: chunk.toString('base64'),
-      })
+    const fd = fs.openSync(file.path, 'r')
+    try {
+      const buf = Buffer.alloc(FILE_CHUNK)
+      let offset = resumeOffset
+      while (offset < size) {
+        const n = fs.readSync(fd, buf, 0, buf.length, offset)
+        if (!n) break
+        await this.send(peerId, 'attachment', {
+          type: 'harness-file-chunk',
+          id,
+          offset,
+          b64: buf.subarray(0, n).toString('base64'),
+        })
+        offset += n
+      }
+    } finally {
+      fs.closeSync(fd)
     }
     await this.send(peerId, 'attachment', { type: 'harness-file-end', id })
   }
@@ -148,6 +191,7 @@ class Worklet {
         this._onFrame(peerId, frame.channel, frame.payload)
       }
     })
+    socket.on('error', () => {})
     socket.on('close', () => {
       this._peers.delete(peerId)
       this._emit('disconnected', { peerId })
@@ -244,4 +288,4 @@ if (require.main === module) {
   })
 }
 
-module.exports = { Worklet, handleIpcRequest }
+module.exports = { Worklet, handleIpcRequest, hashPath, FILE_CHUNK }

@@ -21,12 +21,30 @@
         "name": "bare-runtime-linux-x64-1.31.0.tgz",
         "sha256": "9408f82dd1344d7403acb93a0c66b50a4b2cc63c483c6bf48ef8df67203b6ec7"
       },
-      "linux-arm64": { "name": "bare-runtime-linux-arm64-1.31.0.tgz" },
-      "darwin-x64": { "name": "bare-runtime-darwin-x64-1.31.0.tgz" },
-      "darwin-arm64": { "name": "bare-runtime-darwin-arm64-1.31.0.tgz" },
-      "windows-x64": { "name": "bare-runtime-win32-x64-1.31.0.tgz" },
-      "android-arm64": { "name": "bare-runtime-android-arm64-1.31.0.tgz" },
-      "ios-arm64": { "name": "bare-runtime-ios-arm64-1.31.0.tgz" }
+      "linux-arm64": {
+        "name": "bare-runtime-linux-arm64-1.31.0.tgz",
+        "sha256": "dedaeb43fb3315e69d215b262a02c7f74fcdc354076df363905c73fec3cc7119"
+      },
+      "darwin-x64": {
+        "name": "bare-runtime-darwin-x64-1.31.0.tgz",
+        "sha256": "5efb7c26b5a95b5bfba3aa0d1177709dd9d71ba90096ccd50f62a04fc6e69cd1"
+      },
+      "darwin-arm64": {
+        "name": "bare-runtime-darwin-arm64-1.31.0.tgz",
+        "sha256": "3c0bbb33eab8c5147bb4af80366815c1d9c58015043d721c67f13a7d20b8d5f2"
+      },
+      "windows-x64": {
+        "name": "bare-runtime-win32-x64-1.31.0.tgz",
+        "sha256": "d31c7c79b445546416d37462808616482993bc85460856ff23a772fe2ed97527"
+      },
+      "android-arm64": {
+        "name": "bare-runtime-android-arm64-1.31.0.tgz",
+        "sha256": "f80ff745710fd82bc2f5f68016c7e2375a8e0d0254a2270db36ae2e7e55cd3e6"
+      },
+      "ios-arm64": {
+        "name": "bare-runtime-ios-arm64-1.31.0.tgz",
+        "sha256": "5a19737fd26279ef57756cea4e40325be02967599952c569d3b46d1a6f2776b6"
+      }
     }
   },
   "note": "Drop a local Bare binary in the matching OS slot, or run tool/bare/vendor.sh. Production must not download it. shipped=false until every OS slot is in the app bundle."
