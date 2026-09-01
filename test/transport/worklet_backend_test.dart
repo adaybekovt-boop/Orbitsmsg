@@ -141,8 +141,20 @@ void main() {
       contains("'relayThrough': config.relayThrough"),
     );
     expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'journalDir': config.journalDir"),
+    );
+    expect(
       File('lib/transport/native_transport_host.dart').readAsStringSync(),
       contains('relayThroughKeysFromDirectory'),
+    );
+    expect(
+      File('lib/transport/native_transport_host.dart').readAsStringSync(),
+      contains('localWorkletJournalDir'),
+    );
+    expect(
+      File('lib/transport/native_transport_host.dart').readAsStringSync(),
+      contains('journalDir: journalDir'),
     );
     expect(
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),

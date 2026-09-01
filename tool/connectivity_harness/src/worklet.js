@@ -25,6 +25,13 @@ const { CorestoreJournal } = require('./corestore_journal')
 
 const FILE_CHUNK = 64 * 1024
 
+function localJournalDir(p) {
+  if (typeof p !== 'string') return ''
+  const t = p.trim()
+  if (!t || t.includes('://')) return ''
+  return t
+}
+
 function safeFileName(raw) {
   let name = String(raw || 'file').replace(/\\/g, '/').split('/').pop()
   name = name.replace(/[\x00-\x1f\\/:*?"<>|]/g, '_').trim()
@@ -99,7 +106,8 @@ class Worklet {
     this._config = config
     this._started = true
     try {
-      await this._journal.useCorestoreIfPresent()
+      const journalDir = localJournalDir(config && config.journalDir)
+      await this._journal.useCorestoreIfPresent(journalDir || undefined)
     } catch {
       this._journal.backend = 'memory'
     }
@@ -127,6 +135,7 @@ class Worklet {
       backend: this.backend,
       port: this._loop.port,
       noisePublicKey: this.noisePublicKeyHex(),
+      journalBackend: this._journal.backend,
     })
   }
 
@@ -244,6 +253,11 @@ class Worklet {
     this._files.clear()
     if (this._swarm) await this._swarm.destroy()
     await this._loop.destroy()
+    try {
+      await this._journal.close()
+    } catch {
+      // journal already closed
+    }
     this._started = false
   }
 
@@ -407,6 +421,7 @@ async function handleIpcRequest(worklet, body) {
         port: worklet._loop.port,
         backend: worklet.backend,
         noisePublicKey: worklet.noisePublicKeyHex(),
+        journalBackend: worklet._journal.backend,
       }
     case 'stop':
       await worklet.stop()
@@ -440,7 +455,7 @@ async function handleIpcRequest(worklet, body) {
       await worklet.refreshNetwork()
       return {}
     case 'journal.append':
-      return worklet._journal.append(params)
+      return await worklet._journal.append(params)
     case 'journal.list':
       return { blocks: worklet._journal.list() }
     default:

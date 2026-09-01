@@ -194,6 +194,9 @@ class WorkletOrbitsTransport implements OrbitsTransport {
         for (final node in config.bootstrap) node.toJson(),
       ],
       if (config.transportSeed != null) 'seed': config.transportSeed,
+      if (config.journalDir != null &&
+          isLocalFsLocation(config.journalDir!))
+        'journalDir': config.journalDir,
     });
     noisePublicKey = noisePublicKeyFromHex(result['noisePublicKey'] as String?);
   }

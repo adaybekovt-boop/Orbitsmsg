@@ -56,6 +56,9 @@ void main() {
     expect(worklet, contains('fs.writeSync'));
     expect(worklet, contains('file-send interrupted'));
     expect(worklet, contains('relayThrough'));
+    expect(worklet, contains('localJournalDir'));
+    expect(worklet, contains('journalDir'));
+    expect(worklet, contains('journalBackend'));
     expect(worklet, isNot(contains('readFileSync(file.path)')));
     expect(worklet, isNot(contains('http://')));
     expect(worklet, isNot(contains('https://')));

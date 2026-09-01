@@ -167,6 +167,15 @@ bool isLocalBarePath(String path) {
   return File(p).existsSync();
 }
 
+/// Local filesystem location that may not exist yet (journal dirs).
+/// Rejects any `://` URL. Does not require the path to exist.
+bool isLocalFsLocation(String path) {
+  final p = path.trim();
+  if (p.isEmpty) return false;
+  if (p.contains('://')) return false;
+  return true;
+}
+
 bool bareManifestForbidsRemoteFetch(Map<String, Object?> manifest) {
   return manifest['remoteFetch'] == false &&
       manifest['downloadUrl'] == null &&

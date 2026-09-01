@@ -95,6 +95,7 @@ class TransportLocalConfiguration {
     this.bootstrap = const [],
     this.relayThrough = const [],
     this.transportSeed,
+    this.journalDir,
   });
 
   final String peerId;
@@ -116,6 +117,10 @@ class TransportLocalConfiguration {
   /// 32-byte Hyperswarm Noise seed. Not the identity key, KEK, or
   /// discovery secret.
   final List<int>? transportSeed;
+
+  /// Local directory for the worklet ciphertext journal (Corestore or
+  /// JSONL). Never a remote URL. Empty means the worklet may use memory.
+  final String? journalDir;
 }
 
 sealed class TransportEvent {

@@ -24,7 +24,10 @@ bool bareStdlibNameForbidden(String name) {
   if (n.contains('://')) return true;
   return n.contains('hyperswarm') ||
       n.contains('hyperdht') ||
-      n.contains('dht-rpc');
+      n.contains('dht-rpc') ||
+      n.contains('corestore') ||
+      n.contains('hypercore') ||
+      n.contains('autobase');
 }
 
 /// Zip next to a bundled Bare binary, plugin native dirs, or the harness.

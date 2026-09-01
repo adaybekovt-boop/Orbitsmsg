@@ -14,7 +14,7 @@ still PeerJS.
 | 4 | App boot binds native host when rollout ≠ off; prefers Hyperswarm **only** with module + explicit HyperDHT bootstrap (`ORBITS_DHT_BOOTSTRAP` / directory rows), else loopback; Noise seed ≠ identity; loopback natives exchange `v2:` / wireHello | Default still PeerJS; two physical natives not run |
 | 5 | Identity-signed caps on native connect and as a PeerJS `wireHello.caps` sibling; contact QR may carry discovery secret `d=`; secrets persist vault-wrapped | Physical pair not run |
 | 6 | Native `call` channel + CallKit / Telecom in-app sheet (opaque handle, name “Orbits”); iOS remote-notification *handlers* (no PushKit) | No PushKit / `voip` background; registration gated; no physical call |
-| 7 | File journal + Hypercore local store + worklet Corestore journal (`useCorestoreIfPresent`); Bare probes a **local** `corestore.bare` via `Bare.Addon.load` (never `require('corestore')` on Bare) and otherwise writes encrypted-envelope JSONL (`backend = 'fs'`); live vs replay projector fingerprint; DualStackBridge ingest of replication frames into the journal; boot replays the file journal into memory + Drift after block-then-decrypt | Not a Holepunch Corestore native addon |
+| 7 | File journal + Hypercore local store + worklet Corestore journal (`useCorestoreIfPresent`); append **awaits** Hypercore/`JSONL` and reopen **hydrates** ciphertext; Bare probes a **local** `corestore.bare` via `Bare.Addon.load` (never `require('corestore')` on Bare) and otherwise writes encrypted-envelope JSONL (`backend = 'fs'`); native host passes a local `journalDir` (Application Support `orbits-corestore`); live vs replay projector fingerprint; DualStackBridge ingest of replication frames into the journal; boot replays the file journal into memory + Drift after block-then-decrypt | Not a Holepunch Corestore native addon |
 | 8 | Blind mailbox + HTTP `StoragePeerClient` + local loopback fleet (3/2/2; HyperDHT bootstrap when the module is present, else HTTP marked `protocol: http`) + HyperDHT `relayThrough` keys on extra testnet relay rows + opaque wake HTTP intake; `PushSender` refuses APNs/FCM; APNs/FCM request builders stay opaque; Android `DEVICE_IDLE` → Doze; drain tombstones ciphertext; block list before mailbox decrypt/persist; backlog rollback | No deployed public fleet / APNs/FCM send / live signed directory |
 | 9 | Drop packets on native `attachment` channel; 10–50 MiB resume tests; path-streamed native `sendFileFromPath`; receiver writes chunks at offset to a path (never a growing Dart `Uint8List`); `harness-file-resume` handshake so an interrupted send continues from the contiguous offset; PeerJS Drop `sendFileRanged` / `PathDropChunkStore` so the default live path also streams from disk; Drop UI never `readAsBytes` of the picked file on native | Web Drop still uses picker bytes |
 | 10 | Device-link QR + revoke journal events + per-identity fan-out + three-device RatchetState isolation test; QR keys from Noise seed (not dummy bytes); native `dial` passes Noise public key; revoke drops that device's transport ratchet only | No live multi-device ratchet sessions on hardware |
@@ -69,17 +69,21 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
   the plugin first, then plugin native dirs / `tool/bare/` slots, then Node.
   Native `start` refuses any worklet path with `://`. CI asserts the binary
   is inside the linux/macOS/Windows/iOS/APK artifacts after `flutter build`.
-  A local `bare-*` stdlib zip (no hyperswarm/hyperdht) is packed at build
+  A local `bare-*` stdlib zip (no hyperswarm/hyperdht/corestore/hypercore)
+  is packed at build
   time and copied next to that binary so Bare can resolve `bare-fs` without
   Node. That still does
   not set `kBareBinaryShipped` — not every OS slot is in every app bundle.
 - Holepunch Corestore native addon: `kHolepunchCorestoreAddonLinked` is
   false. `tool/bare/addons/vendor-corestore.sh` copies a **local** `.node`
   / `.bare` only (refuses http). JS `corestore` may load on Node when locally installed, else
-  memory. Bare must not `require('corestore')` (Node's addon hangs Bare
+  JSONL when `journalDir` is set, else memory. Bare must not `require('corestore')` (Node's addon hangs Bare
   1.31). If a local `corestore.bare` exists, the worklet calls
   `Bare.Addon.load` (never a remote URL) and otherwise appends encrypted
-  envelopes to a JSONL file (`backend = 'fs'`). That is still not a
+  envelopes to a JSONL file (`backend = 'fs'`). Append waits for the
+  durable write; a later `useCorestoreIfPresent` / JSONL open hydrates
+  `list()` from that log (ciphertext only). Native start passes a local
+  `journalDir`. That is still not a
   linked Holepunch Corestore.
 - Store review: [app-review-notes.md](app-review-notes.md) is a checklist,
   not a filed review.

@@ -64,6 +64,10 @@ void main() {
       contains('hyperdht'),
     );
     expect(
+      File('tool/connectivity_harness/pack-bare-stdlib.sh').readAsStringSync(),
+      contains('corestore'),
+    );
+    expect(
       File('tool/connectivity_harness/embed-bare-stdlib.sh').readAsStringSync(),
       contains('NEVER downloads'),
     );
@@ -207,6 +211,10 @@ void main() {
     expect(isLocalBarePath('file://tmp/bare'), isFalse);
     expect(isLocalBarePath(''), isFalse);
     expect(isLocalBarePath(worklet.path), isTrue);
+    expect(isLocalFsLocation(''), isFalse);
+    expect(isLocalFsLocation('https://evil.example/journal'), isFalse);
+    expect(isLocalFsLocation('file://tmp/journal'), isFalse);
+    expect(isLocalFsLocation('/tmp/orbits-corestore'), isTrue);
 
     final probe = File(
       '${Directory.systemTemp.path}/orbits-bare-probe-${DateTime.now().microsecondsSinceEpoch}',

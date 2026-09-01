@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Pack a *local* Holepunch bare-* stdlib zip next to the worklet.
 # NEVER downloads. Dart/Flutter must not invoke this at runtime.
-# Does not include hyperswarm / hyperdht (those are not the default live path).
+# Does not include hyperswarm / hyperdht / corestore / hypercore
+# (those are not the default live path; Corestore is a separate addon).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -40,6 +41,9 @@ forbidden = (
     "dht-rpc",
     "hyperswarm-secret-stream",
     "blind-relay",
+    "corestore",
+    "hypercore",
+    "autobase",
 )
 
 
@@ -85,7 +89,14 @@ try:
         shutil.copytree(
             src,
             dst,
-            ignore=shutil.ignore_patterns("hyperswarm*", "hyperdht*", ".bin"),
+            ignore=shutil.ignore_patterns(
+                "hyperswarm*",
+                "hyperdht*",
+                "corestore*",
+                "hypercore*",
+                "autobase*",
+                ".bin",
+            ),
             symlinks=False,
         )
     if out.exists():
@@ -107,6 +118,8 @@ if "node_modules/bare-fs/package.json" not in names:
     raise SystemExit("packed zip missing node_modules/bare-fs/package.json")
 if "hyperswarm" in joined.lower() or "hyperdht" in joined.lower():
     raise SystemExit("refusing zip that contains hyperswarm/hyperdht")
+if "corestore" in joined.lower() or "hypercore" in joined.lower():
+    raise SystemExit("refusing zip that contains corestore/hypercore")
 print(f"packed {len(needed)} packages -> {out} ({out.stat().st_size} bytes)")
 print("kBareBinaryShipped stays false")
 PY

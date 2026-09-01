@@ -114,6 +114,8 @@ jobs:
           blob = "\n".join(names).lower()
           if "hyperswarm" in blob or "hyperdht" in blob:
               raise SystemExit("stdlib zip must not contain hyperswarm/hyperdht")
+          if "corestore" in blob or "hypercore" in blob:
+              raise SystemExit("stdlib zip must not contain corestore/hypercore")
           print("local bare stdlib zip packed; kBareBinaryShipped stays false")
           PY
 

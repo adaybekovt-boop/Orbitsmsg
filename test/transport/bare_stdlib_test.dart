@@ -10,6 +10,8 @@ void main() {
     expect(kBareStdlibRootPackages, isNot(contains('hyperswarm')));
     expect(bareStdlibNameForbidden('node_modules/hyperswarm/index.js'), isTrue);
     expect(bareStdlibNameForbidden('node_modules/hyperdht/index.js'), isTrue);
+    expect(bareStdlibNameForbidden('node_modules/corestore/index.js'), isTrue);
+    expect(bareStdlibNameForbidden('node_modules/hypercore/index.js'), isTrue);
     expect(bareStdlibNameForbidden('https://example.invalid/bare-fs'), isTrue);
     expect(bareStdlibNameForbidden('node_modules/bare-fs/package.json'), isFalse);
     expect(
@@ -22,6 +24,7 @@ void main() {
     expect(pack, contains('NEVER downloads'));
     expect(pack, isNot(contains('curl')));
     expect(pack, contains('refusing zip that contains hyperswarm/hyperdht'));
+    expect(pack, contains('refusing zip that contains corestore/hypercore'));
     expect(
       File('tool/ci/vendor_bare_stdlib.sh').readAsStringSync(),
       contains('pack-bare-stdlib.sh'),
@@ -43,6 +46,7 @@ void main() {
 
     add('node_modules/bare-fs/package.json', '{"name":"bare-fs"}');
     add('node_modules/hyperswarm/index.js', 'no');
+    add('node_modules/corestore/index.js', 'no');
     add('../evil.js', 'no');
     zip.writeAsBytesSync(ZipEncoder().encode(archive));
     extractBareStdlibZip(zip, dir);
@@ -52,6 +56,10 @@ void main() {
     );
     expect(
       File('${dir.path}/node_modules/hyperswarm/index.js').existsSync(),
+      isFalse,
+    );
+    expect(
+      File('${dir.path}/node_modules/corestore/index.js').existsSync(),
       isFalse,
     );
     expect(File('${dir.path}/evil.js').existsSync(), isFalse);

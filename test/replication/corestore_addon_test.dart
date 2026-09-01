@@ -41,6 +41,14 @@ void main() {
       File('tool/connectivity_harness/src/corestore_journal.js').readAsStringSync(),
       contains('must not be required from Bare'),
     );
+    expect(
+      File('tool/connectivity_harness/src/corestore_journal.js').readAsStringSync(),
+      contains('_hydrateFromCore'),
+    );
+    expect(
+      File('tool/connectivity_harness/src/corestore_journal.js').readAsStringSync(),
+      contains('await this._core.append'),
+    );
     final vendor = File('tool/bare/addons/vendor-corestore.sh').readAsStringSync();
     expect(vendor, contains('NEVER downloads'));
     expect(vendor, contains('kHolepunchCorestoreAddonLinked stays false'));

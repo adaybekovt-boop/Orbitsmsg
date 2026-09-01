@@ -52,9 +52,15 @@ void main() {
     expect(journal, contains('useCorestoreIfPresent'));
     expect(journal, contains('Bare.Addon.load'));
     expect(journal, contains('envelopes.jsonl'));
+    expect(journal, contains('_hydrateFromCore'));
+    expect(journal, contains('await this._core.append'));
     expect(
       File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
       contains('useCorestoreIfPresent'),
+    );
+    expect(
+      File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
+      contains('journalDir'),
     );
     expect(
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),

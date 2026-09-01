@@ -75,6 +75,7 @@ class NativeTransportHost {
     _watchCarrier();
 
     final journal = await openLocalFileJournal('local-device');
+    final journalDir = await localWorkletJournalDir();
     final secret = discoverySecretStore.getOrCreateLocal();
     final seed = transportNoiseSeedStore.getOrCreate();
     try {
@@ -88,6 +89,7 @@ class NativeTransportHost {
           relayThrough: relayThroughKeysFromDirectory(directory),
           diagnosticsEnabled: isHyperswarmDiagnosticsEnabled(),
           allowPeerjsFallback: isPeerjsFallbackEnabled(),
+          journalDir: journalDir,
         ),
       );
     } catch (_) {
