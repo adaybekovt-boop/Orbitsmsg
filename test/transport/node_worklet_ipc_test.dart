@@ -71,4 +71,35 @@ void main() {
       throwsA(isA<Object>()),
     );
   });
+
+  test('relayThrough without bootstrap still refuses public DHT', () async {
+    final script = File('tool/connectivity_harness/src/worklet.js');
+    final node = await Process.start(
+      'node',
+      [script.absolute.path],
+      environment: {
+        ...Platform.environment,
+        'ORBITS_HARNESS_BACKEND': 'hyperswarm',
+      },
+    );
+    node.stderr.listen((_) {});
+    final client = BareIpcClient(write: (bytes) {
+      node.stdin.add(bytes);
+    });
+    node.stdout.listen(client.addBytes);
+    addTearDown(() async {
+      await client.close();
+      node.kill();
+    });
+    await expectLater(
+      client.request('start', {
+        'peerId': 'ORBIT-AA',
+        'relayForced': true,
+        'relayThrough': [
+          '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+        ],
+      }).timeout(const Duration(seconds: 8)),
+      throwsA(isA<Object>()),
+    );
+  });
 }

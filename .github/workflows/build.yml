@@ -129,7 +129,8 @@ jobs:
           python3 - <<'PY'
           import hashlib, json
           from pathlib import Path
-          worklet = Path("tool/connectivity_harness/src/worklet.js").read_bytes()
+          src_dir = Path("tool/connectivity_harness/src")
+          worklet = (src_dir / "worklet.js").read_bytes()
           digest = hashlib.sha256(worklet).hexdigest()
           manifest = json.loads(Path("tool/connectivity_harness/BUNDLE.manifest").read_text())
           if manifest.get("remoteJs") is not False:
@@ -142,8 +143,20 @@ jobs:
           pkg_pin = manifest.get("packageJsonSha256")
           if pkg_pin != pkg_digest:
               raise SystemExit(f"package.json hash {pkg_digest} != pinned {pkg_pin}")
+          sources = manifest.get("sources") or {}
+          if not sources:
+              raise SystemExit("BUNDLE.manifest sources must pin every worklet file")
+          if sources.get("worklet.js") != pinned:
+              raise SystemExit("workletSha256 must match sources[worklet.js]")
+          for name, src_pin in sources.items():
+              if "/" in name or "\\" in name or name.startswith("."):
+                  raise SystemExit(f"illegal source name {name}")
+              src_digest = hashlib.sha256((src_dir / name).read_bytes()).hexdigest()
+              if src_digest != src_pin:
+                  raise SystemExit(f"{name} hash {src_digest} != pinned {src_pin}")
           print(f"worklet.js sha256={digest}")
           print(f"package.json sha256={pkg_digest}")
+          print(f"pinned sources={len(sources)}")
           PY
 
       - name: Pin Bare vendor tarball hashes (Dart never fetches)

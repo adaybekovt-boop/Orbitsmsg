@@ -23,7 +23,8 @@ def sha256(path: Path) -> str:
 def build() -> dict:
     bundle = json.loads((ROOT / "tool/connectivity_harness/BUNDLE.manifest").read_text())
     bare = json.loads((ROOT / "tool/bare/BARE.manifest").read_text())
-    worklet = ROOT / "tool/connectivity_harness/src/worklet.js"
+    src_dir = ROOT / "tool/connectivity_harness/src"
+    worklet = src_dir / "worklet.js"
     pkg = ROOT / "tool/connectivity_harness/package.json"
     components = [
         {
@@ -47,6 +48,21 @@ def build() -> dict:
             ],
         },
     ]
+    for name, pinned in sorted((bundle.get("sources") or {}).items()):
+        if name == "worklet.js":
+            continue
+        path = src_dir / name
+        components.append(
+            {
+                "type": "file",
+                "name": f"orbits-connectivity-{name}",
+                "hashes": [{"alg": "SHA-256", "content": sha256(path)}],
+                "properties": [
+                    {"name": "pinnedSourceSha256", "value": pinned},
+                    {"name": "remoteJs", "value": "false"},
+                ],
+            }
+        )
     assets = ((bare.get("vendor") or {}).get("assets") or {})
     for slot, asset in sorted(assets.items()):
         components.append(
@@ -98,10 +114,26 @@ def main() -> int:
             print("ORBITS.sbom.json is stale; run tool/sbom/generate.py", file=sys.stderr)
             return 1
         bundle = json.loads((ROOT / "tool/connectivity_harness/BUNDLE.manifest").read_text())
-        worklet_hash = sha256(ROOT / "tool/connectivity_harness/src/worklet.js")
+        src_dir = ROOT / "tool/connectivity_harness/src"
+        worklet_hash = sha256(src_dir / "worklet.js")
         if bundle["workletSha256"] != worklet_hash:
             print("BUNDLE.manifest worklet hash drift", file=sys.stderr)
             return 1
+        sources = bundle.get("sources") or {}
+        if not sources:
+            print("BUNDLE.manifest sources missing", file=sys.stderr)
+            return 1
+        if sources.get("worklet.js") != bundle["workletSha256"]:
+            print("BUNDLE.manifest workletSha256 != sources[worklet.js]", file=sys.stderr)
+            return 1
+        for name, pinned in sources.items():
+            if "/" in name or "\\" in name or name.startswith("."):
+                print("illegal source name", name, file=sys.stderr)
+                return 1
+            digest = sha256(src_dir / name)
+            if digest != pinned:
+                print(f"BUNDLE.manifest {name} hash drift", file=sys.stderr)
+                return 1
         print("sbom pins ok")
         return 0
     OUT.write_text(text)

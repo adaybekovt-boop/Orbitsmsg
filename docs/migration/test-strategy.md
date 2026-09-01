@@ -20,7 +20,7 @@ independent room-E2E audit stay **blocked** until the user is free.
 | 0 | `test/docs_consistency/migration_phase0_test.dart` | — |
 | 1 | Loopback + JS harness echo/file/suspend | Live NAT matrix |
 | 2 | `src/stand.js` metrics schema | Live KZ operators |
-| 3 | Plugin lifecycle + IPC + OS hosts refuse remote JS (including `://` worklet paths); federated plugin is an app dependency (no web); Linux/Windows C registrars + `barePath`; spawn `start(remoteJs: false, worklet: localPath)` before worklet; per-OS Bare slots; `vendor.sh` / `embed.sh` / `vendor-bare-modules.sh` / `pack-bare-stdlib.sh`; all vendor tarball sha256 pins; worklet import maps; path-streamed `sendFile`; CI embeds linux-x64, ios-arm64, darwin-arm64, android-arm64, windows-x64 and vendors linux-arm64 / darwin-x64 beside the host binary; CMake/Gradle copy the slot into the app bundle plus a local `bare-*` stdlib zip (no hyperswarm); CI `flutter build linux` / `macos` / Windows / iOS / APK assert `bare` and `bare_stdlib.zip` are inside the artifact | Bare binary embed per OS product flag |
+| 3 | Plugin lifecycle + IPC + OS hosts refuse remote JS (including `://` worklet paths); federated plugin is an app dependency (no web); Linux/Windows C registrars + `barePath`; spawn `start(remoteJs: false, worklet: localPath)` before worklet; per-OS Bare slots; `vendor.sh` / `embed.sh` / `vendor-bare-modules.sh` / `pack-bare-stdlib.sh`; all vendor tarball sha256 pins; worklet import maps; `BUNDLE.manifest` `sources` pins every bundled worklet file; path-streamed `sendFile`; CI embeds linux-x64, ios-arm64, darwin-arm64, android-arm64, windows-x64 and vendors linux-arm64 / darwin-x64 beside the host binary; CMake/Gradle copy the slot into the app bundle plus a local `bare-*` stdlib zip (no hyperswarm); CI `flutter build linux` / `macos` / Windows / iOS / APK assert `bare` and `bare_stdlib.zip` are inside the artifact | Bare binary embed per OS product flag |
 | 4 | `dual_stack_bridge_test` two natives, `v2:` / wireHello; `preferredWorkletBackend`; `rollbackNativeToPeerjs` on start fail / worklet-exit / journal / mailbox / lost messages / battery / relay blow-up | Two physical devices |
 | 5 | Signed caps on native connect and PeerJS `wireHello.caps`; vault-wrapped discovery persist | Physical pair |
 | 6 | `NativeCallSession` + CallKit/Telecom opaque handle; iOS remote-notification handlers | PushKit / physical devices |
@@ -41,6 +41,7 @@ from CI.
 
 ## Pins
 
-Flutter 3.44.7, Node 22 in CI, `orbits-bare-ipc-v1`, worklet SHA-256 in
-`tool/connectivity_harness/BUNDLE.manifest`. Production must not fetch
-remote Bare JS.
+Flutter 3.44.7, Node 22 in CI, `orbits-bare-ipc-v1`, every bundled
+worklet source SHA-256 in `tool/connectivity_harness/BUNDLE.manifest`
+(`sources` plus `workletSha256`). Production must not fetch remote
+Bare JS.

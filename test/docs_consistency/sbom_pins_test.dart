@@ -29,6 +29,20 @@ void main() {
       File('tool/connectivity_harness/BUNDLE.manifest').readAsStringSync(),
     ) as Map;
     expect(bundle['workletSha256'], workletDigest);
+    final sources = Map<String, String>.from(
+      (bundle['sources'] as Map).map((k, v) => MapEntry('$k', '$v')),
+    );
+    expect(sources['worklet.js'], workletDigest);
+    for (final name in sources.keys) {
+      if (name == 'worklet.js') continue;
+      final digest = sha256
+          .convert(File('tool/connectivity_harness/src/$name').readAsBytesSync())
+          .toString();
+      expect(digest, sources[name], reason: name);
+      final component = byName['orbits-connectivity-$name'];
+      expect(component, isNotNull, reason: name);
+      expect((component!['hashes'] as List).first['content'], digest);
+    }
 
     final bare = jsonDecode(File('tool/bare/BARE.manifest').readAsStringSync()) as Map;
     expect(bare['shipped'], isFalse);

@@ -197,6 +197,70 @@ void main() {
     expect(kLiveSignedRelayDirectory, isFalse);
   });
 
+  test('fleet-shaped directory JSON yields relayThrough keys', () {
+    const good =
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+    final peers = [
+      {
+        'id': 'bootstrap-1',
+        'kind': 'bootstrap',
+        'host': '127.0.0.1',
+        'port': 49737,
+        'region': 'ca',
+        'rttMs': 0,
+        'unsound': false,
+        'live': false,
+        'protocol': 'hyperdht',
+      },
+      {
+        'id': 'relay-1',
+        'kind': 'relay',
+        'host': '127.0.0.1',
+        'port': 49738,
+        'region': 'ca',
+        'rttMs': 1,
+        'unsound': false,
+        'live': false,
+        'protocol': 'hyperdht',
+        'publicKey': good,
+      },
+      {
+        'id': 'relay-2',
+        'kind': 'relay',
+        'host': '127.0.0.1',
+        'port': 9,
+        'region': 'eu',
+        'rttMs': 2,
+        'unsound': false,
+        'live': false,
+        'protocol': 'http',
+      },
+      {
+        'id': 'storage-1',
+        'kind': 'storage',
+        'host': '127.0.0.1',
+        'port': 8787,
+        'region': 'ca',
+        'rttMs': 3,
+        'unsound': false,
+        'live': false,
+        'protocol': 'http',
+      },
+    ];
+    final directory = RelayDirectory(
+      issuedAt: 1,
+      expiresAt: 10,
+      signature: Uint8List(0),
+      identityPublicKey: Uint8List(0),
+      peers: [
+        for (final row in peers)
+          DirectoryPeer.fromJson(Map<String, Object?>.from(row)),
+      ],
+    );
+    expect(relayThroughKeysFromDirectory(directory), [good]);
+    expect(kLiveSignedRelayDirectory, isFalse);
+  });
+
   test('HTTP lab bootstrap rows are not HyperDHT addresses', () {
     final directory = RelayDirectory(
       issuedAt: 1,
