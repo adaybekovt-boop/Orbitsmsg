@@ -9,6 +9,7 @@
 // Wire shapes:
 //   control (JSON map over the text channel):
 //     {type:'file-start', fileId, name, size, mime, hash, totalChunks}
+//     {type:'file-resume', fileId, offset}  // receiver → sender, optional
 //     {type:'file-end',   fileId}
 //     {type:'file-abort', fileId}
 //   chunk (binary message): [ver=1 (1B)][fileId (16B)][seq (4B, BE)][payload]
@@ -146,13 +147,82 @@ Future<String> _sha256Hex(List<int> data) async {
   return _toHex(h.bytes);
 }
 
+/// Where inbound Drop chunks land. The default is in-memory (web / tests).
+/// Native PeerJS Drop uses a path-backed store so a 10–50 MiB file is never
+/// held as one Dart `Uint8List`.
+abstract class DropChunkStore {
+  int get receivedBytes;
+  int get storedChunkCount;
+  bool hasSeq(int seq);
+  bool get countsTowardMemoryBudget;
+  int get resumeOffset;
+  String? get localPath;
+  Future<void> put(int seq, Uint8List payload);
+  Future<Uint8List?> assembledBytes();
+  Future<String> digestHex();
+  Future<void> dispose();
+}
+
+class MemoryDropChunkStore implements DropChunkStore {
+  final Map<int, Uint8List> _chunks = {};
+  int _receivedBytes = 0;
+
+  @override
+  int get receivedBytes => _receivedBytes;
+
+  @override
+  int get storedChunkCount => _chunks.length;
+
+  @override
+  bool hasSeq(int seq) => _chunks.containsKey(seq);
+
+  @override
+  bool get countsTowardMemoryBudget => true;
+
+  @override
+  int get resumeOffset => 0;
+
+  @override
+  String? get localPath => null;
+
+  @override
+  Future<void> put(int seq, Uint8List payload) async {
+    _chunks[seq] = Uint8List.fromList(payload);
+    _receivedBytes += payload.length;
+  }
+
+  @override
+  Future<Uint8List?> assembledBytes() async {
+    final ordered = _chunks.keys.toList()..sort();
+    for (var i = 0; i < ordered.length; i++) {
+      if (ordered[i] != i) return null;
+    }
+    final builder = BytesBuilder(copy: false);
+    for (final s in ordered) {
+      builder.add(_chunks[s]!);
+    }
+    return builder.takeBytes();
+  }
+
+  @override
+  Future<String> digestHex() async {
+    final assembled = await assembledBytes();
+    if (assembled == null) return '';
+    return _sha256Hex(assembled);
+  }
+
+  @override
+  Future<void> dispose() async {
+    _chunks.clear();
+  }
+}
+
 class _Incoming {
-  _Incoming(this.meta, this.peerId, this.startedAt);
+  _Incoming(this.meta, this.peerId, this.startedAt, this.store);
   final DropFileMeta meta;
   final String peerId;
   final DateTime startedAt;
-  final Map<int, Uint8List> chunks = {};
-  int receivedBytes = 0;
+  final DropChunkStore store;
 }
 
 class _Outgoing {
@@ -160,6 +230,7 @@ class _Outgoing {
   bool aborted = false;
   String peerId;
   final Completer<bool> ack = Completer<bool>();
+  Completer<int>? resumeGate;
 }
 
 /// The transfer engine. One instance can drive many concurrent transfers
@@ -174,6 +245,8 @@ class DropEngine {
     this.onOutgoingSent,
     this.onReply,
     this.persistIncoming,
+    this.persistIncomingPath,
+    this.openIncomingStore,
     this.chunkSize = dropChunkSize,
     this.transferTtl = kDropTransferTtl,
     this.maxIncomingBytesTotal = kMaxDropIncomingBytesTotal,
@@ -204,6 +277,13 @@ class DropEngine {
   final Future<bool> Function(DropFileMeta meta, Uint8List bytes)?
       persistIncoming;
 
+  /// Persist a path-backed inbound file without loading it as a `Uint8List`.
+  final Future<bool> Function(DropFileMeta meta, String path)? persistIncomingPath;
+
+  /// Native / tests can land chunks on disk. Default is [MemoryDropChunkStore].
+  final Future<DropChunkStore> Function(DropFileMeta meta, String peerId)?
+      openIncomingStore;
+
   final int chunkSize;
   final Duration transferTtl;
   final int maxIncomingBytesTotal;
@@ -212,9 +292,12 @@ class DropEngine {
   final Map<String, _Incoming> _incoming = {};
   final Map<String, _Outgoing> _outgoing = {};
 
-  /// Bytes currently buffered across all inbound transfers (for tests / caps).
-  int get incomingBufferedBytes =>
-      _incoming.values.fold<int>(0, (sum, s) => sum + s.receivedBytes);
+  /// Bytes currently buffered in RAM across inbound transfers (path stores
+  /// do not count — those chunks are on disk).
+  int get incomingBufferedBytes => _incoming.values.fold<int>(0, (sum, s) {
+        if (!s.store.countsTowardMemoryBudget) return sum;
+        return sum + s.store.receivedBytes;
+      });
 
   int get incomingTransferCount => _incoming.length;
 
@@ -232,14 +315,60 @@ class DropEngine {
     String peerId = '',
     bool waitForAck = true,
     Duration ackTimeout = kDropAckTimeout,
+  }) {
+    return sendFileRanged(
+      size: bytes.length,
+      name: name,
+      mime: mime,
+      hash: null,
+      read: (offset, length) async {
+        final end = offset + length > bytes.length ? bytes.length : offset + length;
+        if (end <= offset) return Uint8List(0);
+        return Uint8List.sublistView(bytes, offset, end);
+      },
+      send: send,
+      waitForDrain: waitForDrain,
+      fileId: fileId,
+      peerId: peerId,
+      waitForAck: waitForAck,
+      ackTimeout: ackTimeout,
+      sourceBytes: bytes,
+    );
+  }
+
+  /// Stream a file from ranged reads. [read] must not load the whole file.
+  /// After `file-start` the sender waits [resumeWait] for `file-resume`
+  /// (offset of the contiguous prefix already on disk).
+  Future<String> sendFileRanged({
+    required int size,
+    required String name,
+    required String mime,
+    required Future<Uint8List> Function(int offset, int length) read,
+    required DropSend send,
+    String? hash,
+    Uint8List? sourceBytes,
+    Future<void> Function()? waitForDrain,
+    String? fileId,
+    String peerId = '',
+    bool waitForAck = true,
+    Duration ackTimeout = kDropAckTimeout,
+    int resumeOffset = 0,
+    Duration resumeWait = Duration.zero,
   }) async {
     final idBytes = fileId != null ? _hexToBytes(fileId) : _randomFileId();
     final idHex = _toHex(idBytes);
-    final total = bytes.length;
+    final total = size;
     final totalChunks = total == 0 ? 0 : ((total + chunkSize - 1) ~/ chunkSize);
-    final hash = await _sha256Hex(bytes);
+    final digest = hash ??
+        (sourceBytes != null ? await _sha256Hex(sourceBytes) : '');
+    if (digest.isEmpty && total > 0) {
+      throw StateError('sendFileRanged needs a hash when the file is not in memory');
+    }
 
     final state = _Outgoing(peerId: peerId);
+    if (resumeWait > Duration.zero) {
+      state.resumeGate = Completer<int>();
+    }
     _outgoing[idHex] = state;
 
     bool emit(Object packet) {
@@ -256,7 +385,7 @@ class DropEngine {
       'name': name,
       'size': total,
       'mime': mime,
-      'hash': hash,
+      'hash': digest,
       'totalChunks': totalChunks,
     })) {
       _outgoing.remove(idHex);
@@ -264,8 +393,19 @@ class DropEngine {
     }
 
     try {
-      var seq = 0;
-      var offset = 0;
+      var offset = resumeOffset < 0 ? 0 : resumeOffset;
+      if (offset > total) {
+        throw StateError('resumeOffset out of range');
+      }
+      final gate = state.resumeGate;
+      if (gate != null) {
+        final offered = gate.isCompleted
+            ? await gate.future
+            : await gate.future.timeout(resumeWait, onTimeout: () => offset);
+        if (offered > offset && offered <= total) offset = offered;
+      }
+      offset = (offset ~/ chunkSize) * chunkSize;
+      var seq = total == 0 ? 0 : offset ~/ chunkSize;
       while (offset < total) {
         if (state.aborted) {
           emit(<String, Object?>{
@@ -275,7 +415,7 @@ class DropEngine {
           throw StateError('Transfer aborted');
         }
         final end = (offset + chunkSize < total) ? offset + chunkSize : total;
-        final payload = Uint8List.sublistView(bytes, offset, end);
+        final payload = await read(offset, end - offset);
         if (waitForDrain != null) await waitForDrain();
         if (!emit(_frameChunk(idBytes, seq, payload))) {
           throw StateError('Drop send failed');
@@ -321,6 +461,8 @@ class DropEngine {
     if (state == null) return;
     state.aborted = true;
     if (!state.ack.isCompleted) state.ack.complete(false);
+    final gate = state.resumeGate;
+    if (gate != null && !gate.isCompleted) gate.complete(0);
   }
 
   /// Feed an inbound packet (control [Map] or binary [Uint8List]). Returns
@@ -337,7 +479,11 @@ class DropEngine {
     if (packet is Map) {
       final type = packet['type'];
       if (type == 'file-start') {
-        _handleStart(packet, peerId);
+        await _handleStart(packet, peerId);
+        return true;
+      }
+      if (type == 'file-resume') {
+        _handleResume(packet);
         return true;
       }
       if (type == 'file-end') {
@@ -358,7 +504,7 @@ class DropEngine {
 
   // ── Receiver internals ──────────────────────────────────────────
 
-  void _handleStart(Map packet, String peerId) {
+  Future<void> _handleStart(Map packet, String peerId) async {
     final fileIdB64 = packet['fileId'];
     if (fileIdB64 is! String || fileIdB64.isEmpty) return;
     final idHex = _toHex(base64ToBytes(fileIdB64));
@@ -383,7 +529,10 @@ class DropEngine {
       onFailed?.call(idHex, DropDirection.incoming, 'Слишком много передач');
       return;
     }
-    if (incomingBufferedBytes + size > maxIncomingBytesTotal &&
+    // RAM budget applies only to in-memory stores. A path-backed receive
+    // still respects [kMaxDropFileBytes].
+    if (openIncomingStore == null &&
+        incomingBufferedBytes + size > maxIncomingBytesTotal &&
         !_incoming.containsKey(key)) {
       onFailed?.call(idHex, DropDirection.incoming, 'Превышен лимит памяти');
       return;
@@ -396,12 +545,24 @@ class DropEngine {
       hash: (packet['hash'] as String?) ?? '',
       totalChunks: declaredChunks ?? expectedChunks,
     );
-    _incoming[key] = _Incoming(meta, peerId, _clock());
+    final opener = openIncomingStore;
+    final store = opener == null
+        ? MemoryDropChunkStore()
+        : await opener(meta, peerId);
+    _incoming[key] = _Incoming(meta, peerId, _clock(), store);
     onIncomingStart?.call(meta);
-    onProgress?.call(idHex, 0, size, DropDirection.incoming);
+    onProgress?.call(idHex, store.receivedBytes, size, DropDirection.incoming);
+    final resumeAt = store.resumeOffset;
+    if (resumeAt > 0) {
+      onReply?.call(peerId, <String, Object?>{
+        'type': 'file-resume',
+        'fileId': fileIdB64,
+        'offset': resumeAt,
+      });
+    }
   }
 
-  bool _handleChunk(Uint8List frame, String peerId) {
+  Future<bool> _handleChunk(Uint8List frame, String peerId) async {
     if (frame.length < _frameHeaderLen) return false;
     if (frame.length > kMaxDropFrameBytes) return false;
     if (frame[0] != _frameVersion) return false;
@@ -412,27 +573,33 @@ class DropEngine {
     final bd = ByteData.sublistView(frame, 1 + _fileIdLen, _frameHeaderLen);
     final seq = bd.getUint32(0, Endian.big);
     if (seq >= state.meta.totalChunks && state.meta.totalChunks > 0) {
-      _failIncoming(key, idHex, 'Некорректный номер чанка');
+      await _failIncoming(key, idHex, 'Некорректный номер чанка');
       return true;
     }
-    if (state.chunks.containsKey(seq)) return true; // dedup
+    if (state.store.hasSeq(seq)) return true; // dedup
     final payload = Uint8List.sublistView(frame, _frameHeaderLen);
-    // Bound memory *before* copying. Declared size is the hard cap; the
-    // global budget is a second line so many small transfers cannot OOM.
-    if (state.receivedBytes + payload.length > state.meta.size ||
-        incomingBufferedBytes + payload.length > maxIncomingBytesTotal) {
-      _failIncoming(key, idHex, 'Превышен объявленный размер');
+    if (state.store.receivedBytes + payload.length > state.meta.size) {
+      await _failIncoming(key, idHex, 'Превышен объявленный размер');
       return true;
     }
-    state.chunks[seq] = Uint8List.fromList(payload);
-    state.receivedBytes += payload.length;
+    if (state.store.countsTowardMemoryBudget &&
+        incomingBufferedBytes + payload.length > maxIncomingBytesTotal) {
+      await _failIncoming(key, idHex, 'Превышен объявленный размер');
+      return true;
+    }
+    await state.store.put(seq, payload);
     onProgress?.call(
-        idHex, state.receivedBytes, state.meta.size, DropDirection.incoming);
+      idHex,
+      state.store.receivedBytes,
+      state.meta.size,
+      DropDirection.incoming,
+    );
     return true;
   }
 
-  void _failIncoming(String key, String idHex, String reason) {
-    _incoming.remove(key);
+  Future<void> _failIncoming(String key, String idHex, String reason) async {
+    final state = _incoming.remove(key);
+    await state?.store.dispose();
     onFailed?.call(idHex, DropDirection.incoming, reason);
   }
 
@@ -445,8 +612,9 @@ class DropEngine {
     if (state == null) return;
 
     if (state.meta.totalChunks > 0 &&
-        (state.chunks.length != state.meta.totalChunks ||
-            state.receivedBytes != state.meta.size)) {
+        (state.store.storedChunkCount != state.meta.totalChunks ||
+            state.store.receivedBytes != state.meta.size)) {
+      await state.store.dispose();
       onFailed?.call(
         idHex,
         DropDirection.incoming,
@@ -454,26 +622,21 @@ class DropEngine {
       );
       return;
     }
-    final ordered = state.chunks.keys.toList()..sort();
-    for (var i = 0; i < ordered.length; i++) {
-      if (ordered[i] != i) {
-        onFailed?.call(
-          idHex,
-          DropDirection.incoming,
-          'Части пришли не по порядку',
-        );
-        return;
-      }
+    final assembled = await state.store.assembledBytes();
+    if (state.meta.totalChunks > 0 && assembled == null && state.store.localPath == null) {
+      await state.store.dispose();
+      onFailed?.call(
+        idHex,
+        DropDirection.incoming,
+        'Части пришли не по порядку',
+      );
+      return;
     }
-    final builder = BytesBuilder(copy: false);
-    for (final s in ordered) {
-      builder.add(state.chunks[s]!);
-    }
-    final assembled = builder.toBytes();
 
     if (state.meta.hash.isNotEmpty) {
-      final actual = await _sha256Hex(assembled);
+      final actual = await state.store.digestHex();
       if (actual != state.meta.hash) {
+        await state.store.dispose();
         onFailed?.call(
           idHex,
           DropDirection.incoming,
@@ -482,16 +645,21 @@ class DropEngine {
         return;
       }
     }
-    onIncomingReady?.call(state.meta, assembled);
-    var persisted = true;
-    final persist = persistIncoming;
-    if (persist != null) {
-      try {
-        persisted = await persist(state.meta, assembled);
-      } catch (_) {
-        persisted = false;
-      }
+    final path = state.store.localPath;
+    if (assembled != null) {
+      onIncomingReady?.call(state.meta, assembled);
     }
+    var persisted = true;
+    try {
+      if (path != null && persistIncomingPath != null) {
+        persisted = await persistIncomingPath!(state.meta, path);
+      } else if (assembled != null && persistIncoming != null) {
+        persisted = await persistIncoming!(state.meta, assembled);
+      }
+    } catch (_) {
+      persisted = false;
+    }
+    await state.store.dispose();
     onReply?.call(peerId, <String, Object?>{
       'type': persisted ? 'file-ack' : 'file-nack',
       'fileId': fileIdB64,
@@ -505,6 +673,17 @@ class DropEngine {
         'Не удалось сохранить файл',
       );
     }
+  }
+
+  void _handleResume(Map packet) {
+    final fileIdB64 = packet['fileId'];
+    if (fileIdB64 is! String) return;
+    final idHex = _toHex(base64ToBytes(fileIdB64));
+    final state = _outgoing[idHex];
+    if (state == null) return;
+    final offset = (packet['offset'] as num?)?.toInt() ?? 0;
+    final gate = state.resumeGate;
+    if (gate != null && !gate.isCompleted) gate.complete(offset < 0 ? 0 : offset);
   }
 
   void _handleAck(Map packet, {required bool accepted}) {
@@ -521,7 +700,9 @@ class DropEngine {
     if (fileIdB64 is! String) return;
     final idHex = _toHex(base64ToBytes(fileIdB64));
     final key = dropTransferKey(peerId, idHex);
-    if (_incoming.remove(key) != null) {
+    final state = _incoming.remove(key);
+    if (state != null) {
+      unawaited(state.store.dispose());
       onFailed?.call(idHex, DropDirection.incoming, 'Отправитель отменил передачу');
     }
   }
@@ -536,6 +717,7 @@ class DropEngine {
     for (final key in stale) {
       final state = _incoming.remove(key);
       if (state != null) {
+        unawaited(state.store.dispose());
         onFailed?.call(
           state.meta.fileId,
           DropDirection.incoming,
@@ -559,6 +741,11 @@ class DropEngine {
   void reset() {
     for (final s in _outgoing.values) {
       if (!s.ack.isCompleted) s.ack.complete(false);
+      final gate = s.resumeGate;
+      if (gate != null && !gate.isCompleted) gate.complete(0);
+    }
+    for (final s in _incoming.values) {
+      unawaited(s.store.dispose());
     }
     _incoming.clear();
     _outgoing.clear();
@@ -573,6 +760,7 @@ class DropEngine {
     for (final key in keys) {
       final state = _incoming.remove(key);
       if (state != null) {
+        unawaited(state.store.dispose());
         onFailed?.call(
           state.meta.fileId,
           DropDirection.incoming,
@@ -588,6 +776,8 @@ class DropEngine {
       final state = _outgoing.remove(key);
       if (state == null) continue;
       if (!state.ack.isCompleted) state.ack.complete(false);
+      final gate = state.resumeGate;
+      if (gate != null && !gate.isCompleted) gate.complete(0);
       onFailed?.call(key, DropDirection.outgoing, 'Соединение закрыто');
     }
   }

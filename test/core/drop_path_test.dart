@@ -14,7 +14,11 @@ void main() {
     expect(provider, contains('harness-file-received'));
     expect(provider, contains('localPath'));
     expect(provider, contains('resumeOffset'));
+    expect(provider, contains('openPeerJsDropStore'));
+    expect(provider, contains('persistIncomingPath'));
+    expect(provider, contains('sendDropFileFromFilesystem'));
     expect(page, contains('t.localPath'));
+    expect(page, isNot(contains('File(pf.path!).readAsBytes')));
     expect(
       File('lib/transport/native_transport_host.dart').readAsStringSync(),
       contains('rollbackNativeToPeerjs'),

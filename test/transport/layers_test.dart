@@ -78,6 +78,18 @@ void main() {
       File('lib/attachments/path_attachment.dart').existsSync(),
       isTrue,
     );
+    expect(
+      File('lib/core/orbits_drop.dart').readAsStringSync(),
+      contains('sendFileRanged'),
+    );
+    expect(
+      File('lib/core/orbits_drop.dart').readAsStringSync(),
+      contains('openIncomingStore'),
+    );
+    expect(
+      File('lib/attachments/path_drop_store.dart').existsSync(),
+      isTrue,
+    );
   });
 
   test('connect checks keep block before TOFU', () {

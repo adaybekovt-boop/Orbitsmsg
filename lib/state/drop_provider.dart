@@ -16,6 +16,10 @@ import '../storage/db.dart' as db;
 import '../transport/transport_api.dart';
 import 'auth_notifier.dart';
 import 'connections_notifier.dart';
+import 'drop_path_send_stub.dart'
+    if (dart.library.io) 'drop_path_send_io.dart' as drop_path_send;
+import 'drop_store_factory_stub.dart'
+    if (dart.library.io) 'drop_store_factory_io.dart' as drop_store;
 
 enum DropStatus { queued, sent, received, completed, failed }
 
@@ -95,6 +99,8 @@ class DropNotifier extends StateNotifier<DropState> {
       onFailed: _onFailed,
       onOutgoingSent: _onOutgoingSent,
       persistIncoming: _persistIncoming,
+      persistIncomingPath: _persistIncomingPath,
+      openIncomingStore: drop_store.openPeerJsDropStore,
       onReply: (peerId, packet) {
         _ref.read(connectionsNotifierProvider.notifier).sendDrop(peerId, packet);
       },
@@ -174,8 +180,8 @@ class DropNotifier extends StateNotifier<DropState> {
     return id;
   }
 
-  /// Native carrier: stream from a path. Returns null when native is not
-  /// bound so the caller can fall back to PeerJS [sendFile] with bytes.
+  /// Native carrier first. If Hyperswarm is off, stream the same path over
+  /// PeerJS Drop without reading the file into a Dart `Uint8List`.
   Future<String?> sendFileFromPath(
     String peerId, {
     required String path,
@@ -206,7 +212,19 @@ class DropNotifier extends StateNotifier<DropState> {
           resumeOffset: resumeOffset,
         ),
       );
-      if (!ok) return null;
+      if (ok) {
+        _upsert(DropTransfer(
+          id: id,
+          name: name,
+          size: sizeBytes,
+          mime: mime,
+          peerId: pid,
+          direction: DropDirection.outgoing,
+          transferred: sizeBytes,
+          status: DropStatus.completed,
+        ));
+        return id;
+      }
     } on StateError catch (e) {
       _upsert(DropTransfer(
         id: id,
@@ -220,6 +238,7 @@ class DropNotifier extends StateNotifier<DropState> {
       ));
       return id;
     }
+
     _upsert(DropTransfer(
       id: id,
       name: name,
@@ -227,9 +246,32 @@ class DropNotifier extends StateNotifier<DropState> {
       mime: mime,
       peerId: pid,
       direction: DropDirection.outgoing,
-      transferred: sizeBytes,
-      status: DropStatus.completed,
     ));
+    try {
+      final sent = await drop_path_send.sendDropFileFromFilesystem(
+        engine: _engine,
+        path: path,
+        name: name,
+        mime: mime,
+        sizeBytes: sizeBytes,
+        fileId: id,
+        peerId: pid,
+        resumeOffset: resumeOffset,
+        send: (packet) => conns.sendDrop(pid, packet),
+        waitForDrain: () => conns.waitForDropDrain(pid),
+      );
+      if (sent == null) {
+        _patch(
+          id,
+          (t) => t.copyWith(
+            status: DropStatus.failed,
+            error: 'Не удалось прочитать файл',
+          ),
+        );
+      }
+    } catch (e) {
+      _patch(id, (t) => t.copyWith(status: DropStatus.failed, error: '$e'));
+    }
     return id;
   }
 
@@ -378,6 +420,18 @@ class DropNotifier extends StateNotifier<DropState> {
         transferred: t.size,
         status: DropStatus.completed,
         blobId: blobId,
+      ),
+    );
+    return true;
+  }
+
+  Future<bool> _persistIncomingPath(DropFileMeta meta, String path) async {
+    _patch(
+      meta.fileId,
+      (t) => t.copyWith(
+        transferred: t.size,
+        status: DropStatus.completed,
+        localPath: path,
       ),
     );
     return true;

@@ -62,24 +62,18 @@ class _DropPageState extends ConsumerState<DropPage> {
     setState(() => _sendingToPeer = peerId);
     try {
       if (!kIsWeb && pf.path != null && pf.path!.isNotEmpty) {
-        final nativeId = await ref.read(dropNotifierProvider.notifier).sendFileFromPath(
+        final id = await ref.read(dropNotifierProvider.notifier).sendFileFromPath(
               peerId,
               path: pf.path!,
               name: name,
               mime: mime,
               sizeBytes: pf.size,
             );
-        if (nativeId != null) return;
+        if (id == null) _toast('Нет соединения с получателем');
+        return;
       }
 
-      Uint8List? bytes = pf.bytes;
-      if ((bytes == null || bytes.isEmpty) && pf.path != null) {
-        try {
-          bytes = await File(pf.path!).readAsBytes();
-        } catch (_) {
-          bytes = null;
-        }
-      }
+      final bytes = pf.bytes;
       if (bytes == null || bytes.isEmpty) {
         _toast('Не удалось прочитать файл');
         return;

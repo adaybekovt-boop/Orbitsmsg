@@ -417,7 +417,8 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     return conn.send(packet);
   }
 
-  /// Native large-file path. PeerJS Drop still uses [sendDrop] with bytes.
+  /// Native large-file path. PeerJS Drop streams from the same path via
+  /// [DropNotifier.sendFileFromPath] (ranged reads, not a Dart byte array).
   Future<bool> sendFileFromPath(
     String remoteId,
     TransportFileDescriptor file,

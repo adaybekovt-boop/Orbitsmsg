@@ -1,6 +1,7 @@
 // Path-backed inbound file. Chunks land at [offset] on disk. The whole
-// blob is never held as a Dart `Uint8List`. Used by the native / loopback
-// `harness-file-*` path — PeerJS Drop still uses in-memory chunks.
+// blob is never held as a Dart `Uint8List`. Used by native / loopback
+// `harness-file-*` and by PeerJS Drop when [DropEngine.openIncomingStore]
+// points at a path store.
 //
 // RandomAccessFile is opened with FileMode.write (seekable). Resume of a
 // previous session copies the contiguous prefix into a fresh file so we
@@ -173,7 +174,9 @@ class IncomingPathAttachment {
   }
 
   Future<void> close() async {
-    await _raf.close();
+    try {
+      await _raf.close();
+    } catch (_) {}
   }
 
   Future<void> _writeSidecar() async {
