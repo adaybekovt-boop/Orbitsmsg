@@ -31,6 +31,18 @@ void main() {
     ).readAsStringSync();
     expect(wake, contains('opaqueWakeToken'));
     expect(wake, contains('peerId'));
+    expect(wake, contains('OrbitsPushBridge.emitWake'));
+    expect(
+      File('android/app/src/main/kotlin/com/orbits/orbits_flutter/MainActivity.kt')
+          .readAsStringSync(),
+      contains('OrbitsPushBridge.attach'),
+    );
+    expect(
+      File(
+        'android/app/src/main/kotlin/com/orbits/orbits_flutter/OrbitsPushBridge.kt',
+      ).existsSync(),
+      isTrue,
+    );
 
     final androidManifest =
         File('android/app/src/main/AndroidManifest.xml').readAsStringSync();
@@ -63,9 +75,23 @@ void main() {
     expect(scope, contains("'battery'"));
     expect(scope, contains('onLowBattery'));
     expect(scope, contains('onBatteryOkay'));
+    expect(scope, contains("'token'"));
+    expect(scope, contains('acceptPushToken'));
+    expect(
+      File('lib/transport/native_transport_host.dart').readAsStringSync(),
+      contains('acceptPushToken'),
+    );
+    expect(
+      File('lib/transport/native_transport_host.dart').readAsStringSync(),
+      contains('Device tokens stay on-device'),
+    );
     expect(
       File('lib/transport/native_transport_host_stub.dart').readAsStringSync(),
       contains('onLowBattery'),
+    );
+    expect(
+      File('lib/transport/native_transport_host_stub.dart').readAsStringSync(),
+      contains('acceptPushToken'),
     );
   });
 }

@@ -51,6 +51,7 @@ void main() {
     expect(src, contains('httpStoragePeerClient'));
     expect(src, contains('PushGateway'));
     expect(src, contains('ingestFcm'));
+    expect(src, contains('acceptPushToken'));
     expect(src, contains('onDoze'));
     expect(src, contains('onLowBattery'));
     expect(src, contains('onBatteryOkay'));

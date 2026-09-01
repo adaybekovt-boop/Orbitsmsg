@@ -47,7 +47,10 @@ enabled — do not promise always-on P2P.
   `batteryLevelDidChangeNotification` (level ≤ 0.20 while unplugged).
 - FCM SDK is not a required dependency. `OpaqueWakeService` accepts only
   an opaque token. `OrbitsWakeReceiver` drops extras that carry text,
-  names, or peer IDs. A public push gateway is still not deployed.
+  names, or peer IDs, then forwards the allowlisted token onto
+  `app.orbits/push` (`wake`) when Flutter is attached. iOS APNs device
+  tokens arrive as `token` on the same channel and stay on-device.
+  A public push gateway is still not deployed.
   `PushSender.sendApns` / `sendFcm` refuse while `kLiveApnsGateway` /
   `kLiveFcmGateway` are false.
 - Foreground service is for an in-app Telecom call, not for keeping a

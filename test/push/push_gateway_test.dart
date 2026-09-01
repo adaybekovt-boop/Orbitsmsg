@@ -40,5 +40,14 @@ void main() {
     );
     expect((await gateway.ingestApns(wake.toJson())).accepted, isTrue);
     expect((await gateway.ingestFcm(wake.toJson())).accepted, isTrue);
+    expect(
+      (await gateway.ingestApns({
+        'opaqueWakeToken': 'tok',
+        'collapseId': 'c1',
+        'protocolVersion': '1',
+      }))
+          .accepted,
+      isTrue,
+    );
   });
 }

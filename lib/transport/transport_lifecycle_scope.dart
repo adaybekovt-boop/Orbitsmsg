@@ -67,6 +67,10 @@ class _TransportLifecycleScopeState
 
   Future<void> _onNativePush(MethodCall call) async {
     final host = ref.read(nativeTransportHostProvider);
+    if (call.method == 'token' && call.arguments is Map) {
+      host.acceptPushToken(Map<String, Object?>.from(call.arguments as Map));
+      return;
+    }
     if (call.method != 'wake' || call.arguments is! Map) return;
     final payload = Map<String, Object?>.from(call.arguments as Map);
     await host.handleWake(payload);

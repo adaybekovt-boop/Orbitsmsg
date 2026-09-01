@@ -13,6 +13,7 @@ import '../mailbox/blind_store.dart';
 import '../mailbox/storage_peer_client.dart';
 import '../mailbox/storage_peer_http.dart';
 import '../push/push_gateway.dart';
+import '../push/push_registration.dart';
 import '../push/wake_service.dart';
 import '../replication/memory_journal.dart';
 import '../state/auth_notifier.dart';
@@ -45,6 +46,7 @@ class NativeTransportHost {
   PushGateway? push;
   StoragePeerHttp? storageHttp;
   RelayDirectory? directory;
+  final PushRegistration pushRegistration = PushRegistration();
 
   Future<void> ensureStarted() async {
     if (!isHyperswarmTransportEnabled()) return;
@@ -330,6 +332,11 @@ class NativeTransportHost {
       return const WakeOutcome(accepted: false, reason: 'not-started');
     }
     return gateway.ingestFcm(payload);
+  }
+
+  /// Device tokens stay on-device. Never journal / Hypercore / mailbox.
+  void acceptPushToken(Map<String, Object?> payload) {
+    pushRegistration.acceptToken(payload);
   }
 }
 

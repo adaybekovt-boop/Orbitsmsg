@@ -39,7 +39,10 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
   connect `path: direct`. This is not a public fleet or a live NAT
   relay, and `kLiveSignedRelayDirectory` stays false.
 - APNs / FCM: local opaque wake HTTP + `PushGateway` intake + `PushSender`
-  which **refuses** Apple/Google send. `kLiveApnsGateway` / `kLiveFcmGateway`
+  which **refuses** Apple/Google send. iOS remote-notification extras and
+  the Android `app.orbits.OPAQUE_WAKE` broadcast forward allowlisted
+  tokens onto `app.orbits/push`; device tokens stay on-device. Live send
+  and OS permission prompts stay off. `kLiveApnsGateway` / `kLiveFcmGateway`
   stay false. iOS/Android hosts can register only after those flags flip.
 - Bare: `tool/bare/vendor.sh` pins Holepunch `bare-runtime` 1.31.0 at
   **build time** (sha256 required for every OS slot in `BARE.manifest`).

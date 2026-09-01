@@ -12,6 +12,7 @@ import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
     private var lifecycleChannel: MethodChannel? = null
+    private var pushChannel: MethodChannel? = null
     private val dozeReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             val pm = getSystemService(POWER_SERVICE) as PowerManager
@@ -49,15 +50,20 @@ class MainActivity : FlutterActivity() {
             flutterEngine.dartExecutor.binaryMessenger,
             "app.orbits/lifecycle",
         )
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "app.orbits/push")
-            .setMethodCallHandler { call, result ->
-                if (call.method == "register") {
-                    // FCM SDK is not a required dependency. Live send stays off.
-                    result.success(null)
-                    return@setMethodCallHandler
-                }
-                result.notImplemented()
+        val push = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "app.orbits/push",
+        )
+        pushChannel = push
+        OrbitsPushBridge.attach(push)
+        push.setMethodCallHandler { call, result ->
+            if (call.method == "register") {
+                // FCM SDK is not a required dependency. Live send stays off.
+                result.success(null)
+                return@setMethodCallHandler
             }
+            result.notImplemented()
+        }
         val filter = IntentFilter(PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED)
         val batteryFilter = IntentFilter().apply {
             addAction(Intent.ACTION_BATTERY_LOW)
@@ -83,6 +89,8 @@ class MainActivity : FlutterActivity() {
             unregisterReceiver(batteryReceiver)
         } catch (_: IllegalArgumentException) {
         }
+        pushChannel?.let { OrbitsPushBridge.detach(it) }
+        pushChannel = null
         super.onDestroy()
     }
 }

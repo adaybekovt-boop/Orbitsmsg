@@ -40,3 +40,11 @@ class OpaqueWake {
         payload.containsKey('protocolVersion');
   }
 }
+
+/// APNs/FCM extras often arrive as strings. 0 means malformed.
+int opaqueWakeProtocolVersion(Object? raw) {
+  if (raw is int) return raw;
+  if (raw is num) return raw.toInt();
+  if (raw is String) return int.tryParse(raw.trim()) ?? 0;
+  return 0;
+}

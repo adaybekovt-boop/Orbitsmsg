@@ -16,6 +16,7 @@ class NativeTransportHost {
       const WakeOutcome(accepted: false, reason: 'web');
   Future<WakeOutcome> handleFcmWake(Map<String, Object?> payload) async =>
       const WakeOutcome(accepted: false, reason: 'web');
+  void acceptPushToken(Map<String, Object?> payload) {}
 }
 
 final nativeTransportHostProvider = Provider<NativeTransportHost>((ref) {

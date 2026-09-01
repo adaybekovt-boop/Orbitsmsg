@@ -70,6 +70,15 @@ void main() {
     expect(life.suspended, isFalse);
     expect(drained, 2);
     expect(life.lastDrained, 2);
+
+    await life.onBackground();
+    final fromString = await wake.handle({
+      'opaqueWakeToken': 'tok',
+      'collapseId': 'c',
+      'protocolVersion': '1',
+    });
+    expect(fromString.accepted, isTrue);
+    expect(life.suspended, isFalse);
   });
 
   test('low battery suspends; battery-okay does not resume native', () async {
