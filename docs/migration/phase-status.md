@@ -62,7 +62,9 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
   the plugin first, then plugin native dirs / `tool/bare/` slots, then Node.
   Native `start` refuses any worklet path with `://`. CI asserts the binary
   is inside the linux/macOS/Windows/iOS/APK artifacts after `flutter build`.
-  That still does
+  A local `bare-*` stdlib zip (no hyperswarm/hyperdht) is packed at build
+  time and copied next to that binary so Bare can resolve `bare-fs` without
+  Node. That still does
   not set `kBareBinaryShipped` — not every OS slot is in every app bundle.
 - Holepunch Corestore native addon: `kHolepunchCorestoreAddonLinked` is
   false. `tool/bare/addons/vendor-corestore.sh` copies a **local** `.node`

@@ -34,6 +34,9 @@ def orbitsBareSlot = file("${project.projectDir}/../../../tool/bare/android-arm6
 def orbitsBareAssetDir = file("${project.projectDir}/src/main/assets")
 def orbitsBareAsset = file("${orbitsBareAssetDir}/bare")
 
+def orbitsStdlibZip = file("${project.projectDir}/../../../tool/connectivity_harness/bare_stdlib.zip")
+def orbitsStdlibAsset = file("${orbitsBareAssetDir}/bare_stdlib.zip")
+
 tasks.register("copyOrbitsBareAsset", Copy) {
     description = "Copy a local android-arm64 Bare slot into plugin assets. Never downloads."
     onlyIf { orbitsBareSlot.exists() }
@@ -42,17 +45,27 @@ tasks.register("copyOrbitsBareAsset", Copy) {
     rename { "bare" }
 }
 
+tasks.register("copyOrbitsBareStdlibAsset", Copy) {
+    description = "Copy a local bare-* stdlib zip into plugin assets. Never downloads."
+    onlyIf { orbitsStdlibZip.exists() }
+    from(orbitsStdlibZip)
+    into(orbitsBareAssetDir)
+    rename { "bare_stdlib.zip" }
+}
+
 afterEvaluate {
     tasks.matching {
         it.name != "copyOrbitsBareAsset" &&
+            it.name != "copyOrbitsBareStdlibAsset" &&
             it.name.contains("Assets") &&
             (it.name.startsWith("merge") || it.name.startsWith("package"))
     }.configureEach {
-        dependsOn("copyOrbitsBareAsset")
+        dependsOn("copyOrbitsBareAsset", "copyOrbitsBareStdlibAsset")
     }
 }
 
-if (orbitsBareSlot.exists() || orbitsBareAsset.exists()) {
+if (orbitsBareSlot.exists() || orbitsBareAsset.exists() ||
+        orbitsStdlibZip.exists() || orbitsStdlibAsset.exists()) {
     android.sourceSets.main.assets.srcDirs += ["src/main/assets"]
 }
 

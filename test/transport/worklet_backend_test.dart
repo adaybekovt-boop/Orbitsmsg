@@ -93,6 +93,10 @@ void main() {
     );
     expect(
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains('ensureLocalBareStdlib'),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
       contains("'bootstrap':"),
     );
     expect(

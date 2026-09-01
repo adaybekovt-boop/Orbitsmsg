@@ -14,6 +14,7 @@ import 'package:path_provider/path_provider.dart';
 import '../replication/corestore_addon.dart';
 import 'bare_ipc_client.dart';
 import 'bare_runtime.dart';
+import 'bare_stdlib.dart';
 import 'device_binding.dart';
 import 'transport_api.dart';
 import 'transport_noise_seed.dart';
@@ -42,6 +43,7 @@ Future<WorkletOrbitsTransport?> spawnWorkletTransport({
       bundled = File(pluginPath);
     }
   } catch (_) {}
+  await ensureLocalBareStdlib(script, bundledBare: bundled);
   final launch = resolveBareRuntime(script, bundledBare: bundled);
   final started = await _spawnLaunch(launch, script, backend);
   if (started != null) return started;
@@ -148,7 +150,9 @@ Future<File?> extractBundledWorklet() async {
           .writeAsBytes(pkg.buffer.asUint8List());
     } catch (_) {}
     final script = File('${dest.path}${Platform.pathSeparator}worklet.js');
-    return script.existsSync() ? script : null;
+    if (!script.existsSync()) return null;
+    await ensureLocalBareStdlib(script);
+    return script;
   } catch (_) {
     return null;
   }

@@ -26,6 +26,7 @@ void main() {
     expect(src, isNot(contains('http://')));
     expect(src, isNot(contains('https://')));
     expect(src, contains("executable: 'node'"));
+    expect(src, contains('ensureLocalBareStdlib'));
     expect(launchKindForCurrentTree(), anyOf('bare', 'node'));
   });
 
@@ -53,6 +54,19 @@ void main() {
     ) as Map;
     expect(modules['remoteFetch'], isFalse);
     expect(modules['downloadUrl'], isNull);
+    expect(modules['packScript'], 'tool/connectivity_harness/pack-bare-stdlib.sh');
+    expect(
+      File('tool/connectivity_harness/pack-bare-stdlib.sh').readAsStringSync(),
+      contains('NEVER downloads'),
+    );
+    expect(
+      File('tool/connectivity_harness/pack-bare-stdlib.sh').readAsStringSync(),
+      contains('hyperdht'),
+    );
+    expect(
+      File('tool/connectivity_harness/embed-bare-stdlib.sh').readAsStringSync(),
+      contains('NEVER downloads'),
+    );
   });
 
   test('Bare manifest lists per-OS slots and does not claim a shipped binary', () {

@@ -61,10 +61,23 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         val out = File(ctx.cacheDir, "orbits-bare")
         out.outputStream().use { input.copyTo(it) }
         out.setExecutable(true)
-        if (out.exists() && out.canExecute()) out.absolutePath else null
+        if (out.exists() && out.canExecute()) {
+          extractStdlibZip(ctx)
+          out.absolutePath
+        } else null
       }
     } catch (_: Exception) {
       null
+    }
+  }
+
+  private fun extractStdlibZip(ctx: Context) {
+    try {
+      ctx.assets.open("bare_stdlib.zip").use { input ->
+        File(ctx.cacheDir, "bare_stdlib.zip").outputStream().use { input.copyTo(it) }
+      }
+    } catch (_: Exception) {
+      // optional local zip
     }
   }
 }

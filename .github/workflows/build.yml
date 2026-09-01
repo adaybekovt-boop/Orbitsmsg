@@ -105,6 +105,17 @@ jobs:
         run: |
           npm ci --omit=dev --no-fund --no-audit
           node --test --test-force-exit test/*.test.js
+          ./pack-bare-stdlib.sh
+          python3 - <<'PY'
+          import zipfile
+          names = zipfile.ZipFile("bare_stdlib.zip").namelist()
+          if "node_modules/bare-fs/package.json" not in names:
+              raise SystemExit("stdlib zip missing bare-fs")
+          blob = "\n".join(names).lower()
+          if "hyperswarm" in blob or "hyperdht" in blob:
+              raise SystemExit("stdlib zip must not contain hyperswarm/hyperdht")
+          print("local bare stdlib zip packed; kBareBinaryShipped stays false")
+          PY
 
       - name: Local mailbox, fleet, and opaque wake (not public)
         run: |
@@ -224,6 +235,13 @@ jobs:
           test -f packages/orbits_transport_macos/macos/bare-x64
           echo "darwin-x64 vendored beside arm64 host; kBareBinaryShipped stays false"
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Pack local bare-* stdlib zip (not hyperswarm)
+        run: bash tool/ci/vendor_bare_stdlib.sh
+
       - name: Generate and verify iOS assets
         run: |
           set -euo pipefail
@@ -260,6 +278,10 @@ jobs:
             exit 1
           fi
           echo "ios app bundle has local Bare; kBareBinaryShipped stays false"
+          if ! find build/ios/iphoneos/Runner.app -name 'bare_stdlib.zip' -type f | grep -q .; then
+            echo "::error::iOS app bundle missing local bare stdlib zip"
+            exit 1
+          fi
 
       - name: Build iOS Simulator debug app
         run: flutter build ios --simulator --debug
@@ -294,6 +316,10 @@ jobs:
             exit 1
           fi
           echo "macos desktop linked; kBareBinaryShipped stays false"
+          if ! find build/macos/Build/Products/Release/orbits_flutter.app -name 'bare_stdlib.zip' -type f | grep -q .; then
+            echo "::error::macOS app bundle missing local bare stdlib zip"
+            exit 1
+          fi
 
   # Android release signing (GH-C01 / U-5) never uses the SDK debug key.
   # Tags/main use owner secrets; PRs use a cached CI sideload key.
@@ -409,6 +435,13 @@ jobs:
           test -f packages/orbits_transport_android/android/src/main/assets/bare
           echo "kBareBinaryShipped stays false"
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Pack local bare-* stdlib zip (not hyperswarm)
+        run: bash tool/ci/vendor_bare_stdlib.sh
+
       # TURN URL (not a secret) + PeerJS config. Username/credential are
       # loaded at runtime — never baked via --dart-define into the APK.
       - name: Compose --dart-define flags (TURN URL / PeerJS)
@@ -455,17 +488,23 @@ jobs:
           if not apks:
               raise SystemExit('no APKs in dist/')
           found = False
+          stdlib = False
           for apk in apks:
               with zipfile.ZipFile(apk) as z:
                   names = z.namelist()
               if any(n.endswith('assets/bare') for n in names):
                   found = True
                   print(f'{apk.name} contains assets/bare')
-                  break
-              print(f'{apk.name} bare-like entries:', [n for n in names if 'bare' in n.lower()][:20])
+              if any(n.endswith('assets/bare_stdlib.zip') for n in names):
+                  stdlib = True
+                  print(f'{apk.name} contains assets/bare_stdlib.zip')
+              if not found and not stdlib:
+                  print(f'{apk.name} bare-like entries:', [n for n in names if 'bare' in n.lower()][:20])
           if not found:
               raise SystemExit('apk missing assets/bare')
-          print('apk has local Bare asset; kBareBinaryShipped stays false')
+          if not stdlib:
+              raise SystemExit('apk missing assets/bare_stdlib.zip')
+          print('apk has local Bare + stdlib zip; kBareBinaryShipped stays false')
           PY
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -604,6 +643,10 @@ jobs:
           channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
       - name: Enable linux desktop
         run: flutter config --enable-linux-desktop
 
@@ -626,6 +669,9 @@ jobs:
           test -x packages/orbits_transport_linux/linux/bare
           test -x packages/orbits_transport_linux/linux/bare-arm64
           echo "kBareBinaryShipped stays false"
+
+      - name: Pack local bare-* stdlib zip (not hyperswarm)
+        run: bash tool/ci/vendor_bare_stdlib.sh
 
       - name: flutter build linux (release)
         env:
@@ -655,6 +701,13 @@ jobs:
           else
             echo "::error::linux app bundle missing lib/bare"
             find build/linux -name 'bare' -o -name 'bare-arm64' || true
+            exit 1
+          fi
+          if [ -f build/linux/x64/release/bundle/lib/bare_stdlib.zip ] || \
+             [ -f build/linux/arm64/release/bundle/lib/bare_stdlib.zip ]; then
+            echo "linux app bundle has local bare stdlib zip; kBareBinaryShipped stays false"
+          else
+            echo "::error::linux app bundle missing lib/bare_stdlib.zip"
             exit 1
           fi
 
@@ -739,6 +792,14 @@ jobs:
           test -f packages/orbits_transport_windows/windows/bare.exe
           echo "kBareBinaryShipped stays false"
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Pack local bare-* stdlib zip (not hyperswarm)
+        shell: bash
+        run: bash tool/ci/vendor_bare_stdlib.sh
+
       - name: flutter build windows (release)
         env:
           TURN_URL: ${{ secrets.TURN_URL }}
@@ -765,6 +826,9 @@ jobs:
           flutter build windows --release @defines
           if (-not (Test-Path "build/windows/x64/runner/Release/bare.exe")) {
             throw "windows app folder missing bare.exe"
+          }
+          if (-not (Test-Path "build/windows/x64/runner/Release/bare_stdlib.zip")) {
+            throw "windows app folder missing bare_stdlib.zip"
           }
           Write-Host "windows app folder has local Bare; kBareBinaryShipped stays false"
 

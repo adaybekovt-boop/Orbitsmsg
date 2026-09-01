@@ -122,6 +122,16 @@ void main() {
     expect(
       File('packages/orbits_transport_android/android/build.gradle')
           .readAsStringSync(),
+      contains('copyOrbitsBareStdlibAsset'),
+    );
+    expect(
+      File('packages/orbits_transport_linux/linux/CMakeLists.txt')
+          .readAsStringSync(),
+      contains('bare_stdlib.zip'),
+    );
+    expect(
+      File('packages/orbits_transport_android/android/build.gradle')
+          .readAsStringSync(),
       isNot(contains('../../../../tool/bare')),
     );
 
@@ -157,8 +167,12 @@ void main() {
     expect(ci, contains('flutter build linux --release'));
     expect(ci, contains('Build Linux'));
     expect(ci, contains('bundle/lib/bare'));
+    expect(ci, contains('bundle/lib/bare_stdlib.zip'));
     expect(ci, contains('runner/Release/bare.exe'));
+    expect(ci, contains('runner/Release/bare_stdlib.zip'));
     expect(ci, contains('assets/bare'));
+    expect(ci, contains('assets/bare_stdlib.zip'));
+    expect(ci, contains('tool/ci/vendor_bare_stdlib.sh'));
     expect(ci, contains("find build/ios/iphoneos/Runner.app -name 'bare'"));
     expect(
       File('linux/flutter/generated_plugin_registrant.cc').readAsStringSync(),

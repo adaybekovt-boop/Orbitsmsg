@@ -127,6 +127,10 @@ dependencies:
   # by `SecureKekVault.isSupported` (web/desktop never invoke it).
   local_auth: ^2.3.0
 
+  # Unzip a locally packed Holepunch bare-* stdlib next to the worklet.
+  # Never used to fetch remote JS.
+  archive: ^4.0.9
+
   # HKDF-SHA256 (HMAC) for the SQLCipher DB-key derivation in
   # storage/database.dart. Tiny, pure-Dart, web-safe.
   crypto: ^3.0.0

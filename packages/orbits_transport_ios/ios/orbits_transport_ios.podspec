@@ -27,6 +27,7 @@ Production must not fetch remote executable JS or binaries.
   s.prepare_command = <<-CMD
     set -e
     SLOT="../../../tool/bare/ios-arm64/bare"
+    STDLIB="../../../tool/connectivity_harness/bare_stdlib.zip"
     if [ -f "$SLOT" ]; then
       cp -f "$SLOT" ./bare
       chmod +x ./bare
@@ -36,10 +37,19 @@ Production must not fetch remote executable JS or binaries.
     else
       echo "orbits_transport_ios: Bare slot empty (kBareBinaryShipped stays false)"
     fi
+    if [ -f "$STDLIB" ]; then
+      cp -f "$STDLIB" ./bare_stdlib.zip
+      echo "orbits_transport_ios: using local bare stdlib zip"
+    elif [ -f ./bare_stdlib.zip ]; then
+      echo "orbits_transport_ios: using previously embedded bare stdlib zip"
+    fi
   CMD
 
-  if File.exist?(File.join(__dir__, 'bare'))
-    s.resource_bundles = { 'OrbitsTransportBare' => ['bare'] }
-    s.resources = 'bare'
+  resources = []
+  resources << 'bare' if File.exist?(File.join(__dir__, 'bare'))
+  resources << 'bare_stdlib.zip' if File.exist?(File.join(__dir__, 'bare_stdlib.zip'))
+  unless resources.empty?
+    s.resource_bundles = { 'OrbitsTransportBare' => resources }
+    s.resources = resources
   end
 end
