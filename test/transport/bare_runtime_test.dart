@@ -18,6 +18,8 @@ void main() {
     final src = File('lib/transport/worklet_orbits_transport_io.dart')
         .readAsStringSync();
     expect(src, contains('resolveBareRuntime'));
+    expect(src, contains('barePath'));
+    expect(src, contains('bundledBare'));
     expect(src, isNot(contains('http://')));
     expect(src, isNot(contains('https://')));
     expect(src, contains("executable: 'node'"));
@@ -164,6 +166,45 @@ void main() {
     } else {
       expect(launch.kind, 'node');
       expect(launch.executable, 'node');
+    }
+  });
+
+  test('plugin-bundled Bare is preferred when the worklet graph is present', () {
+    final candidates = bundledBareCandidates(osArch: 'linux-arm64');
+    expect(
+      candidates,
+      contains('packages/orbits_transport_linux/linux/bare-arm64'),
+    );
+    expect(
+      candidates,
+      contains('packages/orbits_transport_linux/linux/bare'),
+    );
+    expect(
+      bundledBareCandidates(osArch: 'windows-x64'),
+      contains('packages/orbits_transport_windows/windows/bare.exe'),
+    );
+    expect(isLocalBarePath('http://example.invalid/bare'), isFalse);
+    expect(isLocalBarePath('https://example.invalid/bare'), isFalse);
+    expect(isLocalBarePath(''), isFalse);
+    expect(isLocalBarePath(worklet.path), isTrue);
+
+    final probe = File(
+      '${Directory.systemTemp.path}/orbits-bare-probe-${DateTime.now().microsecondsSinceEpoch}',
+    );
+    probe.writeAsBytesSync(const [0x7f]);
+    addTearDown(() {
+      if (probe.existsSync()) probe.deleteSync();
+    });
+    final envBin = Platform.environment['ORBITS_BARE_BIN'];
+    if (envBin != null && envBin.isNotEmpty) {
+      return;
+    }
+    final launch = resolveBareRuntime(worklet, bundledBare: probe);
+    if (bareWorkletGraphPresent(worklet)) {
+      expect(launch.kind, 'bare');
+      expect(launch.executable, probe.absolute.path);
+    } else {
+      expect(launch.kind, 'node');
     }
   });
 }

@@ -84,23 +84,34 @@ bool bareWorkletGraphPresent(File worklet) {
 
 /// Resolves how to start the bundled worklet. Order:
 /// 1. `ORBITS_BARE_BIN` (absolute local path, experimental)
-/// 2. Per-OS slot under `tool/bare/<os-arch>/` only when
-///    [kBareWorkletRunsOnBareRuntime] is true and the Bare stdlib is present
-/// 3. Legacy `tool/bare/bare.exe` / `tool/bare/bare` (same gate)
+/// 2. Plugin-bundled Bare from [bundledBare] (`barePath()`)
+/// 3. Per-OS slot under plugin native dirs / `tool/bare/<os-arch>/`
+///    only when [kBareWorkletRunsOnBareRuntime] is true and the Bare
+///    stdlib is present
 /// 4. `node` for CI / desktop harness
-BareRuntimeLaunch resolveBareRuntime(File worklet) {
+BareRuntimeLaunch resolveBareRuntime(
+  File worklet, {
+  File? bundledBare,
+}) {
   final workletPath = worklet.absolute.path;
   final env = Platform.environment['ORBITS_BARE_BIN'];
-  if (env != null && env.isNotEmpty && File(env).existsSync()) {
+  if (env != null && env.isNotEmpty && isLocalBarePath(env)) {
     return BareRuntimeLaunch(
       executable: File(env).absolute.path,
       arguments: [workletPath],
       kind: 'bare',
     );
   }
-  if (kBareWorkletRunsOnBareRuntime) {
+  if (kBareWorkletRunsOnBareRuntime && bareWorkletGraphPresent(worklet)) {
+    if (bundledBare != null && isLocalBarePath(bundledBare.path)) {
+      return BareRuntimeLaunch(
+        executable: File(bundledBare.path).absolute.path,
+        arguments: [workletPath],
+        kind: 'bare',
+      );
+    }
     final local = _localBareBinary();
-    if (local != null && bareWorkletGraphPresent(worklet)) {
+    if (local != null) {
       return BareRuntimeLaunch(
         executable: local.absolute.path,
         arguments: [workletPath],
@@ -116,17 +127,43 @@ BareRuntimeLaunch resolveBareRuntime(File worklet) {
 }
 
 File? _localBareBinary() {
-  final names = <String>[
-    bareOsSlot(),
+  for (final name in bundledBareCandidates()) {
+    if (isLocalBarePath(name)) return File(name);
+  }
+  return null;
+}
+
+/// Local files Dart may spawn. Plugin-native copies (CI embed) come
+/// before `tool/bare/` slots. None of these are downloaded at runtime.
+List<String> bundledBareCandidates({String? osArch}) {
+  final arch = osArch ?? currentBareOsArch();
+  final sep = Platform.pathSeparator;
+  final exeDir = File(Platform.resolvedExecutable).parent.path;
+  return <String>[
+    '$exeDir${sep}bare',
+    '$exeDir${sep}bare.exe',
+    '$exeDir${sep}lib${sep}bare',
+    if (arch == 'linux-arm64')
+      'packages/orbits_transport_linux/linux/bare-arm64',
+    'packages/orbits_transport_linux/linux/bare',
+    if (arch == 'darwin-x64')
+      'packages/orbits_transport_macos/macos/bare-x64',
+    'packages/orbits_transport_macos/macos/bare',
+    'packages/orbits_transport_windows/windows/bare.exe',
+    'packages/orbits_transport_android/android/src/main/assets/bare',
+    'packages/orbits_transport_ios/ios/bare',
+    bareOsSlot(osArch: arch),
     if (Platform.isWindows) 'tool/bare/bare.exe',
     'tool/bare/bare',
     if (!Platform.isWindows) 'tool/bare/bare.exe',
   ];
-  for (final name in names) {
-    final file = File(name);
-    if (file.existsSync()) return file;
-  }
-  return null;
+}
+
+bool isLocalBarePath(String path) {
+  final p = path.trim();
+  if (p.isEmpty) return false;
+  if (p.startsWith('http://') || p.startsWith('https://')) return false;
+  return File(p).existsSync();
 }
 
 bool bareManifestForbidsRemoteFetch(Map<String, Object?> manifest) {

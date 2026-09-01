@@ -29,6 +29,18 @@ void main() {
       File('tool/connectivity_harness/src/corestore_journal.js').readAsStringSync(),
       contains("typeof Bare !== 'undefined'"),
     );
+    expect(
+      File('tool/connectivity_harness/src/corestore_journal.js').readAsStringSync(),
+      contains('Bare.Addon.load'),
+    );
+    expect(
+      File('tool/connectivity_harness/src/corestore_journal.js').readAsStringSync(),
+      contains('envelopes.jsonl'),
+    );
+    expect(
+      File('tool/connectivity_harness/src/corestore_journal.js').readAsStringSync(),
+      contains('must not be required from Bare'),
+    );
     final vendor = File('tool/bare/addons/vendor-corestore.sh').readAsStringSync();
     expect(vendor, contains('NEVER downloads'));
     expect(vendor, contains('kHolepunchCorestoreAddonLinked stays false'));

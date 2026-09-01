@@ -29,4 +29,28 @@ test('Bare must not require Node corestore (hangs the runtime)', () => {
   )
   assert.match(src, /typeof Bare !== 'undefined'/)
   assert.match(src, /must not be required from Bare/)
+  assert.match(src, /Bare\.Addon\.load/)
+  assert.match(src, /envelopes\.jsonl/)
+  assert.match(src, /isRemoteUrl/)
+})
+
+test('encrypted-envelope file journal stores ciphertext only', () => {
+  const fs = require('node:fs')
+  const os = require('node:os')
+  const path = require('node:path')
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbits-journal-'))
+  const journal = new CorestoreJournal('dev-a')
+  const linked = journal.useEncryptedEnvelopeFileJournal(dir)
+  assert.equal(linked, false)
+  assert.equal(journal.backend, 'fs')
+  journal.append({
+    fields: { encryptedEnvelope: Buffer.from('v2:cipher').toString('base64') },
+  })
+  const log = fs.readFileSync(path.join(dir, 'envelopes.jsonl'), 'utf8')
+  assert.match(log, /encryptedEnvelope/)
+  assert.doesNotMatch(log, /plaintext/)
+  assert.throws(
+    () => journal.append({ fields: { plaintext: 'hello', encryptedEnvelope: 'x' } }),
+    /secret field/,
+  )
 })

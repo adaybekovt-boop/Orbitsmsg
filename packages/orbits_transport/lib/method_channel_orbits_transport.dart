@@ -59,4 +59,14 @@ class MethodChannelOrbitsTransport extends OrbitsTransportPlatform {
   @override
   Future<void> refreshNetwork() =>
       _channel.invokeMethod<void>('refreshNetwork');
+
+  @override
+  Future<String?> barePath() async {
+    final path = await _channel.invokeMethod<String>('barePath');
+    if (path == null || path.isEmpty) return null;
+    if (path.startsWith('http://') || path.startsWith('https://')) {
+      return null;
+    }
+    return path;
+  }
 }

@@ -31,6 +31,7 @@ void main() {
     await plugin.stop();
     expect(host.started, isFalse);
     expect(host.calls, containsAll(['start', 'publish', 'suspend', 'resume', 'stop']));
+    expect(await plugin.barePath(), isNull);
   });
 
   test('federated facade maps every native OS and not the PWA', () {
@@ -66,6 +67,14 @@ void main() {
     await expectLater(
       channel.start({'remoteJs': true}),
       throwsStateError,
+    );
+    expect(
+      File('lib/method_channel_orbits_transport.dart').readAsStringSync(),
+      contains('barePath'),
+    );
+    expect(
+      File('lib/method_channel_orbits_transport.dart').readAsStringSync(),
+      contains("startsWith('http://')"),
     );
   });
 }

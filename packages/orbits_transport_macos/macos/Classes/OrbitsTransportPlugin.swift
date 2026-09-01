@@ -29,6 +29,28 @@ public class OrbitsTransportPlugin: NSObject, FlutterPlugin {
       result(nil)
       return
     }
+    if call.method == "stop" {
+      result(nil)
+      return
+    }
+    if call.method == "barePath" {
+      result(Self.bundledBarePath())
+      return
+    }
     result(FlutterMethodNotImplemented)
+  }
+
+  static func bundledBarePath() -> String? {
+    let bundle = Bundle(for: OrbitsTransportPlugin.self)
+    let candidates = [
+      bundle.path(forResource: "bare", ofType: nil),
+      Bundle.main.path(forResource: "bare", ofType: nil),
+    ]
+    for path in candidates {
+      if let path, FileManager.default.fileExists(atPath: path) {
+        return path
+      }
+    }
+    return nil
   }
 }

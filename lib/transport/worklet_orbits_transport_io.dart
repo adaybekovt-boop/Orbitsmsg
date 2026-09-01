@@ -7,8 +7,10 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
+import 'package:orbits_transport/orbits_transport.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../replication/corestore_addon.dart';
 import 'bare_ipc_client.dart';
 import 'bare_runtime.dart';
 import 'device_binding.dart';
@@ -31,7 +33,14 @@ Future<WorkletOrbitsTransport?> spawnWorkletTransport({
 }) async {
   final script = _resolveWorklet() ?? await extractBundledWorklet();
   if (script == null) return null;
-  final launch = resolveBareRuntime(script);
+  File? bundled;
+  try {
+    final pluginPath = await OrbitsTransportPlatform.instance.barePath();
+    if (pluginPath != null && isLocalBarePath(pluginPath)) {
+      bundled = File(pluginPath);
+    }
+  } catch (_) {}
+  final launch = resolveBareRuntime(script, bundledBare: bundled);
   final started = await _spawnLaunch(launch, script, backend);
   if (started != null) return started;
   if (launch.kind == 'bare') {
@@ -54,20 +63,37 @@ Future<WorkletOrbitsTransport?> _spawnLaunch(
   String backend,
 ) async {
   try {
+    final env = Map<String, String>.from(Platform.environment);
+    env['ORBITS_HARNESS_BACKEND'] = backend;
+    env['ORBITS_RUNTIME'] = launch.kind;
+    final leakedAddon = env['ORBITS_CORESTORE_ADDON'];
+    if (leakedAddon != null && !isLocalBarePath(leakedAddon)) {
+      env.remove('ORBITS_CORESTORE_ADDON');
+    }
+    env.addAll(_corestoreAddonEnv());
     final proc = await Process.start(
       launch.executable,
       launch.arguments,
       workingDirectory: script.parent.path,
-      environment: {
-        ...Platform.environment,
-        'ORBITS_HARNESS_BACKEND': backend,
-        'ORBITS_RUNTIME': launch.kind,
-      },
+      environment: env,
     );
     return WorkletOrbitsTransport._(proc, runtime: launch.kind);
   } catch (_) {
     return null;
   }
+}
+
+Map<String, String> _corestoreAddonEnv() {
+  final fromEnv = Platform.environment['ORBITS_CORESTORE_ADDON'];
+  if (fromEnv != null && isLocalBarePath(fromEnv)) {
+    return {'ORBITS_CORESTORE_ADDON': File(fromEnv).absolute.path};
+  }
+  if (corestoreBareAddonPresent()) {
+    return {
+      'ORBITS_CORESTORE_ADDON': File(kCorestoreBareAddonSlot).absolute.path,
+    };
+  }
+  return const <String, String>{};
 }
 
 File? _resolveWorklet() {

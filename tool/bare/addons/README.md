@@ -12,5 +12,8 @@ Place a locally built `corestore.node` at
   installed next to the harness (memory fallback if missing). That is
   not this addon.
 - On Bare, `useCorestoreIfPresent` must **not** `require('corestore')`.
-  Node's addon hangs Bare 1.31 instead of throwing. Wait for a Bare
-  `.bare` addon in `kCorestoreBareAddonSlot`.
+  Node's addon hangs Bare 1.31 instead of throwing. If a local `.bare`
+  file is in `kCorestoreBareAddonSlot` (or `ORBITS_CORESTORE_ADDON`),
+  the worklet calls `Bare.Addon.load` on that path only. Missing addon
+  → encrypted-envelope JSONL (`backend = 'fs'`). That still does not
+  flip `kHolepunchCorestoreAddonLinked`.

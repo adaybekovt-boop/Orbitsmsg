@@ -31,6 +31,34 @@ function fieldsAreSafe(fields) {
   return true
 }
 
+function isRemoteUrl(p) {
+  if (typeof p !== 'string') return false
+  const t = p.trim().toLowerCase()
+  return t.startsWith('http://') || t.startsWith('https://')
+}
+
+function localBareAddonPath() {
+  const env =
+    (typeof process !== 'undefined' &&
+      process.env &&
+      process.env.ORBITS_CORESTORE_ADDON) ||
+    ''
+  if (env && !isRemoteUrl(env)) return env
+  try {
+    const path = require('node:path')
+    const fs = require('node:fs')
+    const candidates = [
+      path.join(__dirname, '..', '..', 'bare', 'addons', 'corestore.bare'),
+    ]
+    for (const c of candidates) {
+      if (!isRemoteUrl(c) && fs.existsSync(c)) return c
+    }
+  } catch {
+    // missing fs
+  }
+  return ''
+}
+
 class CorestoreJournal {
   constructor(writerDeviceId) {
     this.writerDeviceId = writerDeviceId || 'local-device'
@@ -38,6 +66,7 @@ class CorestoreJournal {
     this.backend = 'memory'
     this._core = null
     this._store = null
+    this._logPath = null
   }
 
   // Try to open Holepunch Corestore. Missing module → memory.
@@ -46,8 +75,7 @@ class CorestoreJournal {
   // separate slot (`kHolepunchCorestoreAddonLinked`).
   async useCorestoreIfPresent(dir) {
     if (typeof Bare !== 'undefined') {
-      this.backend = 'memory'
-      return false
+      return this._useBareJournal(dir)
     }
     let Corestore
     try {
@@ -67,10 +95,49 @@ class CorestoreJournal {
     return true
   }
 
+  async _useBareJournal(dir) {
+    const addon = localBareAddonPath()
+    if (addon) {
+      try {
+        const fs = require('node:fs')
+        if (
+          fs.existsSync(addon) &&
+          typeof Bare !== 'undefined' &&
+          Bare.Addon &&
+          typeof Bare.Addon.load === 'function'
+        ) {
+          Bare.Addon.load(addon)
+        }
+      } catch {
+        // missing / unloadable local addon — keep probing fs journal
+      }
+    }
+    return this.useEncryptedEnvelopeFileJournal(dir)
+  }
+
+  // Encrypted-envelope JSONL on Bare only. Not a Holepunch Corestore.
+  useEncryptedEnvelopeFileJournal(dir) {
+    try {
+      const fs = require('node:fs')
+      const path = require('node:path')
+      const os = require('node:os')
+      const root =
+        dir || path.join(os.tmpdir(), 'orbits-journal-' + this.writerDeviceId)
+      fs.mkdirSync(root, { recursive: true })
+      this._logPath = path.join(root, 'envelopes.jsonl')
+      this.backend = 'fs'
+      return false
+    } catch {
+      this.backend = 'memory'
+      return false
+    }
+  }
+
   async close() {
     if (this._store && this._store.close) await this._store.close()
     this._core = null
     this._store = null
+    this._logPath = null
   }
 
   append(record) {
@@ -92,6 +159,16 @@ class CorestoreJournal {
       const pending = this._core.append(Buffer.from(JSON.stringify(stored)))
       if (pending && typeof pending.then === 'function') {
         pending.catch(() => {})
+      }
+    }
+    if (this._logPath) {
+      try {
+        require('node:fs').appendFileSync(
+          this._logPath,
+          JSON.stringify(stored) + '\n',
+        )
+      } catch {
+        // keep the in-memory copy
       }
     }
     return stored

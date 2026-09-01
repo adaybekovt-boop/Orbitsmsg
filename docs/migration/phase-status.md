@@ -10,11 +10,11 @@ still PeerJS.
 | 0 | ADRs, contracts, tests | Closed |
 | 1 | Harness + loopback echo/file/suspend | NAT matrix **blocked** |
 | 2 | Stand runner + metrics schema | Live KZ matrix **blocked** |
-| 3 | Plugin + worklet IPC + OS hosts refuse remote JS; federated `orbits_transport` is an app dependency with per-OS `default_package` (no web — PWA stays PeerJS); spawn prefers local `bare` then Node when stdlib is present; per-OS Bare slots + build-time `vendor.sh` / `embed.sh` / `vendor-bare-modules.sh`; iOS/macOS podspecs copy a local slot and never curl; **all** vendor tarball sha256 pins; CI vendors+embeds linux-x64, ios-arm64, darwin-arm64, android-arm64, windows-x64 into plugin hosts **and vendors** linux-arm64 / darwin-x64 beside the host-arch binary (never overwriting it); worklet import maps; path-streamed `sendFile` | Bare binary not shipped as the product flag (`kBareBinaryShipped` false) |
+| 3 | Plugin + worklet IPC + OS hosts refuse remote JS; federated `orbits_transport` is an app dependency with per-OS `default_package` (no web — PWA stays PeerJS); Linux/Windows C plugin registrars (`orbits_transport_plugin_register_with_registrar` / `OrbitsTransportPluginRegisterWithRegistrar`) plus `barePath` on every host; spawn prefers plugin-bundled local `bare` then `tool/bare/` then Node when stdlib is present; per-OS Bare slots + build-time `vendor.sh` / `embed.sh` / `vendor-bare-modules.sh`; iOS/macOS podspecs copy a local slot and never curl; **all** vendor tarball sha256 pins; CI vendors+embeds linux-x64, ios-arm64, darwin-arm64, android-arm64, windows-x64 into plugin hosts **and vendors** linux-arm64 / darwin-x64 beside the host-arch binary (never overwriting it); worklet import maps; path-streamed `sendFile` | Bare binary not shipped as the product flag (`kBareBinaryShipped` false) |
 | 4 | App boot binds native host when rollout ≠ off; prefers Hyperswarm **only** with module + explicit HyperDHT bootstrap (`ORBITS_DHT_BOOTSTRAP` / directory rows), else loopback; Noise seed ≠ identity; loopback natives exchange `v2:` / wireHello | Default still PeerJS; two physical natives not run |
 | 5 | Identity-signed caps on native connect and as a PeerJS `wireHello.caps` sibling; contact QR may carry discovery secret `d=`; secrets persist vault-wrapped | Physical pair not run |
 | 6 | Native `call` channel + CallKit / Telecom in-app sheet (opaque handle, name “Orbits”); iOS remote-notification *handlers* (no PushKit) | No PushKit / `voip` background; registration gated; no physical call |
-| 7 | File journal + Hypercore local store + worklet Corestore journal (`useCorestoreIfPresent`); live vs replay projector fingerprint; DualStackBridge ingest of replication frames into the journal; boot replays the file journal into memory + Drift after block-then-decrypt | Not a Holepunch Corestore native addon |
+| 7 | File journal + Hypercore local store + worklet Corestore journal (`useCorestoreIfPresent`); Bare probes a **local** `corestore.bare` via `Bare.Addon.load` (never `require('corestore')` on Bare) and otherwise writes encrypted-envelope JSONL (`backend = 'fs'`); live vs replay projector fingerprint; DualStackBridge ingest of replication frames into the journal; boot replays the file journal into memory + Drift after block-then-decrypt | Not a Holepunch Corestore native addon |
 | 8 | Blind mailbox + HTTP `StoragePeerClient` + local loopback fleet (3/2/2; HyperDHT bootstrap when the module is present, else HTTP marked `protocol: http`) + opaque wake HTTP intake; `PushSender` refuses APNs/FCM; APNs/FCM request builders stay opaque; Android `DEVICE_IDLE` → Doze; drain tombstones ciphertext; block list before mailbox decrypt/persist; backlog rollback | No deployed public fleet / APNs/FCM send / live signed directory |
 | 9 | Drop packets on native `attachment` channel; 10–50 MiB resume tests; path-streamed native `sendFileFromPath`; Drop UI tries path before bytes | In-memory Drop still used when PeerJS |
 | 10 | Device-link QR + revoke journal events + per-identity fan-out + three-device RatchetState isolation test; QR keys from Noise seed (not dummy bytes); native `dial` passes Noise public key; revoke drops that device's transport ratchet only | No live multi-device ratchet sessions on hardware |
@@ -53,13 +53,19 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
   and darwin-x64 (beside the darwin-arm64 macOS host, as `bare-x64`) so
   those slots are pin-checked without overwriting the runner's executable.
   The app depends on the federated plugin so those binaries can land in native
-  builds. That still does
+  builds. Linux and Windows hosts now register a real Flutter plugin and
+  report `barePath` for a local bundled copy when present. Dart spawn asks
+  the plugin first, then plugin native dirs / `tool/bare/` slots, then Node.
+  That still does
   not set `kBareBinaryShipped` — not every OS slot is in every app bundle.
 - Holepunch Corestore native addon: `kHolepunchCorestoreAddonLinked` is
   false. `tool/bare/addons/vendor-corestore.sh` copies a **local** `.node`
   / `.bare` only (refuses http). JS `corestore` may load on Node when locally installed, else
   memory. Bare must not `require('corestore')` (Node's addon hangs Bare
-  1.31).
+  1.31). If a local `corestore.bare` exists, the worklet calls
+  `Bare.Addon.load` (never a remote URL) and otherwise appends encrypted
+  envelopes to a JSONL file (`backend = 'fs'`). That is still not a
+  linked Holepunch Corestore.
 - Store review: [app-review-notes.md](app-review-notes.md) is a checklist,
   not a filed review.
 - Phase 14 isolation stays `default-live`. Do not remove PeerJS.

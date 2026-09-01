@@ -42,6 +42,11 @@ abstract class OrbitsTransportPlatform extends PlatformInterface {
   Future<void> suspend();
   Future<void> resume();
   Future<void> refreshNetwork();
+
+  /// Absolute path to a locally bundled Bare binary, or null.
+  /// Never a remote URL. The product shipped-binary flag stays false
+  /// until every OS slot is in the app bundle.
+  Future<String?> barePath() async => null;
 }
 
 class _UnimplementedTransport extends OrbitsTransportPlatform {

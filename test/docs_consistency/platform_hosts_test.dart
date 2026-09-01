@@ -14,9 +14,32 @@ void main() {
     for (final path in hosts) {
       final text = File(path).readAsStringSync();
       expect(text, contains('must not fetch remote JS'), reason: path);
+      expect(text, contains('barePath'), reason: path);
       expect(text, isNot(contains('http://')));
       expect(text, isNot(contains('https://')));
     }
+    expect(
+      File('packages/orbits_transport_linux/linux/orbits_transport_plugin.cc')
+          .readAsStringSync(),
+      contains('orbits_transport_plugin_register_with_registrar'),
+    );
+    expect(
+      File(
+        'packages/orbits_transport_linux/linux/include/orbits_transport_linux/orbits_transport_plugin.h',
+      ).existsSync(),
+      isTrue,
+    );
+    expect(
+      File('packages/orbits_transport_windows/windows/orbits_transport_plugin.cpp')
+          .readAsStringSync(),
+      contains('OrbitsTransportPluginRegisterWithRegistrar'),
+    );
+    expect(
+      File(
+        'packages/orbits_transport_windows/windows/include/orbits_transport_windows/orbits_transport_plugin.h',
+      ).existsSync(),
+      isTrue,
+    );
     expect(
       File('tool/connectivity_harness/src/corestore_journal.js').existsSync(),
       isTrue,
@@ -26,6 +49,8 @@ void main() {
     expect(journal, contains('encryptedEnvelope'));
     expect(journal, contains('plaintext'));
     expect(journal, contains('useCorestoreIfPresent'));
+    expect(journal, contains('Bare.Addon.load'));
+    expect(journal, contains('envelopes.jsonl'));
     expect(
       File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
       contains('useCorestoreIfPresent'),
