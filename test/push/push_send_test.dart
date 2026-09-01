@@ -75,4 +75,48 @@ void main() {
     expect(result.sent, isTrue);
     expect(result.reason, 'local-http');
   });
+
+  test('APNs/FCM request builders stay opaque and are not sent', () {
+    const wake = OpaqueWake(
+      opaqueWakeToken: 'tok',
+      collapseId: 'c1',
+      protocolVersion: 1,
+    );
+    final apns = buildApnsRequest(deviceToken: 'devtoken', wake: wake)!;
+    expect(apns.host, kApnsProductionHost);
+    expect(apns.path, '/3/device/devtoken');
+    expect(apns.headers['apns-topic'], kApnsTopic);
+    expect(apns.headers['apns-push-type'], 'background');
+    expect(OpaqueWake.isSafe(apns.body), isTrue);
+    expect(apns.body.containsKey('peerId'), isFalse);
+    expect(apns.body.containsKey('text'), isFalse);
+    expect((apns.body['aps'] as Map)['content-available'], 1);
+
+    final fcm = buildFcmRequest(deviceToken: 'ftok', wake: wake)!;
+    expect(fcm.host, kFcmSendHost);
+    expect(fcm.path, contains('/v1/projects/'));
+    expect(fcm.path, contains('messages:send'));
+    final data = ((fcm.body['message'] as Map)['data'] as Map);
+    expect(data['opaqueWakeToken'], 'tok');
+    expect(data.containsKey('peerId'), isFalse);
+
+    expect(
+      buildApnsRequest(
+        deviceToken: 'x',
+        wake: const OpaqueWake(
+          opaqueWakeToken: 't',
+          collapseId: 'c',
+          protocolVersion: 1,
+        ),
+      ),
+      isNotNull,
+    );
+    expect(
+      buildApnsRequest(
+        deviceToken: '',
+        wake: wake,
+      ),
+      isNull,
+    );
+  });
 }

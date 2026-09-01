@@ -30,7 +30,7 @@ a closed store-review gate.
 | Privacy manifest | `ios/Runner/PrivacyInfo.xcprivacy` (no tracking) |
 | Camera / mic / Face ID / local network strings | `ios/Runner/Info.plist` |
 | Encryption export | Uses standard HTTPS + on-device E2E; no custom “military” claims |
-| App Privacy / Data Safety | 1:1 bodies stay on device; rooms are host-plaintext; PeerJS/STUN see metadata |
+| App Privacy / Data Safety | [store-data-safety.json](store-data-safety.json) (`filed: false`) |
 | Privacy policy / support URL | Placeholder until counsel fills `kLegalPendingPlaceholder` |
 | Complaint | `lib/pages/settings/complaint_page.dart` + GitHub Issues |
 | Block user | Existing 1:1 block list (before decrypt / Drift persist) |

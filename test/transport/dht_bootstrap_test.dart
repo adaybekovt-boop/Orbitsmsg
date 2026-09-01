@@ -112,4 +112,35 @@ void main() {
     expect(bootstrapNodesFromDirectory(directory), isEmpty);
     expect(storageOriginFromPeer(directory.peers.single), 'http://10.3.0.1:8787');
   });
+
+  test('HTTP lab bootstrap rows are not HyperDHT addresses', () {
+    final directory = RelayDirectory(
+      issuedAt: 1,
+      expiresAt: 10,
+      signature: Uint8List(0),
+      identityPublicKey: Uint8List(0),
+      peers: const [
+        DirectoryPeer(
+          id: 'b-http',
+          kind: DirectoryPeerKind.bootstrap,
+          host: '127.0.0.1',
+          port: 9,
+          region: 'lab',
+          protocol: 'http',
+        ),
+        DirectoryPeer(
+          id: 'b-dht',
+          kind: DirectoryPeerKind.bootstrap,
+          host: '127.0.0.1',
+          port: 49737,
+          region: 'lab',
+          protocol: 'hyperdht',
+        ),
+      ],
+    );
+    expect(
+      bootstrapNodesFromDirectory(directory),
+      [const DhtBootstrapNode(host: '127.0.0.1', port: 49737)],
+    );
+  });
 }

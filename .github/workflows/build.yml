@@ -98,7 +98,7 @@ jobs:
       - name: Local mailbox, fleet, and opaque wake (not public)
         run: |
           node --test tool/storage_peer/test.js
-          node --test tool/fleet/test.js
+          node --test --test-force-exit tool/fleet/test.js
           node --test tool/push_gateway/test.js
 
       - name: Pin worklet bundle hash (no remote JS)

@@ -2,10 +2,16 @@
 
 /**
  * Loopback fleet for CI. Not a public deployment.
- * 3 bootstrap + 2 relay + 2 storage health servers.
+ * 3 bootstrap + 2 relay + 2 storage.
+ *
+ * Bootstrap is a local HyperDHT testnet when `hyperdht` is installed
+ * next to the connectivity harness. HTTP health ports are never used as
+ * HyperDHT addresses. Relays stay HTTP health (not Hyperswarm
+ * `relayThrough`). Storage is the blind HTTP mailbox.
  */
 
 const http = require('node:http')
+const path = require('node:path')
 const { createServer: createStorage } = require('../storage_peer/server.js')
 
 function healthServer(role, id) {
@@ -26,8 +32,43 @@ function listen(server) {
   })
 }
 
+function loadHyperDhtTestnet() {
+  const candidates = [
+    'hyperdht/testnet',
+    path.join(__dirname, '../connectivity_harness/node_modules/hyperdht/testnet'),
+  ]
+  for (const id of candidates) {
+    try {
+      return require(id)
+    } catch {
+      /* try next */
+    }
+  }
+  return null
+}
+
+async function startLocalDht(count = 3) {
+  const createTestnet = loadHyperDhtTestnet()
+  if (!createTestnet) return null
+  const testnet = await createTestnet(count, { host: '127.0.0.1' })
+  return testnet
+}
+
+async function destroyTestnet(testnet) {
+  if (!testnet) return
+  const nodes = testnet.nodes || []
+  for (let i = nodes.length - 1; i >= 0; i--) {
+    try {
+      await nodes[i].destroy({ force: true })
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 async function startLocalFleet(opts = {}) {
-  const bootstrap = [
+  const testnet = opts.skipDht ? null : await startLocalDht(3)
+  const bootstrapHealth = [
     healthServer('bootstrap', 'b-ca'),
     healthServer('bootstrap', 'b-eu'),
     healthServer('bootstrap', 'b-spare'),
@@ -38,26 +79,66 @@ async function startLocalFleet(opts = {}) {
     createStorage({ token: opts.token || 'local-mailbox' }),
   ]
   const peers = []
-  for (const s of bootstrap) {
-    peers.push({ kind: 'bootstrap', port: await listen(s), server: s })
+  const dhtRows = Array.isArray(testnet && testnet.bootstrap) ? testnet.bootstrap : []
+  for (let i = 0; i < bootstrapHealth.length; i++) {
+    const healthPort = await listen(bootstrapHealth[i])
+    const dht = dhtRows[i] || dhtRows[0]
+    if (dht && dht.port) {
+      peers.push({
+        kind: 'bootstrap',
+        protocol: 'hyperdht',
+        host: dht.host || '127.0.0.1',
+        port: dht.port,
+        healthPort,
+        server: bootstrapHealth[i],
+      })
+    } else {
+      peers.push({
+        kind: 'bootstrap',
+        protocol: 'http',
+        host: '127.0.0.1',
+        port: healthPort,
+        healthPort,
+        server: bootstrapHealth[i],
+      })
+    }
   }
   for (const s of relay) {
-    peers.push({ kind: 'relay', port: await listen(s), server: s })
+    const port = await listen(s)
+    peers.push({
+      kind: 'relay',
+      protocol: 'http',
+      host: '127.0.0.1',
+      port,
+      healthPort: port,
+      server: s,
+    })
   }
   for (const s of storage) {
-    peers.push({ kind: 'storage', port: await listen(s), server: s })
+    const port = await listen(s)
+    peers.push({
+      kind: 'storage',
+      protocol: 'http',
+      host: '127.0.0.1',
+      port,
+      healthPort: port,
+      server: s,
+    })
   }
   return {
     peers,
+    dht: testnet,
+    live: false,
     async close() {
       await Promise.all(
         peers.map((p) => new Promise((resolve) => p.server.close(resolve))),
       )
+      await destroyTestnet(testnet)
     },
   }
 }
 
-module.exports = { startLocalFleet, healthServer }
+module.exports = { startLocalFleet, healthServer, loadHyperDhtTestnet }
 
 if (require.main === module) {
   startLocalFleet().then((fleet) => {
@@ -65,6 +146,19 @@ if (require.main === module) {
     for (const p of fleet.peers) {
       summary[p.kind] = (summary[p.kind] || 0) + 1
     }
-    process.stdout.write(JSON.stringify({ live: false, counts: summary, peers: fleet.peers.map((p) => ({ kind: p.kind, port: p.port })) }) + '\n')
+    process.stdout.write(
+      JSON.stringify({
+        live: false,
+        counts: summary,
+        dht: Boolean(fleet.dht),
+        peers: fleet.peers.map((p) => ({
+          kind: p.kind,
+          protocol: p.protocol,
+          port: p.port,
+          healthPort: p.healthPort,
+        })),
+      }) + '\n',
+    )
+    return fleet.close()
   })
 }

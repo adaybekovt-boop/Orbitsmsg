@@ -22,6 +22,7 @@ class DirectoryPeer {
     required this.region,
     this.rttMs = 0,
     this.unsound = false,
+    this.protocol = '',
   });
 
   final String id;
@@ -32,6 +33,18 @@ class DirectoryPeer {
   final int rttMs;
   final bool unsound;
 
+  /// `hyperdht` for bootstrap rows that may join a swarm; `http` for
+  /// health / storage / lab HTTP. Empty means bootstrap→hyperdht,
+  /// other kinds→http.
+  final String protocol;
+
+  String get wireProtocol => protocol.isNotEmpty
+      ? protocol
+      : (kind == DirectoryPeerKind.bootstrap ? 'hyperdht' : 'http');
+
+  bool get isHyperdhtBootstrap =>
+      kind == DirectoryPeerKind.bootstrap && wireProtocol != 'http';
+
   Map<String, Object?> toJson() => <String, Object?>{
         'id': id,
         'kind': kind.name,
@@ -40,6 +53,7 @@ class DirectoryPeer {
         'region': region,
         'rttMs': rttMs,
         'unsound': unsound,
+        'protocol': wireProtocol,
       };
 
   static DirectoryPeer fromJson(Map<String, Object?> json) {
@@ -59,6 +73,7 @@ class DirectoryPeer {
           ? json['rttMs'] as int
           : (json['rttMs'] as num?)?.toInt() ?? 0,
       unsound: json['unsound'] == true,
+      protocol: json['protocol'] as String? ?? '',
     );
   }
 }

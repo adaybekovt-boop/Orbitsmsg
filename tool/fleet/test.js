@@ -20,10 +20,12 @@ function get(port, path) {
 test('local fleet has 3 bootstrap / 2 relay / 2 storage and is not public', async (t) => {
   const fleet = await startLocalFleet()
   t.after(() => fleet.close())
+  assert.equal(fleet.live, false)
   const counts = { bootstrap: 0, relay: 0, storage: 0 }
   for (const p of fleet.peers) {
     counts[p.kind] += 1
-    const res = await get(p.port, '/health')
+    const healthPort = p.healthPort || p.port
+    const res = await get(healthPort, '/health')
     assert.equal(res.status, 200)
     const json = JSON.parse(res.body)
     assert.equal(json.ok, true)
@@ -45,5 +47,20 @@ test('local fleet maps to unsigned directory rows and is not live', async (t) =>
     assert.equal(row.live, false)
     assert.equal(row.host, '127.0.0.1')
     assert.equal(row.unsound, false)
+  }
+  const bootstrap = rows.filter((r) => r.kind === 'bootstrap')
+  assert.equal(bootstrap.length, 3)
+  if (fleet.dht) {
+    for (const row of bootstrap) {
+      assert.equal(row.protocol, 'hyperdht')
+      assert.notEqual(row.port, row.healthPort)
+    }
+  } else {
+    for (const row of bootstrap) {
+      assert.equal(row.protocol, 'http')
+    }
+  }
+  for (const row of rows.filter((r) => r.kind !== 'bootstrap')) {
+    assert.equal(row.protocol, 'http')
   }
 })

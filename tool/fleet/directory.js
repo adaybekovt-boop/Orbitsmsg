@@ -4,6 +4,9 @@
  * Map a local loopback fleet to unsigned directory rows.
  * Signing is Dart identity-signing-v1 (see RelayDirectory). This is not
  * a live public directory.
+ *
+ * Bootstrap `port` is HyperDHT when protocol is `hyperdht`. HTTP health
+ * lives on `healthPort` and must not be used as a DHT address.
  */
 
 function peersToDirectoryRows(fleet) {
@@ -13,15 +16,18 @@ function peersToDirectoryRows(fleet) {
     const idx = seen[p.kind] || 0
     seen[p.kind] = idx + 1
     const region = (regions[p.kind] || ['lab'])[idx] || 'lab'
+    const protocol = p.protocol || (p.kind === 'bootstrap' ? 'hyperdht' : 'http')
     return {
       id: `${p.kind}-${idx + 1}`,
       kind: p.kind,
-      host: '127.0.0.1',
+      host: p.host || '127.0.0.1',
       port: p.port,
+      healthPort: p.healthPort || p.port,
       region,
       rttMs: idx,
       unsound: false,
       live: false,
+      protocol,
     }
   })
 }

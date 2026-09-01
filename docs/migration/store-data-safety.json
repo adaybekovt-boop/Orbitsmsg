@@ -1,0 +1,22 @@
+{
+  "filed": false,
+  "note": "Engineering packet only. Not submitted to App Store Connect or Play Data Safety until counsel replaces [TEXT PENDING LEGAL REVIEW].",
+  "defaultLivePath": "PeerJS",
+  "kCompletedMigrationPhase": 0,
+  "kRoomsApplicationE2eImplemented": false,
+  "kLiveApnsGateway": false,
+  "kLiveFcmGateway": false,
+  "kLiveStorageFleet": false,
+  "voipBackgroundMode": false,
+  "tracking": false,
+  "collectsMessageBodies": false,
+  "pushPayload": "opaqueWakeToken only",
+  "dataSafety": {
+    "oneToOne": "X3DH + Double Ratchet; bodies stay on device",
+    "rooms": "host-plaintext; UI warning required",
+    "metadata": "PeerJS and STUN see connection metadata on the default live path",
+    "account": false,
+    "encryptionAtRest": "device vault",
+    "mailbox": "encrypted envelopes only, and only if a fleet is deployed (none today)"
+  }
+}

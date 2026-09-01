@@ -59,7 +59,9 @@ List<DhtBootstrapNode> parseDhtBootstrapEnv(String? raw) {
 List<DhtBootstrapNode> bootstrapNodesFromDirectory(RelayDirectory directory) {
   return [
     for (final peer in directory.pick(DirectoryPeerKind.bootstrap))
-      if (!isDeniedPublicDhtHost(peer.host) && peer.port > 0)
+      if (peer.isHyperdhtBootstrap &&
+          !isDeniedPublicDhtHost(peer.host) &&
+          peer.port > 0)
         DhtBootstrapNode(host: peer.host, port: peer.port),
   ];
 }
