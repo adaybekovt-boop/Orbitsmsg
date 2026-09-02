@@ -152,6 +152,8 @@ class PeerConnectionManager {
     _initialConnectTimer?.cancel();
     _initialConnectTimer = Timer(const Duration(seconds: 30), () {
       _initialConnectTimer = null;
+      // Isolation fail-closed: a leftover timer must not flip PeerJS UX.
+      if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
       final p = peer;
       if (p != null && !p.open && !p.destroyed) {
         cb.setStatus?.call('disconnected');
@@ -312,6 +314,9 @@ class PeerConnectionManager {
   }
 
   void _handleOpen(String id) {
+    // Isolation fail-closed: a leftover PeerJS client must not mark
+    // the product as connected. Product default-live still takes this path.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
     _initialConnectTimer?.cancel();
     _initialConnectTimer = null;
     reconnectAttempt = 0;
@@ -331,6 +336,12 @@ class PeerConnectionManager {
   }
 
   void _handleError(PeerError err) {
+    // Isolation fail-closed BEFORE unavailable-id timers, signaling UX,
+    // or host rotation. swapPeerId / _scheduleReconnect are also gated.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      cb.setStatus?.call('disconnected');
+      return;
+    }
     // ── unavailable-id: silent fast-retry (F5 zombie recovery) ─────
     if (err.type == 'unavailable-id') {
       _reconnectTimer?.cancel();
