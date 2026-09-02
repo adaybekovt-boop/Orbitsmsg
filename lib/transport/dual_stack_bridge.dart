@@ -981,7 +981,7 @@ class DualStackBridge {
     try {
       final decoded = decodeJsonPayload(bytes);
       final type = decoded['type'];
-      return type == kDeviceBindingWireType || type == 'capabilities';
+      return type == kDeviceBindingWireType;
     } catch (_) {
       return false;
     }
