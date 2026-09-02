@@ -7,6 +7,8 @@
 //     and the room + its default channels + the host member persist.
 //   • createRoom(selfHosted) on a platform that can't host → a clear joinError
 //     and NO room session (role stays none) — never a silent no-op.
+//   • createRoom(selfHosted, isolationMode: removed) → native-carrier host
+//     (no RoomSignalingHost.start, selfHostInvite null, joinError null).
 //   • clearJoinError resets the error.
 
 import 'package:drift/native.dart';
@@ -24,6 +26,12 @@ import 'package:orbits_flutter/peer/room_signaling_host.dart'
         SelfHostException,
         SelfHostFailure,
         kServerHostDesktopOnlyMessage;
+import 'package:orbits_flutter/transport/peerjs_window.dart'
+    show
+        kPeerjsIsolationDefaultLive,
+        kPeerjsIsolationMode,
+        kPeerjsIsolationRemoved,
+        kPeerjsIsolationWebOnly;
 import 'package:orbits_flutter/state/auth_notifier.dart' show AuthedUser;
 import 'package:orbits_flutter/state/connections_notifier.dart' show RoomBridge;
 import 'package:orbits_flutter/state/local_profile_provider.dart';
@@ -171,9 +179,52 @@ void main() {
     await c.read(roomManagerProvider.notifier).createRoom('S', selfHosted: true);
 
     // The cloud path never touches the signaling-host factory; reaching it (with
-    // the room's own id) proves the self-hosted branch ran.
-    expect(host.startCalls, 1);
+    // the room's own id) proves the self-hosted branch ran. isolationMode
+    // omitted → product default-live still uses the embedded PeerJS server.
+    expect(host.startCalls, greaterThanOrEqualTo(1));
     expect(host.lastRoomId, hostId);
+  });
+
+  test('createRoom(selfHosted) under isolation hosts natively without PeerJS',
+      () async {
+    // Isolation native path does not need the embedded TCP server, so it
+    // also succeeds on mobile (where canHostSignalingServer is false).
+    debugDefaultTargetPlatformOverride = TargetPlatform.iOS;
+    final host = _FailingHost(SelfHostFailure.peerjsIsolation);
+    final c = makeHostingContainer(host);
+
+    await c.read(roomManagerProvider.notifier).createRoom(
+          'S',
+          selfHosted: true,
+          isolationMode: kPeerjsIsolationRemoved,
+        );
+
+    expect(host.startCalls, 0, reason: 'must not call RoomSignalingHost.start');
+    final st = c.read(roomManagerProvider);
+    expect(st.role, RoomRole.host);
+    expect(st.roomId, hostId);
+    expect(st.serverActive, isTrue);
+    expect(st.joinError, isNull);
+    expect(st.selfHostInvite, isNull);
+    expect(st.internetAccessMessage, contains('изоляции'));
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+
+    final members = await db.getRoomMembers(hostId);
+    expect(members.any((m) => m['peerId'] == hostId), isTrue);
+  });
+
+  test('roomSelfHostUsesEmbeddedPeerjs follows the isolation table', () {
+    expect(roomSelfHostUsesEmbeddedPeerjs(null), isTrue);
+    expect(roomSelfHostUsesEmbeddedPeerjs(kPeerjsIsolationRemoved), isFalse);
+    expect(
+      roomSelfHostUsesEmbeddedPeerjs(kPeerjsIsolationWebOnly, isWeb: true),
+      isTrue,
+    );
+    expect(
+      roomSelfHostUsesEmbeddedPeerjs(kPeerjsIsolationWebOnly, isWeb: false),
+      isFalse,
+    );
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
   });
 
   test('self-host bind failure shows a clear error and creates nothing',

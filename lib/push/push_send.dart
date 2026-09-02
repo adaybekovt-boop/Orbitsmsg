@@ -15,6 +15,7 @@ import 'fcm_service_account_jwt.dart';
 export 'apns_provider_jwt.dart';
 export 'fcm_oauth_token_request.dart';
 export 'fcm_service_account_jwt.dart';
+export 'fcm_send_http.dart';
 
 /// iOS APNs topic. Must match the Runner bundle id. Never a Peer ID.
 const String kApnsTopic = 'com.orbits.orbitsFlutter';
@@ -66,6 +67,10 @@ class PushSender {
   /// and the OAuth JWT-bearer form may be built; neither is exchanged or
   /// sent while [kLiveFcmGateway] is false. FCM send Authorization is an
   /// OAuth [accessToken], never the assertion JWT.
+  ///
+  /// The HTTPS POST shape is [buildFcmSendHttp] / [dispatchFcmSendHttp]
+  /// (injected `post`). This method does not call either while
+  /// [kLiveFcmGateway] is false.
   Future<PushSendResult> sendFcm({
     required String deviceToken,
     required OpaqueWake wake,
@@ -73,6 +78,11 @@ class PushSender {
     FcmServiceAccountKey? serviceAccount,
     int? iatSeconds,
     String? accessToken,
+    Future<int> Function(
+      Uri uri,
+      Map<String, String> headers,
+      String body,
+    )? post, // ignored while kLiveFcmGateway is false
   }) async {
     if (serviceAccount != null) {
       final jwt = buildFcmServiceAccountJwt(
@@ -94,8 +104,14 @@ class PushSender {
       return const PushSendResult(sent: false, reason: 'unsafe-keys');
     }
     if (!kLiveFcmGateway) {
+      // [post] is ignored — do not call dispatchFcmSendHttp / Google.
       return const PushSendResult(sent: false, reason: 'fcm-not-deployed');
     }
+    // After kLiveFcmGateway flips, return dispatchFcmSendHttp(
+    //   request: request, post: post ?? <https POST>).
+    // Do not construct a Dart HTTP client here while the const is
+    // false — that branch is dead and the analyzer treats a live
+    // POST as unreachable.
     return const PushSendResult(sent: false, reason: 'fcm-not-configured');
   }
 

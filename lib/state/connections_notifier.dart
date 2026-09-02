@@ -30,7 +30,7 @@
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/attachment_store.dart';
@@ -384,10 +384,16 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         try {
           return await dual.sendEncrypted(remoteId, msg);
         } catch (_) {
-          if (!isPeerjsFallbackEnabled()) return false;
+          // PeerJS fallback only if BOTH the fallback flag and isolation
+          // allow it. Product default-live keeps both true.
+          if (!isPeerjsFallbackEnabled() ||
+              !peerjsAllowedOnNative(isWeb: kIsWeb)) {
+            return false;
+          }
         }
       }
     }
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
     final conn = getConn(remoteId, 'reliable');
     if (conn == null) return false;
     return _wire.sendEncryptedOn(conn, remoteId, msg);
@@ -400,9 +406,13 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       try {
         return await dual.sendEphemeral(remoteId, msg);
       } catch (_) {
-        if (!isPeerjsFallbackEnabled()) return false;
+        if (!isPeerjsFallbackEnabled() ||
+            !peerjsAllowedOnNative(isWeb: kIsWeb)) {
+          return false;
+        }
       }
     }
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
     final conn = getConn(remoteId, 'ephemeral');
     if (conn == null) return false;
     return _wire.sendEphemeralOn(conn, remoteId, msg);
@@ -412,6 +422,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// the peer picker / send button).
   bool hasReliable(String remoteId) {
     if (_nativeCarrierFor(remoteId)) return true;
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
     final conn = getConn(remoteId, 'reliable');
     return conn != null && conn.open;
   }
@@ -466,6 +477,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       unawaited(dual.sendDrop(remoteId, packet));
       return true;
     }
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
     final conn = getConn(remoteId, 'reliable');
     if (conn == null || !conn.open) return false;
     return conn.send(packet);
@@ -499,6 +511,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         send: (p) => dual.sendRoomPacket(remoteId, p),
       );
     }
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
     final conn = getConn(remoteId, 'reliable');
     return sendGuardedRoomPacket(
       packet,
@@ -525,6 +538,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// `bufferedAmount`. Capped (~10s) so a wedged channel can't hang the loop —
   /// the next `conn.send` will then surface the dead channel.
   Future<void> waitForDropDrain(String remoteId) async {
+    // Isolation-disallowed modes have no PeerJS DataConnection to drain
+    // and no native bufferedAmount API — don't invent a drain.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
     final dc = getConn(remoteId, 'reliable')?.dataChannel;
     if (dc == null) return;
     for (var i = 0; i < 200; i++) {
@@ -576,7 +592,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     // Phase 14 isolation: native-only modes must not open PeerJS.
     // Product mode stays default-live, so this is a no-op until the
     // support window closes in writing.
-    if (!peerjsAllowedOnNative()) {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
       return;
     }
     final peer = _boundPeer;
@@ -990,7 +1006,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     if (current == null) return;
 
     _peerSubs.add(current.onConnection.listen((conn) {
-      if (!peerjsAllowedOnNative()) {
+      if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
         unawaited(conn.close());
         return;
       }
@@ -1030,7 +1046,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// `_openChannel` (e.g. the peer goes back to not-ready in the middle of
   /// the loop) can't cause an infinite re-entry.
   void _flushPendingReliable() {
-    if (!peerjsAllowedOnNative()) {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
       _pendingReliableTargets.clear();
       return;
     }

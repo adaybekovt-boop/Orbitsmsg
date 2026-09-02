@@ -356,4 +356,204 @@ void main() {
       isNull,
     );
   });
+
+  test('FCM HTTP v1 POST is built and dispatched only through an injected post',
+      () async {
+    const wake = OpaqueWake(
+      opaqueWakeToken: 'tok',
+      collapseId: 'c1',
+      protocolVersion: 1,
+    );
+    final opaque = buildFcmRequest(
+      deviceToken: 'ftok',
+      wake: wake,
+      accessToken: 'ya29-opaque',
+    )!;
+    final http = buildFcmSendHttp(opaque)!;
+    expect(http.method, 'POST');
+    expect(http.host, kFcmSendHost);
+    expect(http.host, 'fcm.googleapis.com');
+    expect(http.path, opaque.path);
+    expect(http.headers['content-type'], 'application/json');
+    expect(http.headers['authorization'], 'bearer ya29-opaque');
+    expect(http.headers['authorization']!.split('.'), isNot(hasLength(3)));
+    expect(http.headers['authorization'], isNot(contains('.')));
+    final decoded = jsonDecode(http.body) as Map<String, Object?>;
+    expect(decoded['message'], isNotNull);
+    expect(jsonEncode(decoded), jsonEncode(opaque.body));
+
+    expect(
+      buildFcmSendHttp(
+        const FcmOpaqueRequest(
+          host: kFcmSendHost,
+          path: '/v1/projects/orbits/messages:send',
+          headers: {'authorization': 'bearer aaa.bbb.ccc'},
+          body: {'message': <String, Object?>{}},
+        ),
+      ),
+      isNull,
+    );
+    expect(
+      buildFcmSendHttp(
+        const FcmOpaqueRequest(
+          host: kFcmSendHost,
+          path: '/v1/projects/orbits/messages:send',
+          headers: {'authorization': 'bearer ya29-opaque'},
+          body: {
+            'message': {
+              'data': {'peerId': 'ORBIT-AA'},
+            },
+          },
+        ),
+      ),
+      isNull,
+    );
+    expect(
+      buildFcmSendHttp(
+        const FcmOpaqueRequest(
+          host: kFcmSendHost,
+          path: '/v1/projects/orbits/messages:send',
+          headers: {
+            'authorization': 'bearer ya29-opaque',
+            'rootKey': 'nope',
+          },
+          body: {'message': <String, Object?>{}},
+        ),
+      ),
+      isNull,
+    );
+    expect(
+      buildFcmSendHttp(
+        const FcmOpaqueRequest(
+          host: kFcmSendHost,
+          path: '/v1/projects/orbits/messages:send',
+          headers: {
+            'authorization': 'bearer ya29-opaque',
+            'identity-signing-v1': 'nope',
+          },
+          body: {'message': <String, Object?>{}},
+        ),
+      ),
+      isNull,
+    );
+    expect(
+      buildFcmSendHttp(
+        const FcmOpaqueRequest(
+          host: kFcmSendHost,
+          path: '/v1/projects/orbits/messages:send',
+          headers: {
+            'authorization': 'bearer ya29-opaque',
+            'opaqueWakeToken': 'tok',
+          },
+          body: {'message': <String, Object?>{}},
+        ),
+      ),
+      isNull,
+    );
+    expect(
+      buildFcmSendHttp(
+        const FcmOpaqueRequest(
+          host: kFcmSendHost,
+          path: '/v1/projects/orbits/messages:send',
+          headers: {'authorization': 'bearer ya29-opaque'},
+          body: {
+            'message': {
+              'data': {'fileKey': 'nope'},
+            },
+          },
+        ),
+      ),
+      isNull,
+    );
+    expect(
+      buildFcmSendHttp(
+        const FcmOpaqueRequest(
+          host: 'evil.example',
+          path: '/v1/projects/orbits/messages:send',
+          headers: {'authorization': 'bearer ya29-opaque'},
+          body: {'message': <String, Object?>{}},
+        ),
+      ),
+      isNull,
+    );
+    expect(
+      buildFcmSendHttp(
+        const FcmOpaqueRequest(
+          host: kFcmSendHost,
+          path: '/v1/projects/https://evil.example/messages:send',
+          headers: {'authorization': 'bearer ya29-opaque'},
+          body: {'message': <String, Object?>{}},
+        ),
+      ),
+      isNull,
+    );
+
+    var postCount = 0;
+    Uri? postedUri;
+    Map<String, String>? postedHeaders;
+    String? postedBody;
+    Future<int> fakePost(
+      Uri uri,
+      Map<String, String> headers,
+      String body,
+    ) async {
+      postCount++;
+      postedUri = uri;
+      postedHeaders = headers;
+      postedBody = body;
+      return 200;
+    }
+
+    const sender = PushSender();
+    final refused = await sender.sendFcm(
+      deviceToken: 'ftok',
+      wake: wake,
+      accessToken: 'ya29-opaque',
+      post: fakePost,
+    );
+    expect(refused.sent, isFalse);
+    expect(refused.reason, 'fcm-not-deployed');
+    expect(postCount, 0);
+    expect(kLiveFcmGateway, isFalse);
+
+    final dispatched = await dispatchFcmSendHttp(
+      request: opaque,
+      post: fakePost,
+    );
+    expect(dispatched.sent, isTrue);
+    expect(dispatched.reason, 'fcm-http');
+    expect(postCount, 1);
+    expect(postedUri!.scheme, 'https');
+    expect(postedUri!.host, 'fcm.googleapis.com');
+    expect(postedUri!.path, contains('messages:send'));
+    expect(postedHeaders!['content-type'], 'application/json');
+    expect(postedHeaders!['authorization'], 'bearer ya29-opaque');
+    expect(postedBody, http.body);
+
+    final refusedAgain = await sender.sendFcm(
+      deviceToken: 'ftok',
+      wake: wake,
+      accessToken: 'ya29-opaque',
+      post: fakePost,
+    );
+    expect(refusedAgain.reason, 'fcm-not-deployed');
+    expect(postCount, 1);
+
+    final notOk = await dispatchFcmSendHttp(
+      request: opaque,
+      post: (uri, headers, body) async => 403,
+    );
+    expect(notOk.sent, isFalse);
+    expect(notOk.reason, 'http-403');
+
+    expect(
+      File('lib/push/fcm_send_http.dart').readAsStringSync(),
+      isNot(contains('HttpClient')),
+    );
+    expect(
+      File('lib/push/fcm_send_http.dart').readAsStringSync(),
+      contains('Never opens a socket'),
+    );
+    expect(kLiveFcmGateway, isFalse);
+  });
 }

@@ -151,7 +151,9 @@ void main() {
 
   test('native openChannel skips PeerJS when isolation disallows it', () {
     final src = File('lib/state/connections_notifier.dart').readAsStringSync();
-    expect(src, contains('if (!peerjsAllowedOnNative())'));
+    expect(src, contains("show debugPrint, kIsWeb"));
+    expect(src, contains('if (!peerjsAllowedOnNative(isWeb: kIsWeb))'));
+    expect(src, isNot(contains('peerjsAllowedOnNative()')));
     expect(src, contains('unawaited(_dual?.dial(normalized))'));
     expect(src, contains('_flushPendingReliable'));
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
@@ -184,5 +186,55 @@ void main() {
       File('lib/state/calls_provider.dart').readAsStringSync(),
       contains('_bindToCurrentPeer'),
     );
+  });
+
+  test('send/fallback paths skip PeerJS when isolation disallows it', () {
+    final src = File('lib/state/connections_notifier.dart').readAsStringSync();
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(peerjsAllowedOnNative(), isTrue);
+
+    String slice(String start, String end) => src.split(start)[1].split(end)[0];
+
+    final sendEncrypted = slice(
+      'Future<bool> sendEncrypted',
+      'Future<bool> sendEphemeral',
+    );
+    expect(sendEncrypted, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(sendEncrypted, contains('isPeerjsFallbackEnabled()'));
+    expect(sendEncrypted, contains('dual.sendEncrypted'));
+    expect(sendEncrypted, contains('_wire.sendEncryptedOn'));
+
+    final sendEphemeral = slice(
+      'Future<bool> sendEphemeral',
+      'bool hasReliable',
+    );
+    expect(sendEphemeral, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(sendEphemeral, contains('isPeerjsFallbackEnabled()'));
+    expect(sendEphemeral, contains('_wire.sendEphemeralOn'));
+
+    final hasReliable = slice('bool hasReliable', 'bool canDepositMailbox');
+    expect(hasReliable, contains('_nativeCarrierFor'));
+    expect(hasReliable, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(hasReliable, contains("getConn(remoteId, 'reliable')"));
+
+    final sendDrop = slice('bool sendDrop', 'Future<bool> sendFileFromPath');
+    expect(sendDrop, contains('_nativeCarrierFor'));
+    expect(sendDrop, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(sendDrop, contains('conn.send'));
+
+    final sendRoomPacket = slice(
+      'bool sendRoomPacket',
+      'Future<bool> sendAutobaseEvent',
+    );
+    expect(sendRoomPacket, contains('sendGuardedRoomPacket'));
+    expect(sendRoomPacket, contains('dual.sendRoomPacket'));
+    expect(sendRoomPacket, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+
+    final waitForDropDrain = slice(
+      'Future<void> waitForDropDrain',
+      'void openEphemeral',
+    );
+    expect(waitForDropDrain, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(waitForDropDrain, contains('bufferedAmount'));
   });
 }

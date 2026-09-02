@@ -65,6 +65,23 @@ const int kMaxVoiceParticipants = 6;
 /// with `room_join_reject` (reason 'full').
 const int kMaxRoomMembers = 15;
 
+/// Whether self-hosted [RoomManager.createRoom] should start the embedded
+/// PeerJS signaling server. Null [isolationMode] uses the product
+/// [kPeerjsIsolationMode] (`default-live`). Tests pass an explicit mode.
+bool roomSelfHostUsesEmbeddedPeerjs(String? isolationMode,
+        {bool isWeb = false}) =>
+    peerjsAllowedOnNativeFor(
+      isolationMode ?? kPeerjsIsolationMode,
+      isWeb: isWeb,
+    );
+
+/// Host-facing note when self-host create skips the embedded PeerJS server
+/// because Phase 14 isolation forbids it. Guests join with the host peer
+/// code on the native carrier (same path as cloud `joinRoom`). Host-plaintext.
+const String kRoomNativeCarrierIsolationMessageRu =
+    'Встроенный PeerJS-сервер комнат отключён режимом изоляции. '
+    'Гости входят по коду пира хоста через нативный канал.';
+
 /// Caps for untrusted inbound room strings.
 const int kMaxRoomTextLen = 4000;
 const int kMaxRoomNameLen = 80;
@@ -375,14 +392,27 @@ class RoomManager extends StateNotifier<RoomState> {
   /// default channels (#general + 🔊 Голосовой 1) are auto-provisioned by
   /// `db.saveRoom`. Idempotent enough to re-host the same code.
   ///
-  /// When [selfHosted] is true (and the platform can host — see
-  /// [canHostSignalingServer]), this device runs its OWN embedded signaling
-  /// server instead of relying on peerjs.com: an `orbits-room:` invite carrying
-  /// the server's LAN address (+ a UPnP public address when available) is
-  /// surfaced in [RoomState.selfHostInvite] for the host to share. On a
-  /// platform that can't host, the call fails with a [RoomState.joinError]
-  /// rather than silently falling back to the cloud.
-  Future<void> createRoom(String name, {bool selfHosted = false}) async {
+  /// When [selfHosted] is true and isolation still allows native PeerJS
+  /// ([roomSelfHostUsesEmbeddedPeerjs]), this device runs its OWN embedded
+  /// signaling server instead of relying on peerjs.com: an `orbits-room:`
+  /// invite carrying the server's LAN address (+ a UPnP public address when
+  /// available) is surfaced in [RoomState.selfHostInvite] for the host to
+  /// share. That path still requires [canHostSignalingServer]; otherwise the
+  /// call fails with a [RoomState.joinError] rather than silently falling
+  /// back to the cloud.
+  ///
+  /// When [selfHosted] is true but isolation forbids PeerJS, create skips the
+  /// embedded server and hosts on the default (native) transport. Guests join
+  /// with the host peer code via [joinRoom] — [RoomState.selfHostInvite] stays
+  /// null. That path does not need [canHostSignalingServer] (no TCP listener).
+  ///
+  /// [isolationMode] defaults to the product [kPeerjsIsolationMode]. Tests
+  /// pass an explicit mode; do not flip the live constant.
+  Future<void> createRoom(
+    String name, {
+    bool selfHosted = false,
+    String? isolationMode,
+  }) async {
     final self = _ref.read(localProfileProvider);
     final selfId = self?.peerId ?? _selfPeerId();
     if (selfId.isEmpty) {
@@ -395,20 +425,26 @@ class RoomManager extends StateNotifier<RoomState> {
       return;
     }
 
-    if (selfHosted && !canHostSignalingServer) {
+    final useEmbeddedPeerjs = selfHosted &&
+        roomSelfHostUsesEmbeddedPeerjs(isolationMode, isWeb: kIsWeb);
+
+    // Desktop-only applies to the embedded TCP PeerJS listener, not to
+    // native-carrier hosting under isolation.
+    if (useEmbeddedPeerjs && !canHostSignalingServer) {
       state = const RoomState(joinError: kServerHostDesktopOnlyMessage);
       return;
     }
 
     final roomId = selfId; // host peer code IS the room code
 
-    // Self-hosted: stand up the embedded signaling server + the host's loopback
-    // client BEFORE persisting anything. A start failure must surface a SPECIFIC
-    // reason (bind/firewall, no LAN address, loopback timeout) and create
-    // NOTHING — never a half-baked "offline" room that looks like success
-    // (audit: a failed create must look like a failure, not a working server).
+    // Self-hosted + PeerJS allowed: stand up the embedded signaling server +
+    // the host's loopback client BEFORE persisting anything. A start failure
+    // must surface a SPECIFIC reason (bind/firewall, no LAN address, loopback
+    // timeout) and create NOTHING — never a half-baked "offline" room that
+    // looks like success (audit: a failed create must look like a failure,
+    // not a working server).
     String? invite;
-    if (selfHosted) {
+    if (useEmbeddedPeerjs) {
       try {
         // Bounded so a stuck embedded server / loopback client can never hang
         // the create flow forever. host.start + _waitClientOpen are each
@@ -459,13 +495,16 @@ class RoomManager extends StateNotifier<RoomState> {
       activeChannelId: general['id'] as String?,
       serverActive: true,
       selfHostInvite: invite,
-      internetAccessMessage:
-          selfHosted ? kRoomLanOnlyInternetMessageRu : null,
+      internetAccessMessage: !selfHosted
+          ? null
+          : useEmbeddedPeerjs
+              ? kRoomLanOnlyInternetMessageRu
+              : kRoomNativeCarrierIsolationMessageRu,
     );
 
     // Resolve WAN exposure (today: structured LAN-only). The message is
     // already on state so the host sees it before sharing the invite.
-    if (selfHosted) unawaited(_upgradeToInternet(roomId));
+    if (useEmbeddedPeerjs) unawaited(_upgradeToInternet(roomId));
   }
 
   /// Map a self-host startup failure to a clear, user-facing RU diagnostic.

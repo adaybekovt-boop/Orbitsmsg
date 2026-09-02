@@ -236,7 +236,7 @@ void main() {
         .split('void _openChannel')[1]
         .split('Future<void> attachConn')[0];
     expect(openChannel, contains('unawaited(_dual?.dial(normalized))'));
-    expect(openChannel, contains('if (!peerjsAllowedOnNative())'));
+    expect(openChannel, contains('if (!peerjsAllowedOnNative(isWeb: kIsWeb))'));
     expect(openChannel, contains('return;'));
     final rememberKnown = File('lib/transport/dual_stack_bridge.dart')
         .readAsStringSync()
