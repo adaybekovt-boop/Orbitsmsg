@@ -26,6 +26,49 @@ const { AutobaseProjection } = require('./autobase')
 
 const FILE_CHUNK = 64 * 1024
 
+// Attachment ciphertext must not carry named secrets. Same names as Dart
+// kForbiddenReplicationFields. Do not add `b64` — that is the chunk
+// ciphertext field and must stay allowed on this ingest path.
+const ATTACH_FORBIDDEN_KEYS = new Set([
+  'plaintext',
+  'password',
+  'kek',
+  'vaultKek',
+  'rootKey',
+  'sendCk',
+  'recvCk',
+  'dhPriv',
+  'skipped',
+  'discoverySecret',
+  'sharedDiscoverySecret',
+  'attachmentBytes',
+  'fileKey',
+  'fileKeyB64',
+  'privBytes',
+])
+
+/**
+ * Cycle-safe walk of objects/arrays. Rejects if any key is in
+ * ATTACH_FORBIDDEN_KEYS, including nested `{ meta: { fileKey } }`.
+ */
+function attachBodyHasForbiddenKey(value, seen) {
+  if (!value || typeof value !== 'object') return false
+  const walk = seen || new Set()
+  if (walk.has(value)) return false
+  walk.add(value)
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (attachBodyHasForbiddenKey(item, walk)) return true
+    }
+    return false
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (ATTACH_FORBIDDEN_KEYS.has(key)) return true
+    if (attachBodyHasForbiddenKey(child, walk)) return true
+  }
+  return false
+}
+
 function localJournalDir(p) {
   if (typeof p !== 'string') return ''
   const t = p.trim()
@@ -536,7 +579,7 @@ class Worklet {
   }
 
   _ingestAttachChunk(peerId, body) {
-    if (!body || body.fileKey != null || body.fileKeyB64 != null) return
+    if (!body || attachBodyHasForbiddenKey(body)) return
     const fileId = typeof body.fileId === 'string' ? body.fileId : ''
     if (!fileId || fileId.includes('://')) return
     const buf = Buffer.from(body.b64 || '', 'base64')

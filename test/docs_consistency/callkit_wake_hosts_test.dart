@@ -121,6 +121,19 @@ void main() {
     expect(wake, isNot(contains('http://')));
     expect(wake, isNot(contains('https://')));
 
+    expect(ios, contains('tokenIsSafe'));
+    expect(wake, contains('tokenIsSafe'));
+    expect(ios, contains('://'));
+    expect(wake, contains('://'));
+    expect(ios, contains('contains("rootKey")'),
+        reason: 'iOS tokenIsSafe must reject rootKey as a token fragment');
+    expect(wake, contains('contains("rootKey")'),
+        reason: 'Android tokenIsSafe must reject rootKey as a token fragment');
+    expect(iosWake, contains('"opaqueWakeToken"'));
+    expect(iosWake, contains('"collapseId"'));
+    expect(iosWake, contains('"protocolVersion"'));
+    expect(iosWake, isNot(contains('arguments: userInfo')));
+
     final phase13 = File('docs/migration/phase13-group-e2e-review.md')
         .readAsStringSync();
     expect(phase13, contains('kRoomsApplicationE2eImplemented'));

@@ -16,7 +16,7 @@ class OrbitsWakeReceiver : BroadcastReceiver() {
         val extras = intent?.extras ?: return
         if (hasForbiddenKey(extras)) return
         val token = extras.getString("opaqueWakeToken") ?: return
-        if (token.isEmpty()) return
+        if (!tokenIsSafe(token)) return
         if (!extras.containsKey("collapseId")) return
         if (!extras.containsKey("protocolVersion")) return
         val collapse = extras.getString("collapseId") ?: extras.get("collapseId")?.toString() ?: return
@@ -95,6 +95,17 @@ class OrbitsWakeReceiver : BroadcastReceiver() {
                 }
                 else -> return false
             }
+        }
+
+        /// Same fragment rules as Dart opaqueWakeTokenIsSafe.
+        private fun tokenIsSafe(token: String): Boolean {
+            if (token.isEmpty()) return false
+            if (token.contains("://")) return false
+            if (token.contains("peerId")) return false
+            if (token.contains("fileKey")) return false
+            if (token.contains("rootKey")) return false
+            if (token.contains("discoverySecret")) return false
+            return true
         }
     }
 }

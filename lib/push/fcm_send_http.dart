@@ -11,7 +11,29 @@
 
 import 'dart:convert';
 
+import '../transport/layers.dart';
 import 'push_send.dart';
+
+/// Substring fragments that must never appear in FCM host/path/headers/body.
+/// Covers [kForbiddenReplicationFields] except overly-generic tokens (`kek`,
+/// `skipped`) that would false-positive as `contains()` matches.
+const List<String> _kForbiddenSecretFragments = <String>[
+  'peerId',
+  'rootKey',
+  'identity-signing-v1',
+  'fileKey',
+  'discoverySecret',
+  'sharedDiscoverySecret',
+  'vaultKek',
+  'fileKeyB64',
+  'sendCk',
+  'recvCk',
+  'dhPriv',
+  'privBytes',
+  'attachmentBytes',
+  'plaintext',
+  'password',
+];
 
 /// HTTPS POST to [kFcmSendHost]. [body] is JSON. Does not send.
 class FcmSendHttpRequest {
@@ -108,21 +130,21 @@ bool _authorizationLooksLikeJwt(String authorization) {
 }
 
 bool _hasForbiddenSecret(String s, {required bool includeOpaqueWake}) {
-  if (s.contains('peerId') ||
-      s.contains('rootKey') ||
-      s.contains('identity-signing-v1') ||
-      s.contains('fileKey')) {
-    return true;
+  for (final fragment in _kForbiddenSecretFragments) {
+    if (s.contains(fragment)) return true;
   }
   return includeOpaqueWake && s.contains('opaqueWakeToken');
 }
 
-/// Reject peerId / rootKey / identity-signing-v1 / fileKey in JSON keys
-/// or string values. `opaqueWakeToken` is allowed in FCM `message.data`.
+/// Reject [kForbiddenReplicationFields] as exact JSON keys (so `kek` /
+/// `skipped` are caught without substring false positives) plus secret
+/// fragments in keys or string values. `opaqueWakeToken` is allowed in
+/// FCM `message.data`.
 bool _bodyHasForbiddenKeys(Object? node) {
   if (node is Map) {
     for (final e in node.entries) {
       final key = e.key.toString();
+      if (kForbiddenReplicationFields.contains(key)) return true;
       if (_hasForbiddenSecret(key, includeOpaqueWake: false)) return true;
       if (_bodyHasForbiddenKeys(e.value)) return true;
     }

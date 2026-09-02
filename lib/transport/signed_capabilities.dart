@@ -1,6 +1,7 @@
 // Phase 5: signed capability records. The identity key signs; the
 // transport Noise key does not.
 
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -11,6 +12,7 @@ import '../core/identity_key.dart';
 import '../core/spki_codec.dart';
 import 'capabilities.dart';
 import 'device_binding.dart';
+import 'layers.dart';
 
 const String kCapabilityRecordInfo = 'orbits-capabilities-v1';
 
@@ -59,6 +61,7 @@ class CapabilityRecord {
       };
 
   static CapabilityRecord fromWire(Map<String, Object?> json) {
+    _refuseCapabilityRecordSecrets(json, HashSet<Object>.identity());
     final names = (json['capabilities'] as List? ?? const [])
         .whereType<String>()
         .map(TransportCapability.fromWireName)
@@ -77,6 +80,42 @@ class CapabilityRecord {
         base64Decode(json['identityPublicKey'] as String? ?? ''),
       ),
     );
+  }
+}
+
+/// Cycle-safe walk of nested [Map] / [Iterable]. Ciphertext [List<int>]
+/// is a leaf. Forbidden / wake / URL-ish keys, and capability wire names
+/// containing `://`, fail closed. Top-level [CapabilityRecord.peerId] is
+/// a public field and is not refused.
+void _refuseCapabilityRecordSecrets(Object? value, Set<Object> seen) {
+  if (value == null || value is bool || value is num || value is String) {
+    return;
+  }
+  // Ciphertext bytes are leaves — do not walk them as Iterables.
+  if (value is List<int>) return;
+  if (value is Map) {
+    if (!seen.add(value)) return;
+    for (final key in value.keys) {
+      final name = '$key';
+      if (kForbiddenReplicationFields.contains(name) ||
+          name == 'opaqueWakeToken' ||
+          name.contains('://')) {
+        throw ArgumentError('capability record: refusing secret field');
+      }
+    }
+    for (final nested in value.values) {
+      _refuseCapabilityRecordSecrets(nested, seen);
+    }
+    return;
+  }
+  if (value is Iterable) {
+    if (!seen.add(value)) return;
+    for (final item in value) {
+      if (item is String && item.contains('://')) {
+        throw ArgumentError('capability record: refusing secret field');
+      }
+      _refuseCapabilityRecordSecrets(item, seen);
+    }
   }
 }
 

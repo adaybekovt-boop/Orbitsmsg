@@ -211,6 +211,42 @@ test('sendFile attach-chunk rejects fileKey, bytes, remote paths, and missing fi
   await b.stop()
 })
 
+test('inbound attach-chunk drops nested fileKey and does not write cipher', async () => {
+  const { a, b, peerId } = await pair()
+  const attCtPrefix = 'orbits-att-ct-'
+  const before = new Set(fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith(attCtPrefix)))
+  const frames = []
+  const prev = b._emit
+  const echoed = new Promise((resolve) => {
+    b._emit = (name, payload) => {
+      prev(name, payload)
+      if (name === 'frame' && payload.channel === 'attachment') {
+        frames.push(payload.body)
+      }
+      if (name === 'frame' && payload.body && payload.body.type === 'harness-echo') {
+        resolve()
+      }
+    }
+  })
+  await a.send(peerId, 'attachment', {
+    type: 'attach-chunk',
+    fileId: 'chat-nested',
+    offset: 0,
+    b64: Buffer.from('nested-cipher').toString('base64'),
+    meta: { fileKey: 'nope' },
+  })
+  // Same socket is ordered: echo after the chunk means ingest already ran.
+  await a.send(peerId, 'message', { type: 'harness-echo', id: 'after-nested', text: 'after' })
+  await echoed
+  assert.ok(!frames.some((c) => c && c.type === 'attach-chunk-path'))
+  assert.ok(!frames.some((c) => c && c.type === 'attach-chunk'))
+  assert.equal(b._attachFiles.size, 0)
+  const after = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith(attCtPrefix))
+  assert.ok(after.every((n) => before.has(n)))
+  await a.stop()
+  await b.stop()
+})
+
 test('suspend blocks send', async () => {
   const { a, b, peerId } = await pair()
   await a.suspend()

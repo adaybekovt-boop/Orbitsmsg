@@ -60,6 +60,63 @@ void main() {
     );
   });
 
+  test('CapabilityRecord.fromWire refuses nested secret fields', () {
+    final record = CapabilityRecord(
+      peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+      deviceId: 'dev-1',
+      capabilities: {
+        TransportCapability.hyperswarmV1,
+        TransportCapability.peerjsV4,
+      },
+      issuedAt: 1,
+      expiresAt: 2,
+      signature: Uint8List.fromList(const [1]),
+      identityPublicKey: Uint8List.fromList(const [1]),
+    );
+    final wire = record.toWire();
+    expect(wire.containsKey('fileKey'), isFalse);
+    expect(wire.containsKey('opaqueWakeToken'), isFalse);
+    expect(wire.containsKey('peerId'), isTrue);
+    expect(wire['peerId'], 'ORBIT-AAAAAAAAAAAAAAAA');
+
+    final again = CapabilityRecord.fromWire(Map<String, Object?>.from(wire));
+    expect(again.peerId, 'ORBIT-AAAAAAAAAAAAAAAA');
+    expect(again.deviceId, record.deviceId);
+    expect(again.capabilities, record.capabilities);
+
+    expect(
+      () => CapabilityRecord.fromWire({
+        ...wire,
+        'extra': {'fileKey': 'nope'},
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => CapabilityRecord.fromWire({
+        ...wire,
+        'extra': {'opaqueWakeToken': 'tok'},
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => CapabilityRecord.fromWire({
+        ...wire,
+        'extra': {'https://evil': 'x'},
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => CapabilityRecord.fromWire({
+        ...wire,
+        'capabilities': [
+          ...(wire['capabilities'] as List),
+          'https://evil.example/cap',
+        ],
+      }),
+      throwsArgumentError,
+    );
+  });
+
   test('PeerJS hello caps are verified separately from the hello blob', () async {
     remoteCapabilityCache.clear();
     final pair = await generateP256EcdsaKey();

@@ -513,6 +513,50 @@ void main() {
     expect(
       buildFcmSendHttp(
         const FcmOpaqueRequest(
+          host: kFcmSendHost,
+          path: '/v1/projects/orbits/messages:send',
+          headers: {'authorization': 'bearer ya29-opaque'},
+          body: {
+            'message': {
+              'data': {'discoverySecret': 'nope'},
+            },
+          },
+        ),
+      ),
+      isNull,
+    );
+    expect(
+      buildFcmSendHttp(
+        const FcmOpaqueRequest(
+          host: kFcmSendHost,
+          path: '/v1/projects/orbits/messages:send',
+          headers: {'authorization': 'bearer ya29-opaque'},
+          body: {
+            'message': {
+              'data': {'vaultKek': 'nope'},
+            },
+          },
+        ),
+      ),
+      isNull,
+    );
+    expect(
+      buildFcmSendHttp(
+        const FcmOpaqueRequest(
+          host: kFcmSendHost,
+          path: '/v1/projects/orbits/messages:send',
+          headers: {
+            'authorization': 'bearer ya29-opaque',
+            'discoverySecret': 'nope',
+          },
+          body: {'message': <String, Object?>{}},
+        ),
+      ),
+      isNull,
+    );
+    expect(
+      buildFcmSendHttp(
+        const FcmOpaqueRequest(
           host: 'evil.example',
           path: '/v1/projects/orbits/messages:send',
           headers: {'authorization': 'bearer ya29-opaque'},

@@ -152,6 +152,17 @@ import UIKit
     return false
   }
 
+  /// Same fragment rules as Dart opaqueWakeTokenIsSafe.
+  private static func tokenIsSafe(_ token: String) -> Bool {
+    if token.isEmpty { return false }
+    if token.contains("://") { return false }
+    if token.contains("peerId") { return false }
+    if token.contains("fileKey") { return false }
+    if token.contains("rootKey") { return false }
+    if token.contains("discoverySecret") { return false }
+    return true
+  }
+
   override func application(
     _ application: UIApplication,
     didReceiveRemoteNotification userInfo: [AnyHashable: Any],
@@ -162,11 +173,20 @@ import UIKit
       completionHandler(.noData)
       return
     }
-    guard userInfo["opaqueWakeToken"] != nil else {
+    guard let token = userInfo["opaqueWakeToken"] as? String, Self.tokenIsSafe(token) else {
       completionHandler(.noData)
       return
     }
-    pushChannel?.invokeMethod("wake", arguments: userInfo)
+    guard let collapseId = userInfo["collapseId"],
+          let protocolVersion = userInfo["protocolVersion"] else {
+      completionHandler(.noData)
+      return
+    }
+    pushChannel?.invokeMethod("wake", arguments: [
+      "opaqueWakeToken": token,
+      "collapseId": collapseId,
+      "protocolVersion": protocolVersion,
+    ])
     completionHandler(.newData)
   }
 
