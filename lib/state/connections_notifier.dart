@@ -57,6 +57,9 @@ import '../peer/wire_transport.dart';
 import '../devices/device_link.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
+import '../mailbox/mailbox_capability.dart';
+import '../mailbox/mailbox_grant_store.dart';
+import '../mailbox/mailbox_secret_store.dart';
 import '../mailbox/storage_peer_client.dart';
 import '../replication/file_journal.dart';
 import '../replication/memory_journal.dart';
@@ -197,6 +200,8 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   DualStackBridge? _dual;
   MemoryJournal? _nativeJournal;
+  MailboxSecretStore _mailboxSecrets = MailboxSecretStore();
+  MailboxGrantStore _mailboxGrants = MailboxGrantStore();
   void Function(String from, CallSignal signal)? _callHandler;
   void Function(String from, CallSignal signal)? _roomVoiceHandler;
 
@@ -245,13 +250,16 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     FileJournal? durableJournal,
     BlindMailboxStore? mailbox,
     StoragePeerClient? storagePeer,
-    String? mailboxToken,
-    String? mailboxWriterKey,
+    MailboxSecretStore? mailboxSecrets,
+    MailboxGrantStore? mailboxGrants,
+    String? storagePeerHint,
     CapabilityRecord? localCapabilities,
     DeviceBinding? localBinding,
     DeviceRegistry? devices,
   }) {
     _nativeJournal = journal ?? MemoryJournal(deviceId);
+    if (mailboxSecrets != null) _mailboxSecrets = mailboxSecrets;
+    if (mailboxGrants != null) _mailboxGrants = mailboxGrants;
     unawaited(identity_key.exportIdentityPubSpki());
     _dual =
         DualStackBridge(
@@ -262,8 +270,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
             durableJournal: durableJournal,
             mailbox: mailbox,
             storagePeer: storagePeer,
-            mailboxToken: mailboxToken,
-            mailboxWriterKey: mailboxWriterKey,
+            mailboxSecrets: mailboxSecrets ?? _mailboxSecrets,
+            mailboxGrants: mailboxGrants ?? _mailboxGrants,
+            storagePeerHint: storagePeerHint,
             localCapabilities: localCapabilities,
             localBinding: localBinding,
             devices: devices ?? deviceRegistry,
@@ -1039,6 +1048,11 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         if (dual == null) return null;
         return dual.decryptInboundAttachment(rid, fileId, key);
       },
+      onMailboxGrant: (rid, data) {
+        final grant = MailboxGrant.fromWire(data);
+        if (grant == null) return;
+        _mailboxGrants.put(rid, grant);
+      },
       assembleNativeAttachmentPath: (rid, fileId, key) async {
         final dual = _dual;
         if (dual == null) return null;
@@ -1113,6 +1127,11 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   Future<void> _dispatchNativeInbound(String remoteId, Object? data) async {
     if (_messaging.isPeerBlocked(remoteId)) return;
+    if (data is Map && data['type'] == kMailboxGrantWireType) {
+      final grant = MailboxGrant.fromWire(Map<String, Object?>.from(data));
+      if (grant != null) _mailboxGrants.put(remoteId, grant);
+      return;
+    }
     if (isRoomPacket(data) && data is Map) {
       _room.handleInbound(remoteId, Map<String, Object?>.from(data));
       return;

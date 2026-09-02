@@ -95,9 +95,10 @@ async function startLocalFleet(opts = {}) {
     healthServer('bootstrap', 'b-spare'),
   ]
   const relay = [healthServer('relay', 'r1'), healthServer('relay', 'r2')]
+  const storageAdmin = opts.adminToken || process.env.ORBITS_STORAGE_ADMIN_TOKEN || 'lab-admin'
   const storage = [
-    createStorage({ token: opts.token || 'local-mailbox' }),
-    createStorage({ token: opts.token || 'local-mailbox' }),
+    createStorage({ adminToken: storageAdmin }),
+    createStorage({ adminToken: storageAdmin }),
   ]
   const peers = []
   const dhtRows = Array.isArray(testnet && testnet.bootstrap) ? testnet.bootstrap : []

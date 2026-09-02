@@ -12,6 +12,10 @@ import 'package:orbits_flutter/devices/device_registry.dart';
 import 'package:orbits_flutter/mailbox/blind_store.dart';
 import 'package:orbits_flutter/mailbox/storage_peer_client.dart';
 import 'package:orbits_flutter/mailbox/storage_peer_http.dart';
+import 'package:orbits_flutter/mailbox/mailbox_capability.dart';
+import 'package:orbits_flutter/mailbox/mailbox_grant_store.dart';
+import 'package:orbits_flutter/mailbox/mailbox_secret_store.dart';
+import '../mailbox/mailbox_test_support.dart';
 import 'package:orbits_flutter/push/opaque_wake.dart';
 import 'package:orbits_flutter/transport/replication_schema.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
@@ -142,8 +146,6 @@ void main() {
         secrets: secrets,
         isBlocked: blocked.contains,
         mailbox: mailbox,
-        mailboxToken: mailbox == null ? null : 'cap-1',
-        mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
         devices: devices,
         connectionNoiseFor: connectionNoiseFor,
         tofuCheck: tofuCheck ?? _allowTofu,
@@ -1240,15 +1242,11 @@ void main() {
   );
 
   test('recipient reads mailbox after the sender is gone', () async {
-    final store = BlindMailboxStore()
-      ..grant(
-        MailboxCapability(
-          token: 'cap-1',
-          quotaBytes: 4096,
-          retentionMs: 60 * 1000,
-          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
-        ),
-      );
+    final store = BlindMailboxStore();
+    final bOwn = await deriveFreshMailbox();
+    registerCaps(store, bOwn.caps);
+    final grantsA = MailboxGrantStore();
+    shareGrant(grantsA, 'ORBIT-BBBBBBBBBBBBBBBB', bOwn.caps);
     setHyperswarmRollout(HyperswarmRollout.internal);
     final pair = loopbackPair();
     final secrets = DiscoverySecretStore()
@@ -1277,8 +1275,7 @@ void main() {
       secrets: secrets,
       isBlocked: (_) => false,
       mailbox: store,
-      mailboxToken: 'cap-1',
-      mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      mailboxGrants: grantsA,
       tofuCheck: _allowTofu,
       onPacket: (peer, data) async {},
     )..attach();
@@ -1290,17 +1287,22 @@ void main() {
       secrets: secrets,
       isBlocked: (_) => false,
       mailbox: store,
-      mailboxToken: 'cap-1',
-      mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      mailboxSecrets: bOwn.secrets,
       tofuCheck: _allowTofu,
       onPacket: (peer, data) async => seen.add(data),
     )..attach();
-    expect(await a.depositMailbox(utf8.encode('v2:aaa:bbb:ccc')), isTrue);
+    expect(
+      await a.depositMailbox(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        utf8.encode('v2:aaa:bbb:ccc'),
+      ),
+      isTrue,
+    );
     await pair.$1.stop();
-    final n = await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA');
+    final n = await b.drainMailbox();
     expect(n, greaterThan(0));
     expect(seen.whereType<String>().any((p) => p.startsWith('v2:')), isTrue);
-    expect(store.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 0);
+    expect(store.pendingCount(bOwn.caps.queueId), 0);
     expect(await b.verifyLiveMatchesReplay(), isTrue);
     expect(b.hypercoreMatchesJournal(), isTrue);
   });
@@ -1858,18 +1860,15 @@ void main() {
   );
 
   test('recipient reads mailbox over HTTP after the sender is gone', () async {
-    final http = StoragePeerHttp(BlindMailboxStore());
+    final store = BlindMailboxStore();
+    final bOwn = await deriveFreshMailbox();
+    final http = StoragePeerHttp(store, adminToken: 'lab-admin');
     await http.start();
     addTearDown(http.stop);
-    final client = httpStoragePeerClient(http.origin);
-    await client.grant(
-      MailboxCapability(
-        token: 'cap-http',
-        quotaBytes: 4096,
-        retentionMs: 60 * 1000,
-        expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
-      ),
-    );
+    registerCaps(store, bOwn.caps);
+    final client = httpStoragePeerClient(http.origin, adminToken: 'lab-admin');
+    final grantsA = MailboxGrantStore();
+    shareGrant(grantsA, 'ORBIT-BBBBBBBBBBBBBBBB', bOwn.caps);
     setHyperswarmRollout(HyperswarmRollout.internal);
     final pair = loopbackPair();
     final secrets = DiscoverySecretStore()
@@ -1898,8 +1897,7 @@ void main() {
       secrets: secrets,
       isBlocked: (_) => false,
       storagePeer: client,
-      mailboxToken: 'cap-http',
-      mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      mailboxGrants: grantsA,
       tofuCheck: _allowTofu,
       onPacket: (peer, data) async {},
     )..attach();
@@ -1911,41 +1909,52 @@ void main() {
       secrets: secrets,
       isBlocked: (_) => false,
       storagePeer: client,
-      mailboxToken: 'cap-http',
-      mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      mailboxSecrets: bOwn.secrets,
       tofuCheck: _allowTofu,
       onPacket: (peer, data) async => seen.add(data),
     )..attach();
     expect(a.hasMailbox, isTrue);
-    expect(await a.depositMailbox(utf8.encode('v2:aaa:bbb:ccc')), isTrue);
+    expect(
+      await a.depositMailbox(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        utf8.encode('v2:aaa:bbb:ccc'),
+      ),
+      isTrue,
+    );
     await pair.$1.stop();
-    final n = await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA');
-    expect(n, greaterThan(0));
+    expect(await b.drainMailbox(), greaterThan(0));
     expect(seen.whereType<String>().any((p) => p.startsWith('v2:')), isTrue);
-    expect(await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA'), 0);
+    expect(await b.drainMailbox(), 0);
     await a.detach();
     await b.detach();
   });
 
   test('HTTP storage peer rejects plaintext and anonymous writes', () async {
-    final http = StoragePeerHttp(BlindMailboxStore());
+    final http = StoragePeerHttp(BlindMailboxStore(), adminToken: 'lab-admin');
     await http.start();
     addTearDown(http.stop);
     expect(
       storagePeerBodyIsSafe({
-        'token': 'cap',
-        'writerKey': 'w',
-        'b64': 'YQ==',
+        'queueId': 'aa' * 32,
+        'depositCap': 'bb' * 32,
+        'block': {'bytes': 'YQ==', 'blockHash': 'cc' * 32},
         'plaintext': 'nope',
       }),
       isFalse,
     );
     expect(
-      storagePeerBodyIsSafe({'token': '', 'writerKey': 'w', 'b64': 'YQ=='}),
+      storagePeerBodyIsSafe({
+        'token': 'cap',
+        'writerKey': 'w',
+        'b64': 'YQ==',
+      }),
       isFalse,
     );
     expect(storagePeerGrantIsSafe({'token': ''}), isFalse);
-    expect(storagePeerGrantIsSafe({'token': 'cap', 'plaintext': 'x'}), isFalse);
+    expect(
+      storagePeerGrantIsSafe({'queueId': 'aa' * 32, 'plaintext': 'x'}),
+      isFalse,
+    );
 
     final client = HttpClient();
     addTearDown(() => client.close(force: true));
@@ -1970,147 +1979,120 @@ void main() {
       }),
       400,
     );
-    expect(
-      await post('/v1/blocks', {
-        'token': '',
-        'writerKey': 'w',
-        'seq': 0,
-        'b64': 'YQ==',
-      }),
-      400,
-    );
   });
 
-  test(
-    'blocked mailbox drain tombstones without decrypt or journal persist',
-    () async {
-      final store = BlindMailboxStore()
-        ..grant(
-          MailboxCapability(
-            token: 'cap-1',
-            quotaBytes: 4096,
-            retentionMs: 60 * 1000,
-            expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
-          ),
-        );
-      setHyperswarmRollout(HyperswarmRollout.internal);
-      final pair = loopbackPair();
-      final secrets = DiscoverySecretStore()
-        ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
-        ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
-      final seen = <Object?>[];
-      await pair.$1.start(
-        TransportLocalConfiguration(
-          peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
-          discoverySecret: secret,
-        ),
-      );
-      final a = DualStackBridge(
-        transport: pair.$1,
-        journal: MemoryJournal('a'),
-        selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
-        selfDeviceId: 'a',
-        secrets: secrets,
-        isBlocked: (_) => false,
-        mailbox: store,
-        mailboxToken: 'cap-1',
-        mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
-        onPacket: (_, __) async {},
-      )..attach();
-      final b = DualStackBridge(
-        transport: pair.$2,
-        journal: MemoryJournal('b'),
-        selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
-        selfDeviceId: 'b',
-        secrets: secrets,
-        isBlocked: (id) => id == 'ORBIT-AAAAAAAAAAAAAAAA',
-        mailbox: store,
-        mailboxToken: 'cap-1',
-        mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
-        onPacket: (peer, data) async => seen.add(data),
-      )..attach();
-      expect(await a.depositMailbox(utf8.encode('v2:aaa:bbb:ccc')), isTrue);
-      final n = await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA');
-      expect(n, 0);
-      expect(seen, isEmpty);
-      expect(b.journal.length, 0);
-      expect(store.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 0);
-      await a.detach();
-      await b.detach();
-    },
-  );
+  test('blocked mailbox drain tombstones without decrypt or journal persist',
+      () async {
+    final store = BlindMailboxStore();
+    final bOwn = await deriveFreshMailbox();
+    registerCaps(store, bOwn.caps);
+    final grantsA = MailboxGrantStore();
+    shareGrant(grantsA, 'ORBIT-BBBBBBBBBBBBBBBB', bOwn.caps);
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    final seen = <Object?>[];
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    final a = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: secrets,
+      isBlocked: (_) => false,
+      mailbox: store,
+      mailboxGrants: grantsA,
+      onPacket: (_, __) async {},
+    )..attach();
+    final b = DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'b',
+      secrets: secrets,
+      isBlocked: (id) => id == 'ORBIT-AAAAAAAAAAAAAAAA',
+      mailbox: store,
+      mailboxSecrets: bOwn.secrets,
+      onPacket: (peer, data) async => seen.add(data),
+    )..attach();
+    expect(
+      await a.depositMailbox(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        utf8.encode('v2:aaa:bbb:ccc'),
+      ),
+      isTrue,
+    );
+    expect(await b.drainMailbox(), 0);
+    expect(seen, isEmpty);
+    expect(b.journal.length, 0);
+    expect(store.pendingCount(bOwn.caps.queueId), 0);
+    await a.detach();
+    await b.detach();
+  });
 
-  test(
-    'sendEncrypted refuses offline plaintext hello mailbox deposit',
-    () async {
-      final store = BlindMailboxStore()
-        ..grant(
-          MailboxCapability(
-            token: 'cap-1',
-            quotaBytes: 4096,
-            retentionMs: 60 * 1000,
-            expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
-          ),
-        );
-      setHyperswarmRollout(HyperswarmRollout.internal);
-      final pair = loopbackPair();
-      final secrets = DiscoverySecretStore()
-        ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
-        ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
-      await pair.$1.start(
-        TransportLocalConfiguration(
-          peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
-          discoverySecret: secret,
-        ),
-      );
-      await pair.$2.start(
-        TransportLocalConfiguration(
-          peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
-          discoverySecret: secret,
-        ),
-      );
-      await pair.$1.publish(await _bind('a'));
-      await pair.$2.publish(await _bind('b'));
-      final a = DualStackBridge(
-        transport: pair.$1,
-        journal: MemoryJournal('a'),
-        selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
-        selfDeviceId: 'a',
-        secrets: secrets,
-        isBlocked: (_) => false,
-        mailbox: store,
-        mailboxToken: 'cap-1',
-        mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
-        tofuCheck: _allowTofu,
-        onPacket: (peer, data) async {},
-      )..attach();
-      DualStackBridge(
-        transport: pair.$2,
-        journal: MemoryJournal('b'),
-        selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
-        selfDeviceId: 'b',
-        secrets: secrets,
-        isBlocked: (_) => false,
-        mailbox: store,
-        mailboxToken: 'cap-1',
-        mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
-        tofuCheck: _allowTofu,
-        onPacket: (peer, data) async {},
-      ).attach();
-      expect(
-        await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
-          'type': 'wireHello',
-          'v': 4,
-        }),
-        isFalse,
-      );
-      expect(store.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 0);
-      expect(await a.depositMailbox(utf8.encode('v2:aaa:bbb:ccc')), isTrue);
-      await a.detach();
-      await pair.$1.stop();
-      await pair.$2.stop();
-    },
-  );
+  test('sendEncrypted refuses offline plaintext hello mailbox deposit', () async {
+    final store = BlindMailboxStore();
+    final bOwn = await deriveFreshMailbox();
+    registerCaps(store, bOwn.caps);
+    final grantsA = MailboxGrantStore();
+    shareGrant(grantsA, 'ORBIT-BBBBBBBBBBBBBBBB', bOwn.caps);
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(await _bind('a'));
+    await pair.$2.publish(await _bind('b'));
+    final a = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: secrets,
+      isBlocked: (_) => false,
+      mailbox: store,
+      mailboxGrants: grantsA,
+      tofuCheck: _allowTofu,
+      onPacket: (peer, data) async {},
+    )..attach();
+    expect(
+      await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'wireHello',
+        'v': 4,
+      }),
+      isFalse,
+    );
+    expect(store.pendingCount(bOwn.caps.queueId), 0);
+    expect(
+      await a.depositMailbox(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        utf8.encode('v2:aaa:bbb:ccc'),
+      ),
+      isTrue,
+    );
+    await a.detach();
+    await pair.$1.stop();
+    await pair.$2.stop();
+  });
 
   test('sendEncrypted refuses unsendable maps before native send', () async {
     final (a, b, _) = await linked();
@@ -2215,215 +2197,6 @@ void main() {
       sendEphemeral.indexOf('outboundWireMapIsSendable'),
       lessThan(sendEphemeral.indexOf('_ensureNativeSendReady')),
     );
-  });
-
-  test('mailbox quota and backlog force PeerJS rollback', () async {
-    final store = BlindMailboxStore()
-      ..grant(
-        MailboxCapability(
-          token: 'cap-1',
-          quotaBytes: 4,
-          retentionMs: 60 * 1000,
-          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
-        ),
-      );
-    setHyperswarmRollout(HyperswarmRollout.internal);
-    clearNativeRollbackLogForTests();
-    final pair = loopbackPair();
-    final a = DualStackBridge(
-      transport: pair.$1,
-      journal: MemoryJournal('a'),
-      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
-      selfDeviceId: 'a',
-      secrets: DiscoverySecretStore(),
-      isBlocked: (_) => false,
-      mailbox: store,
-      mailboxToken: 'cap-1',
-      mailboxWriterKey: 'writer',
-      onPacket: (_, __) async {},
-    )..attach();
-    expect(await a.depositMailbox(const [1, 2, 3, 4]), isTrue);
-    await a.checkMailboxBacklog(maxBytes: 4, maxCount: 100);
-    expect(hyperswarmRollout(), HyperswarmRollout.off);
-    expect(
-      nativeRollbackLog.last.reason,
-      NativeRollbackReason.relayMailboxBacklog,
-    );
-    setHyperswarmRollout(HyperswarmRollout.internal);
-    expect(await a.depositMailbox(const [5, 6, 7, 8, 9]), isFalse);
-    expect(hyperswarmRollout(), HyperswarmRollout.off);
-    expect(
-      nativeRollbackLog.last.reason,
-      NativeRollbackReason.relayMailboxBacklog,
-    );
-    await a.detach();
-  });
-
-  test('mailbox deposit enqueues an opaque wake without secrets', () async {
-    final store = BlindMailboxStore()
-      ..grant(
-        MailboxCapability(
-          token: 'cap-wake',
-          quotaBytes: 1024,
-          retentionMs: 60 * 1000,
-          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
-        ),
-      );
-    OpaqueWake? seen;
-    setHyperswarmRollout(HyperswarmRollout.internal);
-    final pair = loopbackPair();
-    final a =
-        DualStackBridge(
-            transport: pair.$1,
-            journal: MemoryJournal('a'),
-            selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
-            selfDeviceId: 'a',
-            secrets: DiscoverySecretStore(),
-            isBlocked: (_) => false,
-            mailbox: store,
-            mailboxToken: 'cap-wake',
-            mailboxWriterKey: 'writer',
-            onPacket: (_, __) async {},
-          )
-          ..onMailboxWake = (w) async {
-            seen = w;
-          }
-          ..attach();
-    expect(await a.depositMailbox(const [1, 2, 3, 4]), isTrue);
-    await Future<void>.delayed(const Duration(milliseconds: 20));
-    expect(seen, isNotNull);
-    expect(seen!.opaqueWakeToken, 'cap-wake');
-    expect(seen!.collapseId, 'mailbox');
-    expect(OpaqueWake.isSafe(seen!.toJson()), isTrue);
-    expect(seen!.toJson().containsKey('peerId'), isFalse);
-    expect(seen!.toJson().containsKey('text'), isFalse);
-    await a.detach();
-  });
-
-  test(
-    'mailbox deposit refuses URL, peerId, and empty envelopes before store',
-    () async {
-      expect(kLiveStorageFleet, isFalse);
-      Future<(DualStackBridge, BlindMailboxStore)> make({
-        required String token,
-        String writer = 'ORBIT-AAAAAAAAAAAAAAAA',
-      }) async {
-        final store = BlindMailboxStore()
-          ..grant(
-            MailboxCapability(
-              token: token.isEmpty ? 'cap-unused' : token,
-              quotaBytes: 4096,
-              retentionMs: 60 * 1000,
-              expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
-            ),
-          );
-        setHyperswarmRollout(HyperswarmRollout.internal);
-        final pair = loopbackPair();
-        final a = DualStackBridge(
-          transport: pair.$1,
-          journal: MemoryJournal('a'),
-          selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
-          selfDeviceId: 'a',
-          secrets: DiscoverySecretStore(),
-          isBlocked: (_) => false,
-          mailbox: store,
-          mailboxToken: token,
-          mailboxWriterKey: writer,
-          onPacket: (_, __) async {},
-        )..attach();
-        return (a, store);
-      }
-
-      for (final token in [
-        'https://evil/tok',
-        'ftp://x',
-        'tok-peerId',
-        'x-fileKey',
-        'x-rootKey',
-        'x-discoverySecret',
-      ]) {
-        final (a, store) = await make(token: token);
-        expect(await a.depositMailbox(const [1, 2, 3, 4]), isFalse);
-        expect(store.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 0);
-        await a.detach();
-      }
-
-      final (emptyEnv, emptyStore) = await make(token: 'cap-1');
-      expect(await emptyEnv.depositMailbox(const []), isFalse);
-      expect(emptyStore.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 0);
-      await emptyEnv.detach();
-
-      final (emptyTok, emptyTokStore) = await make(token: '');
-      expect(await emptyTok.depositMailbox(const [1, 2, 3, 4]), isFalse);
-      expect(emptyTokStore.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 0);
-      await emptyTok.detach();
-
-      final (emptyWriter, emptyWriterStore) = await make(
-        token: 'cap-1',
-        writer: '',
-      );
-      expect(await emptyWriter.depositMailbox(const [1, 2, 3, 4]), isFalse);
-      expect(emptyWriterStore.pendingCount(''), 0);
-      await emptyWriter.detach();
-
-      final (ok, okStore) = await make(token: 'cap-1');
-      expect(await ok.depositMailbox(const [1, 2, 3, 4]), isTrue);
-      expect(okStore.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 1);
-      await ok.detach();
-    },
-  );
-
-  test('mailbox drain refuses URL tokens before collect', () async {
-    expect(kLiveStorageFleet, isFalse);
-    final store = BlindMailboxStore()
-      ..grant(
-        MailboxCapability(
-          token: 'cap-1',
-          quotaBytes: 4096,
-          retentionMs: 60 * 1000,
-          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
-        ),
-      )
-      ..grant(
-        MailboxCapability(
-          token: 'https://evil/tok',
-          quotaBytes: 4096,
-          retentionMs: 60 * 1000,
-          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
-        ),
-      );
-    setHyperswarmRollout(HyperswarmRollout.internal);
-    final pair = loopbackPair();
-    final a = DualStackBridge(
-      transport: pair.$1,
-      journal: MemoryJournal('a'),
-      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
-      selfDeviceId: 'a',
-      secrets: DiscoverySecretStore(),
-      isBlocked: (_) => false,
-      mailbox: store,
-      mailboxToken: 'cap-1',
-      mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
-      onPacket: (_, __) async {},
-    )..attach();
-    final b = DualStackBridge(
-      transport: pair.$2,
-      journal: MemoryJournal('b'),
-      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
-      selfDeviceId: 'b',
-      secrets: DiscoverySecretStore(),
-      isBlocked: (_) => false,
-      mailbox: store,
-      mailboxToken: 'https://evil/tok',
-      mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
-      onPacket: (_, __) async {},
-    )..attach();
-    expect(await a.depositMailbox(const [1, 2, 3, 4]), isTrue);
-    expect(store.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 1);
-    expect(await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA'), 0);
-    expect(store.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 1);
-    await a.detach();
-    await b.detach();
   });
 
   test('lost messages and journal mismatch rollback to PeerJS', () async {

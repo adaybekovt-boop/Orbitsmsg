@@ -103,6 +103,7 @@ class ReliableInboundCtx {
     this.isPeerBlocked,
     this.assembleNativeAttachment,
     this.assembleNativeAttachmentPath,
+    this.onMailboxGrant,
     Set<String>? processingMsgIds,
   }) : processingMsgIds = processingMsgIds ?? <String>{};
 
@@ -206,6 +207,11 @@ class ReliableInboundCtx {
     String fileId,
     List<int> fileKey,
   )? assembleNativeAttachmentPath;
+
+  /// Ratcheted mailbox deposit grant from a contact. [data] is the
+  /// decrypted `mailboxGrant` map.
+  final void Function(String remoteId, Map<String, Object?> data)?
+      onMailboxGrant;
 }
 
 // в”Ђв”Ђв”Ђ Ephemeral dispatch в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
@@ -335,6 +341,12 @@ Future<bool> dispatchReliablePlaintext(
   final type = data['type'];
 
   // в”Ђв”Ђв”Ђ profile_req вЂ” remote wants our profile card в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  if (type == 'mailboxGrant') {
+    if (!replicationValueIsSafe(data)) return true;
+    ctx.onMailboxGrant?.call(remoteId, data);
+    return true;
+  }
+
   if (type == 'profile_req') {
     final lp = ctx.localProfile();
     if (lp == null) return true;

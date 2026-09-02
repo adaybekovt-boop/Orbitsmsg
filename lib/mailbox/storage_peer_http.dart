@@ -1,4 +1,4 @@
-// Local HTTP blind storage peer. Encrypted blocks only.
+// Local HTTP blind storage peer. Capability hashes + sealed blobs.
 // Not a public fleet — use this for desktop mailbox / CI.
 
 import 'dart:convert';
@@ -7,6 +7,7 @@ import 'dart:typed_data';
 
 import '../transport/fleet_status.dart';
 import 'blind_store.dart';
+import 'mailbox_capability.dart';
 import 'storage_peer_client.dart';
 
 class StoragePeerHttp {
@@ -15,18 +16,29 @@ class StoragePeerHttp {
     this.maxBodyBytes = kMailboxHttpMaxBodyBytes,
     this.rateLimit = kMailboxHttpRateLimit,
     this.rateWindowMs = kMailboxHttpRateWindowMs,
+    this.adminToken,
   });
 
   final BlindMailboxStore store;
   final int maxBodyBytes;
   final int rateLimit;
   final int rateWindowMs;
+  final String? adminToken;
   HttpServer? _server;
-  final Map<String, _MailboxRateWindow> _rate =
-      <String, _MailboxRateWindow>{};
+  final Map<String, _MailboxRateWindow> _rate = <String, _MailboxRateWindow>{};
 
   int get port => _server?.port ?? 0;
   String get origin => 'http://127.0.0.1:$port';
+
+  bool _adminOk(HttpRequest req) {
+    final expected = adminToken;
+    if (expected == null || expected.isEmpty) return false;
+    final got = req.headers.value(kMailboxAdminHeader) ??
+        req.headers.value(kMailboxAdminHeader.toLowerCase()) ??
+        '';
+    return got.isNotEmpty &&
+        mailboxConstantTimeEquals(utf8.encode(got), utf8.encode(expected));
+  }
 
   Future<void> start({int port = 0}) async {
     _server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
@@ -38,9 +50,19 @@ class StoragePeerHttp {
     _server = null;
   }
 
-  void grant(MailboxCapability cap) {
-    if (!storagePeerTokenIsSafe(cap.token)) return;
-    store.grant(cap);
+  int _statusFor(Object error) {
+    final text = '$error';
+    if (text.contains('rate limited')) return 429;
+    if (text.contains('replay')) return 409;
+    if (text.contains('too large')) return 413;
+    if (text.contains('rejected') ||
+        text.contains('expired') ||
+        text.contains('admin') ||
+        text.contains('readCap') ||
+        text.contains('unknown mailbox')) {
+      return 403;
+    }
+    return 400;
   }
 
   Future<void> _onRequest(HttpRequest req) async {
@@ -56,13 +78,16 @@ class StoragePeerHttp {
           await req.response.close();
           return;
         }
+        final readCapHex = map['readCap'] as String?;
         store.grant(
-          MailboxCapability(
-            token: map['token'] as String,
-            quotaBytes: (map['quotaBytes'] as num?)?.toInt() ?? 0,
-            retentionMs: (map['retentionMs'] as num?)?.toInt() ?? 0,
-            expiresAt: (map['expiresAt'] as num?)?.toInt() ?? 0,
-          ),
+          queueId: (map['queueId'] as String).toLowerCase(),
+          readCapHash: (map['readCapHash'] as String).toLowerCase(),
+          depositCapHash: (map['depositCapHash'] as String).toLowerCase(),
+          quotaBytes: (map['quotaBytes'] as num?)?.toInt(),
+          retentionMs: (map['retentionMs'] as num?)?.toInt(),
+          expiresAt: (map['expiresAt'] as num?)?.toInt(),
+          readCap: readCapHex == null ? null : mailboxHexToBytes(readCapHex),
+          adminOk: _adminOk(req),
         );
         _json(req, {'ok': true});
         return;
@@ -74,91 +99,84 @@ class StoragePeerHttp {
           await req.response.close();
           return;
         }
-        final token = map['token'] as String;
-        if (!_rateOk(token)) {
+        final queueId = (map['queueId'] as String).toLowerCase();
+        if (!_rateOk(queueId) || !_rateOk(map['depositCap'] as String)) {
           req.response.statusCode = 429;
           await req.response.close();
           return;
         }
-        store.put(
-          token: token,
-          writerKey: map['writerKey'] as String,
-          block: EncryptedBlock(
-            seq: (map['seq'] as num?)?.toInt() ?? 0,
-            bytes: base64Decode(map['b64'] as String? ?? ''),
-            storedAt: DateTime.now().millisecondsSinceEpoch,
-          ),
+        final block = Map<String, Object?>.from(map['block'] as Map);
+        final bytes = base64Decode(
+          (block['bytes'] as String?) ?? (block['b64'] as String?) ?? '',
         );
-        _json(req, {'ok': true});
+        final stored = store.put(
+          queueId: queueId,
+          depositCap: mailboxHexToBytes(map['depositCap'] as String) ??
+              const <int>[],
+          bytes: Uint8List.fromList(bytes),
+          blockHash: (block['blockHash'] as String).toLowerCase(),
+        );
+        _json(req, {'ok': true, 'seq': stored.seq});
         return;
       }
       if (req.method == 'POST' && req.uri.path == '/v1/tombstone') {
         final map = await _readJson(req);
-        if (!storagePeerKeysAreSafe(map)) {
+        if (!storagePeerKeysAreSafe(map) ||
+            map.containsKey('token') ||
+            map.containsKey('writerKey')) {
           req.response.statusCode = 400;
           await req.response.close();
           return;
         }
-        final token = map['token'] as String? ?? '';
-        if (!storagePeerTokenIsSafe(token)) {
-          req.response.statusCode = 400;
-          await req.response.close();
-          return;
-        }
-        final writer = map['writerKey'] as String? ?? '';
+        final queueId = map['queueId'] as String? ?? '';
+        final readCap = map['readCap'] as String? ?? '';
         final seq = (map['seq'] as num?)?.toInt();
-        if (writer.isEmpty || seq == null) {
+        if (!storagePeerReadQueryIsSafe(queueId: queueId, readCap: readCap) ||
+            seq == null) {
           req.response.statusCode = 400;
           await req.response.close();
           return;
         }
-        store.tombstone(token, writer, seq);
+        store.tombstone(
+          queueId: queueId.toLowerCase(),
+          readCap: mailboxHexToBytes(readCap) ?? const <int>[],
+          seq: seq,
+        );
         _json(req, {'ok': true});
         return;
       }
       if (req.method == 'GET' && req.uri.path == '/v1/stats') {
-        final token = req.uri.queryParameters['token'] ?? '';
-        if (!storagePeerTokenIsSafe(token)) {
+        final queueId = req.uri.queryParameters['queueId'] ?? '';
+        final readCap = req.uri.queryParameters['readCap'] ?? '';
+        if (!storagePeerReadQueryIsSafe(queueId: queueId, readCap: readCap)) {
           req.response.statusCode = 400;
           await req.response.close();
           return;
         }
-        final writer = req.uri.queryParameters['writerKey'] ?? '';
-        if (writer.isEmpty) {
-          req.response.statusCode = 400;
-          await req.response.close();
-          return;
-        }
-        try {
-          store.get(token: token, writerKey: writer);
-        } catch (_) {
-          req.response.statusCode = 400;
-          await req.response.close();
-          return;
-        }
+        final raw = store.stats(
+          queueId: queueId.toLowerCase(),
+          readCap: mailboxHexToBytes(readCap) ?? const <int>[],
+        );
         _json(req, {
-          'usedBytes': store.usedBytes(writer),
-          'pendingCount': store.pendingCount(writer),
+          ...raw,
+          'usedBytes': raw['bytes'],
+          'pendingCount': raw['blocks'],
         });
         return;
       }
       if (req.method == 'GET' && req.uri.path == '/v1/blocks') {
-        final token = req.uri.queryParameters['token'] ?? '';
-        if (!storagePeerTokenIsSafe(token)) {
-          req.response.statusCode = 400;
-          await req.response.close();
-          return;
-        }
-        final writer = req.uri.queryParameters['writerKey'] ?? '';
-        final from = int.tryParse(req.uri.queryParameters['fromSeq'] ?? '') ?? 0;
-        if (writer.isEmpty) {
+        final queueId = req.uri.queryParameters['queueId'] ?? '';
+        final readCap = req.uri.queryParameters['readCap'] ?? '';
+        final from =
+            int.tryParse(req.uri.queryParameters['fromSeq'] ?? '') ?? 0;
+        if (!storagePeerReadQueryIsSafe(queueId: queueId, readCap: readCap)) {
           req.response.statusCode = 400;
           await req.response.close();
           return;
         }
         final blocks = store.get(
-          token: token,
-          writerKey: writer,
+          queueId: queueId.toLowerCase(),
+          readCap: mailboxHexToBytes(readCap) ?? const <int>[],
           fromSeq: from,
         );
         _json(req, {
@@ -166,8 +184,9 @@ class StoragePeerHttp {
             for (final b in blocks)
               {
                 'seq': b.seq,
-                'b64': base64Encode(b.bytes),
-                'storedAt': b.storedAt,
+                'bytes': base64Encode(b.bytes),
+                'blockHash': b.blockHash,
+                'createdAt': b.createdAt,
               },
           ],
         });
@@ -178,8 +197,8 @@ class StoragePeerHttp {
     } on _MailboxHttpTooLarge {
       req.response.statusCode = 413;
       await req.response.close();
-    } catch (_) {
-      req.response.statusCode = 400;
+    } catch (err) {
+      req.response.statusCode = _statusFor(err);
       await req.response.close();
     }
   }
@@ -204,12 +223,12 @@ class StoragePeerHttp {
     return Map<String, Object?>.from(decoded);
   }
 
-  bool _rateOk(String token) {
-    if (token.isEmpty) return false;
+  bool _rateOk(String key) {
+    if (key.isEmpty) return false;
     final now = DateTime.now().millisecondsSinceEpoch;
-    final hit = _rate[token];
+    final hit = _rate[key];
     if (hit == null || now - hit.windowStart >= rateWindowMs) {
-      _rate[token] = _MailboxRateWindow(windowStart: now, count: 1);
+      _rate[key] = _MailboxRateWindow(windowStart: now, count: 1);
       return true;
     }
     if (hit.count >= rateLimit) return false;
@@ -256,12 +275,24 @@ void _refusePublicMailboxOrigin(String origin) {
   }
 }
 
-StoragePeerClient httpStoragePeerClient(String origin) {
+Future<int> _expectOk(HttpClientResponse res, String op) async {
+  if (res.statusCode != 200) {
+    throw StateError('storage peer $op ${res.statusCode}');
+  }
+  return res.statusCode;
+}
+
+StoragePeerClient httpStoragePeerClient(
+  String origin, {
+  String? adminToken,
+}) {
+  final defaultAdmin = adminToken;
   return StoragePeerClient(
     putRemote: ({
-      required token,
-      required writerKey,
-      required block,
+      required queueId,
+      required depositCap,
+      required bytes,
+      required blockHash,
     }) async {
       _refusePublicMailboxOrigin(origin);
       final client = HttpClient();
@@ -270,38 +301,44 @@ StoragePeerClient httpStoragePeerClient(String origin) {
         req.headers.contentType = ContentType.json;
         req.write(
           jsonEncode({
-            'token': token,
-            'writerKey': writerKey,
-            'seq': block.seq,
-            'b64': base64Encode(block.bytes),
+            'queueId': queueId,
+            'depositCap': mailboxBytesToHex(depositCap),
+            'block': {
+              'bytes': base64Encode(bytes),
+              'blockHash': blockHash,
+            },
           }),
         );
         final res = await req.close();
-        if (res.statusCode != 200) {
-          throw StateError('storage peer put ${res.statusCode}');
-        }
+        await _expectOk(res, 'put');
+        final json = jsonDecode(await utf8.decodeStream(res));
+        final seq = json is Map ? (json['seq'] as num?)?.toInt() ?? 0 : 0;
+        return EncryptedBlock(
+          seq: seq,
+          bytes: bytes,
+          createdAt: DateTime.now().millisecondsSinceEpoch,
+          blockHash: blockHash,
+        );
       } finally {
         client.close(force: true);
       }
     },
     getRemote: ({
-      required token,
-      required writerKey,
+      required queueId,
+      required readCap,
       fromSeq = 0,
     }) async {
       _refusePublicMailboxOrigin(origin);
       final client = HttpClient();
       try {
         final uri = Uri.parse(
-          '$origin/v1/blocks?token=${Uri.encodeQueryComponent(token)}'
-          '&writerKey=${Uri.encodeQueryComponent(writerKey)}'
+          '$origin/v1/blocks?queueId=${Uri.encodeQueryComponent(queueId)}'
+          '&readCap=${Uri.encodeQueryComponent(mailboxBytesToHex(readCap))}'
           '&fromSeq=$fromSeq',
         );
         final req = await client.getUrl(uri);
         final res = await req.close();
-        if (res.statusCode != 200) {
-          throw StateError('storage peer get ${res.statusCode}');
-        }
+        await _expectOk(res, 'get');
         final text = await utf8.decodeStream(res);
         final json = jsonDecode(text) as Map<String, dynamic>;
         final list = json['blocks'] as List? ?? const [];
@@ -310,37 +347,52 @@ StoragePeerClient httpStoragePeerClient(String origin) {
             if (item is Map)
               EncryptedBlock(
                 seq: (item['seq'] as num?)?.toInt() ?? 0,
-                bytes: base64Decode(item['b64'] as String? ?? ''),
-                storedAt: (item['storedAt'] as num?)?.toInt() ?? 0,
+                bytes: base64Decode(
+                  (item['bytes'] as String?) ?? (item['b64'] as String?) ?? '',
+                ),
+                createdAt: (item['createdAt'] as num?)?.toInt() ??
+                    (item['storedAt'] as num?)?.toInt() ??
+                    0,
+                blockHash: item['blockHash'] as String? ?? '',
               ),
         ];
       } finally {
         client.close(force: true);
       }
     },
-    grantRemote: (cap) async {
+    grantRemote: ({required cap, readCap, adminToken}) async {
       _refusePublicMailboxOrigin(origin);
       final client = HttpClient();
       try {
         final req = await client.postUrl(Uri.parse('$origin/v1/grant'));
         req.headers.contentType = ContentType.json;
+        final token = adminToken ?? defaultAdmin;
+        if (token != null && token.isNotEmpty) {
+          req.headers.set(kMailboxAdminHeader, token);
+        }
         req.write(
           jsonEncode({
-            'token': cap.token,
+            'queueId': cap.queueId,
+            'readCapHash': cap.readCapHash,
+            'depositCapHash': cap.depositCapHash,
             'quotaBytes': cap.quotaBytes,
             'retentionMs': cap.retentionMs,
             'expiresAt': cap.expiresAt,
+            if (readCap != null) 'readCap': mailboxBytesToHex(readCap),
           }),
         );
         final res = await req.close();
-        if (res.statusCode != 200) {
-          throw StateError('storage peer grant ${res.statusCode}');
-        }
+        await _expectOk(res, 'grant');
+        await res.drain<void>();
       } finally {
         client.close(force: true);
       }
     },
-    tombstoneRemote: (token, writerKey, seq) async {
+    tombstoneRemote: ({
+      required queueId,
+      required readCap,
+      required seq,
+    }) async {
       _refusePublicMailboxOrigin(origin);
       final client = HttpClient();
       try {
@@ -348,37 +400,38 @@ StoragePeerClient httpStoragePeerClient(String origin) {
         req.headers.contentType = ContentType.json;
         req.write(
           jsonEncode({
-            'token': token,
-            'writerKey': writerKey,
+            'queueId': queueId,
+            'readCap': mailboxBytesToHex(readCap),
             'seq': seq,
           }),
         );
         final res = await req.close();
-        if (res.statusCode != 200) {
-          throw StateError('storage peer tombstone ${res.statusCode}');
-        }
+        await _expectOk(res, 'tombstone');
+        await res.drain<void>();
       } finally {
         client.close(force: true);
       }
     },
-    statsRemote: ({required token, required writerKey}) async {
+    statsRemote: ({required queueId, required readCap}) async {
       _refusePublicMailboxOrigin(origin);
       final client = HttpClient();
       try {
         final uri = Uri.parse(
-          '$origin/v1/stats?token=${Uri.encodeQueryComponent(token)}'
-          '&writerKey=${Uri.encodeQueryComponent(writerKey)}',
+          '$origin/v1/stats?queueId=${Uri.encodeQueryComponent(queueId)}'
+          '&readCap=${Uri.encodeQueryComponent(mailboxBytesToHex(readCap))}',
         );
         final req = await client.getUrl(uri);
         final res = await req.close();
-        if (res.statusCode != 200) {
-          throw StateError('storage peer stats ${res.statusCode}');
-        }
-        final json = jsonDecode(await utf8.decodeStream(res))
-            as Map<String, dynamic>;
+        await _expectOk(res, 'stats');
+        final json =
+            jsonDecode(await utf8.decodeStream(res)) as Map<String, dynamic>;
         return MailboxPeerStats(
-          usedBytes: (json['usedBytes'] as num?)?.toInt() ?? 0,
-          pendingCount: (json['pendingCount'] as num?)?.toInt() ?? 0,
+          usedBytes: (json['usedBytes'] as num?)?.toInt() ??
+              (json['bytes'] as num?)?.toInt() ??
+              0,
+          pendingCount: (json['pendingCount'] as num?)?.toInt() ??
+              (json['blocks'] as num?)?.toInt() ??
+              0,
         );
       } finally {
         client.close(force: true);

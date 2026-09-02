@@ -16,7 +16,11 @@ import '../core/peer_pins.dart';
 import '../core/wire_crypto.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
+import '../mailbox/mailbox_capability.dart';
+import '../mailbox/mailbox_envelope.dart';
+import '../mailbox/mailbox_grant_store.dart';
 import '../mailbox/mailbox_pump.dart';
+import '../mailbox/mailbox_secret_store.dart';
 import '../mailbox/storage_peer_client.dart';
 import '../peer/helpers.dart';
 import '../peer/wire_transport.dart' show outboundWireMapIsSendable;
@@ -142,8 +146,9 @@ class DualStackBridge {
     this.durableJournal,
     this.mailbox,
     this.storagePeer,
-    this.mailboxToken,
-    this.mailboxWriterKey,
+    MailboxSecretStore? mailboxSecrets,
+    MailboxGrantStore? mailboxGrants,
+    this.storagePeerHint,
     this.localCapabilities,
     this.localBinding,
     this.devices,
@@ -157,6 +162,8 @@ class DualStackBridge {
     this.onReplicationAccepted,
     HypercoreLocalStore? hypercore,
   }) : secrets = secrets ?? discoverySecretStore,
+       mailboxSecrets = mailboxSecrets ?? MailboxSecretStore(),
+       mailboxGrants = mailboxGrants ?? MailboxGrantStore(),
        hypercore = hypercore ?? HypercoreLocalStore(selfDeviceId);
 
   final OrbitsTransport transport;
@@ -169,8 +176,9 @@ class DualStackBridge {
   final FileJournal? durableJournal;
   final BlindMailboxStore? mailbox;
   final StoragePeerClient? storagePeer;
-  final String? mailboxToken;
-  final String? mailboxWriterKey;
+  final MailboxSecretStore mailboxSecrets;
+  final MailboxGrantStore mailboxGrants;
+  final String? storagePeerHint;
   final CapabilityRecord? localCapabilities;
   final DeviceBinding? localBinding;
   final DeviceRegistry? devices;
@@ -552,7 +560,7 @@ class DualStackBridge {
       final queued = await encryptWirePayload(norm, msg);
       final bytes = utf8.encode(queued);
       _appendEnvelope(norm, bytes);
-      return await depositMailbox(bytes);
+      return await depositMailbox(norm, bytes);
     }
     if (msg is Map &&
         (msg['type'] == 'wireHello' || msg['type'] == 'wireRekey')) {
@@ -597,18 +605,29 @@ class DualStackBridge {
     return isNativeConnected(norm) && authenticated.contains(norm);
   }
 
-  /// Opaque local capability only — same rules as [mailboxPumpTokenIsSafe].
-  bool _mailboxTokenSafe(String token) => mailboxPumpTokenIsSafe(token);
+  /// Opaque queue id only — same rules as [mailboxPumpTokenIsSafe].
+  bool _mailboxQueueSafe(String queueId) => mailboxPumpTokenIsSafe(queueId);
 
-  /// Offline deposit: encrypted bytes only. Used when the recipient is not
-  /// currently connected. The storage peer never sees keys.
-  Future<bool> depositMailbox(List<int> encryptedEnvelope) async {
-    final token = mailboxToken;
-    final writer = mailboxWriterKey;
-    if (token == null || writer == null) return false;
-    if (!_mailboxTokenSafe(token) ||
-        writer.isEmpty ||
-        encryptedEnvelope.isEmpty) {
+  /// Offline deposit into the REMOTE peer's granted queue. No grant →
+  /// false (PeerJS / outbox fallback). Storage sees only the sealed blob.
+  Future<bool> depositMailbox(
+    String remotePeerId,
+    List<int> innerCiphertext,
+  ) async {
+    final norm = normalizePeerId(remotePeerId);
+    if (norm.isEmpty || innerCiphertext.isEmpty) return false;
+    final grant = mailboxGrants.get(norm);
+    if (grant == null || !_mailboxQueueSafe(grant.queueId)) return false;
+    final Uint8List sealed;
+    try {
+      sealed = sealMailboxEnvelope(
+        envelopeKey: grant.envelopeKey,
+        queueId: grant.queueId,
+        fromPeerId: selfPeerId(),
+        deviceId: selfDeviceId,
+        innerCiphertext: innerCiphertext,
+      );
+    } catch (_) {
       return false;
     }
     try {
@@ -616,27 +635,27 @@ class DualStackBridge {
       if (client != null) {
         await _mailboxPump.depositClient(
           client: client,
-          token: token,
-          writerKey: writer,
-          encryptedEnvelope: encryptedEnvelope,
+          queueId: grant.queueId,
+          depositCap: grant.depositCap,
+          sealedEnvelope: sealed,
         );
-        await checkMailboxBacklog();
-        unawaited(_enqueueMailboxWake());
+        await checkMailboxBacklog(queueId: grant.queueId);
+        unawaited(_enqueueMailboxWake(grant.queueId));
         return true;
       }
       final store = mailbox;
       if (store == null) return false;
       _mailboxPump.deposit(
         store: store,
-        token: token,
-        writerKey: writer,
-        encryptedEnvelope: encryptedEnvelope,
+        queueId: grant.queueId,
+        depositCap: grant.depositCap,
+        sealedEnvelope: sealed,
       );
-      await checkMailboxBacklog();
-      unawaited(_enqueueMailboxWake());
+      await checkMailboxBacklog(queueId: grant.queueId);
+      unawaited(_enqueueMailboxWake(grant.queueId));
       return true;
     } on StateError catch (e) {
-      if ('$e'.contains('quota')) {
+      if ('$e'.contains('quota') || '$e'.contains('rate')) {
         rollbackNativeToPeerjs(
           reason: NativeRollbackReason.relayMailboxBacklog,
           detail: '$e',
@@ -646,17 +665,38 @@ class DualStackBridge {
     }
   }
 
-  Future<void> _enqueueMailboxWake() async {
-    final token = mailboxToken;
+  Future<void> _enqueueMailboxWake(String queueId) async {
     final hook = onMailboxWake;
-    if (hook == null || token == null || !_mailboxTokenSafe(token)) return;
+    if (hook == null || !_mailboxQueueSafe(queueId)) return;
     await hook(
       OpaqueWake(
-        opaqueWakeToken: token,
+        opaqueWakeToken: queueId,
         collapseId: 'mailbox',
         protocolVersion: 1,
       ),
     );
+  }
+
+  Future<void> _offerMailboxGrant(String peerId) async {
+    final norm = normalizePeerId(peerId);
+    if (norm.isEmpty || isBlocked(norm)) return;
+    if (!isWireReady(norm)) {
+      await waitForWireReady(norm, timeout: const Duration(seconds: 8));
+    }
+    if (!isWireReady(norm)) return;
+    try {
+      final caps = await mailboxSecrets.deriveOwn();
+      if (!_mailboxQueueSafe(caps.queueId)) return;
+      await sendEncrypted(
+        norm,
+        MailboxGrant(
+          queueId: caps.queueId,
+          depositCap: caps.depositCap,
+          envelopeKey: caps.envelopeKey,
+          storagePeerHint: storagePeerHint,
+        ).toWire(),
+      );
+    } catch (_) {}
   }
 
   /// Authorization log: revoked writers are ignored on the next fan-out.
@@ -815,67 +855,87 @@ class DualStackBridge {
   }
 
   Future<int> drainMailbox({String? fromPeerId}) async {
-    final token = mailboxToken;
-    final writer = mailboxWriterKey;
-    if (token == null || writer == null) return 0;
-    if (!_mailboxTokenSafe(token) || writer.isEmpty) return 0;
+    final caps = await mailboxSecrets.deriveOwn();
+    if (!_mailboxQueueSafe(caps.queueId)) return 0;
     final List<EncryptedBlock> blocks;
     try {
       final client = storagePeer;
       if (client != null) {
         blocks = await _mailboxPump.collectClient(
           client: client,
-          token: token,
-          writerKey: writer,
+          queueId: caps.queueId,
+          readCap: caps.readCap,
         );
       } else {
         final store = mailbox;
         if (store == null) return 0;
         blocks = _mailboxPump.collect(
           store: store,
-          token: token,
-          writerKey: writer,
+          queueId: caps.queueId,
+          readCap: caps.readCap,
         );
       }
     } on StateError {
       return 0;
     }
-    final from = normalizePeerId(fromPeerId ?? writer);
-    if (isBlocked(from)) {
-      for (final block in blocks) {
-        await _tombstoneMailbox(token, writer, block.seq);
-      }
-      return 0;
-    }
     var delivered = 0;
     for (final block in blocks) {
-      final key = '$writer:${block.seq}';
+      MailboxOpenedEnvelope opened;
+      try {
+        opened = openMailboxEnvelope(
+          envelopeKey: caps.envelopeKey,
+          queueId: caps.queueId,
+          sealed: block.bytes,
+        );
+      } catch (_) {
+        await _tombstoneMailbox(caps, block.seq);
+        continue;
+      }
+      final from = normalizePeerId(opened.fromPeerId);
+      if (fromPeerId != null && normalizePeerId(fromPeerId) != from) {
+        // from is authenticated inside the envelope; ignore caller hint.
+      }
+      if (isBlocked(from)) {
+        await _tombstoneMailbox(caps, block.seq);
+        continue;
+      }
+      final key = '${caps.queueId}:${block.seq}';
       if (_drainedMailboxKeys.contains(key)) {
-        await _tombstoneMailbox(token, writer, block.seq);
+        await _tombstoneMailbox(caps, block.seq);
         continue;
       }
       _drainedMailboxKeys.add(key);
-      _appendEnvelope(from, block.bytes);
-      final text = utf8.decode(block.bytes);
+      _appendEnvelope(from, opened.innerCiphertext);
+      final text = utf8.decode(opened.innerCiphertext);
       await onPacket(
         from,
-        isWireCiphertext(text) ? text : decodeJsonPayload(block.bytes),
+        isWireCiphertext(text)
+            ? text
+            : decodeJsonPayload(opened.innerCiphertext),
       );
-      await _tombstoneMailbox(token, writer, block.seq);
+      await _tombstoneMailbox(caps, block.seq);
       delivered++;
     }
     await verifyLiveMatchesReplay();
-    await checkMailboxBacklog();
+    await checkMailboxBacklog(queueId: caps.queueId);
     return delivered;
   }
 
-  Future<void> _tombstoneMailbox(String token, String writer, int seq) async {
+  Future<void> _tombstoneMailbox(DerivedMailboxCaps caps, int seq) async {
     final client = storagePeer;
     if (client != null) {
-      await client.tombstone(token, writer, seq);
+      await client.tombstone(
+        queueId: caps.queueId,
+        readCap: caps.readCap,
+        seq: seq,
+      );
       return;
     }
-    mailbox?.tombstone(token, writer, seq);
+    mailbox?.tombstone(
+      queueId: caps.queueId,
+      readCap: caps.readCap,
+      seq: seq,
+    );
   }
 
   /// Force PeerJS when native delivery is known lost. Never enables native.
@@ -959,23 +1019,30 @@ class DualStackBridge {
   }
 
   Future<void> checkMailboxBacklog({
+    String? queueId,
+    List<int>? readCap,
     int maxBytes = kMailboxBacklogRollbackBytes,
     int maxCount = kMailboxBacklogRollbackCount,
   }) async {
-    final writer = mailboxWriterKey;
-    if (writer == null) return;
-    final token = mailboxToken;
+    var qid = queueId;
+    var cap = readCap;
+    if (qid == null || qid.isEmpty) {
+      final own = await mailboxSecrets.deriveOwn();
+      qid = own.queueId;
+      cap = own.readCap;
+    }
+    if (!_mailboxQueueSafe(qid)) return;
     final store = mailbox;
     if (store != null &&
-        store.isBacklogged(writer, maxBytes: maxBytes, maxCount: maxCount)) {
+        store.isBacklogged(qid, maxBytes: maxBytes, maxCount: maxCount)) {
       rollbackNativeToPeerjs(
         reason: NativeRollbackReason.relayMailboxBacklog,
-        detail: 'mailbox backlog ${store.usedBytes(writer)} bytes',
+        detail: 'mailbox backlog ${store.usedBytes(qid)} bytes',
       );
       return;
     }
-    if (token == null || !_mailboxTokenSafe(token) || writer.isEmpty) return;
-    final stats = await storagePeer?.stats(token: token, writerKey: writer);
+    if (cap == null || cap.length != kMailboxCapBytes) return;
+    final stats = await storagePeer?.stats(queueId: qid, readCap: cap);
     if (stats != null &&
         (stats.usedBytes >= maxBytes || stats.pendingCount >= maxCount)) {
       rollbackNativeToPeerjs(
@@ -1869,6 +1936,7 @@ class DualStackBridge {
     }
     _flushReplication(norm);
     _flushPendingInbound(norm);
+    unawaited(_offerMailboxGrant(norm));
   }
 
   void _onEvent(TransportEvent event) {

@@ -1,94 +1,102 @@
-// Sender deposits encrypted envelopes; recipient fetches after the
-// sender is gone. The store never receives keys or plaintext.
+// Sender deposits sealed envelopes into the RECIPIENT queue.
+// Recipient collects with readCap. Storage never sees keys or plaintext.
+
+import 'dart:typed_data';
 
 import 'blind_store.dart';
+import 'mailbox_capability.dart';
 import 'storage_peer_client.dart';
 
-/// Capability tokens are opaque. Same rules as [storagePeerTokenIsSafe].
-bool mailboxPumpTokenIsSafe(String token) => storagePeerTokenIsSafe(token);
+/// Opaque capability / queue id. Same rules as [mailboxCapStringIsSafe].
+bool mailboxPumpTokenIsSafe(String token) => mailboxCapStringIsSafe(token);
 
-void _assertMailboxPumpArgs({
-  required String token,
-  required String writerKey,
-  List<int>? encryptedEnvelope,
+void _assertDepositArgs({
+  required String queueId,
+  required List<int> depositCap,
+  List<int>? sealed,
 }) {
-  if (!mailboxPumpTokenIsSafe(token)) {
-    throw StateError('unsafe mailbox token');
+  if (!mailboxCapStringIsSafe(queueId)) {
+    throw StateError('unsafe mailbox queue');
   }
-  if (writerKey.isEmpty) {
-    throw StateError('empty mailbox writer');
+  if (depositCap.length != kMailboxCapBytes) {
+    throw StateError('invalid deposit capability');
   }
-  if (encryptedEnvelope != null && encryptedEnvelope.isEmpty) {
+  if (sealed != null && sealed.isEmpty) {
     throw StateError('empty mailbox envelope');
   }
 }
 
-class MailboxPump {
-  int _seq = 0;
+void _assertReadArgs({
+  required String queueId,
+  required List<int> readCap,
+}) {
+  if (!mailboxCapStringIsSafe(queueId)) {
+    throw StateError('unsafe mailbox queue');
+  }
+  if (readCap.length != kMailboxCapBytes) {
+    throw StateError('invalid read capability');
+  }
+}
 
-  void deposit({
+class MailboxPump {
+  EncryptedBlock deposit({
     required BlindMailboxStore store,
-    required String token,
-    required String writerKey,
-    required List<int> encryptedEnvelope,
+    required String queueId,
+    required List<int> depositCap,
+    required List<int> sealedEnvelope,
   }) {
-    _assertMailboxPumpArgs(
-      token: token,
-      writerKey: writerKey,
-      encryptedEnvelope: encryptedEnvelope,
+    _assertDepositArgs(
+      queueId: queueId,
+      depositCap: depositCap,
+      sealed: sealedEnvelope,
     );
-    store.put(
-      token: token,
-      writerKey: writerKey,
-      block: EncryptedBlock(
-        seq: _seq++,
-        bytes: List<int>.from(encryptedEnvelope),
-        storedAt: DateTime.now().millisecondsSinceEpoch,
-      ),
+    return store.put(
+      queueId: queueId,
+      depositCap: depositCap,
+      bytes: Uint8List.fromList(sealedEnvelope),
+      blockHash: sha256HexOf(sealedEnvelope),
     );
   }
 
   List<EncryptedBlock> collect({
     required BlindMailboxStore store,
-    required String token,
-    required String writerKey,
+    required String queueId,
+    required List<int> readCap,
     int fromSeq = 0,
   }) {
-    _assertMailboxPumpArgs(token: token, writerKey: writerKey);
-    return store.get(token: token, writerKey: writerKey, fromSeq: fromSeq);
+    _assertReadArgs(queueId: queueId, readCap: readCap);
+    return store.get(queueId: queueId, readCap: readCap, fromSeq: fromSeq);
   }
 
-  Future<void> depositClient({
+  Future<EncryptedBlock> depositClient({
     required StoragePeerClient client,
-    required String token,
-    required String writerKey,
-    required List<int> encryptedEnvelope,
-  }) async {
-    _assertMailboxPumpArgs(
-      token: token,
-      writerKey: writerKey,
-      encryptedEnvelope: encryptedEnvelope,
+    required String queueId,
+    required List<int> depositCap,
+    required List<int> sealedEnvelope,
+  }) {
+    _assertDepositArgs(
+      queueId: queueId,
+      depositCap: depositCap,
+      sealed: sealedEnvelope,
     );
-    final seq = _seq;
-    await client.put(
-      token: token,
-      writerKey: writerKey,
-      block: EncryptedBlock(
-        seq: seq,
-        bytes: List<int>.from(encryptedEnvelope),
-        storedAt: DateTime.now().millisecondsSinceEpoch,
-      ),
+    return client.put(
+      queueId: queueId,
+      depositCap: depositCap,
+      bytes: sealedEnvelope,
     );
-    _seq = seq + 1;
   }
 
   Future<List<EncryptedBlock>> collectClient({
     required StoragePeerClient client,
-    required String token,
-    required String writerKey,
+    required String queueId,
+    required List<int> readCap,
     int fromSeq = 0,
   }) {
-    _assertMailboxPumpArgs(token: token, writerKey: writerKey);
-    return client.get(token: token, writerKey: writerKey, fromSeq: fromSeq);
+    _assertReadArgs(queueId: queueId, readCap: readCap);
+    return client.get(
+      queueId: queueId,
+      readCap: readCap,
+      fromSeq: fromSeq,
+    );
   }
 }

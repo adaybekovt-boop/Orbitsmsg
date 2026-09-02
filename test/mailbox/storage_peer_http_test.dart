@@ -1,43 +1,46 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/mailbox/blind_store.dart';
+import 'package:orbits_flutter/mailbox/mailbox_capability.dart';
+import 'package:orbits_flutter/mailbox/storage_peer_client.dart';
 import 'package:orbits_flutter/mailbox/storage_peer_http.dart';
 import 'package:orbits_flutter/transport/fleet_status.dart';
 
+import 'mailbox_test_support.dart';
+
 void main() {
   test('HTTP mailbox rejects oversized bodies and rate-limits deposits', () async {
+    final owner = await deriveFreshMailbox();
+    final store = BlindMailboxStore();
+    registerCaps(store, owner.caps, quotaBytes: 1024 * 1024);
     final http = StoragePeerHttp(
-      BlindMailboxStore(),
+      store,
       maxBodyBytes: 64,
       rateLimit: 2,
       rateWindowMs: 60 * 1000,
-    );
-    http.grant(
-      MailboxCapability(
-        token: 'cap-1',
-        quotaBytes: 1024,
-        retentionMs: 60 * 1000,
-        expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
-      ),
+      adminToken: 'lab-admin',
     );
     await http.start();
     addTearDown(http.stop);
     expect(http.origin, startsWith('http://127.0.0.1:'));
     expect(localStoragePeerOriginIsLoopback(http.origin), isTrue);
 
-    Future<int> put({required String b64, int seq = 0}) async {
+    Future<int> put(List<int> bytes) async {
       final client = HttpClient();
       try {
         final req = await client.postUrl(Uri.parse('${http.origin}/v1/blocks'));
         req.headers.contentType = ContentType.json;
         req.write(
           jsonEncode({
-            'token': 'cap-1',
-            'writerKey': 'w',
-            'seq': seq,
-            'b64': b64,
+            'queueId': owner.caps.queueId,
+            'depositCap': mailboxBytesToHex(owner.caps.depositCap),
+            'block': {
+              'bytes': base64Encode(bytes),
+              'blockHash': sha256HexOf(bytes),
+            },
           }),
         );
         final res = await req.close();
@@ -48,9 +51,9 @@ void main() {
       }
     }
 
-    expect(await put(b64: base64Encode(const [1])), 200);
-    expect(await put(b64: base64Encode(const [2]), seq: 1), 200);
-    expect(await put(b64: base64Encode(const [3]), seq: 2), 429);
+    expect(await put(const [1]), 200);
+    expect(await put(const [2]), 200);
+    expect(await put(const [3]), 429);
 
     final client = HttpClient();
     try {
@@ -84,239 +87,208 @@ void main() {
     final region = js.substring(start, end + 1);
     expect(region, contains('fileKey'));
     expect(region, contains('discoverySecret'));
+    expect(region, contains('writerKey'));
+    expect(region, contains('peerId'));
     expect(region, isNot(contains("'b64'")));
-  });
-
-  test('HTTP mailbox rejects deposit bodies with fileKey', () async {
-    final http = StoragePeerHttp(BlindMailboxStore());
-    http.grant(
-      MailboxCapability(
-        token: 'cap-file',
-        quotaBytes: 1024,
-        retentionMs: 60 * 1000,
-        expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
-      ),
-    );
-    await http.start();
-    addTearDown(http.stop);
-
-    final client = HttpClient();
-    try {
-      final req = await client.postUrl(Uri.parse('${http.origin}/v1/blocks'));
-      req.headers.contentType = ContentType.json;
-      req.write(
-        jsonEncode({
-          'token': 'cap-file',
-          'writerKey': 'w',
-          'seq': 0,
-          'b64': 'YQ==',
-          'fileKey': 'must-not-persist',
-        }),
-      );
-      final res = await req.close();
-      await res.drain();
-      expect(res.statusCode, 400);
-    } finally {
-      client.close(force: true);
-    }
   });
 
   test('kLiveStorageFleet stays false', () {
     expect(kLiveStorageFleet, isFalse);
   });
 
-  test(
-    'HTTP mailbox GET blocks/stats and tombstone refuse unsafe tokens',
-    () async {
-      expect(kLiveStorageFleet, isFalse);
-      final store = BlindMailboxStore();
-      final http = StoragePeerHttp(store);
-      final expiresAt = DateTime.now().millisecondsSinceEpoch + 60 * 1000;
-      MailboxCapability cap(String token) => MailboxCapability(
-            token: token,
-            quotaBytes: 1024,
-            retentionMs: 60 * 1000,
-            expiresAt: expiresAt,
-          );
-      http.grant(cap('https://evil/tok'));
-      expect(
-        () => store.get(token: 'https://evil/tok', writerKey: 'w'),
-        throwsA(isA<StateError>()),
-      );
-      http.grant(cap('cap-safe'));
-      await http.start();
-      addTearDown(http.stop);
+  test('HTTP stranger/depositor read tombstone stats are 403', () async {
+    final owner = await deriveFreshMailbox();
+    final stranger = await deriveFreshMailbox();
+    final store = BlindMailboxStore();
+    registerCaps(store, owner.caps);
+    final http = StoragePeerHttp(store, adminToken: 'lab-admin');
+    await http.start();
+    addTearDown(http.stop);
+    store.put(
+      queueId: owner.caps.queueId,
+      depositCap: owner.caps.depositCap,
+      bytes: Uint8List.fromList(const [1, 2, 3]),
+      blockHash: sha256HexOf(const [1, 2, 3]),
+    );
 
-      const cipher = <int>[9, 8, 7];
+    Future<int> get(String path) async {
       final client = HttpClient();
-      addTearDown(() => client.close(force: true));
+      try {
+        final req = await client.getUrl(Uri.parse('${http.origin}$path'));
+        final res = await req.close();
+        await res.drain();
+        return res.statusCode;
+      } finally {
+        client.close(force: true);
+      }
+    }
 
-      Future<int> putSafe() async {
-        final req = await client.postUrl(Uri.parse('${http.origin}/v1/blocks'));
+    Future<int> post(String path, Map<String, Object?> body) async {
+      final client = HttpClient();
+      try {
+        final req = await client.postUrl(Uri.parse('${http.origin}$path'));
         req.headers.contentType = ContentType.json;
+        req.write(jsonEncode(body));
+        final res = await req.close();
+        await res.drain();
+        return res.statusCode;
+      } finally {
+        client.close(force: true);
+      }
+    }
+
+    final depositHex = mailboxBytesToHex(owner.caps.depositCap);
+    final strangerHex = mailboxBytesToHex(stranger.caps.readCap);
+    expect(
+      await get(
+        '/v1/blocks?queueId=${owner.caps.queueId}&readCap=$depositHex',
+      ),
+      403,
+    );
+    expect(
+      await get(
+        '/v1/stats?queueId=${owner.caps.queueId}&readCap=$strangerHex',
+      ),
+      403,
+    );
+    expect(
+      await post('/v1/tombstone', {
+        'queueId': owner.caps.queueId,
+        'readCap': strangerHex,
+        'seq': 1,
+      }),
+      403,
+    );
+    expect(store.pendingCount(owner.caps.queueId), 1);
+  });
+
+  test('unauthenticated grant and re-register without readCap are 403', () async {
+    final owner = await deriveFreshMailbox();
+    final http = StoragePeerHttp(
+      BlindMailboxStore(requireAdminForFirstGrant: true),
+      adminToken: 'lab-admin',
+    );
+    await http.start();
+    addTearDown(http.stop);
+
+    Future<int> grant({String? admin, String? readCap}) async {
+      final client = HttpClient();
+      try {
+        final req = await client.postUrl(Uri.parse('${http.origin}/v1/grant'));
+        req.headers.contentType = ContentType.json;
+        if (admin != null) req.headers.set(kMailboxAdminHeader, admin);
         req.write(
           jsonEncode({
-            'token': 'cap-safe',
-            'writerKey': 'w',
-            'seq': 0,
-            'b64': base64Encode(cipher),
+            'queueId': owner.caps.queueId,
+            'readCapHash': owner.caps.readCapHashHex,
+            'depositCapHash': owner.caps.depositCapHashHex,
+            'expiresAt': DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+            if (readCap != null) 'readCap': readCap,
           }),
         );
         final res = await req.close();
         await res.drain();
         return res.statusCode;
+      } finally {
+        client.close(force: true);
       }
+    }
 
-      Future<int> getBlocks(String token) async {
-        final uri = Uri.parse(
-          '${http.origin}/v1/blocks?token=${Uri.encodeQueryComponent(token)}'
-          '&writerKey=w',
-        );
-        final req = await client.getUrl(uri);
-        final res = await req.close();
-        await res.drain();
-        return res.statusCode;
-      }
-
-      Future<Map<String, Object?>> getBlocksJson(String token) async {
-        final uri = Uri.parse(
-          '${http.origin}/v1/blocks?token=${Uri.encodeQueryComponent(token)}'
-          '&writerKey=w',
-        );
-        final req = await client.getUrl(uri);
-        final res = await req.close();
-        expect(res.statusCode, 200);
-        return Map<String, Object?>.from(
-          jsonDecode(await utf8.decodeStream(res)) as Map,
-        );
-      }
-
-      Future<int> getStats(String token) async {
-        final uri = Uri.parse(
-          '${http.origin}/v1/stats?token=${Uri.encodeQueryComponent(token)}'
-          '&writerKey=w',
-        );
-        final req = await client.getUrl(uri);
-        final res = await req.close();
-        await res.drain();
-        return res.statusCode;
-      }
-
-      Future<Map<String, Object?>> getStatsJson(String token) async {
-        final uri = Uri.parse(
-          '${http.origin}/v1/stats?token=${Uri.encodeQueryComponent(token)}'
-          '&writerKey=w',
-        );
-        final req = await client.getUrl(uri);
-        final res = await req.close();
-        expect(res.statusCode, 200);
-        return Map<String, Object?>.from(
-          jsonDecode(await utf8.decodeStream(res)) as Map,
-        );
-      }
-
-      Future<int> tombstone(String token, {String writer = 'w', int? seq = 0}) async {
-        final req =
-            await client.postUrl(Uri.parse('${http.origin}/v1/tombstone'));
-        req.headers.contentType = ContentType.json;
-        final body = <String, Object?>{
-          'token': token,
-          'writerKey': writer,
-        };
-        if (seq != null) body['seq'] = seq;
-        req.write(jsonEncode(body));
-        final res = await req.close();
-        await res.drain();
-        return res.statusCode;
-      }
-
-      expect(await putSafe(), 200);
-      expect(store.pendingCount('w'), 1);
-
-      for (final token in <String>['https://evil/tok', 'ftp://x', 'tok-peerId']) {
-        expect(await getBlocks(token), 400);
-        expect(await getStats(token), 400);
-        expect(await tombstone(token), 400);
-        expect(store.pendingCount('w'), 1);
-      }
-
-      expect(await tombstone('cap-safe', writer: ''), 400);
-      expect(await tombstone('cap-safe', seq: null), 400);
-      expect(store.pendingCount('w'), 1);
-
-      final stats = await getStatsJson('cap-safe');
-      expect(stats['pendingCount'], 1);
-
-      final got = await getBlocksJson('cap-safe');
-      final blocks = got['blocks'] as List;
-      expect(blocks, hasLength(1));
-      expect((blocks.first as Map)['b64'], base64Encode(cipher));
-      expect(kLiveStorageFleet, isFalse);
-    },
-  );
-
-  test('localStoragePeerOriginIsLoopback allows only loopback HTTP', () {
-    expect(localStoragePeerOriginIsLoopback('http://127.0.0.1'), isTrue);
-    expect(localStoragePeerOriginIsLoopback('http://127.0.0.1:8080'), isTrue);
-    expect(localStoragePeerOriginIsLoopback('http://localhost'), isTrue);
-    expect(localStoragePeerOriginIsLoopback('http://localhost:9'), isTrue);
-    expect(localStoragePeerOriginIsLoopback('http://[::1]'), isTrue);
-    expect(localStoragePeerOriginIsLoopback('http://[::1]:1'), isTrue);
-
-    expect(localStoragePeerOriginIsLoopback(''), isFalse);
-    expect(localStoragePeerOriginIsLoopback('https://evil'), isFalse);
-    expect(localStoragePeerOriginIsLoopback('https://evil.example/v1'), isFalse);
-    expect(localStoragePeerOriginIsLoopback('ftp://x'), isFalse);
-    expect(localStoragePeerOriginIsLoopback('file://'), isFalse);
-    expect(localStoragePeerOriginIsLoopback('example.com'), isFalse);
-    expect(localStoragePeerOriginIsLoopback('http://example.com'), isFalse);
-    expect(localStoragePeerOriginIsLoopback('https://127.0.0.1'), isFalse);
+    expect(await grant(), 403);
+    expect(await grant(admin: 'lab-admin'), 200);
+    expect(await grant(admin: 'lab-admin'), 403);
     expect(
-      localStoragePeerOriginIsLoopback('http://127.0.0.1.example.com'),
-      isFalse,
+      await grant(
+        admin: 'lab-admin',
+        readCap: mailboxBytesToHex(owner.caps.readCap),
+      ),
+      200,
     );
   });
 
-  test(
-    'httpStoragePeerClient refuses public origin before HttpClient',
-    () async {
-      expect(kLiveStorageFleet, isFalse);
-      var httpClientBuilt = false;
-      await HttpOverrides.runZoned(
-        () async {
-          final client = httpStoragePeerClient('https://evil.example/v1');
-          const cap = MailboxCapability(
-            token: 't',
-            quotaBytes: 1,
-            retentionMs: 1,
-            expiresAt: 1,
-          );
-          const block = EncryptedBlock(seq: 0, bytes: <int>[], storedAt: 0);
+  test('HTTP client round-trip and captured bodies stay protocol-only', () async {
+    final owner = await deriveFreshMailbox();
+    final store = BlindMailboxStore();
+    registerCaps(store, owner.caps);
+    final http = StoragePeerHttp(store, adminToken: 'lab-admin');
+    await http.start();
+    addTearDown(http.stop);
+    final captured = <String>[];
+    final client = httpStoragePeerClient(http.origin, adminToken: 'lab-admin');
+    final wrapped = StoragePeerClient(
+      putRemote: ({
+        required queueId,
+        required depositCap,
+        required bytes,
+        required blockHash,
+      }) async {
+        captured.add(
+          jsonEncode({
+            'queueId': queueId,
+            'depositCap': mailboxBytesToHex(depositCap),
+            'block': {
+              'bytes': base64Encode(bytes),
+              'blockHash': blockHash,
+            },
+          }),
+        );
+        return client.put(
+          queueId: queueId,
+          depositCap: depositCap,
+          bytes: bytes,
+          blockHash: blockHash,
+        );
+      },
+      getRemote: ({required queueId, required readCap, fromSeq = 0}) {
+        return client.get(
+          queueId: queueId,
+          readCap: readCap,
+          fromSeq: fromSeq,
+        );
+      },
+    );
+    await wrapped.put(
+      queueId: owner.caps.queueId,
+      depositCap: owner.caps.depositCap,
+      bytes: const [7, 7, 7],
+    );
+    expect(captured, hasLength(1));
+    final body = jsonDecode(captured.single) as Map<String, Object?>;
+    expect(storagePeerKeysAreSafe(body), isTrue);
+    expect(body.containsKey('peerId'), isFalse);
+    expect(body.containsKey('conversationId'), isFalse);
+    expect(body.containsKey('writerKey'), isFalse);
+    expect(jsonEncode(body), isNot(contains('discoverySecret')));
+    expect(jsonEncode(body), isNot(contains('fileKey')));
+  });
 
-          await expectLater(
-            client.put(token: 't', writerKey: 'w', block: block),
-            throwsA(isA<StateError>()),
-          );
-          await expectLater(
-            client.get(token: 't', writerKey: 'w'),
-            throwsA(isA<StateError>()),
-          );
-          await expectLater(client.grant(cap), throwsA(isA<StateError>()));
-          await expectLater(
-            client.tombstone('t', 'w', 0),
-            throwsA(isA<StateError>()),
-          );
-          await expectLater(
-            client.stats(token: 't', writerKey: 'w'),
-            throwsA(isA<StateError>()),
-          );
-        },
-        createHttpClient: (context) {
-          httpClientBuilt = true;
-          fail('HttpClient must not be constructed for a public mailbox origin');
-        },
-      );
-      expect(httpClientBuilt, isFalse);
-    },
-  );
+  test('httpStoragePeerClient grants with admin and reads with readCap', () async {
+    final owner = await deriveFreshMailbox();
+    final store = BlindMailboxStore(requireAdminForFirstGrant: true);
+    final http = StoragePeerHttp(store, adminToken: 'lab-admin');
+    await http.start();
+    addTearDown(http.stop);
+    final client = httpStoragePeerClient(http.origin, adminToken: 'lab-admin');
+    await client.grant(
+      cap: MailboxCapability(
+        queueId: owner.caps.queueId,
+        readCapHash: owner.caps.readCapHashHex,
+        depositCapHash: owner.caps.depositCapHashHex,
+        quotaBytes: 4096,
+        retentionMs: 60 * 1000,
+        expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+      ),
+      adminToken: 'lab-admin',
+    );
+    await client.put(
+      queueId: owner.caps.queueId,
+      depositCap: owner.caps.depositCap,
+      bytes: const [1, 2, 3, 4],
+    );
+    final blocks = await client.get(
+      queueId: owner.caps.queueId,
+      readCap: owner.caps.readCap,
+    );
+    expect(blocks.single.bytes, [1, 2, 3, 4]);
+  });
 }

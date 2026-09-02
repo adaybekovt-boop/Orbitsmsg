@@ -10,6 +10,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/feature_flags.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
+import '../mailbox/mailbox_capability.dart';
+import '../mailbox/mailbox_grant_store.dart';
+import '../mailbox/mailbox_secret_store.dart';
 import '../mailbox/storage_peer_client.dart';
 import '../mailbox/storage_peer_http.dart';
 import '../push/push_gateway.dart';
@@ -157,14 +160,37 @@ class NativeTransportHost {
       await transport!.publish(binding);
     } catch (_) {}
 
+    final mailboxSecrets = MailboxSecretStore();
+    await mailboxSecrets.hydrate();
+    final derived = await mailboxSecrets.deriveOwn();
+    final now = DateTime.now().millisecondsSinceEpoch;
     final cap = MailboxCapability(
-      token: 'local-mailbox',
+      queueId: derived.queueId,
+      readCapHash: derived.readCapHashHex,
+      depositCapHash: derived.depositCapHashHex,
       quotaBytes: 64 * 1024 * 1024,
       retentionMs: 30 * 24 * 3600 * 1000,
-      expiresAt: DateTime.now().millisecondsSinceEpoch + 86400000 * 30,
+      expiresAt: now + 86400000 * 30,
     );
-    final mailbox = BlindMailboxStore()..grant(cap);
-    final storagePeer = await _bindStoragePeer(mailbox, cap, directory);
+    final mailbox = BlindMailboxStore()
+      ..grant(
+        queueId: cap.queueId,
+        readCapHash: cap.readCapHash,
+        depositCapHash: cap.depositCapHash,
+        quotaBytes: cap.quotaBytes,
+        retentionMs: cap.retentionMs,
+        expiresAt: cap.expiresAt,
+        adminOk: true,
+      );
+    final adminToken =
+        Platform.environment['ORBITS_STORAGE_ADMIN_TOKEN'] ?? 'lab-admin';
+    final storagePeer = await _bindStoragePeer(
+      mailbox,
+      cap,
+      directory,
+      adminToken: adminToken,
+      readCap: derived.readCap,
+    );
 
     // Replay keeps FileJournal writer seq / writerDeviceId. Do not
     // ingest() those rows — that restamps them as fresh local appends.
@@ -181,8 +207,8 @@ class NativeTransportHost {
           durableJournal: journal,
           mailbox: mailbox,
           storagePeer: storagePeer,
-          mailboxToken: 'local-mailbox',
-          mailboxWriterKey: auth.user.peerId,
+          mailboxSecrets: mailboxSecrets,
+          mailboxGrants: MailboxGrantStore(),
           localCapabilities: caps,
           localBinding: issuedBinding,
           devices: deviceRegistry,
@@ -290,8 +316,10 @@ class NativeTransportHost {
   Future<StoragePeerClient> _bindStoragePeer(
     BlindMailboxStore mailbox,
     MailboxCapability cap,
-    RelayDirectory? directory,
-  ) async {
+    RelayDirectory? directory, {
+    String? adminToken,
+    List<int>? readCap,
+  }) async {
     var origin = resolveStoragePeerOrigin(
       env: Platform.environment,
       directory: directory,
@@ -303,18 +331,22 @@ class NativeTransportHost {
     }
     if (origin != null && origin.isNotEmpty) {
       try {
-        final client = httpStoragePeerClient(origin);
-        await client.grant(cap);
+        final client = httpStoragePeerClient(origin, adminToken: adminToken);
+        await client.grant(
+          cap: cap,
+          readCap: readCap,
+          adminToken: adminToken,
+        );
         return client;
       } catch (_) {}
     }
     try {
-      final http = StoragePeerHttp(mailbox);
+      final http = StoragePeerHttp(mailbox, adminToken: adminToken);
       await http.start();
       storageHttp = http;
-      return httpStoragePeerClient(http.origin);
+      return httpStoragePeerClient(http.origin, adminToken: adminToken);
     } catch (_) {
-      return StoragePeerClient.local(mailbox);
+      return StoragePeerClient.local(mailbox, adminToken: adminToken);
     }
   }
 
