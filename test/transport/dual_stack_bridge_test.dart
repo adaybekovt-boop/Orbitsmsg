@@ -348,7 +348,7 @@ void main() {
     Uint8List? got;
     final deadline = DateTime.now().add(const Duration(seconds: 2));
     while (DateTime.now().isBefore(deadline)) {
-      got = b.decryptInboundAttachment(
+      got = await b.decryptInboundAttachment(
         'ORBIT-AAAAAAAAAAAAAAAA',
         'chat-file-1',
         key,
@@ -396,7 +396,7 @@ void main() {
     Uint8List? got;
     final deadline = DateTime.now().add(const Duration(seconds: 2));
     while (DateTime.now().isBefore(deadline)) {
-      got = b.decryptInboundAttachment(
+      got = await b.decryptInboundAttachment(
         'ORBIT-AAAAAAAAAAAAAAAA',
         'chat-file-path',
         key,
@@ -433,6 +433,14 @@ void main() {
     expect(
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
       isNot(contains("'fileKey'")),
+    );
+    expect(
+      File('lib/transport/loopback_transport.dart').readAsStringSync(),
+      contains('attach-chunk-path'),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('xorCipherPathToPlaintext'),
     );
   });
 

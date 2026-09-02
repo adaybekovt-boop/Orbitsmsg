@@ -42,3 +42,11 @@ Future<CipherPathWrite?> xorPlaintextPathToCipherFile(
   List<int> fileKey,
 ) =>
     impl.xorPlaintextPathToCipherFile(plaintextPath, fileKey);
+
+/// XOR a local **ciphertext** path back to plaintext. Null on web /
+/// refused paths. Does not hold [fileKey] on disk. Caps at 50 MiB.
+Future<List<int>?> xorCipherPathToPlaintext(
+  String cipherPath,
+  List<int> fileKey,
+) =>
+    impl.xorCipherPathToPlaintext(cipherPath, fileKey);

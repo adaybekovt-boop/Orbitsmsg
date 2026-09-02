@@ -155,32 +155,34 @@ test('sendFile attach-chunk streams ciphertext from a path', async () => {
   const src = path.join(os.tmpdir(), 'orbits-attach-chunk.bin')
   const ct = Buffer.alloc(FILE_CHUNK + 100, 5)
   fs.writeFileSync(src, ct)
-  const chunks = []
+  const frames = []
   const prev = b._emit
   const done = new Promise((resolve) => {
     b._emit = (name, payload) => {
       prev(name, payload)
       if (name === 'frame' && payload.channel === 'attachment') {
-        chunks.push(payload.body)
-        if (payload.body && payload.body.type === 'attach-chunk' && payload.body.index === 1) {
-          resolve()
-        }
+        frames.push(payload.body)
+        if (payload.body && payload.body.type === 'attach-chunk-path') resolve()
       }
     }
   })
   await a.sendFile(peerId, { path: src, protocol: 'attach-chunk', fileId: 'chat-1' })
   await done
-  assert.ok(!chunks.some((c) => c && c.type === 'harness-file-start'))
-  const first = chunks.find((c) => c && c.type === 'attach-chunk' && c.index === 0)
-  const second = chunks.find((c) => c && c.type === 'attach-chunk' && c.index === 1)
-  assert.ok(first)
-  assert.ok(second)
-  assert.equal(first.fileId, 'chat-1')
-  assert.equal(first.offset, 0)
-  assert.equal(second.offset, FILE_CHUNK)
-  const firstCt = Buffer.from(first.b64, 'base64')
-  assert.equal(firstCt.length, FILE_CHUNK)
-  assert.equal(first.hash, createHash('sha256').update(firstCt).digest('hex'))
+  assert.ok(!frames.some((c) => c && c.type === 'harness-file-start'))
+  assert.ok(!frames.some((c) => c && c.b64))
+  assert.ok(!frames.some((c) => c && c.type === 'attach-chunk'))
+  const pathFrame = frames.find((c) => c && c.type === 'attach-chunk-path')
+  assert.ok(pathFrame)
+  assert.equal(pathFrame.fileId, 'chat-1')
+  assert.ok(pathFrame.path)
+  assert.ok(!String(pathFrame.path).includes('://'))
+  const deadline = Date.now() + 2000
+  while (Date.now() < deadline) {
+    if (fs.existsSync(pathFrame.path) && fs.statSync(pathFrame.path).size === ct.length) break
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  const onDisk = fs.readFileSync(pathFrame.path)
+  assert.equal(onDisk.equals(ct), true)
   await a.stop()
   await b.stop()
 })

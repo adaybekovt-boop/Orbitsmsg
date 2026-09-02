@@ -324,8 +324,13 @@ class WorkletOrbitsTransport implements OrbitsTransport {
         );
         List<int> bytes = const [];
         final b64 = payload['frameB64'] as String?;
-        if (b64 != null) {
+        if (b64 != null && b64.isNotEmpty) {
           bytes = base64Decode(b64);
+        } else {
+          final body = payload['body'];
+          if (body is Map) {
+            bytes = utf8.encode(jsonEncode(body));
+          }
         }
         _events.add(TransportFrame(peerId, channel, bytes));
       default:

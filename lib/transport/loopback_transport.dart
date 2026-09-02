@@ -51,6 +51,8 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
       <String, LoopbackOrbitsTransport>{};
   final Map<String, IncomingPathAttachment> _files =
       <String, IncomingPathAttachment>{};
+  final Map<String, IncomingPathAttachment> _attachCiphers =
+      <String, IncomingPathAttachment>{};
   final Map<String, int> _resumeOffsets = <String, int>{};
   final Map<String, Completer<int>> _resumeWaiters = <String, Completer<int>>{};
   Future<void> _attachmentIo = Future<void>.value();
@@ -88,6 +90,10 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
       await incoming.close();
     }
     _files.clear();
+    for (final incoming in _attachCiphers.values) {
+      await incoming.close();
+    }
+    _attachCiphers.clear();
     _hub.detach(this);
     _started = false;
     _published = false;
@@ -408,7 +414,8 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
           type == 'harness-file-chunk' ||
           type == 'harness-file-end' ||
           type == 'harness-file-resume' ||
-          type == 'harness-file-received';
+          type == 'harness-file-received' ||
+          type == 'attach-chunk';
     } catch (_) {
       return false;
     }
@@ -441,6 +448,10 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
       final offset = (body['offset'] as num?)?.toInt() ?? 0;
       if (id != null) _onResume(id, offset);
       _events.add(TransportFrame(from, TransportChannel.attachment, frame));
+      return;
+    }
+    if (type == 'attach-chunk') {
+      await _ingestIncomingAttachChunk(from, body);
       return;
     }
     if (type != 'harness-file-start' &&
@@ -520,6 +531,57 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
       }
     }
     _events.add(TransportFrame(from, TransportChannel.attachment, frame));
+  }
+
+  Future<void> _ingestIncomingAttachChunk(
+    String from,
+    Map<String, Object?> body,
+  ) async {
+    if (body.containsKey('fileKey') || body.containsKey('fileKeyB64')) {
+      return;
+    }
+    final fileId = body['fileId'] as String? ?? '';
+    if (fileId.isEmpty || fileId.contains('://')) return;
+    final raw = body['b64'] as String? ?? '';
+    if (raw.isEmpty) return;
+    List<int> cipher;
+    try {
+      cipher = base64Decode(raw);
+    } catch (_) {
+      return;
+    }
+    if (cipher.isEmpty) return;
+    final offset = (body['offset'] as num?)?.toInt() ?? 0;
+    if (offset < 0 || offset + cipher.length > 50 * 1024 * 1024) return;
+    final hash = body['hash'] as String? ?? '';
+    if (hash.isNotEmpty && sha256.convert(cipher).toString() != hash) {
+      return;
+    }
+    var incoming = _attachCiphers[fileId];
+    var first = false;
+    if (incoming == null) {
+      incoming = await IncomingPathAttachment.open(
+        id: fileId,
+        name: 'cipher.bin',
+        totalBytes: 50 * 1024 * 1024,
+        sha256hex: '',
+      );
+      _attachCiphers[fileId] = incoming;
+      first = true;
+    }
+    await incoming.writeChunk(offset, cipher);
+    if (!first) return;
+    _events.add(
+      TransportFrame(
+        from,
+        TransportChannel.attachment,
+        jsonPayload({
+          'type': 'attach-chunk-path',
+          'fileId': fileId,
+          'path': incoming.path,
+        }),
+      ),
+    );
   }
 
   void _onResume(String id, int offset) {

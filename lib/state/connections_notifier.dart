@@ -829,7 +829,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         },
         isAppInForeground: () => true,
         assembleNativeAttachment: (rid, fileId, key) async {
-          return _dual?.decryptInboundAttachment(rid, fileId, key);
+          final dual = _dual;
+          if (dual == null) return null;
+          return dual.decryptInboundAttachment(rid, fileId, key);
         },
     );
   }

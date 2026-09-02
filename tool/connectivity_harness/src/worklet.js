@@ -96,6 +96,7 @@ class Worklet {
     this.events = []
     this._journal = new CorestoreJournal('local-device')
     this._files = new Map()
+    this._attachFiles = new Map()
     this._resumeOffsets = new Map()
     this._resumeWaiters = new Map()
     this.fileSendBudget = null
@@ -297,6 +298,14 @@ class Worklet {
       }
     }
     this._files.clear()
+    for (const incoming of this._attachFiles.values()) {
+      try {
+        fs.closeSync(incoming.fd)
+      } catch {
+        // already closed
+      }
+    }
+    this._attachFiles.clear()
     if (this._swarm) await this._swarm.destroy()
     await this._loop.destroy()
     try {
@@ -342,7 +351,7 @@ class Worklet {
       }).catch(() => {})
     }
     if (channel === 'attachment') {
-      this._handleIncomingFile(peerId, body)
+      if (this._handleIncomingFile(peerId, body) === true) return
     }
     this._emit('frame', { peerId, channel, body, frameB64 })
   }
@@ -378,6 +387,10 @@ class Worklet {
   _handleIncomingFile(peerId, body) {
     const type = body && body.type
     const id = body && body.id
+    if (type === 'attach-chunk') {
+      this._ingestAttachChunk(peerId, body)
+      return true
+    }
     if (type === 'harness-file-resume') {
       if (id) this._onResume(id, Number(body.offset) || 0)
       return
@@ -442,17 +455,55 @@ class Worklet {
         this._emit('error', { code: 'file-hash', message: 'attachment hash mismatch' })
         return
       }
+      const received = {
+        type: 'harness-file-received',
+        id,
+        path: incoming.path,
+        size: hashed.size,
+        sha256: hashed.digest,
+      }
       this._emit('frame', {
         peerId,
         channel: 'attachment',
-        body: {
-          type: 'harness-file-received',
-          id,
-          path: incoming.path,
-          size: hashed.size,
-          sha256: hashed.digest,
-        },
+        body: received,
+        frameB64: Buffer.from(JSON.stringify(received)).toString('base64'),
       })
+    }
+    return false
+  }
+
+  _ingestAttachChunk(peerId, body) {
+    if (!body || body.fileKey != null || body.fileKeyB64 != null) return
+    const fileId = typeof body.fileId === 'string' ? body.fileId : ''
+    if (!fileId || fileId.includes('://')) return
+    const buf = Buffer.from(body.b64 || '', 'base64')
+    if (!buf.length) return
+    const offset = Number(body.offset) || 0
+    if (offset < 0 || offset + buf.length > 50 * 1024 * 1024) return
+    const hash = typeof body.hash === 'string' ? body.hash : ''
+    if (hash) {
+      const actual = createHash('sha256').update(buf).digest('hex')
+      if (actual !== hash) return
+    }
+    let incoming = this._attachFiles.get(fileId)
+    if (!incoming) {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbits-att-ct-'))
+      const filePath = path.join(dir, 'cipher.bin')
+      incoming = { path: filePath, fd: fs.openSync(filePath, 'w+') }
+      this._attachFiles.set(fileId, incoming)
+      const pathBody = { type: 'attach-chunk-path', fileId, path: filePath }
+      this._emit('frame', {
+        peerId,
+        channel: 'attachment',
+        body: pathBody,
+        frameB64: Buffer.from(JSON.stringify(pathBody)).toString('base64'),
+      })
+    }
+    fs.writeSync(incoming.fd, buf, 0, buf.length, offset)
+    try {
+      fs.fsyncSync(incoming.fd)
+    } catch {
+      // already flushed
     }
   }
 }

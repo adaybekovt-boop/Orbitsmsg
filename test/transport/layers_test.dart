@@ -54,6 +54,12 @@ void main() {
     expect(worklet, contains('sendFile refuses fileKey'));
     expect(worklet, contains("file.protocol === 'attach-chunk'"));
     expect(worklet, contains("type: 'attach-chunk'"));
+    expect(worklet, contains("type: 'attach-chunk-path'"));
+    expect(worklet, contains('_ingestAttachChunk'));
+    expect(
+      File('lib/transport/loopback_transport.dart').readAsStringSync(),
+      contains('attach-chunk-path'),
+    );
     expect(worklet, contains('sendFile refuses remote path'));
     expect(worklet, contains('resumeOffset'));
     expect(worklet, contains('harness-file-resume'));

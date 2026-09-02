@@ -60,6 +60,8 @@ void main() {
       chunks.last.ciphertext,
     );
     expect(ResumableAttachment.decrypt(chunks, key), plain);
+    final roundTrip = await xorCipherPathToPlaintext(write.path, key);
+    expect(roundTrip, plain);
     expect(
       File('lib/core/path_byte_stream_io.dart').readAsStringSync(),
       isNot(contains('readAsBytes')),
@@ -70,5 +72,6 @@ void main() {
     expect(stub.localPathLength('/tmp/x'), isNull);
     expect(stub.openLocalPathByteStream('/tmp/x'), isNull);
     expect(await stub.xorPlaintextPathToCipherFile('/tmp/x', [1]), isNull);
+    expect(await stub.xorCipherPathToPlaintext('/tmp/x', [1]), isNull);
   });
 }

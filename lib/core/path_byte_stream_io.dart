@@ -1,6 +1,7 @@
 // Native: stream from a local path. Never follow `://` URLs.
 
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../attachments/resumable_blob.dart';
 import 'path_byte_stream.dart';
@@ -82,4 +83,38 @@ Future<CipherPathWrite?> xorPlaintextPathToCipherFile(
     } catch (_) {}
     return null;
   }
+}
+
+Future<List<int>?> xorCipherPathToPlaintext(
+  String cipherPath,
+  List<int> fileKey,
+) async {
+  final p = cipherPath.trim();
+  if (p.isEmpty || p.contains('://') || fileKey.isEmpty) return null;
+  final src = File(p);
+  if (!src.existsSync()) return null;
+  const maxBytes = 50 * 1024 * 1024;
+  try {
+    if (src.lengthSync() > maxBytes || src.lengthSync() <= 0) return null;
+  } catch (_) {
+    return null;
+  }
+  final out = BytesBuilder(copy: true);
+  var i = 0;
+  try {
+    await for (final piece in src.openRead()) {
+      if (piece.isEmpty) continue;
+      if (out.length + piece.length > maxBytes) return null;
+      final dst = Uint8List(piece.length);
+      for (var j = 0; j < piece.length; j++) {
+        dst[j] = piece[j] ^ fileKey[i % fileKey.length];
+        i++;
+      }
+      out.add(dst);
+    }
+  } catch (_) {
+    return null;
+  }
+  if (out.isEmpty) return null;
+  return out.takeBytes();
 }

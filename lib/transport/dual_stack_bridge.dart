@@ -8,6 +8,7 @@ import 'dart:typed_data';
 
 import '../attachments/resumable_blob.dart';
 import '../calls/hyperswarm_signaling.dart';
+import '../core/path_byte_stream.dart';
 import '../core/feature_flags.dart';
 import '../core/wire_crypto.dart';
 import '../devices/device_registry.dart';
@@ -73,6 +74,7 @@ class DualStackBridge {
   Future<void> _durable = Future<void>.value();
   final Map<String, List<AttachmentChunk>> _inboundAttach =
       <String, List<AttachmentChunk>>{};
+  final Map<String, String> _inboundAttachPaths = <String, String>{};
   var _inboundAttachBytes = 0;
   static const int _maxInboundAttachBytes = 50 * 1024 * 1024;
   final AutobaseProjection rooms = AutobaseProjection();
@@ -561,14 +563,21 @@ class DualStackBridge {
   }
 
   /// Decrypt inbound `attach-chunk` ciphertext with the fileKey from the
-  /// ratcheted chat envelope. Never journals the key.
-  Uint8List? decryptInboundAttachment(
+  /// ratcheted chat envelope. Never journals the key. Prefers a ciphertext
+  /// path written by loopback/Bare so Dart does not keep the whole file.
+  Future<Uint8List?> decryptInboundAttachment(
     String fromPeerId,
     String fileId,
     List<int> fileKey,
-  ) {
+  ) async {
     if (fileId.isEmpty || fileKey.isEmpty) return null;
     final key = '${normalizePeerId(fromPeerId)}\x1f$fileId';
+    final path = _inboundAttachPaths.remove(key);
+    if (path != null) {
+      final plain = await xorCipherPathToPlaintext(path, fileKey);
+      if (plain == null || plain.isEmpty) return null;
+      return Uint8List.fromList(plain);
+    }
     final chunks = _inboundAttach.remove(key);
     if (chunks == null || chunks.isEmpty) return null;
     for (final chunk in chunks) {
@@ -612,6 +621,19 @@ class DualStackBridge {
       ),
     );
     _inboundAttachBytes += cipher.length;
+  }
+
+  void _ingestAttachPath(String fromPeerId, Map<String, Object?> frame) {
+    if (frame.containsKey('fileKey') ||
+        frame.containsKey('fileKeyB64') ||
+        frame.containsKey('b64')) {
+      return;
+    }
+    final fileId = frame['fileId'] as String? ?? '';
+    final path = frame['path'] as String? ?? '';
+    if (fileId.isEmpty || path.isEmpty) return;
+    if (path.contains('://') || fileId.contains('://')) return;
+    _inboundAttachPaths['$fromPeerId\x1f$fileId'] = path;
   }
 
   Future<bool> sendEphemeral(String peerId, Object? msg) async {
@@ -814,6 +836,10 @@ class DualStackBridge {
         final decoded = decodeJsonPayload(bytes);
         if (decoded['type'] == 'attach-chunk') {
           _ingestAttachChunk(norm, decoded);
+          return;
+        }
+        if (decoded['type'] == 'attach-chunk-path') {
+          _ingestAttachPath(norm, decoded);
           return;
         }
         onDrop?.call(norm, decoded);

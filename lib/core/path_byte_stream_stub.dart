@@ -11,3 +11,9 @@ Future<CipherPathWrite?> xorPlaintextPathToCipherFile(
   List<int> fileKey,
 ) async =>
     null;
+
+Future<List<int>?> xorCipherPathToPlaintext(
+  String cipherPath,
+  List<int> fileKey,
+) async =>
+    null;
