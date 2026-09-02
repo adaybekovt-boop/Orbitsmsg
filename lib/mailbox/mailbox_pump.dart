@@ -27,7 +27,7 @@ class MailboxPump {
       writerKey: writerKey,
       block: EncryptedBlock(
         seq: _seq++,
-        bytes: List<int>.from(encryptedEnvelope),
+        bytes: wrapOpaqueEnvelope(encryptedEnvelope),
         storedAt: DateTime.now().millisecondsSinceEpoch,
         envelopeId: envelopeId,
       ),
@@ -40,7 +40,21 @@ class MailboxPump {
     required String writerKey,
     int fromSeq = 0,
   }) {
-    return store.get(token: token, writerKey: writerKey, fromSeq: fromSeq);
+    return [
+      for (final block in store.get(
+        token: token,
+        writerKey: writerKey,
+        fromSeq: fromSeq,
+      ))
+        EncryptedBlock(
+          seq: block.seq,
+          bytes: requireOpaqueEnvelope(block.bytes),
+          storedAt: block.storedAt,
+          envelopeId: block.envelopeId,
+          acked: block.acked,
+          tombstoned: block.tombstoned,
+        ),
+    ];
   }
 
   Future<MailboxDepositResult> depositRemote({
@@ -53,7 +67,7 @@ class MailboxPump {
       depositRequest(
         capability: capability,
         envelopeId: envelopeId,
-        ciphertext: encryptedEnvelope,
+        ciphertext: wrapOpaqueEnvelope(encryptedEnvelope),
         requestId: nextRequestId('dep'),
       ),
     );
@@ -63,14 +77,25 @@ class MailboxPump {
     required StoragePeerClient client,
     required SignedMailboxCapability capability,
     int fromSeq = 0,
-  }) {
-    return client.drain(
+  }) async {
+    final blocks = await client.drain(
       drainRequest(
         capability: capability,
         requestId: nextRequestId('drn'),
         fromSeq: fromSeq,
       ),
     );
+    return [
+      for (final block in blocks)
+        EncryptedBlock(
+          seq: block.seq,
+          bytes: requireOpaqueEnvelope(block.bytes),
+          storedAt: block.storedAt,
+          envelopeId: block.envelopeId,
+          acked: block.acked,
+          tombstoned: block.tombstoned,
+        ),
+    ];
   }
 
   Future<void> acknowledgeRemote({

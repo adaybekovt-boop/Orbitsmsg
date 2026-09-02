@@ -11,6 +11,10 @@ import '../transport/layers.dart';
 
 const String kMailboxHttpVersion = 'orbits-mailbox-http-v1';
 const String kMailboxCapabilityInfo = 'orbits-mailbox-cap-v1';
+const int kOpaqueEnvelopeVersion = 1;
+const int kOpaqueEnvelopeAlgRatchetV2 = 1;
+const List<int> kOpaqueEnvelopeMagic = <int>[0x4F, 0x45, 0x31, 0x01];
+const int kOpaqueEnvelopeHeaderBytes = 4 + 1 + 32 + 4;
 
 /// Chat-sized envelope cap. Attachments use the Phase 9 path/descriptor
 /// pipeline and must not be copied through this HTTP body.
@@ -26,6 +30,31 @@ const Set<String> kMailboxForbiddenKeys = {
   'text',
   'body',
   'peerId',
+};
+
+const Set<String> kMailboxRequestKeys = {
+  'v',
+  'op',
+  'requestId',
+  'issuedAt',
+  'capability',
+  'mailboxId',
+  'envelopeId',
+  'ciphertextB64',
+  'fromSeq',
+};
+
+const Set<String> kMailboxCapabilityKeys = {
+  'v',
+  'tokenId',
+  'mailboxId',
+  'scopes',
+  'issuedAt',
+  'notBefore',
+  'expiresAt',
+  'quotaBytes',
+  'retentionMs',
+  'mac',
 };
 
 enum MailboxScope {
@@ -141,7 +170,8 @@ class SignedMailboxCapability {
       );
     }
     final json = Map<String, Object?>.from(raw);
-    _rejectForbiddenKeys(json.keys);
+    _rejectForbiddenDeep(json);
+    _rejectUnknownKeys(json.keys, kMailboxCapabilityKeys, 'capability');
     if (json['v'] != kMailboxCapabilityInfo) {
       throw MailboxProtocolException(
         'malformed',
@@ -235,7 +265,8 @@ class MailboxHttpRequest {
       throw MailboxProtocolException('malformed', 'request is not an object');
     }
     final json = Map<String, Object?>.from(raw);
-    _rejectForbiddenKeys(json.keys);
+    _rejectForbiddenDeep(json);
+    _rejectUnknownKeys(json.keys, kMailboxRequestKeys, 'request');
     if (json['v'] != kMailboxHttpVersion) {
       throw MailboxProtocolException(
         'malformed',
@@ -445,22 +476,58 @@ void verifyMailboxRequest(
   );
 }
 
-void rejectPlaintextEnvelope(List<int> bytes) {
-  if (bytes.isEmpty) {
+Uint8List wrapOpaqueEnvelope(
+  List<int> ciphertext, {
+  int alg = kOpaqueEnvelopeAlgRatchetV2,
+}) {
+  if (ciphertext.isEmpty) {
     throw MailboxProtocolException('plaintext', 'empty envelope');
   }
-  try {
-    final text = utf8.decode(bytes);
-    if (text.startsWith('v2:')) return;
-    final decoded = jsonDecode(text);
-    if (decoded is Map) {
-      _rejectForbiddenKeys(decoded.keys.map((k) => k.toString()));
-    }
-  } on MailboxProtocolException {
-    rethrow;
-  } catch (_) {
-    // Non-JSON opaque bytes are acceptable ciphertext.
+  final digest = sha256.convert(ciphertext).bytes;
+  final out = BytesBuilder(copy: false);
+  out.add(kOpaqueEnvelopeMagic);
+  out.addByte(alg);
+  out.add(digest);
+  final len = ByteData(4)..setUint32(0, ciphertext.length);
+  out.add(len.buffer.asUint8List());
+  out.add(ciphertext);
+  return out.toBytes();
+}
+
+Uint8List requireOpaqueEnvelope(List<int> bytes) {
+  if (bytes.length < kOpaqueEnvelopeHeaderBytes) {
+    throw MailboxProtocolException('plaintext', 'envelope frame too short');
   }
+  for (var i = 0; i < kOpaqueEnvelopeMagic.length; i++) {
+    if (bytes[i] != kOpaqueEnvelopeMagic[i]) {
+      throw MailboxProtocolException('plaintext', 'envelope magic mismatch');
+    }
+  }
+  final alg = bytes[4];
+  if (alg != kOpaqueEnvelopeAlgRatchetV2) {
+    throw MailboxProtocolException('malformed', 'unsupported envelope alg');
+  }
+  final declared = ByteData.sublistView(
+    Uint8List.fromList(bytes.sublist(37, 41)),
+  ).getUint32(0);
+  final ciphertext = bytes.sublist(41);
+  if (ciphertext.length != declared) {
+    throw MailboxProtocolException('malformed', 'envelope length mismatch');
+  }
+  final actual = sha256.convert(ciphertext).bytes;
+  final expected = bytes.sublist(5, 37);
+  var diff = 0;
+  for (var i = 0; i < 32; i++) {
+    diff |= actual[i] ^ expected[i];
+  }
+  if (diff != 0) {
+    throw MailboxProtocolException('malformed', 'envelope hash mismatch');
+  }
+  return Uint8List.fromList(ciphertext);
+}
+
+void rejectPlaintextEnvelope(List<int> bytes) {
+  requireOpaqueEnvelope(bytes);
 }
 
 bool mailboxBodyKeysAreSafe(Iterable<Object?> keys) {
@@ -490,10 +557,54 @@ int _requireInt(Map<String, Object?> json, String key) {
 }
 
 Uint8List _decodeB64(String value, String field) {
+  if (value.contains(RegExp(r'\s'))) {
+    throw MailboxProtocolException('malformed', '$field is not valid base64');
+  }
   try {
-    return Uint8List.fromList(base64Decode(value));
+    final bytes = base64Decode(value);
+    if (base64Encode(bytes) != value) {
+      throw MailboxProtocolException(
+        'malformed',
+        '$field is not canonical base64',
+      );
+    }
+    return Uint8List.fromList(bytes);
+  } on MailboxProtocolException {
+    rethrow;
   } catch (_) {
     throw MailboxProtocolException('malformed', '$field is not valid base64');
+  }
+}
+
+void _rejectUnknownKeys(
+  Iterable<Object?> keys,
+  Set<String> allowed,
+  String where,
+) {
+  for (final key in keys) {
+    if (key is String && !allowed.contains(key)) {
+      throw MailboxProtocolException(
+        'malformed',
+        'unknown field in $where: $key',
+      );
+    }
+  }
+}
+
+void _rejectForbiddenDeep(Object? value, {int depth = 0}) {
+  if (depth > 8) {
+    throw MailboxProtocolException('malformed', 'nested object is too deep');
+  }
+  if (value is Map) {
+    _rejectForbiddenKeys(value.keys);
+    for (final entry in value.entries) {
+      if (entry.key == 'ciphertextB64' || entry.key == 'mac') continue;
+      _rejectForbiddenDeep(entry.value, depth: depth + 1);
+    }
+  } else if (value is List) {
+    for (final item in value) {
+      _rejectForbiddenDeep(item, depth: depth + 1);
+    }
   }
 }
 

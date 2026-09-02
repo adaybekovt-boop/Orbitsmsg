@@ -178,7 +178,17 @@ void main() {
         ),
       ),
     );
-    rejectPlaintextEnvelope(utf8.encode('v2:hdr:iv:ct'));
+    expect(
+      () => rejectPlaintextEnvelope(utf8.encode('v2:hdr:iv:ct')),
+      throwsA(
+        isA<MailboxProtocolException>().having(
+          (e) => e.code,
+          'code',
+          'plaintext',
+        ),
+      ),
+    );
+    rejectPlaintextEnvelope(wrapOpaqueEnvelope(utf8.encode('v2:hdr:iv:ct')));
   });
 
   test(
@@ -264,7 +274,7 @@ void main() {
         depositRequest(
           capability: cap,
           envelopeId: 'dup-1',
-          ciphertext: utf8.encode('v2:a:b:c'),
+          ciphertext: wrapOpaqueEnvelope(utf8.encode('v2:a:b:c')),
           requestId: 'dep-a',
         ),
       );
@@ -273,7 +283,7 @@ void main() {
         depositRequest(
           capability: cap,
           envelopeId: 'dup-1',
-          ciphertext: utf8.encode('v2:a:b:c'),
+          ciphertext: wrapOpaqueEnvelope(utf8.encode('v2:a:b:c')),
           requestId: 'dep-b',
         ),
       );
@@ -303,7 +313,7 @@ void main() {
     final req = depositRequest(
       capability: cap,
       envelopeId: 'rplay',
-      ciphertext: utf8.encode('v2:a:b:c'),
+      ciphertext: wrapOpaqueEnvelope(utf8.encode('v2:a:b:c')),
       requestId: 'same-id',
     );
     await client.deposit(req);
@@ -315,52 +325,137 @@ void main() {
     );
   });
 
-  test(
-    'restart persistence restores envelopes; corrupt records are skipped',
-    () async {
-      final dir = await Directory.systemTemp.createTemp('orbits-mailbox-rs-');
-      final persist = File('${dir.path}/store.json');
-      addTearDown(() async {
-        if (dir.existsSync()) await dir.delete(recursive: true);
-      });
-      final first = StoragePeerHttp(
-        BlindMailboxStore(persistFile: persist),
-        grantSecret: grantSecret,
-      );
-      await first.start();
-      final client = httpStoragePeerClient(first.origin);
-      await client.deposit(
+  test('restart persistence restores envelopes and replay set', () async {
+    final dir = await Directory.systemTemp.createTemp('orbits-mailbox-rs-');
+    final persist = File('${dir.path}/store.json');
+    addTearDown(() async {
+      if (dir.existsSync()) await dir.delete(recursive: true);
+    });
+    final first = StoragePeerHttp(
+      BlindMailboxStore(persistFile: persist),
+      grantSecret: grantSecret,
+    );
+    await first.start();
+    final client = httpStoragePeerClient(first.origin);
+    final framed = wrapOpaqueEnvelope(utf8.encode('v2:keep:this:one'));
+    await client.deposit(
+      depositRequest(
+        capability: cap,
+        envelopeId: 'persist-1',
+        ciphertext: framed,
+        requestId: 'p1',
+      ),
+    );
+    await first.stop();
+
+    final second = StoragePeerHttp(
+      BlindMailboxStore(persistFile: persist),
+      grantSecret: grantSecret,
+    );
+    await second.start();
+    addTearDown(second.stop);
+    final restored = httpStoragePeerClient(second.origin);
+    await expectLater(
+      restored.deposit(
         depositRequest(
           capability: cap,
           envelopeId: 'persist-1',
-          ciphertext: utf8.encode('v2:keep:this:one'),
+          ciphertext: framed,
           requestId: 'p1',
         ),
-      );
-      await first.stop();
+      ),
+      throwsA(
+        isA<MailboxProtocolException>().having((e) => e.code, 'code', 'replay'),
+      ),
+    );
+    final drained = await restored.drain(
+      drainRequest(capability: cap, requestId: 'p-drain'),
+    );
+    expect(drained, hasLength(1));
+    expect(
+      utf8.decode(requireOpaqueEnvelope(drained.single.bytes)),
+      'v2:keep:this:one',
+    );
+  });
 
-      final raw =
-          jsonDecode(await persist.readAsString()) as Map<String, dynamic>;
-      final cores = raw['cores'] as Map<String, dynamic>;
-      final list = List<dynamic>.from(cores[cap.mailboxId] as List);
-      list.add({'seq': 99, 'b64': '!!!not-base64!!!', 'plaintext': 'leak'});
-      cores[cap.mailboxId] = list;
-      await persist.writeAsString(jsonEncode(raw));
+  test('corrupt persist file fails closed', () async {
+    final dir = await Directory.systemTemp.createTemp('orbits-mailbox-bad-');
+    final persist = File('${dir.path}/store.json');
+    addTearDown(() async {
+      if (dir.existsSync()) await dir.delete(recursive: true);
+    });
+    await persist.writeAsString('{not-json');
+    final server = StoragePeerHttp(
+      BlindMailboxStore(persistFile: persist),
+      grantSecret: grantSecret,
+    );
+    await expectLater(server.start(), throwsA(isA<FormatException>()));
+  });
 
-      final second = StoragePeerHttp(
-        BlindMailboxStore(persistFile: persist),
-        grantSecret: grantSecret,
-      );
-      await second.start();
-      addTearDown(second.stop);
-      final restored = httpStoragePeerClient(second.origin);
-      final drained = await restored.drain(
-        drainRequest(capability: cap, requestId: 'p-drain'),
-      );
-      expect(drained, hasLength(1));
-      expect(utf8.decode(drained.single.bytes), 'v2:keep:this:one');
-    },
-  );
+  test('legacy /v1/blocks is closed unless explicitly enabled', () async {
+    final server = StoragePeerHttp(
+      BlindMailboxStore(),
+      grantSecret: grantSecret,
+    );
+    await server.start();
+    addTearDown(server.stop);
+    final http = HttpClient();
+    try {
+      final req = await http.postUrl(Uri.parse('${server.origin}/v1/blocks'));
+      req.headers.contentType = ContentType.json;
+      req.write(jsonEncode({'token': 'x', 'writerKey': 'y', 'b64': 'Zg=='}));
+      final res = await req.close();
+      await res.drain<void>();
+      expect(res.statusCode, 404);
+    } finally {
+      http.close(force: true);
+    }
+  });
+
+  test('unknown fields and nested forbidden metadata are rejected', () {
+    expect(
+      () => MailboxHttpRequest.parse({
+        'v': kMailboxHttpVersion,
+        'op': 'deposit',
+        'requestId': 'u1',
+        'issuedAt': 1,
+        'capability': cap.toJson(),
+        'envelopeId': 'e',
+        'ciphertextB64': base64Encode(
+          wrapOpaqueEnvelope(utf8.encode('v2:a:b:c')),
+        ),
+        'extra': true,
+      }, bodyBytes: 32),
+      throwsA(
+        isA<MailboxProtocolException>().having(
+          (e) => e.code,
+          'code',
+          'malformed',
+        ),
+      ),
+    );
+    expect(
+      () => MailboxHttpRequest.parse({
+        'v': kMailboxHttpVersion,
+        'op': 'deposit',
+        'requestId': 'u2',
+        'issuedAt': 1,
+        'capability': cap.toJson(),
+        'envelopeId': 'e',
+        'ciphertextB64': base64Encode(
+          wrapOpaqueEnvelope(utf8.encode('v2:a:b:c')),
+        ),
+        'nested': {'plaintext': 'nope'},
+      }, bodyBytes: 32),
+      throwsA(
+        isA<MailboxProtocolException>().having(
+          (e) => e.code,
+          'code',
+          'plaintext',
+        ),
+      ),
+    );
+  });
 
   test(
     'HTTP rejects plaintext, oversized, expired, and wrong-recipient',
@@ -423,7 +518,9 @@ void main() {
           'capability': expired.toJson(),
           'mailboxId': cap.mailboxId,
           'envelopeId': 'e',
-          'ciphertextB64': base64Encode(utf8.encode('v2:a:b:c')),
+          'ciphertextB64': base64Encode(
+            wrapOpaqueEnvelope(utf8.encode('v2:a:b:c')),
+          ),
         }),
         401,
       );
@@ -437,7 +534,9 @@ void main() {
           'capability': cap.toJson(),
           'mailboxId': 'someone-else',
           'envelopeId': 'e2',
-          'ciphertextB64': base64Encode(utf8.encode('v2:a:b:c')),
+          'ciphertextB64': base64Encode(
+            wrapOpaqueEnvelope(utf8.encode('v2:a:b:c')),
+          ),
         }),
         403,
       );
@@ -452,7 +551,7 @@ void main() {
           'mailboxId': cap.mailboxId,
           'envelopeId': 'big',
           'ciphertextB64': base64Encode(
-            List<int>.filled(cap.quotaBytes + 8, 7),
+            wrapOpaqueEnvelope(List<int>.filled(cap.quotaBytes + 8, 7)),
           ),
         }),
         429,

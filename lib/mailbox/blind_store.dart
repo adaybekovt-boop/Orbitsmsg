@@ -126,6 +126,7 @@ class BlindMailboxStore {
     if (used + block.bytes.length > cap.quotaBytes) {
       throw StateError('mailbox quota exceeded');
     }
+    rejectPlaintextEnvelope(block.bytes);
     list.add(block);
   }
 
@@ -270,35 +271,54 @@ class BlindMailboxStore {
   Future<void> hydrate() async {
     final file = persistFile;
     if (file == null || !file.existsSync()) return;
+    late final Object raw;
     try {
-      final raw = jsonDecode(await file.readAsString());
-      if (raw is! Map) return;
-      final cores = raw['cores'];
-      if (cores is Map) {
-        cores.forEach((key, value) {
-          if (key is! String || value is! List) return;
-          final blocks = <EncryptedBlock>[];
-          for (final item in value) {
-            final block = EncryptedBlock.fromPersistedJson(item);
-            if (block != null) blocks.add(block);
+      raw = jsonDecode(await file.readAsString());
+    } catch (error) {
+      throw FormatException('corrupt mailbox persist: $error');
+    }
+    if (raw is! Map) {
+      throw const FormatException('corrupt mailbox persist: not an object');
+    }
+    if (!mailboxBodyKeysAreSafe(raw.keys)) {
+      throw const FormatException('corrupt mailbox persist: forbidden keys');
+    }
+    final cores = raw['cores'];
+    if (cores is Map) {
+      cores.forEach((key, value) {
+        if (key is! String || value is! List) {
+          throw const FormatException('corrupt mailbox persist: cores');
+        }
+        final blocks = <EncryptedBlock>[];
+        for (final item in value) {
+          if (item is Map && !mailboxBodyKeysAreSafe(item.keys)) {
+            throw const FormatException(
+              'corrupt mailbox persist: forbidden record',
+            );
           }
-          _cores[key] = blocks;
-        });
-      }
-      final seq = raw['seq'];
-      if (seq is Map) {
-        seq.forEach((key, value) {
-          if (key is String && value is int) _seq[key] = value;
-        });
-      }
-      final requests = raw['requests'];
-      if (requests is Map) {
-        requests.forEach((key, value) {
-          if (key is String && value is int) _seenRequests[key] = value;
-        });
-      }
-    } catch (_) {
-      // Corrupted store: keep whatever records parsed; do not crash drain.
+          final block = EncryptedBlock.fromPersistedJson(item);
+          if (block == null) {
+            throw const FormatException('corrupt mailbox persist: bad record');
+          }
+          rejectPlaintextEnvelope(block.bytes);
+          blocks.add(block);
+        }
+        _cores[key] = blocks;
+      });
+    } else if (cores != null) {
+      throw const FormatException('corrupt mailbox persist: cores type');
+    }
+    final seq = raw['seq'];
+    if (seq is Map) {
+      seq.forEach((key, value) {
+        if (key is String && value is int) _seq[key] = value;
+      });
+    }
+    final requests = raw['requests'];
+    if (requests is Map) {
+      requests.forEach((key, value) {
+        if (key is String && value is int) _seenRequests[key] = value;
+      });
     }
   }
 }

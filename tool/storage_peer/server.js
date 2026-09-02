@@ -115,15 +115,118 @@ function verifyCapability(secret, cap, scope, mailboxId, now) {
   }
 }
 
-function rejectPlaintextEnvelope(bytes) {
-  const text = Buffer.from(bytes).toString('utf8')
-  if (text.startsWith('v2:')) return
-  try {
-    const parsed = JSON.parse(text)
-    if (parsed && typeof parsed === 'object') rejectForbidden(parsed)
-  } catch (err) {
-    if (err.code === 'plaintext') throw err
+const ENVELOPE_MAGIC = Buffer.from([0x4f, 0x45, 0x31, 0x01])
+const ALLOWED_REQUEST_KEYS = new Set([
+  'v',
+  'op',
+  'requestId',
+  'issuedAt',
+  'capability',
+  'mailboxId',
+  'envelopeId',
+  'ciphertextB64',
+  'fromSeq',
+])
+const ALLOWED_CAP_KEYS = new Set([
+  'v',
+  'tokenId',
+  'mailboxId',
+  'scopes',
+  'issuedAt',
+  'notBefore',
+  'expiresAt',
+  'quotaBytes',
+  'retentionMs',
+  'mac',
+])
+
+function wrapOpaqueEnvelope(ciphertext) {
+  const ct = Buffer.from(ciphertext)
+  if (ct.length === 0) {
+    const err = new Error('empty envelope')
+    err.code = 'plaintext'
+    throw err
   }
+  const digest = crypto.createHash('sha256').update(ct).digest()
+  const len = Buffer.alloc(4)
+  len.writeUInt32BE(ct.length)
+  return Buffer.concat([ENVELOPE_MAGIC, Buffer.from([1]), digest, len, ct])
+}
+
+function requireOpaqueEnvelope(bytes) {
+  const buf = Buffer.from(bytes)
+  if (buf.length < 41 || !buf.subarray(0, 4).equals(ENVELOPE_MAGIC)) {
+    const err = new Error('plaintext')
+    err.code = 'plaintext'
+    throw err
+  }
+  if (buf[4] !== 1) {
+    const err = new Error('unsupported envelope alg')
+    err.code = 'malformed'
+    throw err
+  }
+  const declared = buf.readUInt32BE(37)
+  const ct = buf.subarray(41)
+  if (ct.length !== declared) {
+    const err = new Error('envelope length mismatch')
+    err.code = 'malformed'
+    throw err
+  }
+  const actual = crypto.createHash('sha256').update(ct).digest()
+  if (!crypto.timingSafeEqual(actual, buf.subarray(5, 37))) {
+    const err = new Error('envelope hash mismatch')
+    err.code = 'malformed'
+    throw err
+  }
+  return ct
+}
+
+function rejectPlaintextEnvelope(bytes) {
+  requireOpaqueEnvelope(bytes)
+}
+
+function rejectUnknown(obj, allowed, where) {
+  for (const key of Object.keys(obj || {})) {
+    if (!allowed.has(key)) {
+      const err = new Error('unknown field in ' + where)
+      err.code = 'malformed'
+      throw err
+    }
+  }
+}
+
+function rejectForbiddenDeep(value, depth = 0) {
+  if (depth > 8) {
+    const err = new Error('nested object is too deep')
+    err.code = 'malformed'
+    throw err
+  }
+  if (value && typeof value === 'object' && !Buffer.isBuffer(value)) {
+    if (Array.isArray(value)) {
+      for (const item of value) rejectForbiddenDeep(item, depth + 1)
+      return
+    }
+    rejectForbidden(value)
+    for (const [key, child] of Object.entries(value)) {
+      if (key === 'ciphertextB64' || key === 'mac') continue
+      rejectForbiddenDeep(child, depth + 1)
+    }
+  }
+}
+
+function decodeCanonicalB64(value, field) {
+  if (typeof value !== 'string' || /\s/.test(value)) {
+    const err = new Error(field + ' is not valid base64')
+    err.code = 'malformed'
+    throw err
+  }
+  const bytes = Buffer.from(value, 'base64')
+  if (bytes.toString('base64') !== value) {
+    const err = new Error(field + ' is not canonical base64')
+    err.code = 'malformed'
+    throw err
+  }
+  return bytes
 }
 
 function createStore(persistPath) {
@@ -149,6 +252,7 @@ function createStore(persistPath) {
         ]),
       ),
       seq: Object.fromEntries(seqs),
+      requests: Object.fromEntries(seen),
     }
     fs.mkdirSync(path.dirname(persistPath), { recursive: true })
     const tmp = persistPath + '.tmp'
@@ -158,35 +262,42 @@ function createStore(persistPath) {
 
   function hydrate() {
     if (!persistPath || !fs.existsSync(persistPath)) return
+    let raw
     try {
-      const raw = JSON.parse(fs.readFileSync(persistPath, 'utf8'))
-      for (const [key, list] of Object.entries(raw.cores || {})) {
-        cores.set(
-          key,
-          (list || [])
-            .map((item) => {
-              try {
-                rejectForbidden(item)
-                return {
-                  seq: item.seq,
-                  bytes: Buffer.from(item.b64 || '', 'base64'),
-                  storedAt: item.storedAt || 0,
-                  envelopeId: item.envelopeId,
-                  acked: !!item.acked,
-                  tombstoned: !!item.tombstoned,
-                }
-              } catch {
-                return null
-              }
-            })
-            .filter(Boolean),
-        )
+      raw = JSON.parse(fs.readFileSync(persistPath, 'utf8'))
+    } catch (err) {
+      const fail = new Error('corrupt mailbox persist')
+      fail.code = 'malformed'
+      throw fail
+    }
+    if (!raw || typeof raw !== 'object') {
+      const fail = new Error('corrupt mailbox persist')
+      fail.code = 'malformed'
+      throw fail
+    }
+    rejectForbidden(raw)
+    for (const [key, list] of Object.entries(raw.cores || {})) {
+      const blocks = []
+      for (const item of list || []) {
+        rejectForbidden(item)
+        const bytes = Buffer.from(item.b64 || '', 'base64')
+        rejectPlaintextEnvelope(bytes)
+        blocks.push({
+          seq: item.seq,
+          bytes,
+          storedAt: item.storedAt || 0,
+          envelopeId: item.envelopeId,
+          acked: !!item.acked,
+          tombstoned: !!item.tombstoned,
+        })
       }
-      for (const [key, value] of Object.entries(raw.seq || {})) {
-        seqs.set(key, value)
-      }
-    } catch {
-      // skip corrupt file; keep whatever parsed
+      cores.set(key, blocks)
+    }
+    for (const [key, value] of Object.entries(raw.seq || {})) {
+      seqs.set(key, value)
+    }
+    for (const [key, value] of Object.entries(raw.requests || {})) {
+      seen.set(key, value)
     }
   }
 
@@ -199,6 +310,7 @@ function createStore(persistPath) {
       }
       if (seen.has(requestId)) return false
       seen.set(requestId, now)
+      persist()
       return true
     },
     has(mailboxId, envelopeId) {
@@ -312,15 +424,27 @@ function createServer(opts = {}) {
           err.code = 'malformed'
           throw err
         }
-        rejectForbidden(body)
+        rejectForbiddenDeep(body)
+        rejectUnknown(body, ALLOWED_REQUEST_KEYS, 'request')
         if (body.v !== VERSION) {
           const err = new Error('malformed')
           err.code = 'malformed'
           throw err
         }
         const cap = body.capability
-        rejectForbidden(cap)
+        rejectForbiddenDeep(cap)
+        rejectUnknown(cap, ALLOWED_CAP_KEYS, 'capability')
         const mailboxId = body.mailboxId || cap.mailboxId
+        if (body.issuedAt > nowMs() + CLOCK_SKEW_MS) {
+          const err = new Error('not-yet-valid')
+          err.code = 'not-yet-valid'
+          throw err
+        }
+        if (body.issuedAt + REPLAY_TTL_MS < nowMs()) {
+          const err = new Error('expired')
+          err.code = 'expired'
+          throw err
+        }
         verifyCapability(secret, cap, body.op, mailboxId, nowMs())
         if (!store.remember(body.requestId, nowMs())) {
           const err = new Error('replay')
@@ -328,7 +452,7 @@ function createServer(opts = {}) {
           throw err
         }
         if (body.op === 'deposit') {
-          const bytes = Buffer.from(body.ciphertextB64 || '', 'base64')
+          const bytes = decodeCanonicalB64(body.ciphertextB64 || '', 'ciphertextB64')
           const result = store.deposit(mailboxId, body.envelopeId, bytes, cap.quotaBytes)
           res.writeHead(200, { 'content-type': 'application/json' })
           res.end(JSON.stringify({ v: VERSION, ok: true, duplicate: result.duplicate }))
@@ -391,4 +515,11 @@ if (require.main === module) {
   })
 }
 
-module.exports = { createServer, issueCapability, FORBIDDEN, VERSION }
+module.exports = {
+  createServer,
+  issueCapability,
+  FORBIDDEN,
+  VERSION,
+  wrapOpaqueEnvelope,
+  requireOpaqueEnvelope,
+}

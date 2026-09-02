@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/mailbox/blind_store.dart';
+import 'package:orbits_flutter/mailbox/mailbox_protocol.dart';
 import 'package:orbits_flutter/push/doze_adapter.dart';
 import 'package:orbits_flutter/replication/drift_projector.dart';
 import 'package:orbits_flutter/replication/file_journal.dart';
@@ -133,7 +134,7 @@ void main() {
         writerKey: 'alice',
         block: EncryptedBlock(
           seq: 0,
-          bytes: Uint8List.fromList([1, 2, 3]),
+          bytes: wrapOpaqueEnvelope(Uint8List.fromList([1, 2, 3])),
           storedAt: DateTime.now().millisecondsSinceEpoch,
         ),
       );

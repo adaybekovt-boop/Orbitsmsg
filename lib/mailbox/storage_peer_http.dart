@@ -5,6 +5,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
+
 import 'blind_store.dart';
 import 'mailbox_protocol.dart';
 import 'storage_peer_client.dart';
@@ -15,18 +17,25 @@ class StoragePeerHttp {
     required this.grantSecret,
     int Function()? nowMs,
     this.maxBodyBytes = kMailboxMaxBodyBytes,
+    this.allowLegacyBlocks = false,
   }) : nowMs = nowMs ?? (() => DateTime.now().millisecondsSinceEpoch);
 
   final BlindMailboxStore store;
   final List<int> grantSecret;
   final int Function() nowMs;
   final int maxBodyBytes;
+  final bool allowLegacyBlocks;
   HttpServer? _server;
+  int _inflight = 0;
+  static const int maxInflight = 8;
 
   int get port => _server?.port ?? 0;
   String get origin => 'http://127.0.0.1:$port';
 
   Future<void> start({int port = 0}) async {
+    if (kReleaseMode && allowLegacyBlocks) {
+      throw StateError('legacy /v1/blocks cannot be enabled in release');
+    }
     await store.hydrate();
     _server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
     _server!.listen(_onRequest);
@@ -47,11 +56,15 @@ class StoragePeerHttp {
         await _onMailbox(req);
         return;
       }
-      if (req.method == 'POST' && req.uri.path == '/v1/blocks') {
+      if (allowLegacyBlocks &&
+          req.method == 'POST' &&
+          req.uri.path == '/v1/blocks') {
         await _onLegacyPut(req);
         return;
       }
-      if (req.method == 'GET' && req.uri.path == '/v1/blocks') {
+      if (allowLegacyBlocks &&
+          req.method == 'GET' &&
+          req.uri.path == '/v1/blocks') {
         await _onLegacyGet(req);
         return;
       }
@@ -66,6 +79,18 @@ class StoragePeerHttp {
   }
 
   Future<void> _onMailbox(HttpRequest req) async {
+    if (_inflight >= maxInflight) {
+      throw MailboxProtocolException('quota', 'too many in-flight requests');
+    }
+    _inflight += 1;
+    try {
+      await _handleMailbox(req);
+    } finally {
+      _inflight -= 1;
+    }
+  }
+
+  Future<void> _handleMailbox(HttpRequest req) async {
     final raw = await _readLimited(req);
     Object? decoded;
     try {
@@ -78,6 +103,7 @@ class StoragePeerHttp {
     if (!store.rememberRequest(request.requestId)) {
       throw MailboxProtocolException('replay', 'request was already seen');
     }
+    await store.persist();
     switch (request.op) {
       case MailboxOp.deposit:
         final existed = store.hasEnvelope(
@@ -245,53 +271,10 @@ StoragePeerClient httpStoragePeerClient(String origin) {
 
   return StoragePeerClient(
     putRemote: ({required token, required writerKey, required block}) async {
-      final client = HttpClient();
-      try {
-        final req = await client.postUrl(Uri.parse('$origin/v1/blocks'));
-        req.headers.contentType = ContentType.json;
-        req.write(
-          jsonEncode({
-            'token': token,
-            'writerKey': writerKey,
-            'seq': block.seq,
-            'b64': base64Encode(block.bytes),
-            if (block.envelopeId != null) 'envelopeId': block.envelopeId,
-          }),
-        );
-        final res = await req.close();
-        if (res.statusCode != 200) {
-          throw StateError('storage peer put ${res.statusCode}');
-        }
-      } finally {
-        client.close(force: true);
-      }
+      throw StateError('legacy /v1/blocks is disabled');
     },
     getRemote: ({required token, required writerKey, fromSeq = 0}) async {
-      final client = HttpClient();
-      try {
-        final uri = Uri.parse(
-          '$origin/v1/blocks?token=${Uri.encodeQueryComponent(token)}'
-          '&writerKey=${Uri.encodeQueryComponent(writerKey)}'
-          '&fromSeq=$fromSeq',
-        );
-        final req = await client.getUrl(uri);
-        final res = await req.close();
-        final text = await utf8.decodeStream(res);
-        final json = jsonDecode(text) as Map<String, dynamic>;
-        final list = json['blocks'] as List? ?? const [];
-        return [
-          for (final item in list)
-            if (item is Map)
-              EncryptedBlock(
-                seq: item['seq'] as int? ?? 0,
-                bytes: base64Decode(item['b64'] as String? ?? ''),
-                storedAt: item['storedAt'] as int? ?? 0,
-                envelopeId: item['envelopeId'] as String?,
-              ),
-        ];
-      } finally {
-        client.close(force: true);
-      }
+      throw StateError('legacy /v1/blocks is disabled');
     },
     depositRemote: (request) async {
       final json = await post(request);
