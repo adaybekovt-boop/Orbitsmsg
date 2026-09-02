@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbits_flutter/core/path_byte_stream.dart';
+import 'package:orbits_flutter/core/path_byte_stream_stub.dart' as pathStub;
 import 'package:orbits_flutter/core/read_picked_bytes.dart';
 import 'package:orbits_flutter/core/read_picked_bytes_stub.dart' as stub;
 
@@ -61,6 +63,26 @@ void main() {
     expect(
       File('lib/state/messaging_notifier.dart').readAsStringSync(),
       contains('sendChatAttachmentFromPath'),
+    );
+    expect(
+      File('lib/state/messaging_notifier.dart').readAsStringSync(),
+      contains('writeBytesToTempPath'),
+    );
+    expect(
+      File('lib/state/messaging_notifier.dart').readAsStringSync(),
+      contains('_flushChunkedNativeVoice'),
+    );
+    expect(
+      File('lib/core/path_byte_stream.dart').readAsStringSync(),
+      contains('writeBytesToTempPath'),
+    );
+    expect(
+      File('lib/core/path_byte_stream.dart').readAsStringSync(),
+      contains('openInboundCipherPath'),
+    );
+    expect(
+      File('lib/messaging/message_protocol.dart').readAsStringSync(),
+      contains('_assembleChunkedVoice'),
     );
     expect(
       File('lib/state/messaging_notifier.dart').readAsStringSync(),
@@ -251,5 +273,33 @@ void main() {
           .path,
       isNull,
     );
+  });
+
+  test('writeBytesToTempPath and inbound cipher chunks stay on disk', () async {
+    final path = await writeBytesToTempPath(
+      const <int>[1, 2, 3, 4],
+      fileName: 'voice.bin',
+      maxBytes: 16,
+    );
+    expect(path, isNotNull);
+    expect(path!.contains('://'), isFalse);
+    expect(File(path).readAsBytesSync(), [1, 2, 3, 4]);
+    expect(await writeBytesToTempPath(const <int>[1], maxBytes: 0), isNull);
+    expect(
+      await writeBytesToTempPath(const <int>[1], fileName: 'fileKey.bin'),
+      isNull,
+    );
+
+    const fileId = 'voice-chunk-1';
+    final cipherPath = await openInboundCipherPath(fileId);
+    expect(cipherPath, isNotNull);
+    expect(cipherPath!.contains('://'), isFalse);
+    expect(await writeInboundCipherChunk(fileId, 0, const <int>[9, 8, 7]), isTrue);
+    expect(File(cipherPath).readAsBytesSync().sublist(0, 3), [9, 8, 7]);
+    expect(await openInboundCipherPath('https://evil'), isNull);
+    expect(await writeInboundCipherChunk('https://evil', 0, const <int>[1]), isFalse);
+    expect(await pathStub.openInboundCipherPath('x'), isNull);
+    expect(await pathStub.writeInboundCipherChunk('x', 0, const <int>[1]), isFalse);
+    expect(await pathStub.writeBytesToTempPath(const <int>[1]), isNull);
   });
 }

@@ -38,6 +38,11 @@ Drop to PeerJS (or fail visibly if fallback is off) when:
 - battery is low (`ACTION_BATTERY_LOW` / iOS battery notifications)
 
 `logDowngrade` records `pwa` vs `remote-missing-hyperswarm-v1`.
+Live send/fallback (`ConnectionsNotifier.sendEncrypted` /
+`sendEphemeral` / `sendDrop`) calls `recordTransportDowngrade` onto
+`transportDowngradeLog` when the selected route is PeerJS **and**
+Hyperswarm was preferred. Default rollout is off, so that sink stays
+empty on the product path.
 `rollbackNativeToPeerjs` in `lib/transport/native_rollback.dart` forces
 `HyperswarmRollout.off`. Hooks:
 

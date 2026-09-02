@@ -56,7 +56,10 @@ enabled — do not promise always-on P2P.
   wake to loopback `ORBITS_PUSH_GATEWAY_ORIGIN` only.
   `PushSender.sendApns` / `sendFcm` refuse while `kLiveApnsGateway` /
   `kLiveFcmGateway` are false. An APNs provider ES256 JWT may be built
-  (Apple p8 scalar, not the identity key) and is still not sent. An FCM
+  (Apple p8 scalar, not the identity key) and is still not sent.
+  `buildApnsSendHttp` / `dispatchApnsSendHttp` describe the Apple HTTPS
+  POST shape (injected `post`; not HTTP/2 HPACK) and are not called
+  while the flag is false. An FCM
   service-account RS256 JWT and the OAuth JWT-bearer token request may
   be built and are still not exchanged or sent. FCM HTTP v1 send
   `Authorization` is an OAuth access_token, never that assertion JWT.

@@ -729,4 +729,119 @@ void main() {
     );
     expect(kLiveFcmGateway, isFalse);
   });
+
+  test('APNs POST shape is built and dispatched only through an injected post',
+      () async {
+    expect(kLiveApnsGateway, isFalse);
+    const wake = OpaqueWake(
+      opaqueWakeToken: 'tok',
+      collapseId: 'c1',
+      protocolVersion: 1,
+    );
+    final opaque = buildApnsRequest(deviceToken: 'devtoken', wake: wake)!;
+    final http = buildApnsSendHttp(opaque)!;
+    expect(http.method, 'POST');
+    expect(http.host, kApnsProductionHost);
+    expect(http.host, 'api.push.apple.com');
+    expect(http.path, opaque.path);
+    expect(http.path, startsWith('/3/device/'));
+    expect(http.headers['content-type'], 'application/json');
+    final decoded = jsonDecode(http.body) as Map<String, Object?>;
+    expect(decoded['aps'], isNotNull);
+    expect(jsonEncode(decoded), jsonEncode(opaque.body));
+
+    expect(
+      buildApnsSendHttp(
+        const ApnsOpaqueRequest(
+          host: 'example.com',
+          path: '/3/device/devtoken',
+          headers: {},
+          body: {'aps': <String, Object?>{'content-available': 1}},
+        ),
+      ),
+      isNull,
+    );
+    expect(
+      buildApnsSendHttp(
+        const ApnsOpaqueRequest(
+          host: kApnsProductionHost,
+          path: '/3/device/https://evil',
+          headers: {},
+          body: {'aps': <String, Object?>{'content-available': 1}},
+        ),
+      ),
+      isNull,
+    );
+    expect(
+      buildApnsSendHttp(
+        const ApnsOpaqueRequest(
+          host: kApnsProductionHost,
+          path: '/3/device/devtoken',
+          headers: {'rootKey': 'nope'},
+          body: {'aps': <String, Object?>{'content-available': 1}},
+        ),
+      ),
+      isNull,
+    );
+    expect(
+      buildApnsSendHttp(
+        const ApnsOpaqueRequest(
+          host: kApnsProductionHost,
+          path: '/3/device/devtoken',
+          headers: {},
+          body: {
+            'aps': <String, Object?>{'content-available': 1},
+            'peerId': 'ORBIT-AA',
+          },
+        ),
+      ),
+      isNull,
+    );
+
+    var postCount = 0;
+    Uri? postedUri;
+    final dispatched = await dispatchApnsSendHttp(
+      request: opaque,
+      post: (uri, headers, body) async {
+        postCount++;
+        postedUri = uri;
+        return 200;
+      },
+    );
+    expect(dispatched.sent, isTrue);
+    expect(dispatched.reason, 'apns-http');
+    expect(postCount, 1);
+    expect(postedUri!.scheme, 'https');
+    expect(postedUri!.host, 'api.push.apple.com');
+
+    const sender = PushSender();
+    final refused = await sender.sendApns(
+      deviceToken: 'devtoken',
+      wake: wake,
+      post: (uri, headers, body) async {
+        postCount++;
+        return 200;
+      },
+    );
+    expect(refused.sent, isFalse);
+    expect(refused.reason, 'apns-not-deployed');
+    expect(postCount, 1);
+
+    final notOk = await dispatchApnsSendHttp(
+      request: opaque,
+      post: (uri, headers, body) async => 403,
+    );
+    expect(notOk.sent, isFalse);
+    expect(notOk.reason, 'http-403');
+
+    expect(
+      File('lib/push/apns_send_http.dart').readAsStringSync(),
+      isNot(contains('HttpClient')),
+    );
+    expect(
+      File('lib/push/apns_send_http.dart').readAsStringSync(),
+      contains('Never implements HTTP/2 framing or HPACK'),
+    );
+    expect(kLiveApnsGateway, isFalse);
+  });
 }

@@ -776,14 +776,21 @@ void main() {
         .split('void _ingestAttachPath')[0];
     expect(ingest, contains("fileId.contains('://')"));
     expect(ingest, contains('base64Decode'));
+    expect(ingest, contains('_inboundAttachPaths'));
     expect(ingest, contains('_inboundAttach'));
+    expect(ingest, contains('openInboundCipherPath'));
+    expect(ingest, contains('writeInboundCipherChunk'));
     expect(
       ingest.indexOf("fileId.contains('://')"),
       lessThan(ingest.indexOf('base64Decode')),
     );
     expect(
       ingest.indexOf("fileId.contains('://')"),
-      lessThan(ingest.indexOf('_inboundAttach')),
+      lessThan(ingest.indexOf('_inboundAttachPaths')),
+    );
+    expect(
+      ingest.indexOf('_inboundAttachPaths'),
+      lessThan(ingest.indexOf('_inboundAttach.putIfAbsent')),
     );
     final decrypt = src
         .split('Future<Uint8List?> decryptInboundAttachment')[1]
@@ -3411,6 +3418,10 @@ void main() {
     expect(autobase, contains('_sendPeerIds'));
     expect(src, contains('_replicateToSendTargets'));
     expect(src, contains('_replicateToAuthenticated'));
+    final authRep = src
+        .split('void _replicateToAuthenticated')[1]
+        .split('void _replicateRecord')[0];
+    expect(authRep, contains('_sendPeerIds(self)'));
     final envelope = src
         .split('void _appendEnvelope')[1]
         .split('void _replicateToSendTargets')[0];

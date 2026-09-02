@@ -30,3 +30,19 @@ Future<String?> copyLocalPathToStableFile(
   String fileName = 'plain.bin',
 }) async =>
     null;
+
+Future<String?> writeBytesToTempPath(
+  List<int> bytes, {
+  String fileName = 'plain.bin',
+  int maxBytes = 50 * 1024 * 1024,
+}) async =>
+    null;
+
+Future<String?> openInboundCipherPath(String fileId) async => null;
+
+Future<bool> writeInboundCipherChunk(
+  String fileId,
+  int offset,
+  List<int> bytes,
+) async =>
+    false;

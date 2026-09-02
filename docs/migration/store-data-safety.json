@@ -29,6 +29,6 @@
     "account": false,
     "encryptionAtRest": "device vault",
     "mailbox": "encrypted envelopes only, and only if a fleet is deployed (none today)",
-    "push": "not sent; APNs/FCM JWT and OAuth assertion may be built and are not exchanged; FCM send Authorization is an access_token, never the assertion JWT"
+    "push": "not sent; APNs/FCM JWT and OAuth assertion may be built and are not exchanged; FCM send Authorization is an access_token, never the assertion JWT; APNs/FCM HTTPS POST shapes may be built (injected post; APNs is not HTTP/2 HPACK) and are not dispatched while live flags are false"
   }
 }

@@ -223,9 +223,14 @@ void main() {
     expect(sendEncrypted, contains('dual.sendEncrypted'));
     expect(sendEncrypted, contains('_wire.sendEncryptedOn'));
     expect(sendEncrypted, contains('outboundWireMapIsSendable'));
+    expect(sendEncrypted, contains('_notePeerjsDowngrade'));
     expect(
       sendEncrypted.indexOf('outboundWireMapIsSendable'),
       lessThan(sendEncrypted.indexOf('dual.sendEncrypted')),
+    );
+    expect(
+      sendEncrypted.indexOf('_notePeerjsDowngrade'),
+      lessThan(sendEncrypted.indexOf('_wire.sendEncryptedOn')),
     );
 
     final sendEphemeral = slice(
@@ -236,6 +241,7 @@ void main() {
     expect(sendEphemeral, contains('isPeerjsFallbackEnabled()'));
     expect(sendEphemeral, contains('_wire.sendEphemeralOn'));
     expect(sendEphemeral, contains('outboundWireMapIsSendable'));
+    expect(sendEphemeral, contains('_notePeerjsDowngrade'));
 
     final hasReliable = slice('bool hasReliable', 'bool canDepositMailbox');
     expect(hasReliable, contains('_nativeCarrierFor'));
@@ -266,6 +272,7 @@ void main() {
     expect(sendDrop, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
     expect(sendDrop, contains('conn.send'));
     expect(sendDrop, contains('replicationValueIsSafe'));
+    expect(sendDrop, contains('_notePeerjsDowngrade'));
 
     final sendFileFromPath = slice(
       'Future<bool> sendFileFromPath',
@@ -435,5 +442,64 @@ void main() {
     expect(attachGate, greaterThanOrEqualTo(0));
     expect(attachInbound, greaterThan(attachGate));
     expect(attachInsert, greaterThan(attachGate));
+  });
+
+  test('live PeerJS fallback records logDowngrade; rollout off does not', () {
+    clearTransportDowngradeLogForTests();
+    expect(
+      recordTransportDowngrade(
+        selected: TransportRoute.peerjs,
+        preferHyperswarm: false,
+        localIsPwa: false,
+        remoteIsPwa: false,
+      ),
+      isNull,
+    );
+    expect(transportDowngradeLog, isEmpty);
+
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final missing = recordTransportDowngrade(
+      selected: TransportRoute.peerjs,
+      preferHyperswarm: true,
+      localIsPwa: false,
+      remoteIsPwa: false,
+    );
+    expect(missing?.reason, 'remote-missing-hyperswarm-v1');
+    final pwa = recordTransportDowngrade(
+      selected: TransportRoute.peerjs,
+      preferHyperswarm: true,
+      localIsPwa: false,
+      remoteIsPwa: true,
+    );
+    expect(pwa?.reason, 'pwa');
+    expect(transportDowngradeLog, hasLength(2));
+    clearTransportDowngradeLogForTests();
+    expect(transportDowngradeLog, isEmpty);
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+  });
+
+  test('_postNativeOpen mirrors PeerJS profile_req and bundle_req', () {
+    final src = File('lib/state/connections_notifier.dart').readAsStringSync();
+    final native = src
+        .split('Future<void> _postNativeOpen')[1]
+        .split('void _notePeerjsDowngrade')[0];
+    expect(native, contains('initWireSession'));
+    expect(native, contains('profile_req'));
+    expect(native, contains('bundle_req'));
+    expect(native, contains('getCachedBundle'));
+    expect(native, contains('flushOutboxForPeer'));
+    expect(
+      native.indexOf('initWireSession'),
+      lessThan(native.indexOf('profile_req')),
+    );
+    expect(
+      native.indexOf('profile_req'),
+      lessThan(native.indexOf('bundle_req')),
+    );
+    final note = src.split('void _notePeerjsDowngrade')[1];
+    expect(note, contains('recordTransportDowngrade'));
+    expect(note, contains('isHyperswarmTransportEnabled()'));
+    expect(note, contains('TransportCapability.webPwaV1'));
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
   });
 }

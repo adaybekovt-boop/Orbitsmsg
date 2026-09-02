@@ -46,6 +46,35 @@ void main() {
       );
     });
 
+    test('allows chunked native voice.fileKeyB64', () {
+      expect(
+        outboundWireMapIsSendable(<String, Object?>{
+          'type': 'msg',
+          'msgType': 'voice',
+          'voice': <String, Object?>{
+            'mime': 'audio/webm',
+            'fileKeyB64': 'xx',
+            'chunked': true,
+          },
+        }),
+        isTrue,
+      );
+    });
+
+    test('refuses voice that nests kek', () {
+      expect(
+        outboundWireMapIsSendable(<String, Object?>{
+          'type': 'msg',
+          'msgType': 'voice',
+          'voice': <String, Object?>{
+            'mime': 'audio/webm',
+            'kek': 'x',
+          },
+        }),
+        isFalse,
+      );
+    });
+
     test('allows typing heartbeat maps', () {
       expect(
         outboundWireMapIsSendable(<String, Object?>{

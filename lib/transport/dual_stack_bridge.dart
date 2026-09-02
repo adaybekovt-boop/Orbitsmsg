@@ -7,6 +7,8 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' show sha256;
+
 import '../attachments/resumable_blob.dart';
 import '../calls/hyperswarm_signaling.dart';
 import '../core/path_byte_stream.dart';
@@ -1153,13 +1155,47 @@ class DualStackBridge {
       return;
     }
     if (cipher.isEmpty) return;
+    if (hash.isNotEmpty && sha256.convert(cipher).toString() != hash) {
+      return;
+    }
     if (_inboundAttachBytes + cipher.length > _maxInboundAttachBytes) return;
+    final off = offset.toInt();
+    if (off < 0 || off + cipher.length > _maxInboundAttachBytes) return;
+    unawaited(
+      _persistInboundAttachChunk(
+        fromPeerId,
+        fileId,
+        index.toInt(),
+        off,
+        cipher,
+        hash,
+      ),
+    );
+  }
+
+  /// Prefer a ciphertext path (Phase 9). [_inboundAttach] is the web /
+  /// path-write failure fallback only.
+  Future<void> _persistInboundAttachChunk(
+    String fromPeerId,
+    String fileId,
+    int index,
+    int offset,
+    List<int> cipher,
+    String hash,
+  ) async {
     final key = '$fromPeerId\x1f$fileId';
+    final path = await openInboundCipherPath(fileId);
+    if (path != null &&
+        !path.contains('://') &&
+        await writeInboundCipherChunk(fileId, offset, cipher)) {
+      _inboundAttachPaths[key] = path;
+      return;
+    }
     final list = _inboundAttach.putIfAbsent(key, () => <AttachmentChunk>[]);
     list.add(
       AttachmentChunk(
-        index: index.toInt(),
-        offset: offset.toInt(),
+        index: index,
+        offset: offset,
         ciphertext: Uint8List.fromList(cipher),
         hash: hash,
       ),
@@ -1380,6 +1416,15 @@ class DualStackBridge {
   void _replicateToAuthenticated(JournalRecord record) {
     for (final peer in List<String>.from(authenticated)) {
       _replicateRecord(peer, record);
+    }
+    // Own-device transport ids (tablet / desktop) may already be
+    // authenticated under sendTargets. Offline siblings still pick the
+    // event up via [_flushReplication] after DeviceBinding.
+    final self = normalizePeerId(selfPeerId());
+    if (self.isNotEmpty) {
+      for (final target in _sendPeerIds(self)) {
+        _replicateRecord(target, record);
+      }
     }
   }
 

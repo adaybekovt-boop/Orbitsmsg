@@ -363,6 +363,11 @@ class TransportDowngrade {
   final String reason;
 }
 
+/// Live send/fallback sink. Empty while rollout is off (PeerJS is the
+/// product path, not a downgrade). Tests clear via
+/// [clearTransportDowngradeLogForTests].
+final List<TransportDowngrade> transportDowngradeLog = <TransportDowngrade>[];
+
 TransportDowngrade? logDowngrade({
   required TransportRoute selected,
   required bool preferHyperswarm,
@@ -383,4 +388,26 @@ TransportDowngrade? logDowngrade({
     to: TransportRoute.peerjs,
     reason: 'remote-missing-hyperswarm-v1',
   );
+}
+
+/// Record a live native→PeerJS downgrade. No-op when [logDowngrade]
+/// returns null (rollout off, or the selected route is not PeerJS).
+TransportDowngrade? recordTransportDowngrade({
+  required TransportRoute selected,
+  required bool preferHyperswarm,
+  required bool localIsPwa,
+  required bool remoteIsPwa,
+}) {
+  final event = logDowngrade(
+    selected: selected,
+    preferHyperswarm: preferHyperswarm,
+    localIsPwa: localIsPwa,
+    remoteIsPwa: remoteIsPwa,
+  );
+  if (event != null) transportDowngradeLog.add(event);
+  return event;
+}
+
+void clearTransportDowngradeLogForTests() {
+  transportDowngradeLog.clear();
 }

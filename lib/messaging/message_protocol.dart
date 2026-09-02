@@ -579,7 +579,12 @@ Future<bool> dispatchReliablePlaintext(
   JsonMap? voiceMeta = data['voice'] is Map
       ? Map<String, Object?>.from(data['voice'] as Map)
       : null;
-  if (voiceMeta != null && !replicationValueIsSafe(voiceMeta)) voiceMeta = null;
+  if (voiceMeta != null) {
+    final safety = Map<String, Object?>.from(voiceMeta)
+      ..remove('fileKey')
+      ..remove('fileKeyB64');
+    if (!replicationValueIsSafe(safety)) voiceMeta = null;
+  }
   final attachmentMeta = data['attachment'] is Map
       ? Map<String, Object?>.from(data['attachment'] as Map)
       : null;
@@ -654,9 +659,59 @@ Future<bool> dispatchReliablePlaintext(
           'transcript': transcript,
         };
       } catch (_) {
-        // Bad base64 вЂ” fall through to metadata-only so the bubble can at
+        // Bad base64 — fall through to metadata-only so the bubble can at
         // least render a "voice failed" state.
       }
+    } else if (voiceMeta != null && voiceMeta['chunked'] == true) {
+      final mime = (voiceMeta['mime'] as String?) ?? 'audio/webm';
+      final duration = _asInt(voiceMeta['duration']);
+      final waveform = _numListToDoubles(voiceMeta['waveform']);
+      final assembled = await _assembleChunkedVoice(
+        ctx: ctx,
+        remoteId: remoteId,
+        fileId: voiceMeta['fileId'],
+        keyB64: voiceMeta['fileKeyB64'],
+      );
+      if (assembled != null && assembled.isNotEmpty) {
+        await db.saveVoiceBlob(
+          msgId,
+          assembled,
+          mime: mime,
+          duration: duration,
+          waveform: waveform,
+        );
+      }
+      voiceRef = <String, Object?>{
+        'duration': duration,
+        'mime': mime,
+        'waveform': waveform,
+        'transcript': transcript,
+      };
+    } else if (voiceMeta != null && voiceMeta['chunked'] == true) {
+      final mime = (voiceMeta['mime'] as String?) ?? 'audio/webm';
+      final duration = _asInt(voiceMeta['duration']);
+      final waveform = _numListToDoubles(voiceMeta['waveform']);
+      final assembled = await _assembleChunkedVoice(
+        ctx: ctx,
+        remoteId: remoteId,
+        fileId: voiceMeta['fileId'],
+        keyB64: voiceMeta['fileKeyB64'],
+      );
+      if (assembled != null && assembled.isNotEmpty) {
+        await db.saveVoiceBlob(
+          msgId,
+          assembled,
+          mime: mime,
+          duration: duration,
+          waveform: waveform,
+        );
+      }
+      voiceRef = <String, Object?>{
+        'duration': duration,
+        'mime': mime,
+        'waveform': waveform,
+        'transcript': transcript,
+      };
     } else if (voiceMeta != null) {
       voiceRef = <String, Object?>{
         'duration': _asInt(voiceMeta['duration']),
@@ -837,6 +892,40 @@ List<double>? _numListToDoubles(Object? v) {
     }
   }
   return out;
+}
+
+Future<Uint8List?> _assembleChunkedVoice({
+  required ReliableInboundCtx ctx,
+  required String remoteId,
+  required Object? fileId,
+  required Object? keyB64,
+}) async {
+  if (fileId is! String ||
+      fileId.isEmpty ||
+      fileId.length > 200 ||
+      fileId.contains('://') ||
+      keyB64 is! String ||
+      keyB64.isEmpty ||
+      keyB64.length > 64) {
+    return null;
+  }
+  List<int> key;
+  try {
+    key = base64Decode(keyB64);
+  } catch (_) {
+    return null;
+  }
+  if (key.length < 8) return null;
+  final assemble = ctx.assembleNativeAttachment;
+  if (assemble == null) return null;
+  try {
+    final bytes = await assemble(remoteId, fileId, key);
+    if (bytes == null || bytes.isEmpty) return null;
+    if (bytes.length > 6 * 1024 * 1024) return null;
+    return bytes;
+  } catch (_) {
+    return null;
+  }
 }
 
 Future<JsonMap> _assembleChunkedAttachment({

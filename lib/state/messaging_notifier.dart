@@ -561,6 +561,28 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
           continue;
         }
       }
+      if (type == 'voice') {
+        final voice = payload['voice'];
+        if (voice is Map && voice['chunked'] == true) {
+          final streamed = await _flushChunkedNativeVoice(
+            conns,
+            normalized,
+            id,
+            payload,
+          );
+          if (!streamed) {
+            unawaited(db.updateMessageStatus(id, 'failed'));
+            continue;
+          }
+          unawaited(db.updateMessage(id, {
+            'status': 'inflight',
+            'outboxAttempt': ((r['outboxAttempt'] as num?)?.toInt() ?? 0) + 1,
+            'outboxDeadline': now() + sentAckTimeout.inMilliseconds,
+          }));
+          _sentAckGuard.arm(id);
+          continue;
+        }
+      }
       final envelope = await _buildOutboxEnvelope(id, payload, type);
       if (envelope == null) {
         // Row isn't recoverable вЂ” the underlying blob went missing
@@ -762,6 +784,67 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
         'width': att['width'] ?? 0,
         'height': att['height'] ?? 0,
         'duration': att['duration'] ?? 0,
+        'chunked': true,
+        'fileId': fileId,
+        'fileKeyB64': base64Encode(fileKey),
+      },
+      if (payload['replyTo'] is Map)
+        'replyTo': Map<String, Object?>.from(payload['replyTo'] as Map),
+    });
+  }
+
+  Future<bool> _flushChunkedNativeVoice(
+    ConnectionsNotifier conns,
+    String peerId,
+    String msgId,
+    Map<String, Object?> payload,
+  ) async {
+    if (!conns.canUseNative(peerId)) return false;
+    final voice = payload['voice'];
+    if (voice is! Map) return false;
+    final voiceMap = Map<String, Object?>.from(voice);
+    var path = voiceMap['localPath'];
+    if (path is! String || path.isEmpty) {
+      final blob = await db.getVoiceBlob(msgId);
+      final bytes = blob?['blob'];
+      if (bytes is! Uint8List || bytes.isEmpty) return false;
+      final written = await writeBytesToTempPath(bytes, fileName: 'voice.bin');
+      if (written == null) return false;
+      path = written;
+      voiceMap['localPath'] = written;
+      payload['voice'] = voiceMap;
+      unawaited(db.updateMessage(msgId, {'payload': payload}));
+    }
+    final fileId = (voiceMap['fileId'] as String?) ?? msgId;
+    final existing = nativeAttachFileKeyFromPayload(voiceMap);
+    final List<int> fileKey;
+    if (existing == null) {
+      fileKey = _freshFileKey();
+      voiceMap['fileKeyB64'] = base64Encode(fileKey);
+      payload['voice'] = voiceMap;
+      unawaited(db.updateMessage(msgId, {'payload': payload}));
+    } else {
+      fileKey = existing;
+    }
+    final streamed = await conns.sendChatAttachmentFromPath(
+      peerId,
+      path,
+      fileKey: fileKey,
+      fileId: fileId,
+    );
+    if (!streamed) return false;
+    return conns.sendEncrypted(peerId, {
+      'type': 'msg',
+      'id': msgId,
+      'text': '',
+      'ts': payload['ts'],
+      'from': payload['from'],
+      'msgType': 'voice',
+      'voice': <String, Object?>{
+        'duration': voiceMap['duration'] ?? 0,
+        'mime': voiceMap['mime'] ?? 'audio/webm',
+        'waveform': voiceMap['waveform'] ?? const <double>[],
+        'transcript': voiceMap['transcript'] ?? '',
         'chunked': true,
         'fileId': fileId,
         'fileKeyB64': base64Encode(fileKey),
@@ -1069,6 +1152,61 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
 
     if (!open) return msgId;
 
+    if (conns.canUseNative(normalized)) {
+      final tmp = await writeBytesToTempPath(
+        bytes,
+        fileName: 'voice.bin',
+        maxBytes: _maxVoiceRawBytes,
+      );
+      if (tmp == null) {
+        unawaited(db.updateMessageStatus(msgId, 'pending'));
+        return msgId;
+      }
+      final fileKey = _freshFileKey();
+      final persistPath = await persistLocalAttachmentPath(tmp);
+      voiceRef['chunked'] = true;
+      voiceRef['fileId'] = msgId;
+      voiceRef['localPath'] = persistPath;
+      voiceRef['fileKeyB64'] = base64Encode(fileKey);
+      payload['voice'] = voiceRef;
+      unawaited(db.updateMessage(msgId, {'payload': payload}));
+      final streamed = await conns.sendChatAttachmentFromPath(
+        normalized,
+        persistPath,
+        fileKey: fileKey,
+        fileId: msgId,
+      );
+      if (!streamed) {
+        unawaited(db.updateMessageStatus(msgId, 'pending'));
+        return msgId;
+      }
+      final okNative = await conns.sendEncrypted(normalized, {
+        'type': 'msg',
+        'id': msgId,
+        'text': '',
+        'ts': ts,
+        'from': selfId,
+        'msgType': 'voice',
+        'voice': <String, Object?>{
+          'duration': durationSec,
+          'mime': mime,
+          'waveform': safeWaveform,
+          'transcript': safeTranscript,
+          'chunked': true,
+          'fileId': msgId,
+          'fileKeyB64': base64Encode(fileKey),
+        },
+        if (sanitizedReply != null) 'replyTo': sanitizedReply,
+      });
+      if (!okNative) {
+        _sentAckGuard.disarm(msgId);
+        unawaited(db.updateMessageStatus(msgId, 'pending'));
+      } else {
+        _sentAckGuard.arm(msgId);
+      }
+      return msgId;
+    }
+
     final b64 = await b64EncodeHeavy(bytes);
     if (b64.length > _maxVoiceB64Len) {
       // Raw check passed but base64 expansion blew the wire cap. Leave
@@ -1154,6 +1292,26 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
         ? name.substring(0, _maxFileNameLen)
         : name;
     final size = bytes.length;
+
+    if (conns.canUseNative(normalized)) {
+      final tmp = await writeBytesToTempPath(
+        bytes,
+        fileName: safeName,
+        maxBytes: kMaxNativeAttachBytes,
+      );
+      if (tmp == null) return null;
+      return sendFileFromPath(
+        targetId,
+        tmp,
+        name: safeName,
+        mime: mime,
+        kind: kind,
+        width: width,
+        height: height,
+        durationSec: durationSec,
+        replyTo: replyTo,
+      );
+    }
 
     // Pre-compute the thumb data URL once вЂ” we need it for both the wire
     // envelope and the persisted metadata (so an own-sent row can show

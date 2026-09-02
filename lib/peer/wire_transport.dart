@@ -26,7 +26,7 @@ import 'peerjs_client.dart';
 /// `wireHello` / `wireRekey` use [helloEnvelopeIsSafe]. Typing / heartbeat
 /// use [replicationValueIsSafe]. Chat maps refuse nested
 /// [kForbiddenReplicationFields] except `fileKey` / `fileKeyB64` sitting
-/// directly on an `attachment` (needed for chunked-file outbox retry).
+/// directly on an `attachment` or `voice` (chunked native outbox retry).
 /// Also refuses `opaqueWakeToken` and keys containing `://`. Cycle-safe;
 /// ciphertext [List<int>] is a leaf.
 bool outboundWireMapIsSendable(Object? msg) {
@@ -44,7 +44,7 @@ bool outboundWireMapIsSendable(Object? msg) {
       msg.containsKey('replyTo') ||
       msg.containsKey('voice');
   if (looksLikeChat) {
-    for (final key in const ['sticker', 'replyTo', 'voice']) {
+    for (final key in const ['sticker', 'replyTo']) {
       final nested = msg[key];
       if (nested is Map && !replicationValueIsSafe(nested)) return false;
     }
@@ -87,7 +87,8 @@ bool _outboundValueIsSendable(
         entry.value,
         seen,
         allowAttachmentFileKey: allowAttachmentFileKey,
-        underAttachment: '${entry.key}' == 'attachment',
+        underAttachment: '${entry.key}' == 'attachment' ||
+            '${entry.key}' == 'voice',
       )) {
         return false;
       }

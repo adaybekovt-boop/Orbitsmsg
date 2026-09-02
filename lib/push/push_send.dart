@@ -14,6 +14,7 @@ import 'fcm_oauth_token_request.dart';
 import 'fcm_service_account_jwt.dart';
 
 export 'apns_provider_jwt.dart';
+export 'apns_send_http.dart';
 export 'fcm_oauth_token_request.dart';
 export 'fcm_service_account_jwt.dart';
 export 'fcm_send_http.dart';
@@ -93,11 +94,20 @@ class PushSender {
   /// Apple HTTP/2. Refused until the live gateway flag is true.
   /// The request is built so tests can prove opacity; it is never sent
   /// while [kLiveApnsGateway] is false.
+  ///
+  /// The HTTPS POST *shape* is [buildApnsSendHttp] / [dispatchApnsSendHttp]
+  /// (injected `post`). This method does not call either while
+  /// [kLiveApnsGateway] is false. Neither helper implements HTTP/2 HPACK.
   Future<PushSendResult> sendApns({
     required String deviceToken,
     required OpaqueWake wake,
     bool sandbox = false,
     ApnsProviderKey? providerKey,
+    Future<int> Function(
+      Uri uri,
+      Map<String, String> headers,
+      String body,
+    )? post, // ignored while kLiveApnsGateway is false
   }) async {
     final request = buildApnsRequest(
       deviceToken: deviceToken,
@@ -109,8 +119,14 @@ class PushSender {
       return const PushSendResult(sent: false, reason: 'unsafe-keys');
     }
     if (!kLiveApnsGateway) {
+      // [post] is ignored — do not call dispatchApnsSendHttp / Apple.
       return const PushSendResult(sent: false, reason: 'apns-not-deployed');
     }
+    // After kLiveApnsGateway flips, return dispatchApnsSendHttp(
+    //   request: request, post: post ?? <https POST>).
+    // Do not construct a Dart HTTP client here while the const is
+    // false — that branch is dead and the analyzer treats a live
+    // POST as unreachable.
     return const PushSendResult(sent: false, reason: 'apns-not-configured');
   }
 

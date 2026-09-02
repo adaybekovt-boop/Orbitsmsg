@@ -71,3 +71,29 @@ Future<String?> copyLocalPathToStableFile(
       destDirectory,
       fileName: fileName,
     );
+
+/// Write [bytes] to a temp file for native `sendFileFromPath`. Null on
+/// web / refused names / over [maxBytes].
+Future<String?> writeBytesToTempPath(
+  List<int> bytes, {
+  String fileName = 'plain.bin',
+  int maxBytes = 50 * 1024 * 1024,
+}) =>
+    impl.writeBytesToTempPath(
+      bytes,
+      fileName: fileName,
+      maxBytes: maxBytes,
+    );
+
+/// Open (or reuse) a temp ciphertext path for inbound `attach-chunk`.
+/// Null on web / refused [fileId].
+Future<String?> openInboundCipherPath(String fileId) =>
+    impl.openInboundCipherPath(fileId);
+
+/// Write one inbound ciphertext chunk at [offset]. False on web / cap.
+Future<bool> writeInboundCipherChunk(
+  String fileId,
+  int offset,
+  List<int> bytes,
+) =>
+    impl.writeInboundCipherChunk(fileId, offset, bytes);

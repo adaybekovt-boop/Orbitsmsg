@@ -63,8 +63,10 @@ import '../replication/drift_projector.dart';
 import '../rooms/autobase_log.dart';
 import '../storage/db.dart' as db;
 import '../transport/replication_schema.dart';
+import '../transport/capabilities.dart';
 import '../transport/device_binding.dart';
 import '../transport/dual_stack_bridge.dart';
+import '../transport/hello_capabilities.dart';
 import '../transport/layers.dart';
 import '../transport/peerjs_window.dart';
 import '../transport/signed_capabilities.dart';
@@ -519,6 +521,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     // Isolation fail-closed: web-only/removed must not use PeerJS even
     // when `_dual` is unbound. Rollout off does not auto-start Hyperswarm.
     if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
+    _notePeerjsDowngrade(remoteId);
     final conn = getConn(remoteId, 'reliable');
     if (conn == null) return false;
     return _wire.sendEncryptedOn(conn, remoteId, msg);
@@ -539,6 +542,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       }
     }
     if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
+    _notePeerjsDowngrade(remoteId);
     final conn = getConn(remoteId, 'ephemeral');
     if (conn == null) return false;
     return _wire.sendEphemeralOn(conn, remoteId, msg);
@@ -611,6 +615,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       return true;
     }
     if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
+    _notePeerjsDowngrade(remoteId);
     final conn = getConn(remoteId, 'reliable');
     if (conn == null || !conn.open) return false;
     return conn.send(packet);
@@ -1129,6 +1134,37 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     final bridge = _messaging;
     unawaited(bridge.loadPendingForPeer(remoteId));
     unawaited(bridge.flushOutboxForPeer(remoteId));
+    unawaited(sendEncrypted(
+      remoteId,
+      {'type': 'profile_req', 'nonce': now()},
+    ));
+    try {
+      final cached = await getCachedBundle(remoteId);
+      if (cached == null) {
+        unawaited(sendEncrypted(
+          remoteId,
+          {'type': 'bundle_req', 'nonce': now()},
+        ));
+      }
+    } catch (_) {
+      // Bundle cache is a read-through cache — missing row is fine.
+    }
+  }
+
+  /// Live native→PeerJS downgrade. No-op while rollout is off.
+  void _notePeerjsDowngrade(String remoteId) {
+    final cached = remoteCapabilityCache.get(remoteId);
+    final binding = _dual?.remoteBindings[normalizePeerId(remoteId)];
+    final remoteIsPwa =
+        cached?.capabilities.contains(TransportCapability.webPwaV1) == true ||
+            binding?.capabilities.contains(TransportCapability.webPwaV1.wireName) ==
+                true;
+    recordTransportDowngrade(
+      selected: TransportRoute.peerjs,
+      preferHyperswarm: isHyperswarmTransportEnabled(),
+      localIsPwa: kIsWeb,
+      remoteIsPwa: remoteIsPwa,
+    );
   }
 
   void _refreshConnectedIds() {
