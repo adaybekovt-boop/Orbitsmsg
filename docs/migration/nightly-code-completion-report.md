@@ -53,7 +53,9 @@ Invariants checked after the repair:
 9. `1dc7e26` `fix(ci): clear analyze errors and unused imports`
 10. `c2fc04f` `test(migration): prove worklet resume and drop unused plugin import`
 11. `fdba86d` `fix(identity): drop unused dart:convert after device_registry helpers`
-12. This documentation commit
+12. `ef217cb` `docs(migration): reconcile PR 62 claims with repair evidence`
+
+Report HEAD: `ef217cb97a6c3e562049b5631b3dd51755fcc181`.
 
 ## Defects fixed
 
