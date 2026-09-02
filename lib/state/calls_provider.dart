@@ -293,7 +293,7 @@ class CallsNotifier extends StateNotifier<CallState> {
     final conn = _conn;
     if (state.status != CallStatus.ringing) return;
     if (conn == null && _nativeSession == null) return;
-    // Isolation fail-closed before getUserMedia when there is no native
+    // Isolation fail-closed before media acquire when there is no native
     // session. Leftover PeerJS `_conn` must not open the mic.
     if (!peerjsAllowedOnNative(isWeb: kIsWeb) && _nativeSession == null) {
       try {

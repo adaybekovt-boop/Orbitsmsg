@@ -116,7 +116,10 @@ void main() {
     expect(accept, isNot(contains('peerjsAllowedOnNative()')));
     final gateIdx = accept.indexOf('peerjsAllowedOnNative(isWeb: kIsWeb)');
     expect(gateIdx, greaterThanOrEqualTo(0));
-    expect(accept.indexOf('getUserMedia'), greaterThan(gateIdx));
+    expect(
+      accept.indexOf('navigator.mediaDevices.getUserMedia'),
+      greaterThan(gateIdx),
+    );
     expect(accept, contains('_nativeSession == null'));
     expect(accept, contains('Нет активного P2P-соединения'));
 
