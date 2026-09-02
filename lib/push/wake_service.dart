@@ -24,8 +24,8 @@ class OpaqueWakeService {
     }
     final wake = OpaqueWake(
       opaqueWakeToken: payload['opaqueWakeToken'] as String? ?? '',
-      collapseId: payload['collapseId'] as String? ?? '',
-      protocolVersion: payload['protocolVersion'] as int? ?? 0,
+      collapseId: payload['collapseId']?.toString() ?? '',
+      protocolVersion: opaqueWakeProtocolVersion(payload['protocolVersion']),
     );
     if (wake.opaqueWakeToken.isEmpty || wake.protocolVersion < 1) {
       rejected += 1;

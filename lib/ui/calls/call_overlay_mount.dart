@@ -225,8 +225,12 @@ class _CallOverlayState extends ConsumerState<_CallOverlay> {
                     ),
                   ),
                 ),
+                if (!s.remoteMicEnabled) ...[
+                  const Icon(Icons.mic_off, color: Colors.white54, size: 16),
+                  const SizedBox(width: 8),
+                ],
                 Text(
-                  s.screenSharing
+                  s.remoteScreenSharing || s.screenSharing
                       ? 'Демонстрация экрана'
                       : (s.video ? 'Видео-звонок' : 'Аудио-звонок'),
                   style: const TextStyle(

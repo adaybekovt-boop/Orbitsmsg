@@ -9,12 +9,51 @@ void assertNoRemoteBareJs(Map<String, Object?> config) {
   if (config['remoteJs'] == true) {
     throw StateError('production Bare must not fetch remote JS');
   }
-  for (final key in const ['remoteJsUrl', 'bundleUrl', 'scriptUrl']) {
+  for (final key in const [
+    'remoteJsUrl',
+    'bundleUrl',
+    'scriptUrl',
+    'addonUrl',
+    'downloadUrl',
+    'moduleUrl',
+    'jsUrl',
+    'workletUrl',
+  ]) {
     final value = config[key];
-    if (value is String &&
-        (value.startsWith('http://') || value.startsWith('https://'))) {
+    if (value is String && value.isNotEmpty) {
       throw StateError('production Bare must not fetch remote JS');
     }
+  }
+  for (final value in config.values) {
+    if (value is String && value.contains('://')) {
+      throw StateError('production Bare must not fetch remote JS');
+    }
+  }
+  _rejectRemoteSchemeIn(config, <Object>[]);
+}
+
+void _rejectRemoteSchemeIn(Object? value, List<Object> stack) {
+  if (value is String) {
+    if (value.contains('://')) {
+      throw StateError('production Bare must not fetch remote JS');
+    }
+    return;
+  }
+  if (value is Map || value is List) {
+    for (final seen in stack) {
+      if (identical(seen, value)) return;
+    }
+    stack.add(value as Object);
+    if (value is Map) {
+      for (final child in value.values) {
+        _rejectRemoteSchemeIn(child, stack);
+      }
+    } else if (value is List) {
+      for (final child in value) {
+        _rejectRemoteSchemeIn(child, stack);
+      }
+    }
+    stack.removeLast();
   }
 }
 
@@ -42,6 +81,11 @@ abstract class OrbitsTransportPlatform extends PlatformInterface {
   Future<void> suspend();
   Future<void> resume();
   Future<void> refreshNetwork();
+
+  /// Absolute path to a locally bundled Bare binary, or null.
+  /// Never a remote URL. The product shipped-binary flag stays false
+  /// until every OS slot is in the app bundle.
+  Future<String?> barePath() async => null;
 }
 
 class _UnimplementedTransport extends OrbitsTransportPlatform {

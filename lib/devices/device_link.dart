@@ -1,9 +1,13 @@
 // Phase 10 QR device-link payload. The identity key signs; devices do
-// not share a ratchet snapshot.
+// not share a ratchet snapshot. Hyperswarm Noise is not the identity key.
 
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' show sha256;
+
+import '../transport/layers.dart';
 import '../transport/signed_capabilities.dart';
 
 const String kDeviceLinkInfo = 'orbits-device-link-v1';
@@ -49,8 +53,11 @@ class DeviceLinkPayload {
     if (json['v'] != kDeviceLinkInfo) {
       throw FormatException('bad device-link version');
     }
+    _refuseDeviceLinkSecrets(json, HashSet<Object>.identity());
+    final deviceId = json['deviceId'] as String? ?? '';
+    _refuseDeviceIdValue(deviceId);
     return DeviceLinkPayload(
-      deviceId: json['deviceId'] as String? ?? '',
+      deviceId: deviceId,
       transportPublicKey: Uint8List.fromList(
         base64Decode(json['transportPublicKey'] as String? ?? ''),
       ),
@@ -76,6 +83,7 @@ Future<DeviceLinkPayload> issueDeviceLink({
   required Uint8List identityPublicKey,
   required Future<Uint8List> Function(List<int> payload) sign,
 }) async {
+  _refuseDeviceIdValue(deviceId);
   final draft = DeviceLinkPayload(
     deviceId: deviceId,
     transportPublicKey: transportPublicKey,
@@ -95,7 +103,9 @@ Future<DeviceLinkPayload> issueDeviceLink({
 }
 
 Future<bool> verifyDeviceLink(DeviceLinkPayload link) {
-  if (link.deviceId.isEmpty || link.signature.isEmpty) {
+  if (link.deviceId.isEmpty ||
+      link.deviceId.contains('://') ||
+      link.signature.isEmpty) {
     return Future<bool>.value(false);
   }
   return verifyIdentitySignedBytes(
@@ -103,4 +113,61 @@ Future<bool> verifyDeviceLink(DeviceLinkPayload link) {
     link.signedPayload(),
     link.signature,
   );
+}
+
+/// Local-only transport ORBIT id. Not part of the QR signed payload.
+/// First 8 bytes of SHA-256([transportPublicKey]) → `ORBIT-` + 16 hex.
+String transportPeerIdFromPublicKey(List<int> transportPublicKey) {
+  if (transportPublicKey.isEmpty) {
+    throw ArgumentError('device link: refusing secret field');
+  }
+  final hex = sha256
+      .convert(transportPublicKey)
+      .bytes
+      .take(8)
+      .map((v) => v.toRadixString(16).padLeft(2, '0'))
+      .join()
+      .toUpperCase();
+  return 'ORBIT-$hex';
+}
+
+/// Empty or URL-shaped (`://`) [DeviceLinkPayload.deviceId] *values* fail
+/// closed. Keys named `deviceId` stay allowed through the secret-key walk.
+void _refuseDeviceIdValue(String deviceId) {
+  if (deviceId.isEmpty || deviceId.contains('://')) {
+    throw ArgumentError('device link: refusing secret field');
+  }
+}
+
+/// Cycle-safe walk of nested [Map] / [Iterable]. Ciphertext [List<int>]
+/// is a leaf. Any forbidden / wake / URL-ish key at any depth fails closed.
+/// Keys named `deviceId` are allowed; empty or `://` *values* are refused
+/// by [_refuseDeviceIdValue] after this walk in [DeviceLinkPayload.fromQrJson].
+void _refuseDeviceLinkSecrets(Object? value, Set<Object> seen) {
+  if (value == null || value is bool || value is num || value is String) {
+    return;
+  }
+  // Ciphertext bytes are leaves — do not walk them as Iterables.
+  if (value is List<int>) return;
+  if (value is Map) {
+    if (!seen.add(value)) return;
+    for (final key in value.keys) {
+      final name = '$key';
+      if (kForbiddenReplicationFields.contains(name) ||
+          name == 'opaqueWakeToken' ||
+          name.contains('://')) {
+        throw ArgumentError('device link: refusing secret field');
+      }
+    }
+    for (final nested in value.values) {
+      _refuseDeviceLinkSecrets(nested, seen);
+    }
+    return;
+  }
+  if (value is Iterable) {
+    if (!seen.add(value)) return;
+    for (final item in value) {
+      _refuseDeviceLinkSecrets(item, seen);
+    }
+  }
 }

@@ -1,8 +1,11 @@
 # Relay and blind mailbox
 
 Offline delivery must be designed **before** Hypercore (Phase 7–8).
-Today there is no mailbox: if the recipient is gone, PeerJS sends
-`EXPIRE` and the sender keeps a local outbox.
+The default live path is still PeerJS outbox/`EXPIRE` when the
+recipient is gone. In-tree there is also a **local** blind mailbox
+(loopback HTTP storage peer + DualStackBridge deposit/drain) for
+desktop/CI. That is not a public fleet (`kLiveStorageFleet` stays
+false). Anonymous writes and plaintext fields are rejected.
 
 ## Delivery modes
 
@@ -37,6 +40,11 @@ may write”.
 
 Also required: re-download, spam / amplification limits, GC, tombstones,
 crypto-erasure after delete.
+
+In-tree local HTTP mailbox: 256 KiB JSON body cap, 32 deposits / 10s
+per capability token, retention GC on get/put (expired ciphertext is
+deleted, not only filtered). Public fleet rate limits and DDoS policy
+stay ops.
 
 ## Fleet (cannot be “the public DHT will do it”)
 

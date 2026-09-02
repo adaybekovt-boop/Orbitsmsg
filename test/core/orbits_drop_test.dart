@@ -1,8 +1,10 @@
 // DropEngine — chunked transfer + SHA-256 reassembly, end to end (sender's
 // emitted packets replayed into a receiver). No WebRTC needed.
 
+import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/base64_helpers.dart';
 import 'package:orbits_flutter/core/orbits_drop.dart';
@@ -165,6 +167,109 @@ void main() {
     });
   });
 
+  group('DropEngine inbound denylist', () {
+    test('drops file-start with nested fileKey before opening a transfer',
+        () async {
+      var started = false;
+      final receiver = DropEngine(
+        onIncomingStart: (_) => started = true,
+      );
+      final fileId = bytesToBase64(Uint8List(16)..[0] = 1);
+      final consumed = await receiver.handleInbound(<String, Object?>{
+        'type': 'file-start',
+        'fileId': fileId,
+        'name': 'secret.bin',
+        'size': 8,
+        'meta': <String, Object?>{'fileKey': 'x'},
+      });
+      expect(consumed, isTrue);
+      expect(started, isFalse);
+      expect(receiver.incomingTransferCount, 0);
+    });
+
+    test('does not complete a transfer on file-end with nested kek', () async {
+      var started = false;
+      var completed = false;
+      ({DropFileMeta meta, Uint8List bytes})? ready;
+      String? failure;
+      final receiver = DropEngine(
+        onIncomingStart: (_) => started = true,
+        onIncomingReady: (meta, bytes) => ready = (meta: meta, bytes: bytes),
+        onComplete: (_, __) => completed = true,
+        onFailed: (_, __, reason) => failure = reason,
+      );
+      final fileId = bytesToBase64(Uint8List(16)..[0] = 2);
+      await receiver.handleInbound(<String, Object?>{
+        'type': 'file-start',
+        'fileId': fileId,
+        'name': 'ok.bin',
+        'size': 8,
+        'hash': '',
+        'totalChunks': 1,
+      });
+      expect(started, isTrue);
+      expect(receiver.incomingTransferCount, 1);
+
+      final consumed = await receiver.handleInbound(<String, Object?>{
+        'type': 'file-end',
+        'fileId': fileId,
+        'extra': <String, Object?>{'kek': 'x'},
+      });
+      expect(consumed, isTrue);
+      expect(receiver.incomingTransferCount, 1);
+      expect(completed, isFalse);
+      expect(ready, isNull);
+      expect(failure, isNull);
+    });
+
+    test('still starts a transfer on a legit file-start', () async {
+      DropFileMeta? started;
+      final receiver = DropEngine(
+        onIncomingStart: (meta) => started = meta,
+      );
+      final fileId = bytesToBase64(Uint8List(16)..[0] = 3);
+      final consumed = await receiver.handleInbound(<String, Object?>{
+        'type': 'file-start',
+        'fileId': fileId,
+        'name': 'legit.bin',
+        'size': 4,
+        'mime': 'application/octet-stream',
+        'totalChunks': 1,
+      });
+      expect(consumed, isTrue);
+      expect(started, isNotNull);
+      expect(started!.name, 'legit.bin');
+      expect(started!.size, 4);
+      expect(receiver.incomingTransferCount, 1);
+    });
+
+    test('hash, name, and fileId on file-start are not forbidden', () async {
+      DropFileMeta? started;
+      final receiver = DropEngine(
+        onIncomingStart: (meta) => started = meta,
+      );
+      final idBytes = Uint8List(16)..[0] = 4;
+      final fileId = bytesToBase64(idBytes);
+      const hash =
+          '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+      final consumed = await receiver.handleInbound(<String, Object?>{
+        'type': 'file-start',
+        'fileId': fileId,
+        'name': 'photo.jpg',
+        'size': 10,
+        'mime': 'image/jpeg',
+        'hash': hash,
+        'totalChunks': 1,
+      });
+      expect(consumed, isTrue);
+      expect(started, isNotNull);
+      expect(started!.name, 'photo.jpg');
+      expect(started!.hash, hash);
+      expect(started!.fileId, '04000000000000000000000000000000');
+      expect(receiver.incomingTransferCount, 1);
+    });
+  });
+
   group('DropEngine inbound caps', () {
     test('rejects file-start above kMaxDropFileBytes', () async {
       String? failure;
@@ -211,6 +316,90 @@ void main() {
         'fileId': bytesToBase64(Uint8List(16)..[0] = 99),
         'name': 'overflow',
         'size': 10,
+      });
+      expect(failure, isNotNull);
+    });
+  });
+
+  group('DropEngine stream send', () {
+    test('hashes on file-end without holding the whole file', () async {
+      final data = _bytes(64 * 2 + 10);
+      final pieces = <List<int>>[];
+      for (var i = 0; i < data.length; i += 17) {
+        final end = i + 17 > data.length ? data.length : i + 17;
+        pieces.add(data.sublist(i, end));
+      }
+      ({DropFileMeta meta, Uint8List bytes})? got;
+      final packets = <Object>[];
+      final sender = DropEngine(chunkSize: 64);
+      final receiver = DropEngine(
+        chunkSize: 64,
+        onIncomingReady: (meta, bytes) => got = (meta: meta, bytes: bytes),
+      );
+      var inbound = Future<void>.value();
+      await sender.sendFileFromIncomingStream(
+        incoming: Stream<List<int>>.fromIterable(pieces),
+        size: data.length,
+        name: 's.bin',
+        mime: 'application/octet-stream',
+        waitForAck: false,
+        send: (p) {
+          packets.add(p);
+          inbound =
+              inbound.then((_) => receiver.handleInbound(p, peerId: 'alice'));
+          return true;
+        },
+      );
+      await inbound;
+      expect(got!.bytes, data);
+      final start = packets.first as Map;
+      expect(start['type'], 'file-start');
+      expect(start['hash'], '');
+      final end = packets.whereType<Map>().lastWhere((m) => m['type'] == 'file-end');
+      final digest = await Sha256().hash(data);
+      final expected = digest.bytes
+          .map((b) => b.toRadixString(16).padLeft(2, '0'))
+          .join();
+      expect(end['hash'], expected);
+    });
+
+    test('rejects a stream larger than declared size', () async {
+      final sender = DropEngine(chunkSize: 64);
+      await expectLater(
+        sender.sendFileFromIncomingStream(
+          incoming: Stream<List<int>>.fromIterable([
+            List<int>.filled(40, 1),
+            List<int>.filled(40, 2),
+          ]),
+          size: 50,
+          name: 'x.bin',
+          mime: 'application/octet-stream',
+          waitForAck: false,
+          send: (_) => true,
+        ),
+        throwsA(isA<StateError>()),
+      );
+    });
+
+    test('file-end hash mismatch is rejected', () async {
+      String? failure;
+      final receiver = DropEngine(
+        chunkSize: 64,
+        onFailed: (_, __, reason) => failure = reason,
+      );
+      final id = Uint8List(16)..[0] = 7;
+      await receiver.handleInbound(<String, Object?>{
+        'type': 'file-start',
+        'fileId': bytesToBase64(id),
+        'name': 'x.bin',
+        'size': 0,
+        'hash': '',
+        'totalChunks': 0,
+      });
+      await receiver.handleInbound(<String, Object?>{
+        'type': 'file-end',
+        'fileId': bytesToBase64(id),
+        'hash': 'deadbeef',
       });
       expect(failure, isNotNull);
     });

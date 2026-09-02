@@ -2,6 +2,7 @@
 // Hyperswarm Noise and Hypercore writer keys are *not* the identity key.
 // See docs/migration/ADR-0001-layer-separation.md.
 
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -29,6 +30,8 @@ class DeviceBinding {
   final Uint8List hypercorePublicKey;
   final List<String> capabilities;
   final int createdAt;
+
+  /// Epoch-ms expiry. [verifyDeviceBinding] fails when this is `<= now`.
   final int expiresAt;
   final Uint8List signatureByIdentityKey;
 
@@ -62,6 +65,51 @@ class DeviceBinding {
     out.addAll(_u64(expiresAt));
     return out;
   }
+
+  /// Public fields only. Never plaintext, KEK, Noise scalars, or fileKey.
+  Map<String, Object?> toWire() => <String, Object?>{
+        'version': version,
+        'identityPublicKey': base64Encode(identityPublicKey),
+        'deviceId': deviceId,
+        'transportPublicKey': base64Encode(transportPublicKey),
+        'hypercorePublicKey': base64Encode(hypercorePublicKey),
+        'capabilities': List<String>.from(capabilities),
+        'createdAt': createdAt,
+        'expiresAt': expiresAt,
+        'signatureByIdentityKey': base64Encode(signatureByIdentityKey),
+      };
+
+  static DeviceBinding fromWire(Map<String, Object?> json) {
+    _refuseDeviceBindingSecrets(json, HashSet<Object>.identity());
+    final deviceId = json['deviceId'] as String? ?? '';
+    final capabilities = (json['capabilities'] as List? ?? const [])
+        .whereType<String>()
+        .toList();
+    if (deviceId.isEmpty ||
+        deviceId.contains('://') ||
+        capabilities.any((cap) => cap.contains('://'))) {
+      throw ArgumentError('device binding: refusing secret field');
+    }
+    return DeviceBinding(
+      version: json['version'] as int? ?? 0,
+      identityPublicKey: Uint8List.fromList(
+        base64Decode(json['identityPublicKey'] as String? ?? ''),
+      ),
+      deviceId: deviceId,
+      transportPublicKey: Uint8List.fromList(
+        base64Decode(json['transportPublicKey'] as String? ?? ''),
+      ),
+      hypercorePublicKey: Uint8List.fromList(
+        base64Decode(json['hypercorePublicKey'] as String? ?? ''),
+      ),
+      capabilities: capabilities,
+      createdAt: json['createdAt'] as int? ?? 0,
+      expiresAt: json['expiresAt'] as int? ?? 0,
+      signatureByIdentityKey: Uint8List.fromList(
+        base64Decode(json['signatureByIdentityKey'] as String? ?? ''),
+      ),
+    );
+  }
 }
 
 /// Connect-time checklist. Crypto verify is Phase 10; Phase 0 locks order.
@@ -78,6 +126,37 @@ bool noiseKeyMatchesBinding({
     mismatch |= connectionNoisePublicKey[i] ^ expected[i];
   }
   return mismatch == 0;
+}
+
+/// Cycle-safe walk of nested [Map] / [Iterable]. Ciphertext [List<int>]
+/// is a leaf. Any forbidden / wake / URL-ish key at any depth fails closed.
+void _refuseDeviceBindingSecrets(Object? value, Set<Object> seen) {
+  if (value == null || value is bool || value is num || value is String) {
+    return;
+  }
+  // Ciphertext bytes are leaves — do not walk them as Iterables.
+  if (value is List<int>) return;
+  if (value is Map) {
+    if (!seen.add(value)) return;
+    for (final key in value.keys) {
+      final name = '$key';
+      if (kForbiddenReplicationFields.contains(name) ||
+          name == 'opaqueWakeToken' ||
+          name.contains('://')) {
+        throw ArgumentError('device binding: refusing secret field');
+      }
+    }
+    for (final nested in value.values) {
+      _refuseDeviceBindingSecrets(nested, seen);
+    }
+    return;
+  }
+  if (value is Iterable) {
+    if (!seen.add(value)) return;
+    for (final item in value) {
+      _refuseDeviceBindingSecrets(item, seen);
+    }
+  }
 }
 
 List<int> _u64(int value) {

@@ -1,11 +1,17 @@
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
+import 'package:orbits_flutter/push/push_gateway.dart';
+import 'package:orbits_flutter/replication/corestore_addon.dart';
+import 'package:orbits_flutter/transport/bare_runtime.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
+import 'package:orbits_flutter/transport/fleet_status.dart';
 import 'package:orbits_flutter/transport/layers.dart';
 import 'package:orbits_flutter/transport/peerjs_window.dart';
+import 'package:orbits_flutter/transport/relay_directory.dart';
 import 'package:orbits_flutter/transport/replication_schema.dart';
 
 void main() {
@@ -20,6 +26,98 @@ void main() {
     expect(kRoomsApplicationE2eImplemented, isFalse);
     expect(kPeerjsSupportWindowOpen, isTrue);
     expect(kPeerjsIsolationMode, 'default-live');
+    expect(peerjsIsProductPath(), isTrue);
+    expect(kLiveSignedRelayDirectory, isFalse);
+    expect(kLiveStorageFleet, isFalse);
+    expect(kLiveApnsGateway, isFalse);
+    expect(kLiveFcmGateway, isFalse);
+    expect(kBareBinaryShipped, isFalse);
+    expect(kBareWorkletRunsOnBareRuntime, isTrue);
+    expect(
+      File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
+      contains("require('node:fs')"),
+    );
+    expect(
+      File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
+      contains("require('bare-process')"),
+    );
+    expect(
+      File('tool/connectivity_harness/package.json').readAsStringSync(),
+      contains('"bare": "bare-fs"'),
+    );
+    final worklet = File('tool/connectivity_harness/src/worklet.js').readAsStringSync();
+    expect(worklet, contains('function hashPath'));
+    expect(worklet, contains('hashPath(file.path)'));
+    expect(worklet, contains('fs.openSync(file.path'));
+    expect(worklet, contains('fs.readSync'));
+    expect(worklet, contains('sendFile takes a path, not bytes'));
+    expect(worklet, contains('sendFile refuses fileKey'));
+    expect(worklet, contains("file.protocol === 'attach-chunk'"));
+    expect(worklet, contains("type: 'attach-chunk'"));
+    expect(worklet, contains("type: 'attach-chunk-path'"));
+    expect(worklet, contains('_ingestAttachChunk'));
+    expect(
+      File('lib/transport/loopback_transport.dart').readAsStringSync(),
+      contains('attach-chunk-path'),
+    );
+    expect(worklet, contains('sendFile refuses remote path'));
+    expect(worklet, contains('resumeOffset'));
+    expect(worklet, contains('harness-file-resume'));
+    expect(worklet, contains('fs.writeSync'));
+    expect(worklet, contains('file-send interrupted'));
+    expect(worklet, contains('relayThrough'));
+    expect(worklet, contains('localJournalDir'));
+    expect(worklet, contains('journalDir'));
+    expect(worklet, contains('journalBackend'));
+    expect(worklet, isNot(contains('readFileSync(file.path)')));
+    expect(worklet, isNot(contains('http://')));
+    expect(worklet, isNot(contains('https://')));
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'path': file.path"),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'resumeOffset': file.resumeOffset"),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'protocol': file.protocol"),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'fileId': file.fileId"),
+    );
+    expect(
+      File('lib/transport/loopback_transport.dart').readAsStringSync(),
+      contains('_sendAttachChunkFile'),
+    );
+    expect(kHolepunchCorestoreAddonLinked, isFalse);
+    expect(kCorestoreJsModuleOptional, isTrue);
+    expect(
+      File('lib/transport/loopback_transport.dart').readAsStringSync(),
+      contains('IncomingPathAttachment'),
+    );
+    expect(
+      File('lib/transport/loopback_transport.dart').readAsStringSync(),
+      isNot(contains('incoming.bytes.addAll')),
+    );
+    expect(
+      File('lib/attachments/path_attachment.dart').existsSync(),
+      isTrue,
+    );
+    expect(
+      File('lib/core/orbits_drop.dart').readAsStringSync(),
+      contains('sendFileRanged'),
+    );
+    expect(
+      File('lib/core/orbits_drop.dart').readAsStringSync(),
+      contains('openIncomingStore'),
+    );
+    expect(
+      File('lib/attachments/path_drop_store.dart').existsSync(),
+      isTrue,
+    );
   });
 
   test('connect checks keep block before TOFU', () {
@@ -35,6 +133,22 @@ void main() {
     expect(replicationFieldsAreSafe(['encryptedEnvelope', 'rootKey']), isFalse);
     expect(replicationFieldsAreSafe(['vaultKek']), isFalse);
     expect(replicationFieldsAreSafe(['plaintext']), isFalse);
+    expect(replicationFieldsAreSafe(['fileKey']), isFalse);
+    expect(replicationFieldsAreSafe(['fileKeyB64']), isFalse);
+    expect(replicationFieldsAreSafe(['attachmentBytes']), isFalse);
+    expect(
+      replicationValueIsSafe({
+        'extra': {'fileKey': 'x'},
+      }),
+      isFalse,
+    );
+    expect(
+      replicationValueIsSafe({
+        'eventId': 'e',
+        'encryptedEnvelope': [1],
+      }),
+      isTrue,
+    );
   });
 
   test('MessageEnvelopeCreated only exposes allowed journal keys', () {
@@ -95,5 +209,8 @@ void main() {
     expect(payload, binding.signedPayload());
     expect(payload.take(4), [0, 0, 0, 1]);
     expect(payload, isNot(equals(binding.signatureByIdentityKey)));
+    final wire = binding.toWire();
+    expect(DeviceBinding.fromWire(wire).deviceId, 'dev-1');
+    expect(wire.containsKey('plaintext'), isFalse);
   });
 }

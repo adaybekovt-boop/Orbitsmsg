@@ -18,3 +18,11 @@ test('topic is domain-separated and not HASH(peerId)', () => {
 test('empty secret is rejected', () => {
   assert.throws(() => contactDiscoveryTopic(Buffer.alloc(0)))
 })
+
+test('short discovery secret under 32 bytes is rejected', () => {
+  assert.throws(
+    () => contactDiscoveryTopic(Buffer.alloc(16, 1)),
+    (err) => err && err.code === 'short-discovery-secret',
+  )
+  assert.throws(() => contactDiscoveryTopic(null))
+})

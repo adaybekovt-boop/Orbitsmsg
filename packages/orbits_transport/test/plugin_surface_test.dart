@@ -1,6 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_transport/orbits_transport.dart';
-import 'package:orbits_transport_platform_interface/orbits_transport_platform_interface.dart';
 
 void main() {
   test('default instance is unimplemented and IPC version is pinned', () {
@@ -30,6 +31,17 @@ void main() {
     await plugin.stop();
     expect(host.started, isFalse);
     expect(host.calls, containsAll(['start', 'publish', 'suspend', 'resume', 'stop']));
+    expect(await plugin.barePath(), isNull);
+  });
+
+  test('federated facade maps every native OS and not the PWA', () {
+    final pub = File('pubspec.yaml').readAsStringSync();
+    expect(pub, contains('default_package: orbits_transport_android'));
+    expect(pub, contains('default_package: orbits_transport_ios'));
+    expect(pub, contains('default_package: orbits_transport_linux'));
+    expect(pub, contains('default_package: orbits_transport_macos'));
+    expect(pub, contains('default_package: orbits_transport_windows'));
+    expect(pub, isNot(contains('orbits_transport_web')));
   });
 
   test('hosts refuse remote executable JS', () async {
@@ -45,6 +57,20 @@ void main() {
       }),
       throwsStateError,
     );
+    await expectLater(
+      host.start({
+        'peerId': 'ORBIT-AA',
+        'worklet': 'https://example.invalid/worklet.js',
+      }),
+      throwsStateError,
+    );
+    expect(
+      () => assertNoRemoteBareJs({
+        'worklet': '/tmp/orbits-worklet.js',
+        'remoteJs': false,
+      }),
+      returnsNormally,
+    );
     expect(
       () => assertNoRemoteBareJs({
         'bundleUrl': 'http://127.0.0.1/evil.js',
@@ -55,6 +81,42 @@ void main() {
     await expectLater(
       channel.start({'remoteJs': true}),
       throwsStateError,
+    );
+    expect(
+      File('lib/method_channel_orbits_transport.dart').readAsStringSync(),
+      contains('barePath'),
+    );
+    expect(
+      File('lib/method_channel_orbits_transport.dart').readAsStringSync(),
+      contains("startsWith('http://')"),
+    );
+  });
+
+  test('assertNoRemoteBareJs refuses extra URL keys and nested schemes', () {
+    for (final key in [
+      'addonUrl',
+      'downloadUrl',
+      'moduleUrl',
+      'jsUrl',
+      'workletUrl',
+    ]) {
+      expect(
+        () => assertNoRemoteBareJs({key: 'https://evil.example/x'}),
+        throwsStateError,
+        reason: key,
+      );
+    }
+    expect(
+      () => assertNoRemoteBareJs({
+        'extra': {'addonUrl': 'https://evil.example/x'},
+      }),
+      throwsStateError,
+    );
+    expect(
+      () => assertNoRemoteBareJs({
+        'worklet': '/tmp/orbits-worklet.js',
+      }),
+      returnsNormally,
     );
   });
 }

@@ -18,6 +18,9 @@
 //   room_destroy         host → guests  {roomId}
 //   room_leave           guest → host   {roomId, guestPeerId}
 //   room_spatial_update  both           {roomId, peerId, x, y}  (host relays)
+//   room_file_chunk      both           {roomId, channelId, id, offset, total,
+//                                        b64, last, attachment?} host-plaintext
+//                                        path-stream (not one 12 MiB frame)
 //
 // Architecture mirrors `messaging_notifier` / `connections_notifier`: the
 // manager registers a [RoomBridge] on the connection registry (no provider
@@ -33,11 +36,17 @@ import 'dart:math';
 import 'dart:typed_data' show Uint8List;
 import 'dart:ui' show Offset;
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
+import '../calls/hyperswarm_signaling.dart';
+import '../calls/native_call_media.dart';
+import '../core/attachment_store.dart';
+import '../core/path_byte_stream.dart';
 import '../state/connections_notifier.dart';
+import '../transport/layers.dart';
+import '../transport/peerjs_window.dart';
 import '../state/local_profile_provider.dart';
 import '../state/peer_connection_provider.dart';
 import '../storage/db.dart' as db;
@@ -45,6 +54,7 @@ import '../utils/common.dart' show safeAvatarDataUrl;
 import 'helpers.dart';
 import 'peerjs_client.dart';
 import 'peer_server_core.dart';
+import 'room_file_store.dart';
 import 'room_invite.dart';
 import 'room_plaintext_gate.dart';
 import 'room_scoped_transport.dart';
@@ -63,6 +73,23 @@ const int kMaxVoiceParticipants = 6;
 /// Max participants in a room INCLUDING the host. The 16th member is rejected
 /// with `room_join_reject` (reason 'full').
 const int kMaxRoomMembers = 15;
+
+/// Whether self-hosted [RoomManager.createRoom] should start the embedded
+/// PeerJS signaling server. Null [isolationMode] uses the product
+/// [kPeerjsIsolationMode] (`default-live`). Tests pass an explicit mode.
+bool roomSelfHostUsesEmbeddedPeerjs(String? isolationMode,
+        {bool isWeb = false}) =>
+    peerjsAllowedOnNativeFor(
+      isolationMode ?? kPeerjsIsolationMode,
+      isWeb: isWeb,
+    );
+
+/// Host-facing note when self-host create skips the embedded PeerJS server
+/// because Phase 14 isolation forbids it. Guests join with the host peer
+/// code on the native carrier (same path as cloud `joinRoom`). Host-plaintext.
+const String kRoomNativeCarrierIsolationMessageRu =
+    'Встроенный PeerJS-сервер комнат отключён режимом изоляции. '
+    'Гости входят по коду пира хоста через нативный канал.';
 
 /// Caps for untrusted inbound room strings.
 const int kMaxRoomTextLen = 4000;
@@ -97,6 +124,7 @@ const Set<String> kRoomPacketTypes = <String>{
   'room_destroy',
   'room_leave',
   'room_spatial_update',
+  'room_file_chunk',
 };
 
 /// Pure authorization check for an incoming room-voice media call (audit item
@@ -122,6 +150,61 @@ bool shouldAnswerRoomVoiceCall({
   // -1 reserves the slot for ourselves.
   if (currentVoiceCount >= maxVoice - 1) return false;
   return true;
+}
+
+/// Deterministic pair id so both mesh ends share one `rv-` callId.
+/// Never includes `://`.
+String roomVoiceCallId({
+  required String roomId,
+  required String channelId,
+  required String a,
+  required String b,
+}) {
+  final lo = a.compareTo(b) <= 0 ? a : b;
+  final hi = a.compareTo(b) <= 0 ? b : a;
+  return 'rv-$roomId-$channelId-$lo-$hi';
+}
+
+Map<String, Object?> roomVoiceMedia({
+  required String roomId,
+  required String channelId,
+}) =>
+    <String, Object?>{
+      'channel': 'room-voice',
+      'roomId': roomId,
+      'channelId': channelId,
+    };
+
+/// Only the lexicographically smaller peer sends the native offer.
+bool shouldOfferNativeRoomVoice(String selfPeerId, String remotePeerId) =>
+    selfPeerId.compareTo(remotePeerId) < 0;
+
+/// Native DualStack takes the voice leg only when the member is
+/// authenticated on the carrier **and** advertised `room-voice-v1`.
+/// Old DualStack clients without that bit treat `rv-` as a 1:1 ring,
+/// so they stay on PeerJS room-voice (or get no offer under isolation).
+bool roomVoiceUsesNativeLeg({
+  required bool canUseNative,
+  required bool remoteUnderstandsRoomVoice,
+}) =>
+    canUseNative && remoteUnderstandsRoomVoice;
+
+bool roomVoiceUsesPeerJsLeg({
+  required bool peerJsAllowed,
+  required bool canUseNative,
+  required bool remoteUnderstandsRoomVoice,
+}) =>
+    peerJsAllowed &&
+    !roomVoiceUsesNativeLeg(
+      canUseNative: canUseNative,
+      remoteUnderstandsRoomVoice: remoteUnderstandsRoomVoice,
+    );
+
+class _NativeVoiceLeg {
+  _NativeVoiceLeg({required this.session, required this.media});
+
+  final NativeCallSession session;
+  final NativeCallMedia media;
 }
 
 /// Reactive snapshot of the local user's room session.
@@ -258,6 +341,18 @@ class RoomState {
 
 const Object _unset = Object();
 
+class _RoomFileTransfer {
+  _RoomFileTransfer({
+    required this.id,
+    required this.ts,
+    required this.attachment,
+  });
+
+  final String id;
+  final int ts;
+  final Map<String, Object?> attachment;
+}
+
 /// Validated content of a `room_msg`, regardless of kind (text/sticker/file).
 /// Built from an inbound packet (after sanitisation) and reused to derive both
 /// the DB payload ([payload]) and the host→guest relay fields ([wireFields]).
@@ -308,10 +403,27 @@ class RoomManager extends StateNotifier<RoomState> {
     // inbound `room_*` packets without a provider cycle — same bridge pattern
     // as MessagingNotifier/DropNotifier.
     _defaultTransport = _ref.read(roomTransportProvider);
-    _defaultTransport.bindRoom(RoomBridge(handleInbound: _handleInbound));
+    _defaultTransport.bindRoom(RoomBridge(
+        handleInbound: _handleInbound,
+        hostPeerIdFor: hostPeerIdForRoom,
+      ));
+    _defaultTransport.bindRoomVoice(_onNativeRoomVoice);
   }
 
   final Ref _ref;
+
+  /// Host of a joined/created room, or null when [roomId] is unknown.
+  String? hostPeerIdForRoom(String roomId) {
+    if (roomId.isEmpty || roomId.contains('://')) return null;
+    final current = state.roomId;
+    if (current == null || current.isEmpty) return null;
+    if (current != roomId && current != normalizePeerId(roomId)) {
+      return null;
+    }
+    final host = state.hostPeerId;
+    if (host == null || host.isEmpty || host.contains('://')) return null;
+    return host;
+  }
 
   /// The peerjs.com-backed transport (production) or a test fake. Always present.
   late final RoomTransport _defaultTransport;
@@ -339,6 +451,7 @@ class RoomManager extends StateNotifier<RoomState> {
 
   /// Active voice-mesh calls, keyed by remote peerId.
   final Map<String, PeerMediaConnection> _voiceConns = {};
+  final Map<String, _NativeVoiceLeg> _nativeVoice = {};
   MediaStream? _voiceStream;
 
   /// Per-peer subscriptions to remote-stream arrival; on web the spatial-audio
@@ -359,6 +472,13 @@ class RoomManager extends StateNotifier<RoomState> {
   /// and was removed so it could not look like live protection.
   final SecurityMonitor _security = SecurityMonitor();
 
+  /// In-flight host-plaintext path-streamed room files, keyed by
+  /// `$roomId:$author:$channelId`. Never holds a fileKey.
+  final Map<String, RoomIncomingFile> _incomingRoomFiles =
+      <String, RoomIncomingFile>{};
+  final Map<String, _RoomFileTransfer> _incomingRoomMeta =
+      <String, _RoomFileTransfer>{};
+
   /// Delegates to the (possibly faked) transport. Named `_connections` for
   /// continuity — the method surface (sendRoomPacket/openReliable/hasReliable)
   /// matches the registry it wraps in production.
@@ -374,14 +494,27 @@ class RoomManager extends StateNotifier<RoomState> {
   /// default channels (#general + 🔊 Голосовой 1) are auto-provisioned by
   /// `db.saveRoom`. Idempotent enough to re-host the same code.
   ///
-  /// When [selfHosted] is true (and the platform can host — see
-  /// [canHostSignalingServer]), this device runs its OWN embedded signaling
-  /// server instead of relying on peerjs.com: an `orbits-room:` invite carrying
-  /// the server's LAN address (+ a UPnP public address when available) is
-  /// surfaced in [RoomState.selfHostInvite] for the host to share. On a
-  /// platform that can't host, the call fails with a [RoomState.joinError]
-  /// rather than silently falling back to the cloud.
-  Future<void> createRoom(String name, {bool selfHosted = false}) async {
+  /// When [selfHosted] is true and isolation still allows native PeerJS
+  /// ([roomSelfHostUsesEmbeddedPeerjs]), this device runs its OWN embedded
+  /// signaling server instead of relying on peerjs.com: an `orbits-room:`
+  /// invite carrying the server's LAN address (+ a UPnP public address when
+  /// available) is surfaced in [RoomState.selfHostInvite] for the host to
+  /// share. That path still requires [canHostSignalingServer]; otherwise the
+  /// call fails with a [RoomState.joinError] rather than silently falling
+  /// back to the cloud.
+  ///
+  /// When [selfHosted] is true but isolation forbids PeerJS, create skips the
+  /// embedded server and hosts on the default (native) transport. Guests join
+  /// with the host peer code via [joinRoom] — [RoomState.selfHostInvite] stays
+  /// null. That path does not need [canHostSignalingServer] (no TCP listener).
+  ///
+  /// [isolationMode] defaults to the product [kPeerjsIsolationMode]. Tests
+  /// pass an explicit mode; do not flip the live constant.
+  Future<void> createRoom(
+    String name, {
+    bool selfHosted = false,
+    String? isolationMode,
+  }) async {
     final self = _ref.read(localProfileProvider);
     final selfId = self?.peerId ?? _selfPeerId();
     if (selfId.isEmpty) {
@@ -394,20 +527,26 @@ class RoomManager extends StateNotifier<RoomState> {
       return;
     }
 
-    if (selfHosted && !canHostSignalingServer) {
+    final useEmbeddedPeerjs = selfHosted &&
+        roomSelfHostUsesEmbeddedPeerjs(isolationMode, isWeb: kIsWeb);
+
+    // Desktop-only applies to the embedded TCP PeerJS listener, not to
+    // native-carrier hosting under isolation.
+    if (useEmbeddedPeerjs && !canHostSignalingServer) {
       state = const RoomState(joinError: kServerHostDesktopOnlyMessage);
       return;
     }
 
     final roomId = selfId; // host peer code IS the room code
 
-    // Self-hosted: stand up the embedded signaling server + the host's loopback
-    // client BEFORE persisting anything. A start failure must surface a SPECIFIC
-    // reason (bind/firewall, no LAN address, loopback timeout) and create
-    // NOTHING — never a half-baked "offline" room that looks like success
-    // (audit: a failed create must look like a failure, not a working server).
+    // Self-hosted + PeerJS allowed: stand up the embedded signaling server +
+    // the host's loopback client BEFORE persisting anything. A start failure
+    // must surface a SPECIFIC reason (bind/firewall, no LAN address, loopback
+    // timeout) and create NOTHING — never a half-baked "offline" room that
+    // looks like success (audit: a failed create must look like a failure,
+    // not a working server).
     String? invite;
-    if (selfHosted) {
+    if (useEmbeddedPeerjs) {
       try {
         // Bounded so a stuck embedded server / loopback client can never hang
         // the create flow forever. host.start + _waitClientOpen are each
@@ -458,13 +597,16 @@ class RoomManager extends StateNotifier<RoomState> {
       activeChannelId: general['id'] as String?,
       serverActive: true,
       selfHostInvite: invite,
-      internetAccessMessage:
-          selfHosted ? kRoomLanOnlyInternetMessageRu : null,
+      internetAccessMessage: !selfHosted
+          ? null
+          : useEmbeddedPeerjs
+              ? kRoomLanOnlyInternetMessageRu
+              : kRoomNativeCarrierIsolationMessageRu,
     );
 
     // Resolve WAN exposure (today: structured LAN-only). The message is
     // already on state so the host sees it before sharing the invite.
-    if (selfHosted) unawaited(_upgradeToInternet(roomId));
+    if (useEmbeddedPeerjs) unawaited(_upgradeToInternet(roomId));
   }
 
   /// Map a self-host startup failure to a clear, user-facing RU diagnostic.
@@ -488,6 +630,8 @@ class RoomManager extends StateNotifier<RoomState> {
               'локальные соединения.';
         case SelfHostFailure.unsupported:
           return kServerHostDesktopOnlyMessage;
+        case SelfHostFailure.peerjsIsolation:
+          return 'Встроенный PeerJS-сервер комнат отключён режимом изоляции.';
       }
     }
     if (e is TimeoutException) {
@@ -500,6 +644,11 @@ class RoomManager extends StateNotifier<RoomState> {
   /// Start the embedded server + the host's loopback room-scoped client. Swaps
   /// [_selfHostedTransport] in and returns the (LAN-only) invite string.
   Future<String?> _startSelfHost(String roomId) async {
+    // Fail closed before [buildRoomScopedClient] if product isolation
+    // forbids native PeerJS (createRoom already skips this path).
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      throw SelfHostException(SelfHostFailure.peerjsIsolation);
+    }
     final host = _ref.read(roomSignalingHostFactoryProvider)();
     final invite = await host.start(roomId: roomId);
     _selfHost = host;
@@ -514,7 +663,10 @@ class RoomManager extends StateNotifier<RoomState> {
     );
     final transport = RoomScopedTransport(client)
       ..wire()
-      ..bindRoom(RoomBridge(handleInbound: _handleInbound));
+      ..bindRoom(RoomBridge(
+        handleInbound: _handleInbound,
+        hostPeerIdFor: hostPeerIdForRoom,
+      ));
     _selfHostedTransport = transport;
 
     await client.start();
@@ -548,17 +700,71 @@ class RoomManager extends StateNotifier<RoomState> {
   }
 
   /// Join an existing room. Accepts either a plain host peer code (cloud /
-  /// peerjs.com room) OR an `orbits-room:` invite for a self-hosted room — the
-  /// latter is detected and routed to [_joinSelfHosted]. For the cloud path we
-  /// dial the host's reliable channel, then announce ourselves with `room_join`;
-  /// the host replies with the channel list + roster.
-  Future<void> joinRoom(String roomCode, String displayName) async {
+  /// native carrier) OR an `orbits-room:` invite for a self-hosted room.
+  ///
+  /// When isolation still allows native PeerJS, an invite is routed to
+  /// [_joinSelfHosted] (room-scoped PeerJS client). When isolation
+  /// forbids PeerJS (web-only on native, or removed), join **fail-closes
+  /// before** [buildRoomScopedClient]: guests use the host peer code on
+  /// the default/native transport — same path [createRoom] documents
+  /// under isolation. Still host-plaintext. Never starts Hyperswarm
+  /// itself (rollout stays off).
+  ///
+  /// [isolationMode] defaults to the product [kPeerjsIsolationMode].
+  /// Tests pass an explicit mode; do not flip the live constant.
+  Future<void> joinRoom(
+    String roomCode,
+    String displayName, {
+    String? isolationMode,
+  }) async {
     final invite = RoomInvite.tryParse(roomCode);
     if (invite != null) {
-      await _joinSelfHosted(invite, displayName);
+      if (!_peerJsClientAllowed(isolationMode)) {
+        debugPrint(
+          '[room] joinRoom: isolation forbids PeerJS guest client; '
+          'joining host ${invite.roomId} on native/default transport',
+        );
+        await _joinByHostPeerCode(
+          invite.roomId,
+          displayName,
+          isolationMode: isolationMode,
+        );
+        return;
+      }
+      await _joinSelfHosted(
+        invite,
+        displayName,
+        isolationMode: isolationMode,
+      );
       return;
     }
 
+    await _joinByHostPeerCode(
+      roomCode,
+      displayName,
+      isolationMode: isolationMode,
+    );
+  }
+
+  /// Whether a room-scoped PeerJS client may be constructed for this
+  /// [isolationMode]. Null uses the product [kPeerjsIsolationMode] via
+  /// [peerjsAllowedOnNative] (must pass [kIsWeb]).
+  bool _peerJsClientAllowed(String? isolationMode) => isolationMode != null
+      ? peerjsAllowedOnNativeFor(isolationMode, isWeb: kIsWeb)
+      : peerjsAllowedOnNative(isWeb: kIsWeb);
+
+  /// Guest join by host peer code on the default/native [RoomTransport]
+  /// (cloud PeerJS when isolation allows it, DualStack/native otherwise).
+  /// Does not construct a room-scoped [PeerJsClient].
+  ///
+  /// [isolationMode] is the same override [joinRoom] accepts. Null uses
+  /// product [kPeerjsIsolationMode] via [peerjsAllowedOnNative]
+  /// (must pass [kIsWeb]).
+  Future<void> _joinByHostPeerCode(
+    String roomCode,
+    String displayName, {
+    String? isolationMode,
+  }) async {
     final self = _ref.read(localProfileProvider);
     final selfId = self?.peerId ?? _selfPeerId();
     final hostPeerId = normalizePeerId(roomCode);
@@ -585,6 +791,22 @@ class RoomManager extends StateNotifier<RoomState> {
     );
 
     final conns = _connections;
+    // Fail closed before DualStack.dial / PeerJS. Product
+    // [kPeerjsIsolationMode] stays default-live (no-op on the live path).
+    // Use [kIsWeb], never the no-arg form.
+    final peerJsAllowed = isolationMode != null
+        ? peerjsAllowedOnNativeFor(isolationMode, isWeb: kIsWeb)
+        : peerjsAllowedOnNative(isWeb: kIsWeb);
+    if (!peerJsAllowed && !conns.canUseNative(hostPeerId)) {
+      debugPrint(
+        '[room] joinRoom: isolation forbids PeerJS and native cannot take host',
+      );
+      await db.setRoomStatus(roomId, 'offline');
+      state = const RoomState(
+        joinError: 'Не удалось подключиться к серверу (изоляция).',
+      );
+      return;
+    }
     conns.openReliable(hostPeerId);
     if (!await _waitReliable(hostPeerId)) {
       debugPrint('[room] joinRoom: no reliable channel to host $hostPeerId');
@@ -627,7 +849,28 @@ class RoomManager extends StateNotifier<RoomState> {
   /// reachable endpoint (public first, then LAN) until both the signaling
   /// client opens AND a reliable channel to the host comes up; then announces
   /// `room_join` exactly like the cloud path.
-  Future<void> _joinSelfHosted(RoomInvite invite, String displayName) async {
+  ///
+  /// [isolationMode] is the same override [joinRoom] accepts. When PeerJS
+  /// is forbidden, this method must not call [buildRoomScopedClient] —
+  /// it falls through to [_joinByHostPeerCode] instead.
+  Future<void> _joinSelfHosted(
+    RoomInvite invite,
+    String displayName, {
+    String? isolationMode,
+  }) async {
+    if (!_peerJsClientAllowed(isolationMode)) {
+      debugPrint(
+        '[room] _joinSelfHosted: isolation forbids PeerJS; '
+        'joining by host peer code',
+      );
+      await _joinByHostPeerCode(
+        invite.roomId,
+        displayName,
+        isolationMode: isolationMode,
+      );
+      return;
+    }
+
     final self = _ref.read(localProfileProvider);
     final selfId = self?.peerId ?? _selfPeerId();
     final hostPeerId = invite.roomId;
@@ -663,6 +906,18 @@ class RoomManager extends StateNotifier<RoomState> {
       hostPeerId: hostPeerId,
     );
 
+    // Fail closed immediately before any PeerJS client construction.
+    // Product [kPeerjsIsolationMode] is the live gate; [isolationMode]
+    // was already checked at the top of this method.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      await _joinByHostPeerCode(
+        invite.roomId,
+        displayName,
+        isolationMode: isolationMode,
+      );
+      return;
+    }
+
     RoomScopedTransport? connected;
     for (final ep in endpoints) {
       final hp = _splitHostPort(ep);
@@ -675,7 +930,10 @@ class RoomManager extends StateNotifier<RoomState> {
       );
       final transport = RoomScopedTransport(client)
         ..wire()
-        ..bindRoom(RoomBridge(handleInbound: _handleInbound));
+        ..bindRoom(RoomBridge(
+        handleInbound: _handleInbound,
+        hostPeerIdFor: hostPeerIdForRoom,
+      ));
       // Activate it so _connections/_waitReliable route through this candidate.
       _selfHostedTransport = transport;
       try {
@@ -770,7 +1028,10 @@ class RoomManager extends StateNotifier<RoomState> {
       } catch (_) {}
     }
     if (rebind) {
-      _defaultTransport.bindRoom(RoomBridge(handleInbound: _handleInbound));
+      _defaultTransport.bindRoom(RoomBridge(
+        handleInbound: _handleInbound,
+        hostPeerIdFor: hostPeerIdForRoom,
+      ));
     }
   }
 
@@ -960,6 +1221,143 @@ class RoomManager extends StateNotifier<RoomState> {
     }
   }
 
+  /// Native host-plaintext path-stream. Reads [path] in 64 KiB chunks and
+  /// sends `room_file_chunk` packets. Never a fileKey. Web/PeerJS byte
+  /// send stays [sendRoomFile]. Cap remains [kMaxRoomFileRawBytes].
+  Future<void> sendRoomFileFromPath(
+    String roomId,
+    String channelId,
+    String path, {
+    required String name,
+    required String mime,
+    required String kind,
+    int width = 0,
+    int height = 0,
+    double durationSec = 0,
+  }) async {
+    if (roomId.isEmpty || channelId.isEmpty) return;
+    final trimmed = path.trim();
+    if (trimmed.isEmpty || trimmed.contains('://')) return;
+    final size = localPathLength(trimmed);
+    if (size == null || size <= 0 || size > kMaxRoomFileRawBytes) return;
+    if (name.isEmpty || mime.isEmpty || kind.isEmpty) return;
+    final self = _ref.read(localProfileProvider);
+    final selfId = self?.peerId ?? _selfPeerId();
+    if (selfId.isEmpty) return;
+
+    final ts = now();
+    final id = '$selfId:$ts:${_shortRand()}';
+    final fromName = self?.displayName ?? '';
+    final safeName = _clipField(name, 200);
+    final persistPath = await persistLocalAttachmentPath(
+      trimmed,
+      fileName: safeName,
+    );
+
+    final attachment = <String, Object?>{
+      'name': safeName,
+      'size': size,
+      'mime': mime,
+      'kind': kind,
+      'thumb': null,
+      'width': width,
+      'height': height,
+      'duration': durationSec,
+    };
+
+    await db.saveFileBlobFromPath(
+      id,
+      persistPath,
+      mime: mime,
+      name: safeName,
+      kind: kind,
+      size: size,
+      width: width,
+      height: height,
+      duration: durationSec.toInt(),
+    );
+    await db.saveMessage({
+      'id': id,
+      'peerId': selfId,
+      'roomId': roomId,
+      'channelId': channelId,
+      'timestamp': ts,
+      'direction': 'out',
+      'status': 'pending',
+      'payload': {
+        'type': 'file',
+        'attachment': attachment,
+        'fromName': fromName,
+      },
+    });
+
+    final ok = await _dispatchRoomFileFromPath(
+      persistPath,
+      id: id,
+      roomId: roomId,
+      channelId: channelId,
+      attachment: attachment,
+      fromName: fromName,
+      fromPeerId: selfId,
+      ts: ts,
+    );
+    if (ok) {
+      await db.updateMessageStatus(id, 'sent');
+    }
+  }
+
+  Future<bool> _dispatchRoomFileFromPath(
+    String path, {
+    required String id,
+    required String roomId,
+    required String channelId,
+    required Map<String, Object?> attachment,
+    required String fromName,
+    required String fromPeerId,
+    required int ts,
+  }) async {
+    final total = localPathLength(path);
+    if (total == null || total <= 0 || total > kMaxRoomFileRawBytes) {
+      return false;
+    }
+    final stream = openLocalPathByteStream(path);
+    if (stream == null) return false;
+    var offset = 0;
+    var sent = true;
+    await for (final piece in stream) {
+      var i = 0;
+      while (i < piece.length) {
+        final end = i + kRoomFileChunkBytes > piece.length
+            ? piece.length
+            : i + kRoomFileChunkBytes;
+        final slice = piece.sublist(i, end);
+        final last = offset + slice.length >= total;
+        final packet = <String, Object?>{
+          'type': kRoomFileChunkType,
+          'id': id,
+          'roomId': roomId,
+          'channelId': channelId,
+          'offset': offset,
+          'total': total,
+          'last': last,
+          'b64': base64Encode(slice),
+          'fromName': fromName,
+          'fromPeerId': fromPeerId,
+          'ts': ts,
+          if (offset == 0) 'attachment': attachment,
+        };
+        if (!_dispatchRoomPacket(packet)) {
+          sent = false;
+          break;
+        }
+        offset += slice.length;
+        i = end;
+      }
+      if (!sent) break;
+    }
+    return sent && offset >= total;
+  }
+
   /// Route an outbound `room_msg` packet: a host broadcasts to all guests; a
   /// guest sends to the host (who relays). Shared by text/sticker/file sends
   /// AND by the room outbox flush. Returns whether the packet was accepted by
@@ -970,6 +1368,7 @@ class RoomManager extends StateNotifier<RoomState> {
   ///   • guest role → whatever sendRoomPacket(host) reports, so a dead host
   ///     link leaves the message queued instead of silently dropped.
   bool _dispatchRoomPacket(Map<String, Object?> packet) {
+    if (!kRoomPlaintextSessionAck.allowsPacket(packet)) return false;
     if (state.role == RoomRole.host) {
       _broadcastToGuests(packet);
       return true;
@@ -1057,6 +1456,25 @@ class RoomManager extends StateNotifier<RoomState> {
           if (att is! Map) continue;
           try {
             final blob = await db.getFileBlob(id);
+            final localPath = blob?['localPath'];
+            if (localPath is String &&
+                localPath.isNotEmpty &&
+                !localPath.contains('://')) {
+              final streamed = await _dispatchRoomFileFromPath(
+                localPath,
+                id: id,
+                roomId: roomId,
+                channelId: channelId,
+                attachment: Map<String, Object?>.from(att),
+                fromName: fromName,
+                fromPeerId: r['peerId'] as String? ?? '',
+                ts: ts,
+              );
+              if (!streamed) break;
+              await db.updateMessageStatus(id, 'sent');
+              delivered++;
+              continue;
+            }
             final bytes = blob?['blob'];
             if (bytes is! Uint8List || bytes.isEmpty) continue;
             final b64 = base64Encode(bytes);
@@ -1303,6 +1721,9 @@ class RoomManager extends StateNotifier<RoomState> {
     // we're currently in. Anything else is dropped before any handler runs.
     final roomId = packet['roomId'];
     if (roomId is! String || roomId.isEmpty || roomId != state.roomId) return;
+    // Nested secrets (fileKey, kek, ratchet scalars, …) never persist, relay,
+    // or join. Host-plaintext `text` / `b64` and spatial `peerId` stay allowed.
+    if (!replicationValueIsSafe(packet)) return;
     try {
       switch (type) {
         case 'room_join':
@@ -1328,6 +1749,9 @@ class RoomManager extends StateNotifier<RoomState> {
           break;
         case 'room_spatial_update':
           await _onSpatialUpdate(remoteId, packet);
+          break;
+        case 'room_file_chunk':
+          await _onRoomFileChunk(remoteId, packet);
           break;
       }
     } catch (e) {
@@ -1370,6 +1794,173 @@ class RoomManager extends StateNotifier<RoomState> {
       );
       _applySpatialAudio(peerId);
     }
+  }
+
+  /// Host-plaintext path-streamed file chunk. Same star-topology rules as
+  /// [room_msg]: host canonicalises author/id; guests accept only the host.
+  /// Chunks write at [offset] on disk (or a bounded in-memory buffer on web).
+  Future<void> _onRoomFileChunk(
+    String remoteId,
+    Map<String, Object?> packet,
+  ) async {
+    final roomId = state.roomId;
+    if (roomId == null) return;
+    final channelId = (packet['channelId'] as String?) ?? '';
+    if (channelId.isEmpty) return;
+    final offset = (packet['offset'] as num?)?.toInt() ?? -1;
+    final total = (packet['total'] as num?)?.toInt() ?? 0;
+    if (offset < 0 || total <= 0 || total > kMaxRoomFileRawBytes) return;
+    if (offset + 1 > total) return;
+    final b64 = packet['b64'];
+    if (b64 is! String ||
+        b64.isEmpty ||
+        b64.length > kMaxRoomFileChunkB64Len) {
+      return;
+    }
+    List<int> bytes;
+    try {
+      bytes = base64Decode(b64);
+    } catch (_) {
+      return;
+    }
+    if (bytes.isEmpty || offset + bytes.length > total) return;
+    final last = packet['last'] == true || offset + bytes.length >= total;
+    final fromName = _clampName(packet['fromName'] as String?);
+    final packetId = packet['id'] as String? ?? '';
+    final key = state.role == RoomRole.guest && packetId.isNotEmpty
+        ? '$roomId:$packetId'
+        : '$roomId:$remoteId:$channelId';
+
+    _RoomFileTransfer? meta = _incomingRoomMeta[key];
+    if (state.role == RoomRole.host) {
+      if (!state.serverActive) return;
+      if (!state.guestPeerIds.contains(remoteId)) return;
+      if (!await _channelExists(roomId, channelId)) return;
+      if (meta == null) {
+        if (offset != 0) return;
+        if (_security.recordMessage(remoteId, now())) {
+          debugPrint('[room] flood guard: dropped file from $remoteId');
+          return;
+        }
+        final att = _sanitizeRoomAttachment(packet['attachment']);
+        if (att == null) return;
+        final ts = now();
+        meta = _RoomFileTransfer(
+          id: _canonicalMsgId(remoteId, ts),
+          ts: ts,
+          attachment: att,
+        );
+        _incomingRoomMeta[key] = meta;
+      }
+    } else if (state.role == RoomRole.guest) {
+      if (remoteId != state.hostPeerId) return;
+      final author = (packet['fromPeerId'] as String?) ?? '';
+      if (author.isEmpty) return;
+      if (!await _channelExists(roomId, channelId)) return;
+      if (meta == null) {
+        if (offset != 0) return;
+        final att = _sanitizeRoomAttachment(packet['attachment']);
+        if (att == null) return;
+        final ts = (packet['ts'] as num?)?.toInt() ?? now();
+        final rawId =
+            (packet['id'] as String?) ?? _canonicalMsgId(author, ts);
+        meta = _RoomFileTransfer(
+          id: db.scopedRoomMessageId(roomId, rawId),
+          ts: ts,
+          attachment: att,
+        );
+        _incomingRoomMeta[key] = meta;
+      }
+    } else {
+      return;
+    }
+
+    final author = state.role == RoomRole.host
+        ? remoteId
+        : ((packet['fromPeerId'] as String?) ?? remoteId);
+    var incoming = _incomingRoomFiles[key];
+    if (incoming == null) {
+      if (offset != 0) return;
+      incoming = await openRoomIncomingFile(
+        id: meta.id,
+        name: meta.attachment['name'] as String? ?? 'file',
+        totalBytes: total,
+      );
+      if (incoming == null) return;
+      _incomingRoomFiles[key] = incoming;
+    }
+    await incoming.writeChunk(offset, bytes);
+
+    if (state.role == RoomRole.host) {
+      _broadcastToGuests({
+        'type': kRoomFileChunkType,
+        'id': meta.id,
+        'roomId': roomId,
+        'channelId': channelId,
+        'offset': offset,
+        'total': total,
+        'last': last,
+        'b64': b64,
+        'fromName': fromName,
+        'fromPeerId': author,
+        'ts': meta.ts,
+        if (offset == 0) 'attachment': meta.attachment,
+      }, except: remoteId);
+    }
+
+    if (!last && !incoming.isComplete) return;
+    if (!incoming.isComplete) {
+      await incoming.close();
+      _incomingRoomFiles.remove(key);
+      _incomingRoomMeta.remove(key);
+      return;
+    }
+    final path = await incoming.finish();
+    final mem = incoming.assembledBytes;
+    await incoming.close();
+    _incomingRoomFiles.remove(key);
+    _incomingRoomMeta.remove(key);
+    final attachment = meta.attachment;
+    final transferId = meta.id;
+    final ts = meta.ts;
+    if (path != null && path.isNotEmpty) {
+      await db.saveFileBlobFromPath(
+        transferId,
+        path,
+        mime: attachment['mime'] as String?,
+        name: attachment['name'] as String?,
+        kind: attachment['kind'] as String? ?? 'file',
+        size: total,
+        width: (attachment['width'] as num?)?.toInt() ?? 0,
+        height: (attachment['height'] as num?)?.toInt() ?? 0,
+        duration: (attachment['duration'] as num?)?.toInt() ?? 0,
+      );
+    } else if (mem != null &&
+        mem.isNotEmpty &&
+        mem.length <= kMaxRoomFileRawBytes) {
+      await db.saveFileBlob(
+        transferId,
+        Uint8List.fromList(mem),
+        mime: attachment['mime'] as String? ?? 'application/octet-stream',
+        name: attachment['name'] as String? ?? 'file',
+        kind: attachment['kind'] as String? ?? 'file',
+        size: total,
+      );
+    }
+    await db.saveMessage({
+      'id': transferId,
+      'peerId': author,
+      'roomId': roomId,
+      'channelId': channelId,
+      'timestamp': ts,
+      'direction': 'in',
+      'status': 'delivered',
+      'payload': {
+        'type': 'file',
+        'attachment': attachment,
+        'fromName': fromName,
+      },
+    });
   }
 
   /// Host: a guest announced itself. Persist them, send them the channel set
@@ -1768,13 +2359,6 @@ class RoomManager extends StateNotifier<RoomState> {
   /// [kMaxVoiceParticipants]-1 other room members directly.
   Future<void> _startVoiceMesh(String roomId) async {
     await _stopVoice();
-    // Mark that we've entered this voice channel (drives the compact voice
-    // panel) even before the mic / mesh come up.
-    state = state.copyWith(
-      voiceChannelId: state.activeChannelId,
-      micEnabled: true,
-      micAvailable: false,
-    );
     final selfId = _selfPeerId();
     final members = await db.getRoomMembers(roomId);
     final peers = <String>[
@@ -1792,9 +2376,33 @@ class RoomManager extends StateNotifier<RoomState> {
       );
     }
     final targets = peers.take(maxOthers).toList();
+    // Isolation fail-closed before voice UI / getUserMedia / callPeer.
+    // Native DualStack still proceeds when a member is canUseNative.
+    // Product [kPeerjsIsolationMode] stays default-live; this uses
+    // [kIsWeb], never the no-arg form.
+    final peerJsOk = peerjsAllowedOnNative(isWeb: kIsWeb);
+    final nativeOk = targets.any(
+      (t) => roomVoiceUsesNativeLeg(
+        canUseNative: _connections.canUseNative(t),
+        remoteUnderstandsRoomVoice: _connections.remoteUnderstandsRoomVoice(t),
+      ),
+    );
+    if (!peerJsOk && !nativeOk) {
+      debugPrint('[room] voice: PeerJS isolation and no native mesh');
+      return;
+    }
+    // Mark that we've entered this voice channel (drives the compact voice
+    // panel) even before the mic / mesh come up.
+    state = state.copyWith(
+      voiceChannelId: state.activeChannelId,
+      micEnabled: true,
+      micAvailable: false,
+    );
 
     final peer = _rawPeer;
-    if (peer == null) {
+    final willPeerJs = peerJsOk && peer != null;
+    final willNative = nativeOk;
+    if (!willPeerJs && !willNative) {
       debugPrint('[room] voice: no PeerJS client available');
       return;
     }
@@ -1810,28 +2418,59 @@ class RoomManager extends StateNotifier<RoomState> {
     _voiceStream = stream;
     state = state.copyWith(micAvailable: true);
 
-    // Listen for INCOMING room-voice calls (other members dialling us). Live
-    // only while the mesh is up; _stopVoice cancels it.
-    _incomingCallSub?.cancel();
-    _incomingCallSub = peer.onCall.listen(_handleIncomingRoomCall);
-
     final voiceChannelId = state.activeChannelId;
     final connected = <String>{};
-    for (final t in targets) {
-      try {
-        final mc = await peer.callPeer(t, stream, metadata: {
-          'channel': 'room-voice',
-          'roomId': roomId,
-          'channelId': voiceChannelId,
-        });
-        _voiceConns[t] = mc;
-        connected.add(t);
-        _attachVoiceAudio(t, mc);
-      } catch (e) {
-        debugPrint('[room] voice: call to $t failed: $e');
+    final livePeer = peer;
+    if (willPeerJs && livePeer != null) {
+      // Listen for INCOMING room-voice calls (other members dialling us).
+      // Live only while the mesh is up; _stopVoice cancels it.
+      _incomingCallSub?.cancel();
+      _incomingCallSub = livePeer.onCall.listen(_handleIncomingRoomCall);
+      for (final t in targets) {
+        if (roomVoiceUsesNativeLeg(
+          canUseNative: _connections.canUseNative(t),
+          remoteUnderstandsRoomVoice:
+              _connections.remoteUnderstandsRoomVoice(t),
+        )) {
+          continue;
+        }
+        try {
+          final mc = await livePeer.callPeer(t, stream, metadata: {
+            'channel': 'room-voice',
+            'roomId': roomId,
+            'channelId': voiceChannelId,
+          });
+          _voiceConns[t] = mc;
+          connected.add(t);
+          _attachVoiceAudio(t, mc);
+        } catch (e) {
+          debugPrint('[room] voice: call to $t failed: $e');
+        }
       }
     }
-    state = state.copyWith(voicePeerIds: connected);
+    if (willNative) {
+      for (final t in targets) {
+        if (!roomVoiceUsesNativeLeg(
+          canUseNative: _connections.canUseNative(t),
+          remoteUnderstandsRoomVoice:
+              _connections.remoteUnderstandsRoomVoice(t),
+        )) {
+          continue;
+        }
+        if (!shouldOfferNativeRoomVoice(selfId, t)) continue;
+        try {
+          await _offerNativeVoice(
+            t,
+            roomId: roomId,
+            channelId: voiceChannelId ?? '',
+            stream: stream,
+          );
+        } catch (e) {
+          debugPrint('[room] voice: native offer to $t failed: $e');
+        }
+      }
+    }
+    if (mounted) state = state.copyWith(voicePeerIds: connected);
   }
 
   /// Auto-answer an INCOMING room-voice call iff it's for our active voice
@@ -1839,6 +2478,16 @@ class RoomManager extends StateNotifier<RoomState> {
   /// room-voice call we can't accept is closed; non-room calls fall through to
   /// CallsNotifier untouched.
   Future<void> _handleIncomingRoomCall(PeerMediaConnection call) async {
+    // Mesh start is gated earlier in [_startVoiceMesh] (before voice UI /
+    // getUserMedia / callPeer). Keep this inbound fail-closed close().
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      unawaited(call.close().catchError((_) {}));
+      return;
+    }
+    if (_nativeVoice.containsKey(call.peer)) {
+      unawaited(call.close().catchError((_) {}));
+      return;
+    }
     final members = <String>{
       ...state.guestPeerIds,
       if (state.hostPeerId != null) state.hostPeerId!,
@@ -1850,7 +2499,7 @@ class RoomManager extends StateNotifier<RoomState> {
       roomId: state.roomId,
       activeChannelId: state.activeChannelId,
       members: members,
-      currentVoiceCount: _voiceConns.length,
+      currentVoiceCount: _voiceConns.length + _nativeVoice.length,
     );
     final stream = _voiceStream;
     if (!ok || stream == null) {
@@ -1903,6 +2552,10 @@ class RoomManager extends StateNotifier<RoomState> {
       } catch (_) {}
     }
     _voiceConns.clear();
+    for (final id in _nativeVoice.keys.toList()) {
+      _spatialAudio.detachPeer(id);
+      await _closeNativeLeg(id);
+    }
     final s = _voiceStream;
     _voiceStream = null;
     if (s != null) {
@@ -1944,6 +2597,174 @@ class RoomManager extends StateNotifier<RoomState> {
       }
     }
     state = state.copyWith(micEnabled: on);
+    for (final leg in _nativeVoice.values) {
+      unawaited(
+        leg.session.publishMediaState(
+          micEnabled: on,
+          videoEnabled: false,
+          screenSharing: false,
+        ),
+      );
+    }
+  }
+
+  Future<void> _offerNativeVoice(
+    String peerId, {
+    required String roomId,
+    required String channelId,
+    required MediaStream stream,
+  }) async {
+    if (channelId.isEmpty || channelId.contains('://')) return;
+    if (roomId.contains('://') || peerId.contains('://')) return;
+    final media = roomVoiceMedia(roomId: roomId, channelId: channelId);
+    final callId = roomVoiceCallId(
+      roomId: roomId,
+      channelId: channelId,
+      a: _selfPeerId(),
+      b: peerId,
+    );
+    if (callId.contains('://')) return;
+    final session = NativeCallSession(
+      send: (signal) => _sendNativeRoomVoice(peerId, signal),
+      defaultMedia: media,
+    )..callId = callId;
+    final rtc = NativeCallMedia(
+      session: session,
+      onRemoteStream: (remote) => _onNativeVoiceStream(peerId, remote),
+    );
+    await rtc.attachLocal(stream);
+    final sdp = await rtc.createOfferSdp();
+    _nativeVoice[peerId] = _NativeVoiceLeg(session: session, media: rtc);
+    await session.startOutgoing(callId: callId, sdp: sdp, media: media);
+  }
+
+  Future<void> _sendNativeRoomVoice(String peerId, CallSignal signal) {
+    return _defaultTransport.sendCallSignal(peerId, signal);
+  }
+
+  void _onNativeVoiceStream(String peerId, MediaStream remote) {
+    _spatialAudio.attachPeer(peerId, remote);
+    _applySpatialAudio(peerId);
+    if (!mounted) return;
+    state = state.copyWith(voicePeerIds: {...state.voicePeerIds, peerId});
+  }
+
+  void _onNativeRoomVoice(String from, CallSignal signal) {
+    if (!signal.isRoomVoice) return;
+    if (from.isEmpty || from.contains('://')) return;
+    unawaited(_handleNativeRoomVoice(from, signal));
+  }
+
+  Future<void> _handleNativeRoomVoice(String from, CallSignal signal) async {
+    switch (signal.type) {
+      case CallSignalType.offer:
+        await _answerNativeVoice(from, signal);
+      case CallSignalType.answer:
+        final leg = _nativeVoice[from];
+        if (leg == null || signal.sdp == null) return;
+        await leg.media.setRemoteAnswer(signal.sdp!);
+      case CallSignalType.iceCandidate:
+        final ice = signal.candidate;
+        if (ice == null) return;
+        await _nativeVoice[from]?.media.addRemoteIce(ice);
+      case CallSignalType.hangup:
+      case CallSignalType.reject:
+        await _closeNativeLeg(from, notify: false);
+        if (mounted) {
+          state = state.copyWith(
+            voicePeerIds: {...state.voicePeerIds}..remove(from),
+          );
+        }
+      case CallSignalType.mediaState:
+        break;
+      case CallSignalType.accept:
+        break;
+    }
+  }
+
+  Future<void> _answerNativeVoice(String from, CallSignal signal) async {
+    final stream = _voiceStream;
+    final roomId = state.roomId;
+    final members = <String>{
+      ...state.guestPeerIds,
+      if (state.hostPeerId != null) state.hostPeerId!,
+    };
+    final ok = shouldAnswerRoomVoiceCall(
+      metadata: signal.media ?? const <String, Object?>{},
+      fromPeerId: from,
+      role: state.role,
+      roomId: roomId,
+      activeChannelId: state.activeChannelId,
+      members: members,
+      currentVoiceCount: _voiceConns.length + _nativeVoice.length,
+    );
+    if (!ok ||
+        stream == null ||
+        roomId == null ||
+        signal.sdp == null ||
+        signal.sdp!.isEmpty) {
+      unawaited(
+        _sendNativeRoomVoice(
+          from,
+          CallSignal(
+            type: CallSignalType.reject,
+            callId: signal.callId,
+            media: signal.media ??
+                roomVoiceMedia(
+                  roomId: roomId ?? '',
+                  channelId: state.activeChannelId ?? '',
+                ),
+          ),
+        ),
+      );
+      return;
+    }
+    if (_nativeVoice.containsKey(from) &&
+        shouldOfferNativeRoomVoice(_selfPeerId(), from)) {
+      return;
+    }
+    if (_nativeVoice.containsKey(from)) {
+      await _closeNativeLeg(from);
+    }
+    final leftoverPeerJs = _voiceConns.remove(from);
+    if (leftoverPeerJs != null) {
+      _spatialAudio.detachPeer(from);
+      try {
+        await leftoverPeerJs.close();
+      } catch (_) {}
+    }
+    final channelId = state.activeChannelId ?? '';
+    if (channelId.isEmpty || channelId.contains('://')) return;
+    final tags = roomVoiceMedia(roomId: roomId, channelId: channelId);
+    final session = NativeCallSession(
+      send: (next) => _sendNativeRoomVoice(from, next),
+      defaultMedia: tags,
+    )..callId = signal.callId;
+    session.applyRemote(signal);
+    final rtc = NativeCallMedia(
+      session: session,
+      onRemoteStream: (remote) => _onNativeVoiceStream(from, remote),
+    );
+    await rtc.attachLocal(stream);
+    for (final ice in session.remoteIce) {
+      await rtc.addRemoteIce(ice);
+    }
+    final sdp = await rtc.createAnswerSdp(signal.sdp ?? '');
+    _nativeVoice[from] = _NativeVoiceLeg(session: session, media: rtc);
+    await session.accept(sdp: sdp);
+  }
+
+  Future<void> _closeNativeLeg(String peerId, {bool notify = true}) async {
+    final leg = _nativeVoice.remove(peerId);
+    if (leg == null) return;
+    if (notify && !leg.session.closed) {
+      try {
+        await leg.session.hangup();
+      } catch (_) {}
+    }
+    try {
+      await leg.media.close();
+    } catch (_) {}
   }
 
   /// Poll for the reliable channel to [peerId] to open (~15s budget).
@@ -1965,8 +2786,11 @@ class RoomManager extends StateNotifier<RoomState> {
   void dispose() {
     unawaited(_stopVoice());
     _stopRoomOutboxTimer();
-    // Release the embedded server + room-scoped client; skip rebinding the
-    // bridge since this manager is going away.
+    for (final f in _incomingRoomFiles.values) {
+      unawaited(f.close());
+    }
+    _incomingRoomFiles.clear();
+    _incomingRoomMeta.clear();
     unawaited(_teardownSelfHost(rebind: false));
     _spatialAudio.dispose();
     super.dispose();
@@ -1992,6 +2816,22 @@ abstract class RoomTransport {
   /// Proactively dial [peerId]'s reliable channel.
   void openReliable(String peerId);
 
+  /// DualStack can take [peerId]. Default false. Production
+  /// [_ConnRoomTransport] forwards to [ConnectionsNotifier.canUseNative].
+  bool canUseNative(String peerId) => false;
+
+  /// Remote advertised `room-voice-v1`. Default false. Implementors that
+  /// `implements RoomTransport` must override this.
+  bool remoteUnderstandsRoomVoice(String peerId) => false;
+
+  /// Native room-voice signaling on DualStack. Implementors that
+  /// `implements RoomTransport` must override this (Dart has no inherited
+  /// default on `implements`).
+  Future<void> sendCallSignal(String peerId, CallSignal signal) async {}
+
+  /// Incoming Hyperswarm `call` frames tagged room-voice.
+  void bindRoomVoice(void Function(String from, CallSignal signal)? handler) {}
+
   /// The active PeerJS client (for voice-mesh media calls), or null.
   PeerJsClient? get rawPeer;
 }
@@ -2015,6 +2855,21 @@ class _ConnRoomTransport implements RoomTransport {
 
   @override
   void openReliable(String peerId) => _c.openReliable(peerId);
+
+  @override
+  bool canUseNative(String peerId) => _c.canUseNative(peerId);
+
+  @override
+  bool remoteUnderstandsRoomVoice(String peerId) =>
+      _c.remoteUnderstandsRoomVoice(peerId);
+
+  @override
+  Future<void> sendCallSignal(String peerId, CallSignal signal) =>
+      _c.sendCallSignal(peerId, signal);
+
+  @override
+  void bindRoomVoice(void Function(String from, CallSignal signal)? handler) =>
+      _c.bindRoomVoiceHandler(handler);
 
   @override
   PeerJsClient? get rawPeer =>

@@ -23,6 +23,10 @@ class TransportFileDescriptor {
     required this.sizeBytes,
     this.mime,
     this.fileName,
+    this.resumeOffset = 0,
+    this.protocol,
+    this.fileId,
+    this.plaintextBytes,
   });
 
   /// Local filesystem path or platform handle. Not a byte array over IPC.
@@ -30,6 +34,31 @@ class TransportFileDescriptor {
   final int sizeBytes;
   final String? mime;
   final String? fileName;
+
+  /// Byte offset already acked. Worklet / loopback skip those bytes.
+  final int resumeOffset;
+
+  /// `attach-chunk` for native chat ciphertext. Null/empty is Drop/harness.
+  /// Never a place for `fileKey`.
+  final String? protocol;
+
+  /// Chat `attach-chunk` id. Must travel without the fileKey.
+  final String? fileId;
+
+  /// Plaintext size for AEAD associated data. Never a `fileKey`.
+  final int? plaintextBytes;
+
+  TransportFileDescriptor copyWith({int? resumeOffset}) =>
+      TransportFileDescriptor(
+        path: path,
+        sizeBytes: sizeBytes,
+        mime: mime,
+        fileName: fileName,
+        resumeOffset: resumeOffset ?? this.resumeOffset,
+        protocol: protocol,
+        fileId: fileId,
+        plaintextBytes: plaintextBytes,
+      );
 }
 
 class PeerDescriptor {
@@ -37,6 +66,7 @@ class PeerDescriptor {
     required this.peerId,
     this.binding,
     this.discoverySecret,
+    this.noisePublicKey,
   });
 
   final String peerId;
@@ -44,6 +74,31 @@ class PeerDescriptor {
 
   /// Shared contact-discovery secret. Never the public Peer ID.
   final List<int>? discoverySecret;
+
+  /// Hyperswarm Noise public key. Not the identity key. Used for
+  /// `joinPeer` when the worklet is on Hyperswarm.
+  final List<int>? noisePublicKey;
+}
+
+/// HyperDHT bootstrap address. Empty lists mean "do not start Hyperswarm"
+/// — never the public DHT default.
+class DhtBootstrapNode {
+  const DhtBootstrapNode({required this.host, required this.port});
+
+  final String host;
+  final int port;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+    'host': host,
+    'port': port,
+  };
+
+  @override
+  bool operator ==(Object other) =>
+      other is DhtBootstrapNode && other.host == host && other.port == port;
+
+  @override
+  int get hashCode => Object.hash(host, port);
 }
 
 class TransportLocalConfiguration {
@@ -53,6 +108,10 @@ class TransportLocalConfiguration {
     this.allowPeerjsFallback = true,
     this.relayForced = false,
     this.diagnosticsEnabled = false,
+    this.bootstrap = const [],
+    this.relayThrough = const [],
+    this.transportSeed,
+    this.journalDir,
   });
 
   final String peerId;
@@ -63,6 +122,21 @@ class TransportLocalConfiguration {
   final bool allowPeerjsFallback;
   final bool relayForced;
   final bool diagnosticsEnabled;
+
+  /// Explicit HyperDHT bootstrap. Required for the Hyperswarm backend.
+  final List<DhtBootstrapNode> bootstrap;
+
+  /// HyperDHT node public keys (hex) for Hyperswarm `relayThrough`.
+  /// Empty means the swarm may still go direct. Not identity keys.
+  final List<String> relayThrough;
+
+  /// 32-byte Hyperswarm Noise seed. Not the identity key, KEK, or
+  /// discovery secret.
+  final List<int>? transportSeed;
+
+  /// Local directory for the worklet ciphertext journal (Corestore or
+  /// JSONL). Never a remote URL. Empty means the worklet may use memory.
+  final String? journalDir;
 }
 
 sealed class TransportEvent {
@@ -127,6 +201,15 @@ class TransportError extends TransportEvent {
 abstract class OrbitsTransport {
   Stream<TransportEvent> get events;
 
+  /// True on Hyperswarm/worklet. Loopback stays false so connect
+  /// checks may skip Noise equality. A real Noise path must not skip
+  /// when the connection key is empty.
+  bool get bindsNoisePublicKey => false;
+
+  /// Tell a Bare/worklet carrier the peer completed DeviceBinding.
+  /// Loopback is a no-op. Never a substitute for Dart-side auth.
+  Future<void> markAuthenticated(String peerId) async {}
+
   Future<void> start(TransportLocalConfiguration config);
   Future<void> stop();
 
@@ -136,10 +219,33 @@ abstract class OrbitsTransport {
   Future<void> connect(PeerDescriptor peer);
   Future<void> disconnect(String peerId);
 
+  /// Map a Noise public key to [peer.peerId] without dialing, so an
+  /// inbound Hyperswarm connection is keyed by the contact ORBIT id.
+  /// Does not join a topic and must not carry a discovery secret.
+  /// No-op on carriers that already key by ORBIT id (loopback).
+  Future<void> rememberPeer(PeerDescriptor peer) async {}
+
   Future<void> send(String peerId, TransportChannel channel, List<int> frame);
   Future<void> sendFile(String peerId, TransportFileDescriptor file);
 
   Future<void> suspend();
   Future<void> resume();
   Future<void> refreshNetwork();
+
+  /// Encrypted envelopes / metadata only. No-op on carriers without a
+  /// Bare journal. Never plaintext, KEK, or ratchet scalars.
+  Future<void> appendJournal(Map<String, Object?> record) async {}
+
+  Future<List<Map<String, Object?>>> listJournal() async =>
+      const <Map<String, Object?>>[];
+
+  /// Autobase snapshot (membership/channel/attachment metadata).
+  /// Loopback and the worklet return a projection; stubs stay empty.
+  /// Never file bytes or fileKey.
+  Future<Map<String, Object?>> listAutobase() async =>
+      const <String, Object?>{};
+
+  /// Rebuild Autobase membership from journal rows.
+  /// Membership metadata only. No-op on stubs without a projection.
+  Future<void> hydrateAutobase([List<Map<String, Object?>>? rows]) async {}
 }

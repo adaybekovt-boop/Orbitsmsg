@@ -59,6 +59,5 @@ class MessageEnvelopeCreated {
         'previousEventReference': previousEventReference,
       };
 
-  bool get isSafeForHypercore =>
-      replicationFieldsAreSafe(toJournalFields().keys);
+  bool get isSafeForHypercore => replicationValueIsSafe(toJournalFields());
 }

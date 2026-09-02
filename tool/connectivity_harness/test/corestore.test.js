@@ -2,18 +2,435 @@
 
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { CorestoreJournal } = require('../src/corestore_journal')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
+const {
+  CorestoreJournal,
+  fieldsAreSafe,
+  identifierValuesSafe,
+  parseStored,
+  safeJournalDir,
+} = require('../src/corestore_journal')
 
-test('journal stores encrypted envelopes and rejects plaintext', () => {
+function tmpJournalDir(prefix) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+}
+
+test('journal stores encrypted envelopes and rejects plaintext', async () => {
   const journal = new CorestoreJournal('dev-a')
-  const record = journal.append({
+  const dir = tmpJournalDir('orbits-corestore-unit-')
+  const linked = await journal.useCorestoreIfPresent(dir)
+  assert.equal(typeof linked, 'boolean')
+  if (linked) assert.equal(journal.backend, 'corestore')
+  else assert.equal(journal.backend, 'fs')
+  const record = await journal.append({
     fields: { encryptedEnvelope: Buffer.from('v2:cipher').toString('base64') },
   })
   assert.equal(record.writerDeviceId, 'dev-a')
   assert.equal(journal.list().length, 1)
-  assert.throws(
+  await assert.rejects(
     () => journal.append({ fields: { plaintext: 'hello', encryptedEnvelope: 'x' } }),
     /secret field/,
   )
-  assert.throws(() => journal.append({ fields: { kek: 'nope' } }), /secret field|encryptedEnvelope/)
+  await assert.rejects(
+    () => journal.append({
+      kind: 'attachmentPublished',
+      fields: { fileKey: 'nope', encryptedEnvelope: 'x' },
+    }),
+    /secret field/,
+  )
+  await assert.rejects(
+    () => journal.append({
+      kind: 'attachmentPublished',
+      fields: { fileKeyB64: 'nope', encryptedEnvelope: 'x' },
+    }),
+    /secret field/,
+  )
+  await assert.rejects(
+    () => journal.append({ fields: { kek: 'nope' } }),
+    /secret field|encryptedEnvelope/,
+  )
+  await journal.close()
+})
+
+test('Bare must not require Node corestore (hangs the runtime)', () => {
+  const src = require('node:fs').readFileSync(
+    require('node:path').join(__dirname, '..', 'src', 'corestore_journal.js'),
+    'utf8',
+  )
+  assert.match(src, /typeof Bare !== 'undefined'/)
+  assert.match(src, /must not be required from Bare/)
+  assert.match(src, /Bare\.Addon\.load/)
+  assert.match(src, /corestoreCtorFromAddon/)
+  assert.match(src, /envelopes\.jsonl/)
+  assert.match(src, /isRemoteUrl/)
+  assert.match(src, /_hydrateFromCore/)
+  assert.match(src, /_hydrateFromLog/)
+  assert.match(src, /await this\._core\.append/)
+  const start = src.indexOf('async _useBareJournal')
+  const end = src.indexOf('useEncryptedEnvelopeFileJournal(dir)')
+  assert.ok(start >= 0)
+  assert.ok(end > start)
+  const body = src.slice(start, end)
+  assert.doesNotMatch(body, /require\('corestore'\)/)
+  assert.match(body, /corestoreCtorFromAddon/)
+  assert.match(body, /Bare\.Addon\.load/)
+})
+
+test('corestoreCtorFromAddon maps Addon.load results', () => {
+  const { corestoreCtorFromAddon, isLocalAddonFile, localBareAddonPath } =
+    require('../src/corestore_journal')
+  function Ctor () {}
+  assert.equal(corestoreCtorFromAddon(Ctor), Ctor)
+  assert.equal(corestoreCtorFromAddon({ Corestore: Ctor }), Ctor)
+  assert.equal(corestoreCtorFromAddon({ default: Ctor }), Ctor)
+  assert.equal(corestoreCtorFromAddon(null), null)
+  assert.equal(corestoreCtorFromAddon({}), null)
+  assert.equal(corestoreCtorFromAddon('nope'), null)
+  assert.equal(isLocalAddonFile('https://evil.example/corestore.bare'), false)
+  assert.equal(isLocalAddonFile('not-an-addon'), false)
+  const env = localBareAddonPath()
+  if (env) assert.doesNotMatch(env, /:\/\//)
+})
+
+test('encrypted-envelope file journal stores ciphertext only', async () => {
+  const dir = tmpJournalDir('orbits-journal-')
+  const journal = new CorestoreJournal('dev-a')
+  const linked = journal.useEncryptedEnvelopeFileJournal(dir)
+  assert.equal(linked, false)
+  assert.equal(journal.backend, 'fs')
+  await journal.append({
+    fields: { encryptedEnvelope: Buffer.from('v2:cipher').toString('base64') },
+  })
+  const log = fs.readFileSync(path.join(dir, 'envelopes.jsonl'), 'utf8')
+  assert.match(log, /encryptedEnvelope/)
+  assert.doesNotMatch(log, /plaintext/)
+  await assert.rejects(
+    () => journal.append({ fields: { plaintext: 'hello', encryptedEnvelope: 'x' } }),
+    /secret field/,
+  )
+  await journal.close()
+})
+
+test('file journal reopen hydrates ciphertext after close', async () => {
+  const dir = tmpJournalDir('orbits-journal-reopen-')
+  const cipher = Buffer.from('v2:cipher-reopen').toString('base64')
+  const first = new CorestoreJournal('dev-a')
+  first.useEncryptedEnvelopeFileJournal(dir)
+  await first.append({ fields: { encryptedEnvelope: cipher } })
+  await first.close()
+
+  const second = new CorestoreJournal('dev-a')
+  second.useEncryptedEnvelopeFileJournal(dir)
+  const blocks = second.list()
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].fields.encryptedEnvelope, cipher)
+  assert.equal(Object.prototype.hasOwnProperty.call(blocks[0].fields, 'plaintext'), false)
+  await second.close()
+})
+
+test('Corestore reopen hydrates ciphertext when the module is present', async (t) => {
+  let Corestore
+  try {
+    Corestore = require('corestore')
+  } catch {
+    t.skip('corestore module not installed; JSONL hydrate still covered')
+    return
+  }
+  assert.equal(typeof Corestore, 'function')
+  const dir = tmpJournalDir('orbits-corestore-reopen-')
+  const cipher = Buffer.from('v2:corestore-roundtrip').toString('base64')
+  const first = new CorestoreJournal('dev-a')
+  const linked = await first.useCorestoreIfPresent(dir)
+  assert.equal(linked, true)
+  assert.equal(first.backend, 'corestore')
+  await first.append({ fields: { encryptedEnvelope: cipher } })
+  await first.close()
+
+  const second = new CorestoreJournal('dev-a')
+  const relinked = await second.useCorestoreIfPresent(dir)
+  assert.equal(relinked, true)
+  const blocks = second.list()
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].fields.encryptedEnvelope, cipher)
+  assert.equal(Object.prototype.hasOwnProperty.call(blocks[0].fields, 'plaintext'), false)
+  await second.close()
+})
+
+test('safeJournalDir rejects remote URLs', () => {
+  assert.equal(safeJournalDir(''), '')
+  assert.equal(safeJournalDir('https://evil.example/corestore'), '')
+  assert.equal(safeJournalDir('http://127.0.0.1/x'), '')
+  assert.ok(safeJournalDir('/tmp/orbits-corestore').endsWith('orbits-corestore'))
+})
+
+test('useCorestoreIfPresent without journalDir stays memory', async () => {
+  const journal = new CorestoreJournal('dev-ephemeral')
+  const linked = await journal.useCorestoreIfPresent()
+  assert.equal(linked, false)
+  assert.equal(journal.backend, 'memory')
+  await journal.append({
+    fields: { encryptedEnvelope: 'djI6bWVt' },
+  })
+  assert.equal(journal.list().length, 1)
+  await journal.close()
+})
+
+test('deviceRevoked metadata is journaled without an envelope', async () => {
+  const journal = new CorestoreJournal('dev-a')
+  await journal.append({
+    kind: 'deviceRevoked',
+    fields: { deviceId: 'dev-x', createdAt: 1 },
+  })
+  const blocks = journal.list()
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].kind, 'deviceRevoked')
+  assert.equal(blocks[0].fields.deviceId, 'dev-x')
+  assert.equal(blocks[0].fields.encryptedEnvelope, undefined)
+  await assert.rejects(
+    () => journal.append({ kind: 'messageEnvelopeCreated', fields: { eventId: 'e' } }),
+    /encryptedEnvelope/,
+  )
+  await journal.close()
+})
+
+test('fieldsAreSafe walks nested objects and arrays; cycles do not hang', () => {
+  assert.equal(fieldsAreSafe(null), false)
+  assert.equal(fieldsAreSafe('x'), false)
+  assert.equal(
+    fieldsAreSafe({ eventId: 'e', encryptedEnvelope: 'x' }),
+    true,
+  )
+  assert.equal(
+    fieldsAreSafe({ eventId: 'e', extra: { fileKey: 'nope' } }),
+    false,
+  )
+  assert.equal(
+    fieldsAreSafe({ eventId: 'e', extra: { rootKey: 'nope' } }),
+    false,
+  )
+  assert.equal(
+    fieldsAreSafe({ eventId: 'e', extra: { discoverySecret: 'nope' } }),
+    false,
+  )
+  assert.equal(
+    fieldsAreSafe({ eventId: 'e', items: [{ fileKey: 'nope' }] }),
+    false,
+  )
+  assert.equal(
+    fieldsAreSafe({ eventId: 'e', items: [{ extra: { rootKey: 'nope' } }] }),
+    false,
+  )
+  const cyclic = { eventId: 'e', encryptedEnvelope: 'x' }
+  cyclic.self = cyclic
+  assert.equal(fieldsAreSafe(cyclic), true)
+  const cyclicBad = { eventId: 'e', extra: { fileKey: 'nope' } }
+  cyclicBad.extra.self = cyclicBad
+  assert.equal(fieldsAreSafe(cyclicBad), false)
+})
+
+test('append refuses nested secrets; list skips them on hydrate', async () => {
+  const journal = new CorestoreJournal('dev-a')
+  await journal.append({
+    fields: { eventId: 'e', encryptedEnvelope: 'safe-env' },
+  })
+  assert.equal(journal.list().length, 1)
+  assert.equal(journal.list()[0].fields.eventId, 'e')
+  assert.equal(journal.list()[0].fields.encryptedEnvelope, 'safe-env')
+
+  await assert.rejects(
+    () =>
+      journal.append({
+        fields: {
+          eventId: 'e',
+          extra: { fileKey: 'nope' },
+          encryptedEnvelope: 'x',
+        },
+      }),
+    /secret field/,
+  )
+  await assert.rejects(
+    () =>
+      journal.append({
+        fields: {
+          eventId: 'e',
+          extra: { rootKey: 'nope' },
+          encryptedEnvelope: 'x',
+        },
+      }),
+    /secret field/,
+  )
+  await assert.rejects(
+    () =>
+      journal.append({
+        fields: {
+          eventId: 'e',
+          extra: { discoverySecret: 'nope' },
+          encryptedEnvelope: 'x',
+        },
+      }),
+    /secret field/,
+  )
+  assert.equal(journal.list().length, 1)
+  await journal.close()
+
+  assert.equal(
+    parseStored({
+      kind: 'messageEnvelopeCreated',
+      fields: { eventId: 'e', extra: { fileKey: 'nope' }, encryptedEnvelope: 'x' },
+    }),
+    null,
+  )
+  assert.equal(
+    parseStored({
+      kind: 'messageEnvelopeCreated',
+      fields: { eventId: 'e', extra: { rootKey: 'nope' }, encryptedEnvelope: 'x' },
+    }),
+    null,
+  )
+  assert.equal(
+    parseStored({
+      kind: 'messageEnvelopeCreated',
+      fields: {
+        eventId: 'e',
+        extra: { discoverySecret: 'nope' },
+        encryptedEnvelope: 'x',
+      },
+    }),
+    null,
+  )
+
+  const dir = tmpJournalDir('orbits-journal-nested-secret-')
+  fs.appendFileSync(
+    path.join(dir, 'envelopes.jsonl'),
+    JSON.stringify({
+      kind: 'messageEnvelopeCreated',
+      fields: {
+        eventId: 'e',
+        extra: { fileKey: 'nope' },
+        encryptedEnvelope: 'x',
+      },
+    }) + '\n',
+  )
+  const hydrated = new CorestoreJournal('dev-a')
+  hydrated.useEncryptedEnvelopeFileJournal(dir)
+  assert.equal(hydrated.list().length, 0)
+  await hydrated.close()
+})
+
+test('append refuses URL-shaped writerDeviceId; list stays empty', async () => {
+  const journal = new CorestoreJournal('dev-a')
+  await assert.rejects(
+    () =>
+      journal.append({
+        writerDeviceId: 'https://evil',
+        fields: { encryptedEnvelope: 'x' },
+      }),
+    /secret field/,
+  )
+  assert.equal(journal.list().length, 0)
+  await journal.close()
+})
+
+test('parseStored refuses URL-shaped writerDeviceId', () => {
+  assert.equal(
+    parseStored(
+      JSON.stringify({
+        writerDeviceId: 'https://evil',
+        kind: 'messageEnvelopeCreated',
+        fields: { encryptedEnvelope: 'x' },
+      }),
+    ),
+    null,
+  )
+})
+
+test('append with honest writerDeviceId still lists', async () => {
+  const journal = new CorestoreJournal()
+  await journal.append({
+    writerDeviceId: 'dev-a',
+    fields: { encryptedEnvelope: 'cipher-ok' },
+  })
+  const blocks = journal.list()
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].writerDeviceId, 'dev-a')
+  assert.equal(blocks[0].fields.encryptedEnvelope, 'cipher-ok')
+  await journal.close()
+})
+
+test('parseStored of a legit ciphertext row still works', () => {
+  const rec = {
+    writerDeviceId: 'dev-a',
+    kind: 'messageEnvelopeCreated',
+    fields: { encryptedEnvelope: 'v2:https://looks-like-url-but-is-ciphertext' },
+  }
+  const parsed = parseStored(JSON.stringify(rec))
+  assert.ok(parsed)
+  assert.equal(parsed.writerDeviceId, 'dev-a')
+  assert.equal(
+    parsed.fields.encryptedEnvelope,
+    'v2:https://looks-like-url-but-is-ciphertext',
+  )
+})
+
+test('append refuses URL-shaped eventId; list stays empty', async () => {
+  const journal = new CorestoreJournal('dev-a')
+  await assert.rejects(
+    () =>
+      journal.append({
+        fields: { eventId: 'https://evil', encryptedEnvelope: 'x' },
+      }),
+    /secret field/,
+  )
+  assert.equal(journal.list().length, 0)
+  await journal.close()
+})
+
+test('parseStored refuses URL-shaped conversationId', () => {
+  assert.equal(
+    parseStored(
+      JSON.stringify({
+        writerDeviceId: 'dev-a',
+        kind: 'messageEnvelopeCreated',
+        fields: { conversationId: 'https://evil', encryptedEnvelope: 'x' },
+      }),
+    ),
+    null,
+  )
+})
+
+test('append with honest eventId still lists', async () => {
+  const journal = new CorestoreJournal('dev-a')
+  await journal.append({
+    fields: { eventId: 'evt-honest', encryptedEnvelope: 'cipher-ok' },
+  })
+  const blocks = journal.list()
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].fields.eventId, 'evt-honest')
+  assert.equal(blocks[0].fields.encryptedEnvelope, 'cipher-ok')
+  await journal.close()
+})
+
+test('identifierValuesSafe refuses empty or URL identifiers; text/b64 stay free', () => {
+  assert.equal(
+    identifierValuesSafe({ eventId: 'e', encryptedEnvelope: 'x' }),
+    true,
+  )
+  assert.equal(
+    identifierValuesSafe({ eventId: '', encryptedEnvelope: 'x' }),
+    false,
+  )
+  assert.equal(
+    identifierValuesSafe({ eventId: 'https://evil', encryptedEnvelope: 'x' }),
+    false,
+  )
+  assert.equal(
+    identifierValuesSafe({
+      text: 'see https://example.com/docs',
+      b64: 'https://looks-like-url',
+      encryptedEnvelope: 'x',
+    }),
+    true,
+  )
 })

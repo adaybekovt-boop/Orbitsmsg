@@ -34,4 +34,6 @@ class OrbitsTransportPlugin {
 
   Future<void> refreshNetwork() =>
       OrbitsTransportPlatform.instance.refreshNetwork();
+
+  Future<String?> barePath() => OrbitsTransportPlatform.instance.barePath();
 }
