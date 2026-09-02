@@ -18,7 +18,7 @@ void main() {
     registerCaps(store, owner.caps, quotaBytes: 1024 * 1024);
     final http = StoragePeerHttp(
       store,
-      maxBodyBytes: 64,
+      maxBodyBytes: 512,
       rateLimit: 2,
       rateWindowMs: 60 * 1000,
       adminToken: 'lab-admin',
@@ -59,7 +59,7 @@ void main() {
     try {
       final req = await client.postUrl(Uri.parse('${http.origin}/v1/blocks'));
       req.headers.contentType = ContentType.json;
-      req.write('{${'x' * 80}}');
+      req.write('{${'x' * 600}}');
       final res = await req.close();
       await res.drain();
       expect(res.statusCode, 413);

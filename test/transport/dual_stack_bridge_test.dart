@@ -12,11 +12,8 @@ import 'package:orbits_flutter/devices/device_registry.dart';
 import 'package:orbits_flutter/mailbox/blind_store.dart';
 import 'package:orbits_flutter/mailbox/storage_peer_client.dart';
 import 'package:orbits_flutter/mailbox/storage_peer_http.dart';
-import 'package:orbits_flutter/mailbox/mailbox_capability.dart';
 import 'package:orbits_flutter/mailbox/mailbox_grant_store.dart';
-import 'package:orbits_flutter/mailbox/mailbox_secret_store.dart';
 import '../mailbox/mailbox_test_support.dart';
-import 'package:orbits_flutter/push/opaque_wake.dart';
 import 'package:orbits_flutter/transport/replication_schema.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
@@ -30,7 +27,6 @@ import 'package:orbits_flutter/transport/capabilities.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
-import 'package:orbits_flutter/transport/fleet_status.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
 import 'package:orbits_flutter/transport/mux_frames.dart';
 import 'package:orbits_flutter/transport/native_rollback.dart';
@@ -396,6 +392,7 @@ void main() {
         eventId: 'att-gone',
         conversationId: 'ORBIT-BBBBBBBBBBBBBBBB',
       );
+      await Future<void>.delayed(Duration.zero);
       expect(
         a.journal.records.any(
           (r) =>
@@ -433,6 +430,7 @@ void main() {
       isFalse,
     );
     a.revokeDevice('gone-device');
+    await Future<void>.delayed(Duration.zero);
     expect(
       a.journal.records.any(
         (r) => r.kind == ReplicationEventKind.deviceRevoked,
@@ -514,6 +512,7 @@ void main() {
         ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
       ),
     );
+    await Future<void>.delayed(Duration.zero);
     expect(
       a.journal.records.any(
         (r) =>
@@ -538,6 +537,7 @@ void main() {
         isFalse,
       );
       a.journalContactBlocked(peerId: 'ORBIT-BBBBBBBBBBBBBBBB', blocked: true);
+      await Future<void>.delayed(Duration.zero);
       expect(
         a.journal.records.any(
           (r) =>
@@ -1838,6 +1838,7 @@ void main() {
       final dropped = <String>[];
       a.onRatchetDropped = dropped.add;
       a.revokeDevice('phone-2');
+      await Future<void>.delayed(Duration.zero);
       expect(devices.acceptsWriter('phone-2'), isFalse);
       expect(
         devices.transportTargets('ORBIT-BBBBBBBBBBBBBBBB'),

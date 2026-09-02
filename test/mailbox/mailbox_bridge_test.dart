@@ -12,7 +12,6 @@ import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
 import 'package:orbits_flutter/transport/native_rollback.dart';
-import 'package:orbits_flutter/transport/transport_api.dart';
 
 import 'mailbox_test_support.dart';
 

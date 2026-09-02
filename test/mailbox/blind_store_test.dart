@@ -263,7 +263,12 @@ void main() {
     var now = 5_000;
     final store = BlindMailboxStore(nowMs: () => now);
     final owner = await deriveFreshMailbox();
-    registerCaps(store, owner.caps, quotaBytes: 1024 * 1024);
+    registerCaps(
+      store,
+      owner.caps,
+      quotaBytes: 1024 * 1024,
+      expiresAt: now + 60 * 1000,
+    );
     for (var i = 0; i < kMailboxRateMaxPuts; i++) {
       final bytes = Uint8List.fromList([i]);
       store.put(

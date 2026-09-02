@@ -680,9 +680,6 @@ class DualStackBridge {
   Future<void> _offerMailboxGrant(String peerId) async {
     final norm = normalizePeerId(peerId);
     if (norm.isEmpty || isBlocked(norm)) return;
-    if (!isWireReady(norm)) {
-      await waitForWireReady(norm, timeout: const Duration(seconds: 8));
-    }
     if (!isWireReady(norm)) return;
     try {
       final caps = await mailboxSecrets.deriveOwn();

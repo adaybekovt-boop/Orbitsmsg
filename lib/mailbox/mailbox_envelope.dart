@@ -111,11 +111,16 @@ MailboxOpenedEnvelope openMailboxEnvelope({
   final ct = rest.sublist(0, rest.length - kMailboxEnvelopeTagBytes);
   final tag = rest.sublist(rest.length - kMailboxEnvelopeTagBytes);
   final secret = SecretKeyData(envelopeKey);
-  final clear = _aead.decryptSync(
-    SecretBox(ct, nonce: nonce, mac: Mac(tag)),
-    secretKey: secret,
-    aad: mailboxEnvelopeAd(queueId),
-  );
+  final List<int> clear;
+  try {
+    clear = _aead.decryptSync(
+      SecretBox(ct, nonce: nonce, mac: Mac(tag)),
+      secretKey: secret,
+      aad: mailboxEnvelopeAd(queueId),
+    );
+  } catch (err) {
+    throw MailboxEnvelopeError('auth $err');
+  }
   final decoded = jsonDecode(utf8.decode(clear));
   if (decoded is! Map) throw MailboxEnvelopeError('payload');
   final from = decoded['from'] as String? ?? '';

@@ -240,9 +240,8 @@ bool _liveRoomEventAuthorized({
   String? Function(String roomId)? roomHostFor,
 }) {
   if (authenticatedPeer == null) return true;
-  final host = (roomId != null && roomId.isNotEmpty)
-      ? roomHostFor?.call(roomId)
-      : null;
+  if (roomId == null || roomId.isEmpty) return true;
+  final host = roomHostFor?.call(roomId);
   if (host == null || host.isEmpty) return !membership;
   final isHost = host == authenticatedPeer || host == authenticatedDeviceId;
   if (isHost) return true;
