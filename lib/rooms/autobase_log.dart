@@ -250,7 +250,7 @@ bool _liveRoomEventAuthorized({
       (authenticatedDeviceId != null &&
           claimedWriter == authenticatedDeviceId);
   if (!writerOk) return false;
-  if (membership && host != null && host.isNotEmpty) return false;
+  if (membership) return false;
   return true;
 }
 

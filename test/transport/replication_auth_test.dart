@@ -4,13 +4,11 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
-import 'package:orbits_flutter/core/identity_key.dart';
 import 'package:orbits_flutter/core/peer_pins.dart';
 import 'package:orbits_flutter/core/spki_codec.dart';
 import 'package:orbits_flutter/devices/device_registry.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/replication/file_journal.dart';
-import 'package:orbits_flutter/replication/hypercore_store.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/rooms/autobase_log.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
@@ -675,7 +673,7 @@ void main() {
       ),
     );
     a.hypercore.append(
-      JournalRecord(
+      const JournalRecord(
         seq: 2,
         writerDeviceId: 'dev-a',
         kind: ReplicationEventKind.roomMembershipChanged,
@@ -691,7 +689,7 @@ void main() {
       ),
     );
     a.hypercore.append(
-      JournalRecord(
+      const JournalRecord(
         seq: 3,
         writerDeviceId: 'dev-a',
         kind: ReplicationEventKind.contactBlocked,
