@@ -55,7 +55,8 @@ enabled — do not promise always-on P2P.
   `kLiveFcmGateway` are false. An APNs provider ES256 JWT may be built
   (Apple p8 scalar, not the identity key) and is still not sent. An FCM
   service-account RS256 JWT and the OAuth JWT-bearer token request may
-  be built and are still not exchanged or sent.
+  be built and are still not exchanged or sent. FCM HTTP v1 send
+  `Authorization` is an OAuth access_token, never that assertion JWT.
 - Foreground service is for an in-app Telecom call, not for keeping a
   messaging socket alive.
 

@@ -66,6 +66,22 @@ void main() {
       File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
       isNot(contains("import 'dart:io'")),
     );
+    expect(
+      File('lib/ui/profile/profile_edit_page.dart').readAsStringSync(),
+      contains('withData: kIsWeb'),
+    );
+    expect(
+      File('lib/ui/profile/profile_edit_page.dart').readAsStringSync(),
+      isNot(contains('withData: true')),
+    );
+    expect(
+      File('lib/ui/profile/profile_edit_page.dart').readAsStringSync(),
+      contains('readPickedBytes'),
+    );
+    expect(
+      File('lib/ui/profile/profile_edit_page.dart').readAsStringSync(),
+      isNot(contains("import 'dart:io'")),
+    );
   });
 
   test('native path read stats size before loading bytes', () async {

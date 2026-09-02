@@ -209,15 +209,7 @@ void main() {
       collapseId: 'c1',
       protocolVersion: 1,
     );
-    final req = buildFcmRequest(
-      deviceToken: 'ftok',
-      wake: wake,
-      serviceAccount: key,
-      iatSeconds: 1700000000,
-    )!;
-    final auth = req.headers['authorization']!;
-    expect(auth.startsWith('bearer '), isTrue);
-    final jwt = auth.substring(7);
+    final jwt = buildFcmServiceAccountJwt(key, iatSeconds: 1700000000)!;
     expect(
       verifyFcmServiceAccountJwt(
         jwt: jwt,
@@ -232,7 +224,11 @@ void main() {
     expect(jwt, isNot(contains('peerId')));
     expect(jwt, isNot(contains('opaqueWakeToken')));
     expect(jwt, isNot(contains('rootKey')));
-    expect(req.body.containsKey('authorization'), isFalse);
+
+    final req = buildFcmRequest(deviceToken: 'ftok', wake: wake)!;
+    expect(req.headers.containsKey('authorization'), isFalse);
+    expect(jsonEncode(req.headers), isNot(contains(jwt)));
+    expect(jsonEncode(req.body), isNot(contains(jwt)));
     final data = Map<String, Object?>.from(
       (req.body['message'] as Map)['data'] as Map,
     );
@@ -309,6 +305,29 @@ void main() {
     expect(
       File('lib/push/fcm_oauth_token_request.dart').readAsStringSync(),
       isNot(contains('HttpClient')),
+    );
+
+    final withTok = buildFcmRequest(
+      deviceToken: 'ftok',
+      wake: wake,
+      accessToken: token.accessToken,
+    )!;
+    expect(withTok.headers['authorization'], 'bearer ya29-opaque');
+    expect(withTok.headers['authorization'], isNot(contains(jwt)));
+    expect(jsonEncode(withTok.body), isNot(contains(jwt)));
+    expect(buildFcmRequest(deviceToken: 'ftok', wake: wake, accessToken: jwt),
+        isNull);
+    expect(
+      buildFcmRequest(
+        deviceToken: 'ftok',
+        wake: wake,
+        accessToken: 'https://evil.example/t',
+      ),
+      isNull,
+    );
+    expect(
+      File('lib/push/push_send.dart').readAsStringSync(),
+      contains('Never the service-account'),
     );
 
     expect(

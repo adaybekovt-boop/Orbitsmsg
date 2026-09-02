@@ -58,24 +58,16 @@ class PushSender {
   /// FCM HTTP v1. Refused until the live gateway flag is true.
   /// A service-account JWT may be built (RS256, not identity-signing-v1)
   /// and the OAuth JWT-bearer form may be built; neither is exchanged or
-  /// sent while [kLiveFcmGateway] is false.
+  /// sent while [kLiveFcmGateway] is false. FCM send Authorization is an
+  /// OAuth [accessToken], never the assertion JWT.
   Future<PushSendResult> sendFcm({
     required String deviceToken,
     required OpaqueWake wake,
     String projectId = '',
     FcmServiceAccountKey? serviceAccount,
     int? iatSeconds,
+    String? accessToken,
   }) async {
-    final request = buildFcmRequest(
-      deviceToken: deviceToken,
-      wake: wake,
-      projectId: projectId,
-      serviceAccount: serviceAccount,
-      iatSeconds: iatSeconds,
-    );
-    if (request == null) {
-      return const PushSendResult(sent: false, reason: 'unsafe-keys');
-    }
     if (serviceAccount != null) {
       final jwt = buildFcmServiceAccountJwt(
         serviceAccount,
@@ -85,6 +77,15 @@ class PushSender {
         // Shape only — never HttpClient.post to kFcmOauthTokenUri.
         buildFcmOauthTokenRequest(assertionJwt: jwt);
       }
+    }
+    final request = buildFcmRequest(
+      deviceToken: deviceToken,
+      wake: wake,
+      projectId: projectId,
+      accessToken: accessToken,
+    );
+    if (request == null) {
+      return const PushSendResult(sent: false, reason: 'unsafe-keys');
     }
     if (!kLiveFcmGateway) {
       return const PushSendResult(sent: false, reason: 'fcm-not-deployed');
@@ -186,23 +187,31 @@ ApnsOpaqueRequest? buildApnsRequest({
 }
 
 /// Build an FCM HTTP v1 body. Does not send. Null if the wake is unsafe
-/// or the token is empty. Does not POST the JWT to [kFcmOauthTokenUri].
+/// or the token is empty. Does not POST to [kFcmOauthTokenUri].
+/// [accessToken] is a Google OAuth access_token. Never the service-account
+/// assertion JWT (that belongs on [buildFcmOauthTokenRequest] only).
 FcmOpaqueRequest? buildFcmRequest({
   required String deviceToken,
   required OpaqueWake wake,
   String projectId = 'orbits',
-  FcmServiceAccountKey? serviceAccount,
-  int? iatSeconds,
+  String? accessToken,
 }) {
   final payload = wake.toJson();
   if (deviceToken.isEmpty || !OpaqueWake.isSafe(payload)) return null;
   final project = projectId.isEmpty ? 'orbits' : projectId;
   final headers = <String, String>{};
-  final jwt = serviceAccount == null
-      ? null
-      : buildFcmServiceAccountJwt(serviceAccount, iatSeconds: iatSeconds);
-  if (jwt != null) {
-    headers['authorization'] = 'bearer $jwt';
+  final token = accessToken?.trim() ?? '';
+  if (token.isNotEmpty) {
+    if (token.contains('://') ||
+        token.contains('peerId') ||
+        token.contains('opaqueWakeToken') ||
+        token.contains('rootKey') ||
+        token.contains('identity-signing-v1') ||
+        token.contains('fileKey') ||
+        token.split('.').length == 3) {
+      return null;
+    }
+    headers['authorization'] = 'bearer $token';
   }
   return FcmOpaqueRequest(
     host: kFcmSendHost,
