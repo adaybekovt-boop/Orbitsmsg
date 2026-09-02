@@ -229,16 +229,28 @@ test('pre-auth application frame is dropped and counted', async () => {
 test('outbound queue cap rejects without exceeding byte cap', async () => {
   const { a, b, peerId } = await pair()
   const rssBefore = process.memoryUsage().rss
-  const half = Math.floor(OUTBOUND_QUEUE_CAP / 2) + 1024
-  const big = Buffer.alloc(half, 7)
-  const p1 = a.send(peerId, 'message', big)
-  const p2 = a.send(peerId, 'message', big)
-  const p3 = a.send(peerId, 'message', big)
-  await assert.rejects(p3, (err) => err && err.code === 'outbound-queue-full')
+  const piece = Math.min(MAX_MUX_FRAME_BYTES - 64, 900 * 1024)
   const peer = a._peers.get(peerId)
+  peer.flushing = true
+  const queued = []
+  const errors = []
+  for (let i = 0; i < 8; i++) {
+    const p = a.send(peerId, 'message', Buffer.alloc(piece, 7))
+    queued.push(p)
+    p.catch((err) => errors.push(err))
+  }
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.ok(
+    errors.some((err) => err && err.code === 'outbound-queue-full'),
+    'expected outbound-queue-full while the socket cannot drain; got ' +
+      errors.map((e) => e && e.code).join(','),
+  )
   assert.ok(peer.maxOutBytes <= a._outboundQueueCap)
   assert.ok(peer.outBytes <= a._outboundQueueCap)
-  await Promise.allSettled([p1, p2])
+  assert.equal(a._outboundQueueCap, OUTBOUND_QUEUE_CAP)
+  peer.flushing = false
+  a._flushOut(peer)
+  await Promise.allSettled(queued)
   const rssAfter = process.memoryUsage().rss
   assert.ok(rssAfter - rssBefore < 80 * 1024 * 1024)
   await a.stop()

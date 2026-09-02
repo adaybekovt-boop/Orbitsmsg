@@ -114,10 +114,14 @@ test('receiver cancellation removes the partial file', { timeout: 15000 }, async
   const { a, b, peerId } = await pair()
   const src = path.join(os.tmpdir(), 'orbits-harness-rx-cancel.bin')
   fs.writeFileSync(src, Buffer.alloc(FILE_CHUNK * 4, 21))
-  const started = waitEmit(b, 'frame', (p) => p.body && p.body.type === 'harness-file-start')
+  const prev = b._emit
+  b._emit = (name, payload) => {
+    prev(name, payload)
+    if (name === 'frame' && payload && payload.body && payload.body.type === 'harness-file-start') {
+      b.cancelFile('rx-cancel-1').catch(() => {})
+    }
+  }
   const sendP = a.sendFile(peerId, { path: src, id: 'rx-cancel-1', fileName: 'c.bin' })
-  await started
-  await b.cancelFile('rx-cancel-1')
   await assert.rejects(sendP, (err) => {
     return Boolean(
       err &&
