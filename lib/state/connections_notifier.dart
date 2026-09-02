@@ -833,6 +833,11 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
           if (dual == null) return null;
           return dual.decryptInboundAttachment(rid, fileId, key);
         },
+        assembleNativeAttachmentPath: (rid, fileId, key) async {
+          final dual = _dual;
+          if (dual == null) return null;
+          return dual.decryptInboundAttachmentPath(rid, fileId, key);
+        },
     );
   }
 

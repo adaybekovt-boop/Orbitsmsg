@@ -73,5 +73,44 @@ void main() {
     expect(stub.openLocalPathByteStream('/tmp/x'), isNull);
     expect(await stub.xorPlaintextPathToCipherFile('/tmp/x', [1]), isNull);
     expect(await stub.xorCipherPathToPlaintext('/tmp/x', [1]), isNull);
+    expect(await stub.xorCipherPathToPlaintextFile('/tmp/x', [1]), isNull);
+  });
+
+  test('xor ciphertext path to plaintext file never holds the fileKey', () async {
+    expect(
+      await xorCipherPathToPlaintextFile('https://evil.example/x', [1, 2, 3]),
+      isNull,
+    );
+    expect(await xorCipherPathToPlaintextFile('/nope', const <int>[1]), isNull);
+
+    final dir = Directory.systemTemp.createTempSync('orbits-xor-pt-file-');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final key = List<int>.generate(32, (i) => i + 3);
+    final plain = List<int>.generate(70 * 1024, (i) => i % 247);
+    final src = File('${dir.path}${Platform.pathSeparator}plain.bin')
+      ..writeAsBytesSync(plain);
+    final write = await xorPlaintextPathToCipherFile(src.path, key);
+    expect(write, isNotNull);
+    addTearDown(write!.dispose);
+    final dest = await xorCipherPathToPlaintextFile(write.path, key);
+    expect(dest, isNotNull);
+    expect(dest!.contains('://'), isFalse);
+    addTearDown(() {
+      try {
+        File(dest).parent.deleteSync(recursive: true);
+      } catch (_) {}
+    });
+    expect(File(dest).readAsBytesSync(), plain);
+    expect(File(write.path).readAsBytesSync(), isNot(equals(plain)));
+    expect(
+      File('lib/core/path_byte_stream_io.dart').readAsStringSync(),
+      isNot(contains('readAsBytes')),
+    );
+    expect(
+      File('lib/core/path_byte_stream_io.dart').readAsStringSync(),
+      contains('xorCipherPathToPlaintextFile'),
+    );
   });
 }

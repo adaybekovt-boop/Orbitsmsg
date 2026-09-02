@@ -442,6 +442,81 @@ void main() {
       File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
       contains('xorCipherPathToPlaintext'),
     );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('decryptInboundAttachmentPath'),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('xorCipherPathToPlaintextFile'),
+    );
+  });
+
+  test('decryptInboundAttachmentPath writes plaintext to a path and consumes',
+      () async {
+    final (a, b, _) = await linked();
+    final key = List<int>.generate(32, (i) => i + 8);
+    final plain = List<int>.generate(90, (i) => i + 3);
+    final dir = Directory.systemTemp.createTempSync('orbits-att-pt-path-');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final src = File('${dir.path}${Platform.pathSeparator}plain.bin')
+      ..writeAsBytesSync(plain);
+    final write = await xorPlaintextPathToCipherFile(src.path, key);
+    expect(write, isNotNull);
+    addTearDown(write!.dispose);
+    expect(
+      await a.sendAttachmentCipherPath(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        TransportFileDescriptor(
+          path: write.path,
+          sizeBytes: write.sizeBytes,
+          protocol: 'attach-chunk',
+          fileId: 'chat-file-pt-path',
+        ),
+        firstCipher: write.firstCipher,
+        chunkCount: write.chunkCount,
+      ),
+      isTrue,
+    );
+    String? dest;
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(deadline)) {
+      dest = await b.decryptInboundAttachmentPath(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        'chat-file-pt-path',
+        key,
+      );
+      if (dest != null) break;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(dest, isNotNull);
+    expect(dest!.contains('://'), isFalse);
+    addTearDown(() {
+      try {
+        File(dest!).parent.deleteSync(recursive: true);
+      } catch (_) {}
+    });
+    expect(File(dest).readAsBytesSync(), plain);
+    expect(
+      await b.decryptInboundAttachmentPath(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        'chat-file-pt-path',
+        key,
+      ),
+      isNull,
+    );
+    expect(
+      await b.decryptInboundAttachment(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        'chat-file-pt-path',
+        key,
+      ),
+      isNull,
+    );
+    expect(jsonEncode(a.journal.records.map((r) => r.fields).toList()),
+        isNot(contains('fileKey')));
   });
 
   test('recipient reads mailbox after the sender is gone', () async {

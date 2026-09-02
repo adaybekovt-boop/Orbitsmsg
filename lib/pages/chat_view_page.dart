@@ -26,6 +26,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image/image.dart' as img;
 import 'package:mime/mime.dart';
 
+import '../attachments/resumable_blob.dart';
 import '../core/path_byte_stream.dart';
 import '../core/read_picked_bytes.dart';
 import '../state/calls_provider.dart';
@@ -304,10 +305,9 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
     }
     if (picked == null || picked.files.isEmpty) return;
     final pf = picked.files.single;
-    // 12 MiB raw cap — match the JS front gate so the user sees the
-    // error before we burn time encoding base64 to learn the same
-    // thing on the wire side.
-    const int maxRaw = 12 * 1024 * 1024;
+    // PeerJS stays 12 MiB (base64). Native path-streamed chat may go
+    // to [kMaxNativeAttachBytes].
+    const int maxRaw = kMaxPeerJsFileRawBytes;
     final name = pf.name;
     final mime = lookupMimeType(name) ?? 'application/octet-stream';
     final kind = _classifyKind(mime);
@@ -329,7 +329,7 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
           );
         return;
       }
-      if (size > maxRaw) {
+      if (size > kMaxNativeAttachBytes) {
         if (!mounted) return;
         final mb = (size / (1024 * 1024)).ceil();
         ScaffoldMessenger.of(context)
@@ -337,7 +337,7 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
           ..showSnackBar(
             SnackBar(
               content: Text(
-                'Файл больше 12 МБ — отправка невозможна ($mb МБ).',
+                'Файл больше 50 МБ — отправка невозможна ($mb МБ).',
               ),
               duration: const Duration(seconds: 3),
             ),

@@ -93,7 +93,7 @@ Future<List<int>?> xorCipherPathToPlaintext(
   if (p.isEmpty || p.contains('://') || fileKey.isEmpty) return null;
   final src = File(p);
   if (!src.existsSync()) return null;
-  const maxBytes = 50 * 1024 * 1024;
+  const maxBytes = kMaxNativeAttachBytes;
   try {
     if (src.lengthSync() > maxBytes || src.lengthSync() <= 0) return null;
   } catch (_) {
@@ -117,4 +117,57 @@ Future<List<int>?> xorCipherPathToPlaintext(
   }
   if (out.isEmpty) return null;
   return out.takeBytes();
+}
+
+Future<String?> xorCipherPathToPlaintextFile(
+  String cipherPath,
+  List<int> fileKey,
+) async {
+  final p = cipherPath.trim();
+  if (p.isEmpty || p.contains('://') || fileKey.isEmpty) return null;
+  final src = File(p);
+  if (!src.existsSync()) return null;
+  const maxBytes = kMaxNativeAttachBytes;
+  try {
+    if (src.lengthSync() > maxBytes || src.lengthSync() <= 0) return null;
+  } catch (_) {
+    return null;
+  }
+  Directory? dir;
+  IOSink? sink;
+  try {
+    dir = Directory.systemTemp.createTempSync('orbits-att-pt-');
+    final dest = File('${dir.path}${Platform.pathSeparator}plain.bin');
+    sink = dest.openWrite();
+    var i = 0;
+    var total = 0;
+    await for (final piece in src.openRead()) {
+      if (piece.isEmpty) continue;
+      if (total + piece.length > maxBytes) {
+        throw StateError('cipher path exceeds cap');
+      }
+      final dst = Uint8List(piece.length);
+      for (var j = 0; j < piece.length; j++) {
+        dst[j] = piece[j] ^ fileKey[i % fileKey.length];
+        i++;
+      }
+      sink.add(dst);
+      total += dst.length;
+    }
+    await sink.close();
+    sink = null;
+    if (total <= 0) {
+      dir.deleteSync(recursive: true);
+      return null;
+    }
+    return dest.path;
+  } catch (_) {
+    try {
+      await sink?.close();
+    } catch (_) {}
+    try {
+      dir?.deleteSync(recursive: true);
+    } catch (_) {}
+    return null;
+  }
 }

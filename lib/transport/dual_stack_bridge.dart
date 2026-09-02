@@ -76,7 +76,7 @@ class DualStackBridge {
       <String, List<AttachmentChunk>>{};
   final Map<String, String> _inboundAttachPaths = <String, String>{};
   var _inboundAttachBytes = 0;
-  static const int _maxInboundAttachBytes = 50 * 1024 * 1024;
+  static const int _maxInboundAttachBytes = kMaxNativeAttachBytes;
   final AutobaseProjection rooms = AutobaseProjection();
   final List<RoomEvent> roomLog = <RoomEvent>[];
   int _roomSeq = 0;
@@ -589,6 +589,23 @@ class DualStackBridge {
     } catch (_) {
       return null;
     }
+  }
+
+  /// XOR inbound ciphertext **to a plaintext path**. Never journals the
+  /// fileKey. Null if only the in-memory chunk fallback is present.
+  Future<String?> decryptInboundAttachmentPath(
+    String fromPeerId,
+    String fileId,
+    List<int> fileKey,
+  ) async {
+    if (fileId.isEmpty || fileKey.isEmpty) return null;
+    final key = '${normalizePeerId(fromPeerId)}\x1f$fileId';
+    final path = _inboundAttachPaths[key];
+    if (path == null || path.isEmpty) return null;
+    final dest = await xorCipherPathToPlaintextFile(path, fileKey);
+    if (dest == null || dest.isEmpty) return null;
+    _inboundAttachPaths.remove(key);
+    return dest;
   }
 
   void _ingestAttachChunk(String fromPeerId, Map<String, Object?> frame) {

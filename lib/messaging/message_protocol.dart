@@ -99,6 +99,7 @@ class ReliableInboundCtx {
     this.persistInbound,
     this.isPeerBlocked,
     this.assembleNativeAttachment,
+    this.assembleNativeAttachmentPath,
     Set<String>? processingMsgIds,
   }) : processingMsgIds = processingMsgIds ?? <String>{};
 
@@ -193,6 +194,14 @@ class ReliableInboundCtx {
     String fileId,
     List<int> fileKey,
   )? assembleNativeAttachment;
+
+  /// Native `attach-chunk` decrypt-to-path. Persist via
+  /// [db.saveFileBlobFromPath] so Drift does not hold the plaintext.
+  final Future<String?> Function(
+    String remoteId,
+    String fileId,
+    List<int> fileKey,
+  )? assembleNativeAttachmentPath;
 }
 
 // в”Ђв”Ђв”Ђ Ephemeral dispatch в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
@@ -822,6 +831,26 @@ Future<JsonMap> _assembleChunkedAttachment({
     return missing;
   }
   if (key.length < 8) return missing;
+  final pathAssemble = ctx.assembleNativeAttachmentPath;
+  if (pathAssemble != null) {
+    try {
+      final path = await pathAssemble(remoteId, fileId, key);
+      if (path != null && path.isNotEmpty && !path.contains('://')) {
+        final ok = await db.saveFileBlobFromPath(
+          msgId,
+          path,
+          mime: mime,
+          name: name,
+          kind: kind,
+          size: size,
+          width: width,
+          height: height,
+          duration: duration,
+        );
+        if (ok) return metaOut;
+      }
+    } catch (_) {}
+  }
   final assemble = ctx.assembleNativeAttachment;
   if (assemble == null) return missing;
   try {

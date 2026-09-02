@@ -26,6 +26,8 @@ import 'dart:math';
 
 import 'package:drift/drift.dart';
 
+import '../attachments/resumable_blob.dart';
+import '../core/path_byte_stream.dart';
 import '../core/vault_kek.dart';
 import '../utils/common.dart';
 import 'database.dart';
@@ -309,7 +311,7 @@ Future<bool> saveFileBlob(
   if (id.isEmpty) return false;
   // Defense-in-depth byte cap (audit finding 4): mirror the send-side raw cap
   // `_maxFileRawBytes` (12 MiB).
-  if (bytes.length > 12 * 1024 * 1024) return false;
+  if (bytes.length > kMaxPeerJsFileRawBytes) return false;
   // JS trims name to 200 chars — keep parity so inbound rows don't diverge.
   final trimmedName = _clipName(name ?? 'file');
   final db = orbitsDb();
@@ -334,6 +336,55 @@ Future<bool> saveFileBlob(
   return true;
 }
 
+/// Native chat attachment: persist a local plaintext path in KEK-wrapped
+/// `data`. Drift `bytes` stays an empty wrapped blob — never the file
+/// body. Refuses `://` paths.
+Future<bool> saveFileBlobFromPath(
+  String id,
+  String path, {
+  String? mime,
+  String? name,
+  int size = 0,
+  String kind = 'file',
+  List<int>? thumb,
+  int width = 0,
+  int height = 0,
+  int duration = 0,
+}) async {
+  if (id.isEmpty) return false;
+  final p = path.trim();
+  if (p.isEmpty ||
+      p.contains('://') ||
+      p.contains('fileKey') ||
+      p.contains('peerId') ||
+      p.contains('opaqueWakeToken')) {
+    return false;
+  }
+  final n = localPathLength(p);
+  if (n == null || n <= 0 || n > kMaxNativeAttachBytes) return false;
+  final trimmedName = _clipName(name ?? 'file');
+  final db = orbitsDb();
+  await db.into(db.fileBlobsTable).insertOnConflictUpdate(
+        FileBlobsTableCompanion.insert(
+          id: id,
+          mime: Value(mime ?? 'application/octet-stream'),
+          name: Value(trimmedName),
+          kind: Value(kind),
+          size: Value(size == 0 ? n : size),
+          width: Value(width),
+          height: Value(height),
+          duration: Value(duration),
+          createdAt: Value(_now()),
+          bytes: _secureBytesEncode(const <int>[]),
+          thumb: thumb == null
+              ? const Value.absent()
+              : Value(_secureBytesEncode(thumb)),
+          data: _secureEncode(<String, Object?>{'localPath': p}),
+        ),
+      );
+  return true;
+}
+
 Future<Map<String, Object?>?> getFileBlob(String id) async {
   if (id.isEmpty) return null;
   final db = orbitsDb();
@@ -341,6 +392,23 @@ Future<Map<String, Object?>?> getFileBlob(String id) async {
         ..where((t) => t.id.equals(id)))
       .getSingleOrNull();
   if (row == null) return null;
+  String? localPath;
+  try {
+    Map<String, Object?> extra;
+    try {
+      extra = _secureDecode(row.data);
+    } catch (_) {
+      extra = decodeRow(row.data);
+    }
+    final p = extra['localPath'];
+    if (p is String &&
+        p.isNotEmpty &&
+        !p.contains('://') &&
+        !p.contains('fileKey') &&
+        !p.contains('peerId')) {
+      localPath = p;
+    }
+  } catch (_) {}
   return <String, Object?>{
     'id': row.id,
     'mime': row.mime,
@@ -354,6 +422,7 @@ Future<Map<String, Object?>?> getFileBlob(String id) async {
     // See note in getVoiceBlob — map key stays 'blob' for caller contract.
     'blob': _secureBytesDecode(row.bytes),
     'thumb': row.thumb == null ? null : _secureBytesDecode(row.thumb!),
+    if (localPath != null) 'localPath': localPath,
   };
 }
 

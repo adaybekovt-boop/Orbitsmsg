@@ -50,3 +50,11 @@ Future<List<int>?> xorCipherPathToPlaintext(
   List<int> fileKey,
 ) =>
     impl.xorCipherPathToPlaintext(cipherPath, fileKey);
+
+/// XOR a local ciphertext path onto a temp plaintext file. Null on web
+/// / refused paths. Never holds [fileKey] on disk.
+Future<String?> xorCipherPathToPlaintextFile(
+  String cipherPath,
+  List<int> fileKey,
+) =>
+    impl.xorCipherPathToPlaintextFile(cipherPath, fileKey);

@@ -24,6 +24,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../attachments/resumable_blob.dart';
 import '../core/error_reporter.dart';
 import '../core/path_byte_stream.dart';
 import '../utils/heavy_codec.dart';
@@ -69,7 +70,7 @@ const int _maxTextLen = 32 * 1024;
 const int _maxStickerLen = 512 * 1024;
 const int _maxVoiceRawBytes = 6 * 1024 * 1024; // ~8 MiB base64
 const int _maxVoiceB64Len = 8 * 1024 * 1024;
-const int _maxFileRawBytes = 12 * 1024 * 1024; // JS UI gate (Chats.jsx:822)
+const int _maxFileRawBytes = kMaxPeerJsFileRawBytes; // JS UI gate (Chats.jsx:822)
 const int _maxFileB64Len = 16 * 1024 * 1024;
 const int _maxFileThumbLen = 48 * 1024;
 const int _maxFileNameLen = 200; // JS: messageProtocol.js:347
@@ -1221,7 +1222,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
 
     final size = localPathLength(path);
     if (size == null || size <= 0) return null;
-    if (size > _maxFileRawBytes) return null;
+    if (size > kMaxNativeAttachBytes) return null;
 
     final selfId = _ref.read(currentPeerIdProvider) ?? '';
     if (selfId.isEmpty) return null;
@@ -1265,6 +1266,19 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       'status': 'pending',
       'payload': payload,
     });
+    // Persist the picker path, not a plaintext blob. FileTile reads
+    // `localPath` from file_blobs; Drift never holds the 50 MiB body.
+    await db.saveFileBlobFromPath(
+      msgId,
+      path,
+      mime: mime,
+      name: safeName,
+      kind: kind,
+      size: size,
+      width: width,
+      height: height,
+      duration: durationSec.round(),
+    );
     unawaited(db.savePeer({'id': normalized, 'lastSeenAt': now()}));
 
     if (!_readyToShip(conns, normalized)) return msgId;

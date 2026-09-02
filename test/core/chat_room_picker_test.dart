@@ -13,6 +13,8 @@ void main() {
     expect(chat, isNot(contains('withData: true')));
     expect(chat, contains('readPickedBytes'));
     expect(chat, contains('sendFileFromPath'));
+    expect(chat, contains('kMaxNativeAttachBytes'));
+    expect(chat, contains('kMaxPeerJsFileRawBytes'));
     expect(chat, contains('canUseNative'));
     expect(chat, contains('localPathLength'));
     expect(chat, isNot(contains("File(pf.path!).readAsBytes")));
@@ -53,6 +55,38 @@ void main() {
     expect(
       File('lib/state/messaging_notifier.dart').readAsStringSync(),
       contains('sendChatAttachmentFromPath'),
+    );
+    expect(
+      File('lib/state/messaging_notifier.dart').readAsStringSync(),
+      contains('saveFileBlobFromPath'),
+    );
+    expect(
+      File('lib/storage/db.dart').readAsStringSync(),
+      contains('saveFileBlobFromPath'),
+    );
+    expect(
+      File('lib/storage/db.dart').readAsStringSync(),
+      contains('kMaxNativeAttachBytes'),
+    );
+    expect(
+      File('lib/core/path_byte_stream.dart').readAsStringSync(),
+      contains('xorCipherPathToPlaintextFile'),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('decryptInboundAttachmentPath'),
+    );
+    expect(
+      File('lib/state/connections_notifier.dart').readAsStringSync(),
+      contains('decryptInboundAttachmentPath'),
+    );
+    expect(
+      File('lib/messaging/message_protocol.dart').readAsStringSync(),
+      contains('assembleNativeAttachmentPath'),
+    );
+    expect(
+      File('lib/ui/chat/file_tile.dart').readAsStringSync(),
+      contains('_loadLocalPath'),
     );
     expect(
       File('lib/state/connections_notifier.dart').readAsStringSync(),

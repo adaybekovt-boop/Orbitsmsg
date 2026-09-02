@@ -4,6 +4,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/attachments/resumable_blob.dart';
 
 void main() {
+  test('PeerJS stays 12 MiB; native path chat may use 50 MiB', () {
+    expect(kMaxPeerJsFileRawBytes, 12 * 1024 * 1024);
+    expect(kMaxNativeAttachBytes, 50 * 1024 * 1024);
+  });
+
   test('chunk, drop one piece, resume, then decrypt', () {
     final key = List<int>.generate(32, (i) => i + 1);
     final plain = List<int>.generate(70 * 1024, (i) => i % 251);

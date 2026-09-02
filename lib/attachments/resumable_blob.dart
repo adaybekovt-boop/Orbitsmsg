@@ -8,6 +8,14 @@ import 'package:crypto/crypto.dart' show sha256;
 
 const int kAttachmentChunkSize = 64 * 1024;
 
+/// PeerJS base64 chat/room cap (JS UI gate). Native path-streamed
+/// chat uses [kMaxNativeAttachBytes] instead.
+const int kMaxPeerJsFileRawBytes = 12 * 1024 * 1024;
+
+/// Native `attach-chunk` / path-streamed chat. Matches DualStackBridge
+/// inbound cipher cap. Not the PeerJS live path.
+const int kMaxNativeAttachBytes = 50 * 1024 * 1024;
+
 class AttachmentChunk {
   const AttachmentChunk({
     required this.index,
