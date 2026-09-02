@@ -8,10 +8,11 @@ max="${ORBITS_APK_RETRIES:-4}"
 delay="${ORBITS_APK_RETRY_DELAY_SEC:-30}"
 
 while true; do
-  if flutter build apk "$@"; then
+  status=0
+  flutter build apk "$@" || status=$?
+  if [ "$status" -eq 0 ]; then
     exit 0
   fi
-  status=$?
   if [ "$attempt" -ge "$max" ]; then
     echo "::error::flutter build apk failed after $max attempts" >&2
     exit "$status"
