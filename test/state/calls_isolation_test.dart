@@ -173,6 +173,45 @@ void main() {
       greaterThan(gateIdx),
     );
     expect(share.indexOf('getDisplayMedia'), greaterThan(gateIdx));
+    expect(share, contains('_nativeMedia'));
+    expect(share, contains('_publishNativeMediaState'));
+
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(kPeerjsSupportWindowOpen, isTrue);
+  });
+
+  test('setMicEnabled and setVideoEnabled publish native mediaState', () {
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(kPeerjsSupportWindowOpen, isTrue);
+
+    final src = File('lib/state/calls_provider.dart').readAsStringSync();
+    final mic = src
+        .split('void setMicEnabled(')[1]
+        .split('void setVideoEnabled(')[0];
+    expect(mic, contains('_publishNativeMediaState'));
+    final video = src
+        .split('void setVideoEnabled(')[1]
+        .split('Future<void> toggleScreenShare(')[0];
+    expect(video, contains('_publishNativeMediaState'));
+    expect(src, contains('session.publishMediaState'));
+    expect(src, contains('CallSignalType.mediaState'));
+    expect(src, contains('remoteMicEnabled'));
+    final replace = src
+        .split('Future<void> _replaceVideoTrack(')[1]
+        .split('void _attachConnection(')[0];
+    expect(
+      replace.indexOf('_nativeMedia?.peerConnection'),
+      lessThan(replace.indexOf('_conn?.peerConnection')),
+    );
+
+    expect(
+      File('lib/ui/calls/call_overlay_mount.dart').readAsStringSync(),
+      contains('remoteMicEnabled'),
+    );
+    expect(
+      File('lib/ui/calls/call_overlay_mount.dart').readAsStringSync(),
+      contains('remoteScreenSharing'),
+    );
 
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
     expect(kPeerjsSupportWindowOpen, isTrue);

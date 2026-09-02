@@ -3096,6 +3096,88 @@ void main() {
     await a.detach();
   });
 
+  test('dial fans out to recipient device transports', () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final bobNoise = List<int>.generate(32, (i) => 21);
+    final tabletNoise = List<int>.generate(32, (i) => 31);
+    final devices = DeviceRegistry()
+      ..authorize(
+        AuthorizedDevice(
+          deviceId: 'bob-phone',
+          transportPublicKey: bobNoise,
+          hypercorePublicKey: List<int>.generate(32, (i) => 22),
+          name: 'Bob',
+          kind: 'phone',
+          createdAt: 1,
+          status: DeviceStatus.active,
+          ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+          transportPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        ),
+      )
+      ..authorize(
+        AuthorizedDevice(
+          deviceId: 'bob-tablet',
+          transportPublicKey: tabletNoise,
+          hypercorePublicKey: List<int>.generate(32, (i) => 32),
+          name: 'tablet',
+          kind: 'tablet',
+          createdAt: 1,
+          status: DeviceStatus.active,
+          ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+          transportPeerId: 'ORBIT-B1B1B1B1B1B1B1B1',
+        ),
+      );
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(await _bind('a'));
+    await pair.$2.publish(await _bind('b'));
+    final a = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: secrets,
+      devices: devices,
+      isBlocked: (_) => false,
+      tofuCheck: _allowTofu,
+      onPacket: (_, __) async {},
+    )..attach();
+    await a.dial('ORBIT-BBBBBBBBBBBBBBBB');
+    expect(
+      pair.$1.connectAttempts.map((p) => p.peerId),
+      containsAll([
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        'ORBIT-B1B1B1B1B1B1B1B1',
+      ]),
+    );
+    expect(
+      pair.$1.connectAttempts
+          .firstWhere((p) => p.peerId == 'ORBIT-B1B1B1B1B1B1B1B1')
+          .noisePublicKey,
+      tabletNoise,
+    );
+    expect(
+      pair.$1.connectAttempts
+          .firstWhere((p) => p.peerId == 'ORBIT-B1B1B1B1B1B1B1B1')
+          .discoverySecret,
+      secret,
+    );
+    await a.detach();
+  });
+
   test('attach maps known contacts without sending discovery secrets', () async {
     setHyperswarmRollout(HyperswarmRollout.internal);
     final pair = loopbackPair();
@@ -3347,6 +3429,12 @@ void main() {
         .split('List<int>? discoverySecretFor')[0];
     expect(remember, contains('_dialOwnKnownDevices'));
     expect(remember, isNot(contains('discoverySecret')));
+    final dial = src
+        .split('Future<void> dial(')[1]
+        .split('Set<String> _sendPeerIds')[0];
+    expect(dial, contains('transportTargets'));
+    expect(dial, contains('_dialOne'));
+    expect(dial, isNot(contains('sendTargets')));
   });
 
   test('loopback Autobase lists DualStack membership after room_join',

@@ -68,6 +68,7 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   DeviceBinding? _binding;
   String? topicHex;
   PeerDescriptor? lastConnect;
+  final List<PeerDescriptor> connectAttempts = <PeerDescriptor>[];
   TransportChannel? lastSendChannel;
   final List<String> sentPeerIds = <String>[];
   final List<PeerDescriptor> rememberedPeers = <PeerDescriptor>[];
@@ -132,6 +133,7 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   @override
   Future<void> connect(PeerDescriptor peer) async {
     lastConnect = peer;
+    connectAttempts.add(peer);
     _ensureStarted();
     if (_suspended) {
       throw StateError('transport is suspended');

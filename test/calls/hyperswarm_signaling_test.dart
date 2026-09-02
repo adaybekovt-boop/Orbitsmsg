@@ -122,6 +122,47 @@ void main() {
     expect(session.closed, isTrue);
   });
 
+  test('native session publishes and applies mediaState', () async {
+    final seen = <CallSignal>[];
+    final session = NativeCallSession(send: (s) async => seen.add(s));
+    session.callId = 'c1';
+    await session.publishMediaState(
+      micEnabled: false,
+      videoEnabled: true,
+      screenSharing: true,
+    );
+    expect(seen.single.type, CallSignalType.mediaState);
+    expect(seen.single.media, {
+      'mic': false,
+      'video': true,
+      'screen': true,
+    });
+    session.applyRemote(seen.single);
+    expect(session.remoteMedia, {
+      'mic': false,
+      'video': true,
+      'screen': true,
+    });
+    expect(session.lastApplied, CallSignalType.mediaState);
+  });
+
+  test('publishMediaState skips empty or URL callId', () async {
+    final seen = <CallSignal>[];
+    final session = NativeCallSession(send: (s) async => seen.add(s));
+    await session.publishMediaState(
+      micEnabled: false,
+      videoEnabled: false,
+      screenSharing: false,
+    );
+    session.callId = 'https://evil';
+    await session.publishMediaState(
+      micEnabled: true,
+      videoEnabled: false,
+      screenSharing: false,
+    );
+    expect(seen, isEmpty);
+  });
+
   test('sendCallSignal refuses unsafe toJson before transport.send', () {
     final src = File('lib/transport/dual_stack_bridge.dart').readAsStringSync();
     expect(src, contains('replicationValueIsSafe'));

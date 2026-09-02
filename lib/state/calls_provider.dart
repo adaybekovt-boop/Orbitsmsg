@@ -14,11 +14,13 @@
 //     tracks. Both sides return to `idle`.
 //
 //   • `setMicEnabled` / `setVideoEnabled` toggle the corresponding track
-//     `enabled` flag (no track replacement, no signaling round-trip).
+//     `enabled` flag (no track replacement). Native DualStack also emits
+//     `CallSignalType.mediaState` so the remote overlay can update.
 //
 //   • `toggleScreenShare` replaces the outgoing video track with one
-//     from `getDisplayMedia` (and back). On unsupported platforms it
-//     no-ops and surfaces an error.
+//     from `getDisplayMedia` (and back) on the PeerJS or native
+//     `RTCPeerConnection`. On unsupported platforms it no-ops and
+//     surfaces an error.
 //
 // Everything platform-specific (getUserMedia, getDisplayMedia, RTC
 // peer connection plumbing) lives behind the `flutter_webrtc` package
@@ -75,6 +77,9 @@ class CallState {
     this.micEnabled = true,
     this.videoEnabled = false,
     this.screenSharing = false,
+    this.remoteMicEnabled = true,
+    this.remoteVideoEnabled = false,
+    this.remoteScreenSharing = false,
   });
 
   const CallState.idle() : this();
@@ -107,6 +112,13 @@ class CallState {
   /// perspective — the UI shows one or the other, never both.
   final bool screenSharing;
 
+  /// Remote mute / camera / screen-share from `CallSignalType.mediaState`.
+  /// Defaults assume the peer starts unmuted; PeerJS-only calls never
+  /// update these (track `enabled` is enough on a shared PC).
+  final bool remoteMicEnabled;
+  final bool remoteVideoEnabled;
+  final bool remoteScreenSharing;
+
   bool get isActive => status != CallStatus.idle;
 
   CallState copyWith({
@@ -119,6 +131,9 @@ class CallState {
     bool? micEnabled,
     bool? videoEnabled,
     bool? screenSharing,
+    bool? remoteMicEnabled,
+    bool? remoteVideoEnabled,
+    bool? remoteScreenSharing,
   }) {
     return CallState(
       status: status ?? this.status,
@@ -138,6 +153,9 @@ class CallState {
       micEnabled: micEnabled ?? this.micEnabled,
       videoEnabled: videoEnabled ?? this.videoEnabled,
       screenSharing: screenSharing ?? this.screenSharing,
+      remoteMicEnabled: remoteMicEnabled ?? this.remoteMicEnabled,
+      remoteVideoEnabled: remoteVideoEnabled ?? this.remoteVideoEnabled,
+      remoteScreenSharing: remoteScreenSharing ?? this.remoteScreenSharing,
     );
   }
 }
@@ -205,6 +223,9 @@ class CallsNotifier extends StateNotifier<CallState> {
       videoEnabled: video,
       micEnabled: true,
       screenSharing: false,
+      remoteMicEnabled: true,
+      remoteVideoEnabled: false,
+      remoteScreenSharing: false,
       lastError: null,
       localStream: null,
       remoteStream: null,
@@ -382,7 +403,8 @@ class CallsNotifier extends StateNotifier<CallState> {
   }
 
   /// Toggle our outgoing audio. Synchronous from the peer's POV — no
-  /// renegotiation, just flips the track's `enabled` bit.
+  /// renegotiation, just flips the track's `enabled` bit. Native
+  /// DualStack also publishes `mediaState` for the remote overlay.
   void setMicEnabled(bool enabled) {
     final stream = state.localStream;
     if (stream == null) return;
@@ -390,6 +412,7 @@ class CallsNotifier extends StateNotifier<CallState> {
       t.enabled = enabled;
     }
     state = state.copyWith(micEnabled: enabled);
+    _publishNativeMediaState();
   }
 
   /// Toggle our outgoing camera (or whatever video track we're sending
@@ -401,6 +424,7 @@ class CallsNotifier extends StateNotifier<CallState> {
       t.enabled = enabled;
     }
     state = state.copyWith(videoEnabled: enabled);
+    _publishNativeMediaState();
   }
 
   /// Replace the camera track with a `getDisplayMedia` track, or
@@ -409,11 +433,14 @@ class CallsNotifier extends StateNotifier<CallState> {
   /// the state stays unchanged.
   Future<void> toggleScreenShare() async {
     // Isolation fail-closed: leftover PeerJS `_conn` must not start
-    // screen share or re-acquire camera. Native DualStack does not use `_conn`.
-    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
-    final conn = _conn;
+    // screen share or re-acquire camera unless native DualStack media
+    // already owns the RTCPeerConnection.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb) && _nativeMedia == null) {
+      return;
+    }
     final local = state.localStream;
-    if (conn == null || local == null) return;
+    if (local == null) return;
+    if (_nativeMedia == null && _conn == null) return;
 
     if (state.screenSharing) {
       // Restore camera. Use the track we backed up when share started;
@@ -443,6 +470,7 @@ class CallsNotifier extends StateNotifier<CallState> {
         videoEnabled: true,
         lastError: null,
       );
+      _publishNativeMediaState();
       return;
     }
 
@@ -491,6 +519,7 @@ class CallsNotifier extends StateNotifier<CallState> {
       videoEnabled: true,
       lastError: null,
     );
+    _publishNativeMediaState();
   }
 
   /// End the active call (or cancel a still-dialing one). Both sides
@@ -552,7 +581,9 @@ class CallsNotifier extends StateNotifier<CallState> {
 
   Future<void> _replaceVideoTrack(
       MediaStreamTrack newTrack, MediaStream stream) async {
-    final pc = _conn?.peerConnection ?? _nativeMedia?.peerConnection;
+    // Prefer the native DualStack PC so leftover PeerJS `_conn` cannot
+    // steal replaceTrack under isolation.
+    final pc = _nativeMedia?.peerConnection ?? _conn?.peerConnection;
     if (pc == null) return;
     final senders = await pc.getSenders();
     final videoSender = senders.firstWhere(
@@ -603,6 +634,18 @@ class CallsNotifier extends StateNotifier<CallState> {
     );
   }
 
+  void _publishNativeMediaState() {
+    final session = _nativeSession;
+    if (session == null) return;
+    unawaited(
+      session.publishMediaState(
+        micEnabled: state.micEnabled,
+        videoEnabled: state.videoEnabled,
+        screenSharing: state.screenSharing,
+      ),
+    );
+  }
+
   void _onNativeCallSignal(String from, CallSignal signal) {
     _nativeSession ??= NativeCallSession(
       send: (next) =>
@@ -619,6 +662,15 @@ class CallsNotifier extends StateNotifier<CallState> {
     if (signal.type == CallSignalType.hangup ||
         signal.type == CallSignalType.reject) {
       unawaited(hangUp());
+      return;
+    }
+    if (signal.type == CallSignalType.mediaState) {
+      final media = signal.media;
+      state = state.copyWith(
+        remoteMicEnabled: media?['mic'] != false,
+        remoteVideoEnabled: media?['video'] == true,
+        remoteScreenSharing: media?['screen'] == true,
+      );
       return;
     }
     if (signal.type == CallSignalType.offer && !state.isActive) {

@@ -405,6 +405,21 @@ class DualStackBridge {
   }
 
   Future<void> dial(String peerId) async {
+    final targets = devices?.transportTargets(peerId) ??
+        <String>{normalizePeerId(peerId)};
+    if (targets.length <= 1) {
+      await _dialOne(targets.isEmpty ? peerId : targets.first);
+      return;
+    }
+    for (final tid in targets) {
+      try {
+        await _dialOne(tid);
+      } catch (_) {}
+    }
+  }
+
+  /// One transport id. [dial] fans this out to recipient devices.
+  Future<void> _dialOne(String peerId) async {
     if (!nativeEnabled) return;
     final secret = discoverySecretFor(peerId);
     if (secret == null) return;

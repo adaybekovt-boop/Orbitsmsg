@@ -72,6 +72,7 @@ class NativeCallSession {
   CallSignalType? lastApplied;
   String? callId;
   String? remoteSdp;
+  Map<String, Object?>? remoteMedia;
   final List<Map<String, Object?>> remoteIce = <Map<String, Object?>>[];
   bool closed = false;
 
@@ -113,6 +114,28 @@ class NativeCallSession {
     );
   }
 
+  /// Mute / camera / screen-share flags on the Hyperswarm `call` channel.
+  /// Track `enabled` still flips locally; this is for the remote overlay.
+  Future<void> publishMediaState({
+    required bool micEnabled,
+    required bool videoEnabled,
+    required bool screenSharing,
+  }) {
+    final id = callId ?? '';
+    if (id.isEmpty || id.contains('://')) return Future<void>.value();
+    return send(
+      CallSignal(
+        type: CallSignalType.mediaState,
+        callId: id,
+        media: <String, Object?>{
+          'mic': micEnabled,
+          'video': videoEnabled,
+          'screen': screenSharing,
+        },
+      ),
+    );
+  }
+
   void applyRemote(CallSignal signal) {
     lastApplied = signal.type;
     callId ??= signal.callId;
@@ -126,8 +149,9 @@ class NativeCallSession {
       case CallSignalType.hangup:
       case CallSignalType.reject:
         closed = true;
-      case CallSignalType.accept:
       case CallSignalType.mediaState:
+        remoteMedia = signal.media;
+      case CallSignalType.accept:
         break;
     }
   }

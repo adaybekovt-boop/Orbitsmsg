@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -132,4 +133,69 @@ void main() {
       expect(transportError, lessThan(defaultCase));
     },
   );
+
+  test('in-process pair routes connect/send and refuses unsafe sendFile',
+      () async {
+    final hub = InProcessWorkletHub();
+    final a = openInProcessIpc(hub: hub);
+    final b = openInProcessIpc(hub: hub);
+    final frames = <Map<String, Object?>>[];
+    final sub = b.client.events.listen(frames.add);
+
+    await a.client.request('start', {'peerId': 'ORBIT-AAAAAAAAAAAAAAAA'});
+    await b.client.request('start', {'peerId': 'ORBIT-BBBBBBBBBBBBBBBB'});
+    await a.client.request('publish', {
+      'binding': {'deviceId': 'dev-a'},
+    });
+    await b.client.request('publish', {
+      'binding': {'deviceId': 'dev-b'},
+    });
+    await a.client.request('connect', {'peerId': 'ORBIT-BBBBBBBBBBBBBBBB'});
+    expect(a.worklet.connectedPeers, contains('ORBIT-BBBBBBBBBBBBBBBB'));
+    expect(b.worklet.connectedPeers, contains('ORBIT-AAAAAAAAAAAAAAAA'));
+
+    await a.client.request('send', {
+      'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+      'channel': 'message',
+      'frameB64': base64Encode(utf8.encode('{"type":"ping"}')),
+    });
+    await Future<void>.delayed(Duration.zero);
+    expect(a.worklet.sentFrames, isNotEmpty);
+    expect(
+      frames.any((e) => e['name'] == 'frame'),
+      isTrue,
+    );
+
+    await expectLater(
+      a.client.request('sendFile', {
+        'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+        'file': {'path': 'https://evil.example/x'},
+      }),
+      throwsA(isA<StateError>()),
+    );
+    await expectLater(
+      a.client.request('sendFile', {
+        'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+        'file': {
+          'path': '/tmp/safe.bin',
+          'fileKey': 'nope',
+        },
+      }),
+      throwsA(isA<StateError>()),
+    );
+    await a.client.request('sendFile', {
+      'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+      'file': {
+        'path': '/tmp/safe.bin',
+        'fileName': 'safe.bin',
+        'protocol': 'attach-chunk',
+        'fileId': 'att-1',
+      },
+    });
+    expect(a.worklet.sentFiles, hasLength(1));
+
+    await sub.cancel();
+    await a.client.close();
+    await b.client.close();
+  });
 }
