@@ -147,6 +147,7 @@ void main() {
         devices: devices,
         connectionNoiseFor: connectionNoiseFor,
         tofuCheck: tofuCheck ?? _allowTofu,
+        roomHostFor: (id) => 'ORBIT-AAAAAAAAAAAAAAAA',
         onPacket: (peer, data) async {
           packets.add(data);
         },

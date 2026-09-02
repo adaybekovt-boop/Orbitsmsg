@@ -403,11 +403,27 @@ class RoomManager extends StateNotifier<RoomState> {
     // inbound `room_*` packets without a provider cycle — same bridge pattern
     // as MessagingNotifier/DropNotifier.
     _defaultTransport = _ref.read(roomTransportProvider);
-    _defaultTransport.bindRoom(RoomBridge(handleInbound: _handleInbound));
+    _defaultTransport.bindRoom(RoomBridge(
+        handleInbound: _handleInbound,
+        hostPeerIdFor: hostPeerIdForRoom,
+      ));
     _defaultTransport.bindRoomVoice(_onNativeRoomVoice);
   }
 
   final Ref _ref;
+
+  /// Host of a joined/created room, or null when [roomId] is unknown.
+  String? hostPeerIdForRoom(String roomId) {
+    if (roomId.isEmpty || roomId.contains('://')) return null;
+    final current = state.roomId;
+    if (current == null || current.isEmpty) return null;
+    if (current != roomId && current != normalizePeerId(roomId)) {
+      return null;
+    }
+    final host = state.hostPeerId;
+    if (host == null || host.isEmpty || host.contains('://')) return null;
+    return host;
+  }
 
   /// The peerjs.com-backed transport (production) or a test fake. Always present.
   late final RoomTransport _defaultTransport;
@@ -647,7 +663,10 @@ class RoomManager extends StateNotifier<RoomState> {
     );
     final transport = RoomScopedTransport(client)
       ..wire()
-      ..bindRoom(RoomBridge(handleInbound: _handleInbound));
+      ..bindRoom(RoomBridge(
+        handleInbound: _handleInbound,
+        hostPeerIdFor: hostPeerIdForRoom,
+      ));
     _selfHostedTransport = transport;
 
     await client.start();
@@ -911,7 +930,10 @@ class RoomManager extends StateNotifier<RoomState> {
       );
       final transport = RoomScopedTransport(client)
         ..wire()
-        ..bindRoom(RoomBridge(handleInbound: _handleInbound));
+        ..bindRoom(RoomBridge(
+        handleInbound: _handleInbound,
+        hostPeerIdFor: hostPeerIdForRoom,
+      ));
       // Activate it so _connections/_waitReliable route through this candidate.
       _selfHostedTransport = transport;
       try {
@@ -1006,7 +1028,10 @@ class RoomManager extends StateNotifier<RoomState> {
       } catch (_) {}
     }
     if (rebind) {
-      _defaultTransport.bindRoom(RoomBridge(handleInbound: _handleInbound));
+      _defaultTransport.bindRoom(RoomBridge(
+        handleInbound: _handleInbound,
+        hostPeerIdFor: hostPeerIdForRoom,
+      ));
     }
   }
 

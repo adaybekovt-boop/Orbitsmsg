@@ -163,6 +163,23 @@ void main() {
         }, fallbackWriter: 'x')?.payload['peerId'],
         _peerC,
       );
+      expect(
+        roomEventFromNativePacket(
+          {
+            'type': 'room_join',
+            'roomId': 'room-unknown',
+            'abWriter': 'dev-b',
+            'abSeq': 1,
+            'guestPeerId': _peerC,
+            'guestName': 'C',
+          },
+          fallbackWriter: _peerB,
+          authenticatedPeer: _peerB,
+          authenticatedDeviceId: 'dev-b',
+          roomHostFor: (_) => null,
+        ),
+        isNull,
+      );
     },
   );
 
@@ -638,6 +655,7 @@ void main() {
       isBlocked: (_) => false,
       tofuCheck: _allowTofu,
       ownIdentityPublicKey: () => _spkiA,
+      roomHostFor: (id) => _peerA,
       onPacket: (_, __) async {},
     )..attach();
     a.hypercore.append(
@@ -709,6 +727,7 @@ void main() {
       secrets: secrets,
       isBlocked: (_) => false,
       tofuCheck: _allowTofu,
+      roomHostFor: (id) => _peerA,
       onPacket: (_, __) async {},
     )..attach();
     await pair.$1.connect(const PeerDescriptor(peerId: _peerB));
@@ -877,6 +896,7 @@ Future<(DualStackBridge, DualStackBridge)> _linked({
     tofuCheck: _allowTofu,
     ownIdentityPublicKey: () => _spkiA,
     verifyRecord: verifyIdentitySignedBytes,
+    roomHostFor: (id) => _peerA,
     onReplicatedContactBlocked: onBlockedA,
     onReplicationAccepted: onProjectedA,
     onPacket: (_, __) async {},
@@ -890,6 +910,7 @@ Future<(DualStackBridge, DualStackBridge)> _linked({
     isBlocked: (_) => false,
     tofuCheck: _allowTofu,
     ownIdentityPublicKey: () => _spkiB,
+    roomHostFor: (id) => _peerA,
     onPacket: (_, __) async {},
   )..attach();
   await pair.$1.connect(const PeerDescriptor(peerId: _peerB));
@@ -944,7 +965,8 @@ Future<(DualStackBridge, DualStackBridge)> _ownDevicePair({
   );
   await pair.$1.publish(await _bind('dev-a', spki: _spkiA, pair: _idA));
   await pair.$2.publish(await _bind('dev-a2', spki: _spkiA, pair: _idA));
-  List<int>? sign(List<int> canonical) => signP256Ecdsa(_idA, canonical);
+  Future<List<int>?> sign(List<int> canonical) async =>
+      signP256Ecdsa(_idA, canonical);
   final phone = DualStackBridge(
     transport: pair.$1,
     journal: MemoryJournal('dev-a'),

@@ -182,8 +182,8 @@ class DualStackBridge {
   /// Injected own identity SPKI. Defaults to [localBinding].
   List<int>? Function()? ownIdentityPublicKey;
 
-  /// Sync identity-key signer for own-account records. Tests inject keys.
-  List<int>? Function(List<int> canonical)? signRecord;
+  /// Identity-key signer for own-account records. Awaited before append.
+  Future<List<int>?> Function(List<int> canonical)? signRecord;
 
   /// Identity-key verifier for own-account records. Tests inject keys.
   Future<bool> Function(List<int> identitySpki, List<int> payload, List<int> sig)?
@@ -666,18 +666,20 @@ class DualStackBridge {
     if (deviceId.isEmpty || deviceId.contains('://')) return;
     final before = devices?.getDevice(deviceId);
     devices?.revoke(deviceId);
-    final fields = <String, Object?>{
-      'deviceId': deviceId,
-      'createdAt': DateTime.now().millisecondsSinceEpoch,
-    };
-    _attachIdentitySignature(ReplicationEventKind.deviceRevoked, fields);
-    final record = journal.append(
-      ReplicationEventKind.deviceRevoked,
-      fields,
-    );
-    unawaited(_persistDurable(record));
-    hypercore.append(record);
-    _replicateToAuthenticated(record);
+    unawaited(() async {
+      final fields = <String, Object?>{
+        'deviceId': deviceId,
+        'createdAt': DateTime.now().millisecondsSinceEpoch,
+      };
+      await _attachIdentitySignature(ReplicationEventKind.deviceRevoked, fields);
+      final record = journal.append(
+        ReplicationEventKind.deviceRevoked,
+        fields,
+      );
+      unawaited(_persistDurable(record));
+      hypercore.append(record);
+      _replicateToAuthenticated(record);
+    }());
     for (final key in ratchetKeysForRevokedDevice(before)) {
       onRatchetDropped?.call(key);
       unawaited(teardownWireSession(key));
@@ -711,18 +713,23 @@ class DualStackBridge {
         }());
       }
     }
-    final fields = <String, Object?>{
-      'deviceId': device.deviceId,
-      'createdAt': device.createdAt,
-    };
-    _attachIdentitySignature(ReplicationEventKind.deviceAuthorized, fields);
-    final record = journal.append(
-      ReplicationEventKind.deviceAuthorized,
-      fields,
-    );
-    unawaited(_persistDurable(record));
-    hypercore.append(record);
-    _replicateToAuthenticated(record);
+    unawaited(() async {
+      final fields = <String, Object?>{
+        'deviceId': device.deviceId,
+        'createdAt': device.createdAt,
+      };
+      await _attachIdentitySignature(
+        ReplicationEventKind.deviceAuthorized,
+        fields,
+      );
+      final record = journal.append(
+        ReplicationEventKind.deviceAuthorized,
+        fields,
+      );
+      unawaited(_persistDurable(record));
+      hypercore.append(record);
+      _replicateToAuthenticated(record);
+    }());
   }
 
   /// Local block list is Drift + the inbound [isBlocked] hook. This
@@ -735,20 +742,25 @@ class DualStackBridge {
     if (norm.isEmpty || peerId.contains('://') || norm.contains('://')) {
       return;
     }
-    final fields = <String, Object?>{
-      'conversationId': norm,
-      'peerId': norm,
-      'blocked': blocked,
-      'createdAt': DateTime.now().millisecondsSinceEpoch,
-    };
-    _attachIdentitySignature(ReplicationEventKind.contactBlocked, fields);
-    final record = journal.append(
-      ReplicationEventKind.contactBlocked,
-      fields,
-    );
-    unawaited(_persistDurable(record));
-    hypercore.append(record);
-    _replicateToAuthenticated(record);
+    unawaited(() async {
+      final fields = <String, Object?>{
+        'conversationId': norm,
+        'peerId': norm,
+        'blocked': blocked,
+        'createdAt': DateTime.now().millisecondsSinceEpoch,
+      };
+      await _attachIdentitySignature(
+        ReplicationEventKind.contactBlocked,
+        fields,
+      );
+      final record = journal.append(
+        ReplicationEventKind.contactBlocked,
+        fields,
+      );
+      unawaited(_persistDurable(record));
+      hypercore.append(record);
+      _replicateToAuthenticated(record);
+    }());
   }
 
   /// Inbound delivery receipt after decrypt. Metadata only — no ratchet
@@ -1556,10 +1568,10 @@ class DualStackBridge {
     }
   }
 
-  void _attachIdentitySignature(
+  Future<void> _attachIdentitySignature(
     ReplicationEventKind kind,
     Map<String, Object?> fields,
-  ) {
+  ) async {
     final hook = signRecord;
     if (hook == null) return;
     final canonical = canonicalReplicationRecordBytes(
@@ -1567,7 +1579,7 @@ class DualStackBridge {
       writerDeviceId: selfDeviceId,
       fields: fields,
     );
-    final sig = hook(canonical);
+    final sig = await hook(canonical);
     if (sig == null || sig.isEmpty) return;
     fields['signature'] = base64Encode(sig);
   }
@@ -1608,13 +1620,17 @@ class DualStackBridge {
       final norm = normalizePeerId(fromPeerId);
       final binding = remoteBindings[norm];
       final host = _hostForRoom(roomId);
-      if (host != null) {
-        final own = binding != null && isOwnDevice(binding);
-        if (!_senderIsRoomHost(roomId, norm, binding) && !own) {
-          return false;
+      final own = binding != null && isOwnDevice(binding);
+      if (host == null || host.isEmpty) {
+        if (!own) return false;
+        final stored = event.payload['hostPeerId'] as String?;
+        if (stored != null && stored.isNotEmpty) {
+          _rememberRoomHost(roomId, stored);
         }
-      } else {
-        _rememberRoomHost(roomId, norm);
+        return true;
+      }
+      if (!_senderIsRoomHost(roomId, norm, binding) && !own) {
+        return false;
       }
       return true;
     }
@@ -1777,7 +1793,7 @@ class DualStackBridge {
       final roomId = fields['roomId'] as String?;
       if (roomId == null || roomId.isEmpty) return false;
       final host = _hostForRoom(roomId);
-      if (host == null) return true;
+      if (host == null) return false;
       return _senderIsRoomHost(roomId, norm, binding);
     }
     return false;

@@ -52,6 +52,7 @@ import '../peer/room_plaintext_gate.dart';
 import '../peer/peerjs_client.dart';
 import '../calls/hyperswarm_signaling.dart';
 import '../core/feature_flags.dart';
+import '../core/identity_key.dart' as identity_key;
 import '../peer/wire_transport.dart';
 import '../devices/device_link.dart';
 import '../devices/device_registry.dart';
@@ -251,6 +252,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     DeviceRegistry? devices,
   }) {
     _nativeJournal = journal ?? MemoryJournal(deviceId);
+    unawaited(identity_key.exportIdentityPubSpki());
     _dual =
         DualStackBridge(
             transport: transport,
@@ -265,6 +267,15 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
             localCapabilities: localCapabilities,
             localBinding: localBinding,
             devices: devices ?? deviceRegistry,
+            ownIdentityPublicKey: () =>
+                identity_key.cachedIdentityPubSpki() ??
+                localBinding?.identityPublicKey,
+            signRecord: identity_key.signBytes,
+            verifyRecord: verifyIdentitySignedBytes,
+            roomHostFor: (id) => _room.hostPeerIdFor?.call(id),
+            onReplicatedContactBlocked: (peerId, blocked) {
+              unawaited(db.setPeerBlocked(peerId, blocked));
+            },
             onPacket: _dispatchNativeInbound,
             isBlocked: (rid) => _messaging.isPeerBlocked(rid),
           )
@@ -1359,13 +1370,16 @@ class DropBridge {
 /// forward inbound `room_*` control packets without a provider cycle. No-ops
 /// until [ConnectionsNotifier.bindRoom] is called.
 class RoomBridge {
-  const RoomBridge({required this.handleInbound});
+  const RoomBridge({required this.handleInbound, this.hostPeerIdFor});
 
   /// Receives a plaintext `room_*` control map for [remoteId]. Returns a
   /// Future so callers can await full settlement (production fires it
   /// forget-style; the router's `roomInbound` is a `void` hook).
   final Future<void> Function(String remoteId, Map<String, Object?> packet)
   handleInbound;
+
+  /// Host of [roomId] from RoomManager, or null when unknown.
+  final String? Function(String roomId)? hostPeerIdFor;
 
   static RoomBridge get empty => const RoomBridge(handleInbound: _noop);
   static Future<void> _noop(String _, Map<String, Object?> __) async {}
