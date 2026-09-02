@@ -40,7 +40,7 @@ void main() {
         TransportCapability.peerjsV4,
       },
       issuedAt: 1,
-      expiresAt: 10,
+      expiresAt: DateTime.now().millisecondsSinceEpoch + 86400000,
       identityPublicKey: spki,
       sign: (payload) async => signP256Ecdsa(pair, payload),
     );
@@ -59,40 +59,39 @@ void main() {
     );
   });
 
-  test('PeerJS hello caps are verified separately from the hello blob', () async {
-    remoteCapabilityCache.clear();
-    final pair = await generateP256EcdsaKey();
-    final spki = buildP256Spki(x: pair.x, y: pair.y);
-    final record = await issueCapabilityRecord(
-      peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
-      deviceId: 'dev-1',
-      capabilities: {
-        TransportCapability.hyperswarmV1,
-        TransportCapability.peerjsV4,
-      },
-      issuedAt: 1,
-      expiresAt: DateTime.now().millisecondsSinceEpoch + 86400000,
-      identityPublicKey: spki,
-      sign: (payload) async => signP256Ecdsa(pair, payload),
-    );
-    final remembered = await rememberHelloCapabilities(
-      'ORBIT-AAAAAAAAAAAAAAAA',
-      {
+  test(
+    'PeerJS hello caps are verified separately from the hello blob',
+    () async {
+      remoteCapabilityCache.clear();
+      final pair = await generateP256EcdsaKey();
+      final spki = buildP256Spki(x: pair.x, y: pair.y);
+      final record = await issueCapabilityRecord(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        deviceId: 'dev-1',
+        capabilities: {
+          TransportCapability.hyperswarmV1,
+          TransportCapability.peerjsV4,
+        },
+        issuedAt: 1,
+        expiresAt: DateTime.now().millisecondsSinceEpoch + 86400000,
+        identityPublicKey: spki,
+        sign: (payload) async => signP256Ecdsa(pair, payload),
+      );
+      final remembered = await rememberHelloCapabilities(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        {'type': 'wireHello', 'v': 3, 'caps': record.toWire()},
+      );
+      expect(remembered, isNotNull);
+      expect(
+        remoteCapabilityCache.get('orbit-aaaaaaaaaaaaaaaa')?.deviceId,
+        'dev-1',
+      );
+      await rememberHelloCapabilities('ORBIT-BBBBBBBBBBBBBBBB', {
         'type': 'wireHello',
         'v': 3,
         'caps': record.toWire(),
-      },
-    );
-    expect(remembered, isNotNull);
-    expect(
-      remoteCapabilityCache.get('orbit-aaaaaaaaaaaaaaaa')?.deviceId,
-      'dev-1',
-    );
-    await rememberHelloCapabilities('ORBIT-BBBBBBBBBBBBBBBB', {
-      'type': 'wireHello',
-      'v': 3,
-      'caps': record.toWire(),
-    });
-    expect(remoteCapabilityCache.get('ORBIT-BBBBBBBBBBBBBBBB'), isNull);
-  });
+      });
+      expect(remoteCapabilityCache.get('ORBIT-BBBBBBBBBBBBBBBB'), isNull);
+    },
+  );
 }
