@@ -165,6 +165,14 @@ void main() {
       contains('journalDir: journalDir'),
     );
     expect(
+      File('lib/transport/native_transport_host.dart').readAsStringSync(),
+      contains('ingestWorkletRows'),
+    );
+    expect(
+      File('lib/transport/native_transport_host.dart').readAsStringSync(),
+      contains('listJournal()'),
+    );
+    expect(
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
       isNot(contains('http://')),
     );

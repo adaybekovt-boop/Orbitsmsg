@@ -17,16 +17,16 @@
 // silently, matching the web UX.
 
 import 'dart:async';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show compute;
+import 'package:flutter/foundation.dart' show compute, kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image/image.dart' as img;
 import 'package:mime/mime.dart';
 
+import '../core/read_picked_bytes.dart';
 import '../state/calls_provider.dart';
 import '../state/chat_prefs_provider.dart';
 import '../state/connections_notifier.dart';
@@ -281,14 +281,14 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
   Future<void> _runAttachmentPick() async {
     FilePickerResult? picked;
     try {
-      // `withData: true` pulls bytes into memory up front. Worst case
-      // is 12 MiB (our hard cap), which is fine to hold transiently;
-      // it avoids a race where iOS sweeps the picker-cached file
-      // between `pickFiles` resolving and our `readAsBytes` call.
+      // Native: path only, then [readPickedBytes] stats the size before
+      // reading so a 100 MiB pick is refused without a Dart Uint8List.
+      // Web still needs picker bytes (`xFile` requires `withData`).
+      // Chat send is still PeerJS base64 (12 MiB) — not Bare Drop.
       picked = await FilePicker.platform.pickFiles(
         type: FileType.any,
         allowMultiple: false,
-        withData: true,
+        withData: kIsWeb,
       );
     } catch (_) {
       if (!mounted) return;
@@ -304,32 +304,14 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
     }
     if (picked == null || picked.files.isEmpty) return;
     final pf = picked.files.single;
-    Uint8List? bytes = pf.bytes;
-    // Some Android configurations still only return a path (no bytes),
-    // despite `withData: true`. Fall back to reading the path.
-    if ((bytes == null || bytes.isEmpty) && pf.path != null) {
-      try {
-        bytes = await File(pf.path!).readAsBytes();
-      } catch (_) {
-        bytes = null;
-      }
-    }
-    if (bytes == null || bytes.isEmpty) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(
-          const SnackBar(content: Text('Не удалось прочитать файл')),
-        );
-      return;
-    }
     // 12 MiB raw cap — match the JS front gate so the user sees the
     // error before we burn time encoding base64 to learn the same
     // thing on the wire side.
     const int maxRaw = 12 * 1024 * 1024;
-    if (bytes.length > maxRaw) {
+    final pickedBytes = await readPickedBytes(pf, maxRawBytes: maxRaw);
+    if (pickedBytes.tooLarge) {
       if (!mounted) return;
-      final mb = (bytes.length / (1024 * 1024)).ceil();
+      final mb = (pickedBytes.sizeBytes / (1024 * 1024)).ceil();
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
         ..showSnackBar(
@@ -339,6 +321,16 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
             ),
             duration: const Duration(seconds: 3),
           ),
+        );
+      return;
+    }
+    final bytes = pickedBytes.bytes;
+    if (bytes == null || bytes.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(content: Text('Не удалось прочитать файл')),
         );
       return;
     }

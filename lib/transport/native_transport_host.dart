@@ -161,6 +161,9 @@ class NativeTransportHost {
         memory.ingest(record);
       }
     }
+    try {
+      ingestWorkletRows(memory, await transport!.listJournal());
+    } catch (_) {}
 
     _ref.read(connectionsNotifierProvider.notifier).bindNativeTransport(
           transport!,

@@ -12,11 +12,13 @@
 // interactive here (voice mesh UI is a later phase).
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mime/mime.dart';
 
+import '../core/read_picked_bytes.dart';
 import '../peer/room_disclaimer.dart';
 import '../peer/room_manager.dart';
 import '../peer/room_plaintext_gate.dart';
@@ -114,9 +116,10 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
   /// pickers on Android, which throws on the second).
   bool _roomAttachBusy = false;
 
-  /// Pick a file and send it into [channelId]. Uses `withData: true` so the
-  /// bytes arrive in memory (no dart:io path read — keeps this web-safe). For
-  /// images we synthesize a small JPEG thumbnail so the bubble shows a preview.
+  /// Pick a file and send it into [channelId]. Native uses a path +
+  /// [readPickedBytes] (stat then read under the 12 MiB cap) so this
+  /// page stays free of `dart:io`. Web still needs picker bytes.
+  /// Rooms stay host-plaintext PeerJS — not Bare path-stream Drop.
   Future<void> _pickRoomAttachment(String roomId, String channelId) async {
     if (_roomAttachBusy) return;
     _roomAttachBusy = true;
@@ -126,7 +129,7 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
         picked = await FilePicker.platform.pickFiles(
           type: FileType.any,
           allowMultiple: false,
-          withData: true,
+          withData: kIsWeb,
         );
       } catch (_) {
         _toast('Не удалось открыть файловый выбор');
@@ -134,14 +137,18 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
       }
       if (picked == null || picked.files.isEmpty) return;
       final pf = picked.files.single;
-      final bytes = pf.bytes;
-      if (bytes == null || bytes.isEmpty) {
-        _toast('Не удалось прочитать файл');
+      final pickedBytes = await readPickedBytes(
+        pf,
+        maxRawBytes: kMaxRoomFileRawBytes,
+      );
+      if (pickedBytes.tooLarge) {
+        final mb = (pickedBytes.sizeBytes / (1024 * 1024)).ceil();
+        _toast('Файл больше 12 МБ — отправка невозможна ($mb МБ).');
         return;
       }
-      if (bytes.length > kMaxRoomFileRawBytes) {
-        final mb = (bytes.length / (1024 * 1024)).ceil();
-        _toast('Файл больше 12 МБ — отправка невозможна ($mb МБ).');
+      final bytes = pickedBytes.bytes;
+      if (bytes == null || bytes.isEmpty) {
+        _toast('Не удалось прочитать файл');
         return;
       }
 

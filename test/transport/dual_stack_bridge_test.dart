@@ -259,6 +259,25 @@ void main() {
       isTrue,
     );
     expect(jsonEncode(envelopes), isNot(contains('plaintext')));
+    final restored = MemoryJournal('dev-b-restore');
+    expect(ingestWorkletRows(restored, envelopes), greaterThan(0));
+    final liveEnc = b.journal.records
+        .map((r) => r.fields['encryptedEnvelope'])
+        .whereType<List<int>>()
+        .first;
+    final restoredEnc = restored.records
+        .map((r) => r.fields['encryptedEnvelope'])
+        .whereType<List<int>>()
+        .first;
+    expect(restoredEnc, liveEnc);
+    expect(
+      restored.records.every((r) => !r.fields.containsKey('plaintext')),
+      isTrue,
+    );
+    expect(
+      restored.records.every((r) => !r.fields.containsKey('rootKey')),
+      isTrue,
+    );
   });
 
   test('recipient reads mailbox after the sender is gone', () async {

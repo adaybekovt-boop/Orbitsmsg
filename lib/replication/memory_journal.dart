@@ -72,6 +72,13 @@ class MemoryJournal {
         return null;
       }
     }
+    // Boot hydrates FileJournal then the carrier. Same revoke / ack
+    // payload must not land twice even if writer ids were restamped.
+    if (_records.any((r) =>
+        r.kind == record.kind &&
+        journalFieldsEqual(r.fields, record.fields))) {
+      return null;
+    }
     return append(record.kind, record.fields);
   }
 
@@ -110,10 +117,98 @@ bool journalKindRequiresEnvelope(String kind) =>
     kind == ReplicationEventKind.messageEnvelopeCreated.name ||
     kind == ReplicationEventKind.attachmentPublished.name;
 
+/// Inverse of [journalRecordToWorklet]. Ciphertext stays ciphertext.
+JournalRecord? journalRecordFromWorklet(Map<String, Object?> row) {
+  final kindName = row['kind'] as String?;
+  if (kindName == null || kindName.isEmpty) return null;
+  ReplicationEventKind? kind;
+  for (final k in ReplicationEventKind.values) {
+    if (k.name == kindName) {
+      kind = k;
+      break;
+    }
+  }
+  if (kind == null) return null;
+  final raw = row['fields'];
+  if (raw is! Map) return null;
+  final fields = <String, Object?>{};
+  raw.forEach((k, v) {
+    final key = '$k';
+    if (key == 'encryptedEnvelope' && v is String) {
+      try {
+        fields[key] = base64Decode(v);
+      } catch (_) {
+        return;
+      }
+    } else {
+      fields[key] = v;
+    }
+  });
+  if (!replicationFieldsAreSafe(fields.keys)) return null;
+  if (journalKindRequiresEnvelope(kindName) &&
+      fields['encryptedEnvelope'] is! List<int>) {
+    return null;
+  }
+  final seqRaw = row['seq'];
+  final seq = seqRaw is int
+      ? seqRaw
+      : seqRaw is num
+          ? seqRaw.toInt()
+          : 0;
+  return JournalRecord(
+    seq: seq,
+    writerDeviceId: row['writerDeviceId'] as String? ?? '',
+    kind: kind,
+    fields: fields,
+  );
+}
+
+/// Merge carrier/worklet rows into a Dart journal. Duplicates skip.
+int ingestWorkletRows(
+  MemoryJournal journal,
+  Iterable<Map<String, Object?>> rows,
+) {
+  var n = 0;
+  for (final row in rows) {
+    final rec = journalRecordFromWorklet(row);
+    if (rec != null && journal.ingest(rec) != null) n++;
+  }
+  return n;
+}
+
 bool encryptedEnvelopeEquals(Object? stored, List<int> bytes) {
   if (stored is! List<int> || stored.length != bytes.length) return false;
   for (var i = 0; i < bytes.length; i++) {
     if (stored[i] != bytes[i]) return false;
   }
   return true;
+}
+
+bool journalFieldsEqual(Map<String, Object?> a, Map<String, Object?> b) {
+  if (a.length != b.length) return false;
+  for (final key in a.keys) {
+    if (!b.containsKey(key)) return false;
+    if (!_journalValueEqual(a[key], b[key])) return false;
+  }
+  return true;
+}
+
+bool _journalValueEqual(Object? a, Object? b) {
+  if (identical(a, b) || a == b) return true;
+  if (a is List && b is List) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (!_journalValueEqual(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  if (a is Map && b is Map) {
+    if (a.length != b.length) return false;
+    for (final key in a.keys) {
+      if (!b.containsKey(key)) return false;
+      if (!_journalValueEqual(a[key], b[key])) return false;
+    }
+    return true;
+  }
+  return false;
 }
