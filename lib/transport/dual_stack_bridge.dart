@@ -1508,6 +1508,11 @@ class DualStackBridge {
   Future<void> sendCallSignal(String peerId, CallSignal signal) async {
     if (!replicationValueIsSafe(signal.toJson())) return;
     if (signal.callId.isEmpty || signal.callId.contains('://')) return;
+    if ((signal.type == CallSignalType.offer ||
+            signal.type == CallSignalType.answer) &&
+        !isSendableCallSdp(signal.sdp)) {
+      return;
+    }
     for (final target in _sendPeerIds(peerId)) {
       if (!await _ensureNativeSendReady(target)) continue;
       await transport.send(
