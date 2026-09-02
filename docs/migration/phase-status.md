@@ -16,7 +16,7 @@ PeerJS. `HyperswarmRollout` default remains **off**.
 | 0 | ADRs and contracts in tree | `test/docs_consistency/migration_phase0_test.dart` | Closed |
 | 1 | Loopback harness only | `tool/connectivity_harness` `node --test` **16/16** | NAT / device matrix **open** |
 | 2 | Modeled stand schema only | `tool/connectivity_harness/test/stand.test.js` | Live Kazakhstan matrix **open** |
-| 3 | Federated plugin registered; OS hosts **fail closed** (`BARE_RUNTIME_MISSING`) without a linked Bare binary; local worklet hash verified before Node/debug spawn | `packages/orbits_transport` `flutter test` **5/5**; `test/transport/plugin_boundary_test.dart`; `bash tool/ci/verify_worklet_bundle.sh`; Linux `g++ -c` host | Signed Bare binary **not shipped**; `tool/bare-reproducible-build.sh` exits 2 |
+| 3 | Federated plugin registered and linked on iOS/Windows/Android CI builds; OS hosts **fail closed** (`BARE_RUNTIME_MISSING`) without a linked Bare binary; local worklet hash verified before Node/debug spawn | `packages/orbits_transport` `flutter test` **5/5**; `test/transport/plugin_boundary_test.dart`; host `g++` fail-closed tests; GitHub Build iOS/Windows/Android on `d01c54e` | Signed Bare binary **not shipped**; `tool/bare-reproducible-build.sh` exits 2 |
 | 4 | App `NativeTransportHost` talks only through `PluginOrbitsTransport` when rollout ≠ off; default rollout still off so boot stays PeerJS | `test/transport/plugin_boundary_test.dart`, `native_backend_policy_test.dart` | Two physical natives **open** |
 | 5 | Identity-signed capabilities in tree | `test/transport/capability_matrix_test.dart` | Physical pair **open** |
 | 6 | In-app call machine; no PushKit | `test/calls/native_call_machine_test.dart` | Physical call / PushKit **open** |

@@ -12,6 +12,7 @@ migration is code-complete or safe to merge.
 | PR | https://github.com/adaybekovt-boop/Orbitsmsg/pull/62 |
 | Base | `main` at `671c2e57875d62e56b371a7d4c651de9d2477836` |
 | Repair-pass start HEAD | `77033a313d798eed8fbf3f1a3385f0ed07840b2d` |
+| Platform-green implementation SHA | `d01c54e2a9d4486e7f4aa7ade9d7dd9498e29c64` |
 | Flutter | 3.44.7 (Dart 3.12.2) |
 
 Invariants checked after the repair:
@@ -54,8 +55,10 @@ Invariants checked after the repair:
 10. `c2fc04f` `test(migration): prove worklet resume and drop unused plugin import`
 11. `fdba86d` `fix(identity): drop unused dart:convert after device_registry helpers`
 12. `ef217cb` `docs(migration): reconcile PR 62 claims with repair evidence`
-
-Report HEAD: `ef217cb97a6c3e562049b5631b3dd51755fcc181`.
+13. `cb876cb` `docs(migration): pin repair report ending commit SHA`
+14. `79ccc42` `fix(transport): package native plugin hosts for platform builds`
+15. `65265aa` `fix(ios): stop assigning get-only CallKit localizedName`
+16. `d01c54e` `fix(android): subclass abstract Telecom Connection on SDK 36`
 
 ## Defects fixed
 
@@ -67,6 +70,7 @@ Report HEAD: `ef217cb97a6c3e562049b5631b3dd51755fcc181`.
 | App did not depend on `orbits_transport` | Path dependency + generated registrants |
 | `NativeTransportHost` bypassed the plugin | Now uses `PluginOrbitsTransport` |
 | Native hosts returned success without Bare | `start` → `BARE_RUNTIME_MISSING`; `started` stays false |
+| iOS/Windows/Linux plugins could not link | podspecs + CMake registrars; fail-closed host tests |
 | `resolveBareRuntime()` fell back to Node in release | Release throws `BARE_RUNTIME_MISSING` |
 | Worklet `sendFile` used `readFileSync` | Chunked `readSync` + drain + resume state |
 | Placeholder device keys / swallowed publish | Real persisted keys + signed binding |
@@ -74,11 +78,14 @@ Report HEAD: `ef217cb97a6c3e562049b5631b3dd51755fcc181`.
 | `/v1/blocks` still served | Default off; Dart client throws; Node 404 |
 | Node replay was memory-only | `requests` persisted; restart replay rejected |
 | SBOM job counted package names | CycloneDX 1.5 from `pubspec.lock` |
+| iOS 26 `CXProviderConfiguration.localizedName` assignment | Removed; CallKit uses the app display name |
+| Android `Connection()` abstract on compileSdk 36 | Concrete `OrbitsConnection` subclass |
 
-## Local commands on the implementation SHA
+## Commands on `d01c54e` / equivalent local tree
 
-Recorded on this workspace after `fdba86d` (docs commit does not change
-runtime code):
+GitHub App tests on `d01c54e`: `01:39 +743: All tests passed!`
+
+Local (packaging SHA `79ccc42`; later commits are iOS CallKit + Android Telecom only):
 
 ```text
 flutter analyze --no-fatal-infos
@@ -112,12 +119,22 @@ python3 tool/ci/generate_sbom.py --lock pubspec.lock --out /tmp/orbits.cdx.json
 bash tool/ci/verify_worklet_bundle.sh
   → all src/*.js hashes match BUNDLE.manifest
 
-g++ -std=c++17 -c packages/orbits_transport_linux/linux/orbits_transport_plugin.cc
-  → compiled
+g++ host fail-closed tests (linux + windows TUs)
+  → exit 0
 
 git diff --check main...HEAD
   → exit 0
 ```
+
+## GitHub on implementation SHA `d01c54e`
+
+- Security scans **success**: https://github.com/adaybekovt-boop/Orbitsmsg/actions/runs/33681971114
+  - Semgrep, Gitleaks, CycloneDX SBOM and license policy
+- Build & Release **success**: https://github.com/adaybekovt-boop/Orbitsmsg/actions/runs/33681971111
+  - Analyze app, Analyze federated packages, App tests, Plugin tests,
+    Connectivity harness, Storage peer, Required suites
+  - Build Web, Build Windows, Build iOS (Xcode 26), Build Android (APK)
+  - GitHub Release **skipped** (not a `v*` tag)
 
 ## Remaining code blockers
 
@@ -125,6 +142,9 @@ git diff --check main...HEAD
   hosts fail closed rather than pretending to send.
 - PeerJS remains the default live transport.
 - Rooms remain host-plaintext.
+- Linux desktop `flutter build` is not in this workflow; the Linux host
+  TU compiles in CI and the registrar/CMake exist for local desktop
+  builds. GTK/ninja are not on this agent.
 - Source-text host-surface tests remain as narrow policy guards; they
   are not counted as runtime Bare evidence.
 
