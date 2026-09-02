@@ -444,6 +444,8 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         }
       }
     }
+    // Isolation fail-closed: web-only/removed must not use PeerJS even
+    // when `_dual` is unbound. Rollout off does not auto-start Hyperswarm.
     if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
     final conn = getConn(remoteId, 'reliable');
     if (conn == null) return false;

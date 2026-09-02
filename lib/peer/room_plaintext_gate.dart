@@ -23,9 +23,11 @@ class RoomPlaintextSessionAck {
   void reset() => _acked = false;
 
   /// Control packets (join/leave/members/…) always pass. `room_msg`
-  /// (text / sticker / file) requires the disclaimer ack.
+  /// (text / sticker / file) and host-plaintext `room_file_chunk`
+  /// require the disclaimer ack.
   bool allowsPacket(Map<String, Object?> packet) {
-    if (packet['type'] != 'room_msg') return true;
+    final type = packet['type'];
+    if (type != 'room_msg' && type != 'room_file_chunk') return true;
     return _acked;
   }
 }

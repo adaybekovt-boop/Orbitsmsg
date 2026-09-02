@@ -6,6 +6,7 @@ import 'package:orbits_flutter/transport/capabilities.dart';
 import 'package:orbits_flutter/transport/dual_stack.dart';
 import 'package:orbits_flutter/transport/peerjs_window.dart';
 import 'package:orbits_flutter/transport/signed_capabilities.dart';
+import 'package:orbits_flutter/transport/worklet_backend.dart';
 
 void main() {
   setUp(resetFlagsForTests);
@@ -89,6 +90,24 @@ void main() {
     expect(decision.isolationMode, kPeerjsIsolationFallbackOnly);
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
     expect(peerjsIsProductPath(), isTrue);
+  });
+
+  test('isolation removed fails closed and does not start Hyperswarm', () {
+    expect(hyperswarmRollout(), HyperswarmRollout.off);
+    expect(isHyperswarmTransportEnabled(), isFalse);
+    expect(
+      decideDualStack(
+        local: both,
+        remote: both,
+        isolationMode: kPeerjsIsolationRemoved,
+      ).route,
+      TransportRoute.unavailable,
+    );
+    expect(
+      preferredWorkletBackend(modulePresent: true, hasBootstrap: true),
+      'loopback',
+    );
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
   });
 
   test('isolation fallback-only prefers Hyperswarm once rollout is on', () {

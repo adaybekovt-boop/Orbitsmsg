@@ -176,6 +176,7 @@ flutter:
     - tool/connectivity_harness/src/swarm.js
     - tool/connectivity_harness/src/stand.js
     - tool/connectivity_harness/src/corestore_journal.js
+    - tool/connectivity_harness/src/autobase.js
 
   fonts:
     - family: Manrope

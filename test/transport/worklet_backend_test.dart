@@ -214,6 +214,18 @@ void main() {
       contains('rememberPeer'),
     );
     expect(
+      File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
+      contains("require('./autobase')"),
+    );
+    expect(
+      File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
+      contains('autobase.state'),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'autobase.js'"),
+    );
+    expect(
       File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
       contains('rememberKnownPeers'),
     );

@@ -22,6 +22,7 @@ const { contactDiscoveryTopic } = require('./discovery')
 const { LoopbackBackend } = require('./loopback')
 const { REQUEST, RESPONSE, EVENT, encode, Decoder } = require('./ipc')
 const { CorestoreJournal } = require('./corestore_journal')
+const { AutobaseProjection } = require('./autobase')
 
 const FILE_CHUNK = 64 * 1024
 
@@ -95,6 +96,7 @@ class Worklet {
     this._topic = null
     this.events = []
     this._journal = new CorestoreJournal('local-device')
+    this._autobase = new AutobaseProjection()
     this._files = new Map()
     this._attachFiles = new Map()
     this._resumeOffsets = new Map()
@@ -220,6 +222,12 @@ class Worklet {
     const peer = this._peers.get(peerId)
     if (!peer) throw new Error('not connected: ' + peerId)
     const payload = Buffer.isBuffer(frame) ? frame : Buffer.from(JSON.stringify(frame))
+    if (channel === 'control') {
+      this._applyControlAutobase(
+        payload,
+        (this._config && this._config.peerId) || 'local',
+      )
+    }
     peer.socket.write(encodeMux(channel, payload))
   }
 
@@ -404,6 +412,9 @@ class Worklet {
     if (channel === 'attachment') {
       if (this._handleIncomingFile(peerId, body) === true) return
     }
+    if (channel === 'control') {
+      this._autobase.applyFromPacket(body, peerId)
+    }
     this._emit('frame', { peerId, channel, body, frameB64 })
   }
 
@@ -557,6 +568,15 @@ class Worklet {
       // already flushed
     }
   }
+
+  _applyControlAutobase(payload, fallbackWriter) {
+    try {
+      const body = JSON.parse(payload.toString('utf8'))
+      this._autobase.applyFromPacket(body, fallbackWriter)
+    } catch {
+      // binary / non-JSON control frames are not Autobase events
+    }
+  }
 }
 
 async function handleIpcRequest(worklet, body) {
@@ -609,6 +629,8 @@ async function handleIpcRequest(worklet, body) {
       return await worklet._journal.append(params)
     case 'journal.list':
       return { blocks: worklet._journal.list() }
+    case 'autobase.state':
+      return worklet._autobase.snapshot()
     default:
       throw new Error('unknown method ' + method)
   }

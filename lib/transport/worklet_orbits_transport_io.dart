@@ -28,6 +28,7 @@ const _bundledWorkletFiles = <String>[
   'swarm.js',
   'stand.js',
   'corestore_journal.js',
+  'autobase.js',
 ];
 
 Future<WorkletOrbitsTransport?> spawnWorkletTransport({

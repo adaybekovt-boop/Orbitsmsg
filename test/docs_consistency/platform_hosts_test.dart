@@ -42,6 +42,22 @@ void main() {
       isTrue,
     );
     expect(
+      File('tool/connectivity_harness/src/autobase.js').existsSync(),
+      isTrue,
+    );
+    expect(
+      File('tool/connectivity_harness/src/autobase.js').readAsStringSync(),
+      contains('room_file_chunk'),
+    );
+    expect(
+      File('tool/connectivity_harness/src/autobase.js').readAsStringSync(),
+      isNot(contains('fetch(')),
+    );
+    expect(
+      File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
+      contains("require('./autobase')"),
+    );
+    expect(
       File('tool/connectivity_harness/src/corestore_journal.js').existsSync(),
       isTrue,
     );

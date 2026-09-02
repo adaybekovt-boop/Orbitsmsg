@@ -395,6 +395,12 @@ void main() {
         'guestName': 'G',
         'guestPeerId': 'g1',
       });
+      await h.tx.bridge.handleInbound('g2', {
+        'type': 'room_join',
+        'roomId': hostId,
+        'guestName': 'G2',
+        'guestPeerId': 'g2',
+      });
       h.tx.sent.clear();
       final raw = List<int>.generate(1000, (i) => i & 0xff);
       final att = {
@@ -426,6 +432,7 @@ void main() {
       expect(msgs.first['peerId'], 'g1');
       final blob = await db.getFileBlob(msgs.first['id'] as String);
       expect(blob, isNotNull);
+      expect(blob!['localPath'], isNotNull);
       final relays = h.tx.ofType('room_file_chunk').toList();
       expect(relays, isNotEmpty);
       expect(relays.first['fromPeerId'], 'g1');

@@ -1360,6 +1360,47 @@ void main() {
     await b.detach();
   });
 
+  test('room_file_chunk projects Autobase attachment metadata without b64',
+      () async {
+    final (a, b, _) = await linked();
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    expect(
+      a.sendRoomPacket('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'room_file_chunk',
+        'id': 'f1',
+        'roomId': 'room-ab',
+        'channelId': 'c1',
+        'offset': 0,
+        'total': 4,
+        'last': true,
+        'b64': 'AQIDBA==',
+        'fromPeerId': 'ORBIT-AAAAAAAAAAAAAAAA',
+        'attachment': {
+          'name': 'note.bin',
+          'size': 4,
+          'mime': 'application/octet-stream',
+        },
+      }),
+      isTrue,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(a.rooms.state.attachments['f1']?['name'], 'note.bin');
+    expect(a.rooms.state.attachments['f1']?.containsKey('b64'), isFalse);
+    expect(b.rooms.state.attachments['f1']?['name'], 'note.bin');
+    expect(b.rooms.state.attachments['f1']?.containsKey('b64'), isFalse);
+    expect(
+      a.journal.records.every((r) => !r.fields.containsKey('b64')),
+      isTrue,
+    );
+    expect(
+      a.journal.records.every((r) => !r.fields.containsKey('fileKey')),
+      isTrue,
+    );
+    kRoomPlaintextSessionAck.reset();
+    await a.detach();
+    await b.detach();
+  });
+
   test('room_msg is blocked without the plaintext ack', () {
     kRoomPlaintextSessionAck.reset();
     expect(

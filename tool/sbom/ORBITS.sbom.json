@@ -21,13 +21,13 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "969829b414a6ccb0397f91e047dcedc49e78db8de2abd58250dcd69fec82839f"
+          "content": "b684c439eeecda59640dba3abec8137a35c90aa41587cd40cf01347187e702d7"
         }
       ],
       "properties": [
         {
           "name": "pinnedWorkletSha256",
-          "value": "969829b414a6ccb0397f91e047dcedc49e78db8de2abd58250dcd69fec82839f"
+          "value": "b684c439eeecda59640dba3abec8137a35c90aa41587cd40cf01347187e702d7"
         },
         {
           "name": "remoteJs",
@@ -48,6 +48,26 @@
         {
           "name": "pinnedPackageJsonSha256",
           "value": "340fa7323037854f5b210b1373857e876a264e27bbdaca2fa11dc45588ab05f6"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "name": "orbits-connectivity-autobase.js",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "911d54ed97856a027adf2a7e1336b3f6f32fb5f039f30edaa24dd3c5c2bf2e01"
+        }
+      ],
+      "properties": [
+        {
+          "name": "pinnedSourceSha256",
+          "value": "911d54ed97856a027adf2a7e1336b3f6f32fb5f039f30edaa24dd3c5c2bf2e01"
+        },
+        {
+          "name": "remoteJs",
+          "value": "false"
         }
       ]
     },

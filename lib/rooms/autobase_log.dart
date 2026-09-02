@@ -101,6 +101,28 @@ RoomEvent? roomEventFromNativePacket(
           'text': packet['text'],
         },
       );
+    case 'room_file_chunk':
+      final offset = (packet['offset'] as num?)?.toInt() ?? 0;
+      if (offset != 0) return null;
+      final id = packet['id'];
+      if (id == null) return null;
+      final rawAtt = packet['attachment'];
+      final att = rawAtt is Map
+          ? Map<String, Object?>.from(rawAtt)
+          : <String, Object?>{};
+      return RoomEvent(
+        writerId: writer,
+        seq: seq,
+        kind: 'attachment',
+        payload: {
+          'id': id,
+          'name': att['name'],
+          'size': att['size'] ?? packet['total'],
+          'mime': att['mime'],
+          if (packet['roomId'] != null) 'roomId': packet['roomId'],
+          if (packet['channelId'] != null) 'channelId': packet['channelId'],
+        },
+      );
     default:
       return null;
   }
@@ -113,6 +135,8 @@ class RoomState {
   final Map<String, String> roles = <String, String>{};
   final Map<String, String> channels = <String, String>{};
   final List<Map<String, Object?>> messages = <Map<String, Object?>>[];
+  final Map<String, Map<String, Object?>> attachments =
+      <String, Map<String, Object?>>{};
   final Set<String> applied = <String>{};
 
   String keyOf(RoomEvent e) => '${e.writerId}:${e.seq}';
@@ -126,6 +150,7 @@ class AutobaseProjection {
     state.roles.clear();
     state.channels.clear();
     state.messages.clear();
+    state.attachments.clear();
     state.applied.clear();
   }
 
@@ -154,6 +179,13 @@ class AutobaseProjection {
         if (id != null && name != null) state.channels[id] = name;
       case 'message':
         state.messages.add(Map<String, Object?>.from(event.payload));
+      case 'attachment':
+        final id = event.payload['id'] as String?;
+        if (id == null) return;
+        state.attachments[id] = Map<String, Object?>.from(event.payload)
+          ..remove('b64')
+          ..remove('fileKey')
+          ..remove('fileKeyB64');
       case 'moderation':
         final id = event.payload['messageId'] as String?;
         if (id != null) {

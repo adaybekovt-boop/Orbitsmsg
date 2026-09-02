@@ -33,6 +33,43 @@ void main() {
     expect(sent, [packet]);
   });
 
+  test('sendRoomPacket blocks room_file_chunk without session ack', () {
+    expect(kRoomPlaintextSessionAck.isAcknowledged, isFalse);
+    final sent = <Map<String, Object?>>[];
+    final ok = sendGuardedRoomPacket(
+      {
+        'type': 'room_file_chunk',
+        'id': 'f1',
+        'offset': 0,
+        'b64': 'AQIDBA==',
+      },
+      connected: true,
+      send: sent.add,
+    );
+    expect(
+      ok,
+      isFalse,
+      reason: 'wire send must refuse un-acked room_file_chunk',
+    );
+    expect(sent, isEmpty);
+  });
+
+  test('sendRoomPacket allows room_file_chunk after ack', () {
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    final sent = <Map<String, Object?>>[];
+    final packet = {
+      'type': 'room_file_chunk',
+      'id': 'f1',
+      'offset': 0,
+      'b64': 'AQIDBA==',
+    };
+    expect(
+      sendGuardedRoomPacket(packet, connected: true, send: sent.add),
+      isTrue,
+    );
+    expect(sent, [packet]);
+  });
+
   test('control packets still send without ack', () {
     final sent = <Map<String, Object?>>[];
     final ok = sendGuardedRoomPacket(

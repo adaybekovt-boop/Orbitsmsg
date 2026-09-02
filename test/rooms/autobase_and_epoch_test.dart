@@ -58,6 +58,45 @@ void main() {
       )?.payload['roomId'],
       'room-1',
     );
+    final fileEvent = roomEventFromNativePacket(
+      {
+        'type': 'room_file_chunk',
+        'id': 'f1',
+        'roomId': 'r1',
+        'channelId': 'c1',
+        'offset': 0,
+        'total': 4,
+        'b64': 'AQIDBA==',
+        'fileKey': 'nope',
+        'attachment': {
+          'name': 'note.bin',
+          'size': 4,
+          'mime': 'application/octet-stream',
+        },
+        'abWriter': 'a',
+        'abSeq': 2,
+      },
+      fallbackWriter: 'x',
+    );
+    expect(fileEvent?.kind, 'attachment');
+    expect(fileEvent?.payload['name'], 'note.bin');
+    expect(fileEvent?.payload.containsKey('b64'), isFalse);
+    expect(fileEvent?.payload.containsKey('fileKey'), isFalse);
+    final later = roomEventFromNativePacket(
+      {
+        'type': 'room_file_chunk',
+        'id': 'f1',
+        'offset': 64,
+        'b64': 'xxxx',
+        'abWriter': 'a',
+        'abSeq': 3,
+      },
+      fallbackWriter: 'a',
+    );
+    expect(later, isNull);
+    final withFile = AutobaseProjection()..apply(fileEvent!);
+    expect(withFile.state.attachments['f1']?['name'], 'note.bin');
+    expect(withFile.state.attachments['f1']?.containsKey('b64'), isFalse);
   });
 
   test('epoch rotate excludes the removed device', () {
