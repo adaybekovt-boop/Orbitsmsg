@@ -286,7 +286,9 @@ class Worklet {
     if (file.bytes != null) {
       throw new Error('sendFile takes a path, not bytes')
     }
-    if (file.fileKey != null || file.fileKeyB64 != null) {
+    // Nested walk: `{ meta: { fileKey } }` must not stream. Same set as
+    // inbound `_ingestAttachChunk`. Do not add `b64` — chunk ciphertext.
+    if (attachBodyHasForbiddenKey(file)) {
       throw new Error('sendFile refuses fileKey')
     }
     if (file.protocol === 'attach-chunk') {

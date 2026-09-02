@@ -2,9 +2,12 @@
 // live gateway flags are false, so we do not prompt for push permission
 // on the default PeerJS product path.
 
+import 'dart:collection';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
+import 'opaque_wake.dart';
 import 'push_gateway.dart';
 
 const MethodChannel kOrbitsPushChannel = MethodChannel('app.orbits/push');
@@ -16,11 +19,13 @@ class DevicePushTokenStore {
 
   void setApns(String token) {
     if (token.isEmpty) return;
+    if (!opaqueWakeTokenIsSafe(token)) return;
     apnsToken = token;
   }
 
   void setFcm(String token) {
     if (token.isEmpty) return;
+    if (!opaqueWakeTokenIsSafe(token)) return;
     fcmToken = token;
   }
 
@@ -49,9 +54,35 @@ class PushRegistration {
   }
 
   void acceptToken(Map<String, Object?> payload) {
-    final apns = payload['apns'] as String?;
-    final fcm = payload['fcm'] as String?;
-    if (apns != null) tokens.setApns(apns);
-    if (fcm != null) tokens.setFcm(fcm);
+    if (_payloadHasForbiddenKey(payload, HashSet<Object>.identity())) return;
+    final apns = payload['apns'];
+    final fcm = payload['fcm'];
+    if (apns is String) tokens.setApns(apns);
+    if (fcm is String) tokens.setFcm(fcm);
   }
+}
+
+/// Cycle-safe nested walk for [OpaqueWake.forbiddenKeys] (replication
+/// secrets plus UX wake keys). Ciphertext [List<int>] is a leaf.
+bool _payloadHasForbiddenKey(Object? value, Set<Object> seen) {
+  if (value == null || value is bool || value is num || value is String) {
+    return false;
+  }
+  if (value is List<int>) return false;
+  if (value is Map) {
+    if (!seen.add(value)) return false;
+    for (final entry in value.entries) {
+      if (OpaqueWake.forbiddenKeys.contains('${entry.key}')) return true;
+      if (_payloadHasForbiddenKey(entry.value, seen)) return true;
+    }
+    return false;
+  }
+  if (value is Iterable) {
+    if (!seen.add(value)) return false;
+    for (final item in value) {
+      if (_payloadHasForbiddenKey(item, seen)) return true;
+    }
+    return false;
+  }
+  return false;
 }

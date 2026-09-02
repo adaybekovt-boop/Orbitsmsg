@@ -5,6 +5,7 @@ import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.util.IdentityHashMap
 
 /// Android Bare host. The worklet bundle is embedded at build time.
 /// Production must not fetch remote JS. A local `assets/bare` slot is
@@ -26,17 +27,7 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
 
   override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
     if (call.method == "start") {
-      val remoteJs = call.argument<Boolean>("remoteJs")
-      val remoteJsUrl = call.argument<String>("remoteJsUrl")
-      val bundleUrl = call.argument<String>("bundleUrl")
-      val scriptUrl = call.argument<String>("scriptUrl")
-      val worklet = call.argument<String>("worklet") ?: call.argument<String>("workletPath")
-      val remote = remoteJs == true ||
-          !remoteJsUrl.isNullOrEmpty() ||
-          !bundleUrl.isNullOrEmpty() ||
-          !scriptUrl.isNullOrEmpty() ||
-          (worklet != null && worklet.contains("://"))
-      if (remote) {
+      if (startWantsRemoteJs(call.arguments)) {
         result.error("REMOTE_JS", "production Bare must not fetch remote JS", null)
         return
       }
@@ -52,6 +43,48 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
       return
     }
     result.notImplemented()
+  }
+
+  private fun startWantsRemoteJs(arguments: Any?): Boolean {
+    val args = arguments as? Map<*, *> ?: return false
+    if (args["remoteJs"] == true) return true
+    val remoteKeys = arrayOf(
+      "remoteJsUrl",
+      "bundleUrl",
+      "scriptUrl",
+      "addonUrl",
+      "downloadUrl",
+      "moduleUrl",
+      "jsUrl",
+      "workletUrl",
+    )
+    for (key in remoteKeys) {
+      val value = args[key]
+      if (value is String && value.isNotEmpty()) return true
+    }
+    return anyStringContainsScheme(args, IdentityHashMap())
+  }
+
+  private fun anyStringContainsScheme(
+    value: Any?,
+    seen: IdentityHashMap<Any, Boolean>,
+  ): Boolean {
+    when (value) {
+      is String -> return value.contains("://")
+      is Map<*, *> -> {
+        if (seen.put(value, true) != null) return false
+        for (child in value.values) {
+          if (anyStringContainsScheme(child, seen)) return true
+        }
+      }
+      is List<*> -> {
+        if (seen.put(value, true) != null) return false
+        for (child in value) {
+          if (anyStringContainsScheme(child, seen)) return true
+        }
+      }
+    }
+    return false
   }
 
   private fun extractBundledBare(): String? {

@@ -15,6 +15,7 @@ void main() {
       final text = File(path).readAsStringSync();
       expect(text, contains('must not fetch remote JS'), reason: path);
       expect(text, contains('barePath'), reason: path);
+      expect(text, contains('addonUrl'), reason: path);
       expect(text, contains('://'), reason: path);
       expect(text, isNot(contains('http://')));
       expect(text, isNot(contains('https://')));

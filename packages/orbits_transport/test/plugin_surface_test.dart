@@ -91,4 +91,32 @@ void main() {
       contains("startsWith('http://')"),
     );
   });
+
+  test('assertNoRemoteBareJs refuses extra URL keys and nested schemes', () {
+    for (final key in [
+      'addonUrl',
+      'downloadUrl',
+      'moduleUrl',
+      'jsUrl',
+      'workletUrl',
+    ]) {
+      expect(
+        () => assertNoRemoteBareJs({key: 'https://evil.example/x'}),
+        throwsStateError,
+        reason: key,
+      );
+    }
+    expect(
+      () => assertNoRemoteBareJs({
+        'extra': {'addonUrl': 'https://evil.example/x'},
+      }),
+      throwsStateError,
+    );
+    expect(
+      () => assertNoRemoteBareJs({
+        'worklet': '/tmp/orbits-worklet.js',
+      }),
+      returnsNormally,
+    );
+  });
 }

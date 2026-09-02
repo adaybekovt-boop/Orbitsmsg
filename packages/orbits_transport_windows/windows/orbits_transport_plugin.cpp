@@ -13,6 +13,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 
 namespace {
 
@@ -25,6 +26,32 @@ bool string_has_scheme(const std::string& s) {
   return s.find("://") != std::string::npos;
 }
 
+bool value_contains_scheme(const flutter::EncodableValue& value,
+                           std::unordered_set<const void*>* seen) {
+  if (const auto* s = std::get_if<std::string>(&value)) {
+    return string_has_scheme(*s);
+  }
+  if (const auto* map = std::get_if<flutter::EncodableMap>(&value)) {
+    if (!seen->insert(static_cast<const void*>(map)).second) {
+      return false;
+    }
+    for (const auto& entry : *map) {
+      if (value_contains_scheme(entry.second, seen)) return true;
+    }
+    return false;
+  }
+  if (const auto* list = std::get_if<flutter::EncodableList>(&value)) {
+    if (!seen->insert(static_cast<const void*>(list)).second) {
+      return false;
+    }
+    for (const auto& item : *list) {
+      if (value_contains_scheme(item, seen)) return true;
+    }
+    return false;
+  }
+  return false;
+}
+
 bool start_config_wants_remote_js(const flutter::EncodableMap* args) {
   if (args == nullptr) return false;
   const auto flag = args->find(flutter::EncodableValue("remoteJs"));
@@ -33,7 +60,9 @@ bool start_config_wants_remote_js(const flutter::EncodableMap* args) {
       if (*b) return true;
     }
   }
-  const char* remote_keys[] = {"remoteJsUrl", "bundleUrl", "scriptUrl"};
+  const char* remote_keys[] = {"remoteJsUrl", "bundleUrl",  "scriptUrl",
+                               "addonUrl",    "downloadUrl", "moduleUrl",
+                               "jsUrl",       "workletUrl"};
   for (const char* key : remote_keys) {
     const auto it = args->find(flutter::EncodableValue(key));
     if (it == args->end()) continue;
@@ -41,13 +70,10 @@ bool start_config_wants_remote_js(const flutter::EncodableMap* args) {
       if (!s->empty()) return true;
     }
   }
-  const char* path_keys[] = {"worklet", "workletPath"};
-  for (const char* key : path_keys) {
-    const auto it = args->find(flutter::EncodableValue(key));
-    if (it == args->end()) continue;
-    if (const auto* s = std::get_if<std::string>(&it->second)) {
-      if (string_has_scheme(*s)) return true;
-    }
+  std::unordered_set<const void*> seen;
+  seen.insert(static_cast<const void*>(args));
+  for (const auto& entry : *args) {
+    if (value_contains_scheme(entry.second, &seen)) return true;
   }
   return false;
 }

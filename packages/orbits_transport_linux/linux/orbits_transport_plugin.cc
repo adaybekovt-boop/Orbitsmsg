@@ -44,6 +44,27 @@ static gboolean string_has_scheme(const gchar* s) {
   return s != NULL && strstr(s, "://") != NULL;
 }
 
+static gboolean fl_value_contains_scheme(FlValue* value, GHashTable* seen) {
+  if (value == NULL) return FALSE;
+  FlValueType type = fl_value_get_type(value);
+  if (type == FL_VALUE_TYPE_STRING) {
+    return string_has_scheme(fl_value_get_string(value));
+  }
+  if (type != FL_VALUE_TYPE_MAP && type != FL_VALUE_TYPE_LIST) {
+    return FALSE;
+  }
+  if (g_hash_table_contains(seen, value)) return FALSE;
+  g_hash_table_insert(seen, value, value);
+  const gsize n = fl_value_get_length(value);
+  for (gsize i = 0; i < n; i++) {
+    FlValue* child = type == FL_VALUE_TYPE_MAP
+                         ? fl_value_get_map_value(value, i)
+                         : fl_value_get_list_value(value, i);
+    if (fl_value_contains_scheme(child, seen)) return TRUE;
+  }
+  return FALSE;
+}
+
 static gboolean start_config_wants_remote_js(FlValue* args) {
   if (args == NULL || fl_value_get_type(args) != FL_VALUE_TYPE_MAP) {
     return FALSE;
@@ -53,7 +74,9 @@ static gboolean start_config_wants_remote_js(FlValue* args) {
       fl_value_get_bool(flag)) {
     return TRUE;
   }
-  const gchar* remote_keys[] = {"remoteJsUrl", "bundleUrl", "scriptUrl", NULL};
+  const gchar* remote_keys[] = {"remoteJsUrl", "bundleUrl",  "scriptUrl",
+                                "addonUrl",    "downloadUrl", "moduleUrl",
+                                "jsUrl",       "workletUrl",  NULL};
   for (int i = 0; remote_keys[i] != NULL; i++) {
     FlValue* v = fl_value_lookup_string(args, remote_keys[i]);
     if (v != NULL && fl_value_get_type(v) == FL_VALUE_TYPE_STRING) {
@@ -61,15 +84,10 @@ static gboolean start_config_wants_remote_js(FlValue* args) {
       if (s != NULL && s[0] != '\0') return TRUE;
     }
   }
-  const gchar* path_keys[] = {"worklet", "workletPath", NULL};
-  for (int i = 0; path_keys[i] != NULL; i++) {
-    FlValue* v = fl_value_lookup_string(args, path_keys[i]);
-    if (v != NULL && fl_value_get_type(v) == FL_VALUE_TYPE_STRING &&
-        string_has_scheme(fl_value_get_string(v))) {
-      return TRUE;
-    }
-  }
-  return FALSE;
+  GHashTable* seen = g_hash_table_new(g_direct_hash, g_direct_equal);
+  const gboolean remote = fl_value_contains_scheme(args, seen);
+  g_hash_table_unref(seen);
+  return remote;
 }
 
 // Look next to this .so (Flutter bundled_libraries) then next to the exe.

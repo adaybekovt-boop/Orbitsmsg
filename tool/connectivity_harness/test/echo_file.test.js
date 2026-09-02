@@ -200,6 +200,20 @@ test('sendFile attach-chunk rejects fileKey, bytes, remote paths, and missing fi
     /fileKey/,
   )
   await assert.rejects(
+    () =>
+      a.sendFile(peerId, {
+        path: src,
+        protocol: 'attach-chunk',
+        fileId: 'x',
+        meta: { fileKey: 'nope' },
+      }),
+    /fileKey/,
+  )
+  await assert.rejects(
+    () => a.sendFile(peerId, { path: src, meta: { fileKey: 'nope' } }),
+    /fileKey/,
+  )
+  await assert.rejects(
     () => a.sendFile(peerId, { path: 'https://evil.example/x', protocol: 'attach-chunk', fileId: 'x' }),
     /remote path/,
   )

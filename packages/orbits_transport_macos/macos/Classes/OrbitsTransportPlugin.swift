@@ -19,12 +19,21 @@ public class OrbitsTransportPlugin: NSObject, FlutterPlugin {
         let s = args?[key] as? String ?? ""
         return !s.isEmpty
       }
-      func hasScheme(_ key: String) -> Bool {
-        let s = args?[key] as? String ?? ""
-        return s.contains("://")
+      let remoteKeys = [
+        "remoteJsUrl", "bundleUrl", "scriptUrl",
+        "addonUrl", "downloadUrl", "moduleUrl", "jsUrl", "workletUrl",
+      ]
+      var remote = remoteJs
+      for key in remoteKeys {
+        if nonempty(key) {
+          remote = true
+          break
+        }
       }
-      if remoteJs || nonempty("remoteJsUrl") || nonempty("bundleUrl") ||
-          nonempty("scriptUrl") || hasScheme("worklet") || hasScheme("workletPath") {
+      if !remote, let args, Self.containsScheme(args) {
+        remote = true
+      }
+      if remote {
         result(
           FlutterError(
             code: "REMOTE_JS",
@@ -46,6 +55,34 @@ public class OrbitsTransportPlugin: NSObject, FlutterPlugin {
       return
     }
     result(FlutterMethodNotImplemented)
+  }
+
+  static func containsScheme(_ value: Any) -> Bool {
+    var seen = Set<ObjectIdentifier>()
+    return containsScheme(value, seen: &seen)
+  }
+
+  private static func containsScheme(_ value: Any, seen: inout Set<ObjectIdentifier>) -> Bool {
+    if let s = value as? String {
+      return s.contains("://")
+    }
+    if let obj = value as? AnyObject, (obj is NSDictionary || obj is NSArray) {
+      let id = ObjectIdentifier(obj)
+      if seen.contains(id) { return false }
+      seen.insert(id)
+    }
+    if let dict = value as? [AnyHashable: Any] {
+      for child in dict.values where containsScheme(child, seen: &seen) {
+        return true
+      }
+      return false
+    }
+    if let arr = value as? [Any] {
+      for child in arr where containsScheme(child, seen: &seen) {
+        return true
+      }
+    }
+    return false
   }
 
   static func bundledBarePath() -> String? {

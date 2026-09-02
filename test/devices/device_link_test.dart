@@ -38,5 +38,70 @@ void main() {
       ),
       isFalse,
     );
+    // Noise / Hypercore writer keys are not the identity key.
+    expect(link.transportPublicKey, isNot(equals(spki)));
+    expect(link.hypercorePublicKey, isNot(equals(spki)));
+    expect(link.identityPublicKey, spki);
+  });
+
+  test('honest toQrJson still fromQrJson and verifyDeviceLink', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final link = await issueDeviceLink(
+      deviceId: 'phone-honest',
+      transportPublicKey: Uint8List.fromList(List<int>.filled(32, 7)),
+      hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 8)),
+      createdAt: 1,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    final json = link.toQrJson();
+    expect(json.containsKey('fileKey'), isFalse);
+    expect(json.containsKey('opaqueWakeToken'), isFalse);
+    expect(json.containsKey('deviceId'), isTrue);
+    expect(json.keys, isNot(contains(contains('://'))));
+
+    final again = DeviceLinkPayload.fromQrJson(json);
+    expect(again.deviceId, 'phone-honest');
+    expect(again.signature, link.signature);
+    expect(again.signedPayload(), link.signedPayload());
+    expect(again.identityPublicKey, spki);
+    expect(await verifyDeviceLink(again), isTrue);
+  });
+
+  test('DeviceLinkPayload.fromQrJson refuses nested secret fields', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final link = await issueDeviceLink(
+      deviceId: 'phone-refuse',
+      transportPublicKey: Uint8List.fromList(List<int>.filled(32, 7)),
+      hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 8)),
+      createdAt: 1,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    final json = link.toQrJson();
+
+    expect(
+      () => DeviceLinkPayload.fromQrJson({
+        ...json,
+        'extra': {'fileKey': 'x'},
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => DeviceLinkPayload.fromQrJson({
+        ...json,
+        'opaqueWakeToken': 'tok',
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => DeviceLinkPayload.fromQrJson({
+        ...json,
+        'extra': {'https://evil': 'x'},
+      }),
+      throwsArgumentError,
+    );
   });
 }
