@@ -1,6 +1,19 @@
 // Deterministic multiwriter projection for rooms (Phase 12).
 // Does not encrypt. Host-plaintext warning stays in place.
 
+import '../transport/layers.dart';
+
+/// Drop Hypercore-forbidden secrets from an Autobase event payload.
+/// Host-plaintext `text` stays. Attachment ciphertext `b64` is stripped
+/// separately in [AutobaseProjection.apply] — it is not in this set.
+Map<String, Object?> stripForbiddenAutobasePayload(Map<String, Object?> raw) {
+  return <String, Object?>{
+    for (final entry in raw.entries)
+      if (!kForbiddenReplicationFields.contains(entry.key))
+        entry.key: entry.value,
+  };
+}
+
 class RoomEvent {
   const RoomEvent({
     required this.writerId,
@@ -33,7 +46,7 @@ class RoomEvent {
       seq: (packet['seq'] as num?)?.toInt() ?? 0,
       kind: kind,
       payload: raw is Map
-          ? Map<String, Object?>.from(raw)
+          ? stripForbiddenAutobasePayload(Map<String, Object?>.from(raw))
           : <String, Object?>{},
     );
   }
@@ -158,36 +171,34 @@ class AutobaseProjection {
     final key = state.keyOf(event);
     if (state.applied.contains(key)) return;
     state.applied.add(key);
+    final payload = stripForbiddenAutobasePayload(event.payload);
     switch (event.kind) {
       case 'membership':
-        final peer = event.payload['peerId'] as String?;
-        final action = event.payload['action'] as String? ?? 'join';
+        final peer = payload['peerId'] as String?;
+        final action = payload['action'] as String? ?? 'join';
         if (peer == null) return;
         if (action == 'leave' || action == 'kick') {
           state.members.remove(peer);
           state.roles.remove(peer);
         } else {
-          state.members[peer] = event.payload['displayName'] as String? ?? peer;
+          state.members[peer] = payload['displayName'] as String? ?? peer;
         }
       case 'role':
-        final peer = event.payload['peerId'] as String?;
-        final role = event.payload['role'] as String?;
+        final peer = payload['peerId'] as String?;
+        final role = payload['role'] as String?;
         if (peer != null && role != null) state.roles[peer] = role;
       case 'channel':
-        final id = event.payload['id'] as String?;
-        final name = event.payload['name'] as String?;
+        final id = payload['id'] as String?;
+        final name = payload['name'] as String?;
         if (id != null && name != null) state.channels[id] = name;
       case 'message':
-        state.messages.add(Map<String, Object?>.from(event.payload));
+        state.messages.add(payload);
       case 'attachment':
-        final id = event.payload['id'] as String?;
+        final id = payload['id'] as String?;
         if (id == null) return;
-        state.attachments[id] = Map<String, Object?>.from(event.payload)
-          ..remove('b64')
-          ..remove('fileKey')
-          ..remove('fileKeyB64');
+        state.attachments[id] = payload..remove('b64');
       case 'moderation':
-        final id = event.payload['messageId'] as String?;
+        final id = payload['messageId'] as String?;
         if (id != null) {
           state.messages.removeWhere((m) => m['id'] == id);
         }

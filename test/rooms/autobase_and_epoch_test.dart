@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/rooms/autobase_log.dart';
 import 'package:orbits_flutter/rooms/sender_key_epoch.dart';
+import 'package:orbits_flutter/transport/layers.dart';
 
 void main() {
   test('two writers converge in any apply order', () {
@@ -128,6 +129,110 @@ void main() {
     );
     expect(rejoined.epochKey, isNot(epoch.epochKey));
     expect(rejoined.accepts('d2'), isTrue);
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('apply message keeps host-plaintext text and drops forbidden keys', () {
+    final proj = AutobaseProjection()
+      ..apply(
+        const RoomEvent(
+          writerId: 'a',
+          seq: 1,
+          kind: 'message',
+          payload: {
+            'id': 'm-hello',
+            'text': 'hello',
+            'fileKey': 'smuggle-file',
+            'kek': 'smuggle-kek',
+            'rootKey': 'smuggle-root',
+            'discoverySecret': 'smuggle-disco',
+          },
+        ),
+      );
+    final stored = proj.state.messages.single;
+    expect(stored['text'], 'hello');
+    expect(stored['id'], 'm-hello');
+    expect(stored.containsKey('fileKey'), isFalse);
+    expect(stored.containsKey('kek'), isFalse);
+    expect(stored.containsKey('rootKey'), isFalse);
+    expect(stored.containsKey('discoverySecret'), isFalse);
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('apply attachment strips b64 and fileKeyB64', () {
+    final proj = AutobaseProjection()
+      ..apply(
+        const RoomEvent(
+          writerId: 'a',
+          seq: 2,
+          kind: 'attachment',
+          payload: {
+            'id': 'att-1',
+            'name': 'note.bin',
+            'b64': 'AQIDBA==',
+            'fileKeyB64': 'c21lYWtlZA==',
+            'fileKey': 'also-nope',
+          },
+        ),
+      );
+    final stored = proj.state.attachments['att-1']!;
+    expect(stored['name'], 'note.bin');
+    expect(stored.containsKey('b64'), isFalse);
+    expect(stored.containsKey('fileKeyB64'), isFalse);
+    expect(stored.containsKey('fileKey'), isFalse);
+  });
+
+  test('fromWire drops plaintext from autobase-event payload', () {
+    final event = RoomEvent.fromWire({
+      'type': 'autobase-event',
+      'writerId': 'w',
+      'seq': 3,
+      'kind': 'message',
+      'payload': {
+        'id': 'm2',
+        'text': 'still here',
+        'plaintext': 'must-not-keep',
+      },
+    });
+    expect(event, isNotNull);
+    expect(event!.payload['text'], 'still here');
+    expect(event.payload.containsKey('plaintext'), isFalse);
+  });
+
+  test('stripForbiddenAutobasePayload matches kForbiddenReplicationFields', () {
+    expect(
+      kForbiddenReplicationFields,
+      containsAll(<String>{
+        'plaintext',
+        'password',
+        'kek',
+        'vaultKek',
+        'rootKey',
+        'sendCk',
+        'recvCk',
+        'dhPriv',
+        'skipped',
+        'discoverySecret',
+        'sharedDiscoverySecret',
+        'attachmentBytes',
+        'fileKey',
+        'fileKeyB64',
+        'privBytes',
+      }),
+    );
+    final raw = <String, Object?>{
+      'text': 'hello',
+      'id': 'm3',
+      for (final key in kForbiddenReplicationFields) key: 'leaked-$key',
+    };
+    final cleaned = stripForbiddenAutobasePayload(raw);
+    expect(cleaned['text'], 'hello');
+    expect(cleaned['id'], 'm3');
+    expect(cleaned.keys.toSet().intersection(kForbiddenReplicationFields), isEmpty);
+    expect(
+      raw.keys.toSet().difference(cleaned.keys.toSet()),
+      kForbiddenReplicationFields,
+    );
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
 }

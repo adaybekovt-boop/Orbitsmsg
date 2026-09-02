@@ -71,4 +71,38 @@ void main() {
     expect(kMailboxHttpRateLimit, 32);
     expect(kMailboxHttpRateWindowMs, 10 * 1000);
   });
+
+  test('HTTP mailbox rejects deposit bodies with fileKey', () async {
+    final http = StoragePeerHttp(BlindMailboxStore());
+    http.grant(
+      MailboxCapability(
+        token: 'cap-file',
+        quotaBytes: 1024,
+        retentionMs: 60 * 1000,
+        expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+      ),
+    );
+    await http.start();
+    addTearDown(http.stop);
+
+    final client = HttpClient();
+    try {
+      final req = await client.postUrl(Uri.parse('${http.origin}/v1/blocks'));
+      req.headers.contentType = ContentType.json;
+      req.write(
+        jsonEncode({
+          'token': 'cap-file',
+          'writerKey': 'w',
+          'seq': 0,
+          'b64': 'YQ==',
+          'fileKey': 'must-not-persist',
+        }),
+      );
+      final res = await req.close();
+      await res.drain();
+      expect(res.statusCode, 400);
+    } finally {
+      client.close(force: true);
+    }
+  });
 }

@@ -408,6 +408,9 @@ class CallsNotifier extends StateNotifier<CallState> {
   /// support (`flutter_webrtc` mobile) this surfaces an error and
   /// the state stays unchanged.
   Future<void> toggleScreenShare() async {
+    // Isolation fail-closed: leftover PeerJS `_conn` must not start
+    // screen share or re-acquire camera. Native DualStack does not use `_conn`.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
     final conn = _conn;
     final local = state.localStream;
     if (conn == null || local == null) return;
@@ -418,8 +421,8 @@ class CallsNotifier extends StateNotifier<CallState> {
       MediaStreamTrack? cameraTrack = _cameraTrackBackup;
       if (cameraTrack == null) {
         try {
-          final tmp = await navigator.mediaDevices
-              .getUserMedia({'audio': false, 'video': true});
+          final tmp = await navigator.mediaDevices.getUserMedia(
+              {'audio': false, 'video': true});
           cameraTrack = tmp.getVideoTracks().firstOrNull;
         } catch (_) {
           state = state.copyWith(lastError: 'Не удалось вернуть камеру');

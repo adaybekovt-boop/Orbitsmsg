@@ -111,7 +111,7 @@ void main() {
     final src = File('lib/state/calls_provider.dart').readAsStringSync();
     final accept = src
         .split('Future<void> acceptCurrent(')[1]
-        .split('Future<void> hangUp(')[0];
+        .split('Future<void> toggleScreenShare(')[0];
     expect(accept, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
     expect(accept, isNot(contains('peerjsAllowedOnNative()')));
     final gateIdx = accept.indexOf('peerjsAllowedOnNative(isWeb: kIsWeb)');
@@ -147,6 +147,32 @@ void main() {
     expect(attach.indexOf('onStream.listen'), greaterThan(gateIdx));
     expect(attach.indexOf('onClose.listen'), greaterThan(gateIdx));
     expect(attach, contains('conn.close'));
+
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(kPeerjsSupportWindowOpen, isTrue);
+  });
+
+  test(
+      'toggleScreenShare isolation gate sits before getUserMedia and getDisplayMedia',
+      () {
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(kPeerjsSupportWindowOpen, isTrue);
+
+    final src = File('lib/state/calls_provider.dart').readAsStringSync();
+    expect(src, isNot(contains('peerjsAllowedOnNative()')));
+
+    final share = src
+        .split('Future<void> toggleScreenShare(')[1]
+        .split('Future<void> hangUp(')[0];
+    expect(share, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(share, isNot(contains('peerjsAllowedOnNative()')));
+    final gateIdx = share.indexOf('peerjsAllowedOnNative(isWeb: kIsWeb)');
+    expect(gateIdx, greaterThanOrEqualTo(0));
+    expect(
+      share.indexOf('navigator.mediaDevices.getUserMedia'),
+      greaterThan(gateIdx),
+    );
+    expect(share.indexOf('getDisplayMedia'), greaterThan(gateIdx));
 
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
     expect(kPeerjsSupportWindowOpen, isTrue);

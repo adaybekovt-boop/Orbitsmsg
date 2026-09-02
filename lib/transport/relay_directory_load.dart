@@ -52,8 +52,7 @@ bool relayDirectoryIsClockExpired(
   return now >= directory.expiresAt;
 }
 
-/// File path only. `http://` / `https://` is refused so Dart cannot
-/// download a directory.
+/// File path only. Any `://` URL is refused.
 Future<RelayDirectory?> loadRelayDirectoryFile(
   String path, {
   int? nowMs,
@@ -61,7 +60,9 @@ Future<RelayDirectory?> loadRelayDirectoryFile(
   final trimmed = path.trim();
   if (trimmed.isEmpty) return null;
   final lower = trimmed.toLowerCase();
-  if (lower.startsWith('http://') || lower.startsWith('https://')) {
+  if (lower.contains('://') ||
+      lower.startsWith('http://') ||
+      lower.startsWith('https://')) {
     return null;
   }
   final file = File(trimmed);

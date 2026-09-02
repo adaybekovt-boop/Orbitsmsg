@@ -1,5 +1,6 @@
 // HTTP client for a blind storage peer. Ciphertext only.
 
+import '../transport/layers.dart';
 import 'blind_store.dart';
 
 class MailboxPeerStats {
@@ -127,12 +128,10 @@ class StoragePeerClient {
 }
 
 const Set<String> kStoragePeerForbiddenKeys = {
-  'plaintext',
+  ...kForbiddenReplicationFields,
   'text',
   'body',
   'peerId',
-  'kek',
-  'rootKey',
 };
 
 bool storagePeerKeysAreSafe(Map<String, Object?> body) {

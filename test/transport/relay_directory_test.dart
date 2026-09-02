@@ -356,11 +356,50 @@ void main() {
     expect(await loadRelayDirectoryFile('https://example.com/dir.json'), isNull);
     expect(await loadRelayDirectoryFile('http://127.0.0.1/dir.json'), isNull);
     expect(
+      await loadRelayDirectoryFile('ftp://example.invalid/dir.json'),
+      isNull,
+    );
+    expect(await loadRelayDirectoryFile('file:///tmp/dir.json'), isNull);
+    expect(
+      await loadRelayDirectoryFile('HTTP://Example.com/dir.json'),
+      isNull,
+    );
+    expect(
+      await loadRelayDirectoryFile('lab://embedded/dir.json'),
+      isNull,
+    );
+    expect(kLiveSignedRelayDirectory, isFalse);
+    expect(
       await loadRelayDirectoryFromEnv(
         env: {kRelayDirectoryEnv: file.path},
       ),
       isNotNull,
     );
+  });
+
+  test('loadRelayDirectoryFile refuses any :// URL; local lab still loads',
+      () async {
+    expect(await loadRelayDirectoryFile('https://example.com/dir.json'), isNull);
+    expect(
+      await loadRelayDirectoryFile('ftp://example.invalid/dir.json'),
+      isNull,
+    );
+    expect(await loadRelayDirectoryFile('file:///tmp/dir.json'), isNull);
+    expect(
+      await loadRelayDirectoryFile('HTTP://Example.com/dir.json'),
+      isNull,
+    );
+    expect(
+      await loadRelayDirectoryFile('/tmp/prefix://dir.json'),
+      isNull,
+    );
+    expect(kLiveSignedRelayDirectory, isFalse);
+
+    final lab = await loadRelayDirectoryFile('tool/fleet/lab_directory.json');
+    expect(lab, isNotNull);
+    expect(relayDirectoryIsUnsignedLab(lab!), isTrue);
+    expect(kLiveSignedRelayDirectory, isFalse);
+    expect(kLiveStorageFleet, isFalse);
   });
 
   test('signed directory file verifies; tamper is dropped', () async {
