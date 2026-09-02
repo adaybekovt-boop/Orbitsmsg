@@ -9,6 +9,7 @@ import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/vault_kek.dart';
+import 'package:orbits_flutter/calls/hyperswarm_signaling.dart';
 import 'package:orbits_flutter/peer/peerjs_client.dart' show PeerJsClient;
 import 'package:orbits_flutter/peer/room_manager.dart';
 import 'package:orbits_flutter/state/auth_notifier.dart' show AuthedUser;
@@ -42,6 +43,12 @@ class _CaptureTransport implements RoomTransport {
 
   @override
   bool canUseNative(String peerId) => false;
+
+  @override
+  Future<void> sendCallSignal(String peerId, CallSignal signal) async {}
+
+  @override
+  void bindRoomVoice(void Function(String from, CallSignal signal)? handler) {}
 
   @override
   PeerJsClient? get rawPeer => null;
@@ -321,6 +328,36 @@ void main() {
   group('room voice classifier', () {
     Map<String, Object?> meta(String roomId, String channelId) =>
         {'channel': 'room-voice', 'roomId': roomId, 'channelId': channelId};
+
+    test('native room-voice callId is deterministic and not a URL', () {
+      final ab = roomVoiceCallId(
+        roomId: 'r',
+        channelId: 'vc',
+        a: 'ORBIT-BB',
+        b: 'ORBIT-AA',
+      );
+      final ba = roomVoiceCallId(
+        roomId: 'r',
+        channelId: 'vc',
+        a: 'ORBIT-AA',
+        b: 'ORBIT-BB',
+      );
+      expect(ab, ba);
+      expect(ab.startsWith('rv-'), isTrue);
+      expect(ab.contains('://'), isFalse);
+      expect(shouldOfferNativeRoomVoice('ORBIT-AA', 'ORBIT-BB'), isTrue);
+      expect(shouldOfferNativeRoomVoice('ORBIT-BB', 'ORBIT-AA'), isFalse);
+      final offer = CallSignal(
+        type: CallSignalType.offer,
+        callId: ab,
+        media: roomVoiceMedia(roomId: 'r', channelId: 'vc'),
+      );
+      expect(offer.isRoomVoice, isTrue);
+      expect(
+        const CallSignal(type: CallSignalType.offer, callId: 'c1').isRoomVoice,
+        isFalse,
+      );
+    });
 
     test('accepts a member call for the active voice channel', () {
       expect(

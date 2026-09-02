@@ -163,6 +163,26 @@ void main() {
     expect(seen, isEmpty);
   });
 
+  test('CallSignal.isRoomVoice matches media tag or rv- callId', () {
+    expect(
+      const CallSignal(
+        type: CallSignalType.offer,
+        callId: 'c1',
+        media: {'channel': 'room-voice', 'roomId': 'r'},
+      ).isRoomVoice,
+      isTrue,
+    );
+    expect(
+      const CallSignal(type: CallSignalType.iceCandidate, callId: 'rv-r-vc-a-b')
+          .isRoomVoice,
+      isTrue,
+    );
+    expect(
+      const CallSignal(type: CallSignalType.offer, callId: 'c1').isRoomVoice,
+      isFalse,
+    );
+  });
+
   test('sendCallSignal refuses unsafe toJson before transport.send', () {
     final src = File('lib/transport/dual_stack_bridge.dart').readAsStringSync();
     expect(src, contains('replicationValueIsSafe'));

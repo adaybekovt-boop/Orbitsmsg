@@ -40,6 +40,8 @@ import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
+import '../calls/hyperswarm_signaling.dart';
+import '../calls/native_call_media.dart';
 import '../core/attachment_store.dart';
 import '../core/path_byte_stream.dart';
 import '../state/connections_notifier.dart';
@@ -148,6 +150,40 @@ bool shouldAnswerRoomVoiceCall({
   // -1 reserves the slot for ourselves.
   if (currentVoiceCount >= maxVoice - 1) return false;
   return true;
+}
+
+/// Deterministic pair id so both mesh ends share one `rv-` callId.
+/// Never includes `://`.
+String roomVoiceCallId({
+  required String roomId,
+  required String channelId,
+  required String a,
+  required String b,
+}) {
+  final lo = a.compareTo(b) <= 0 ? a : b;
+  final hi = a.compareTo(b) <= 0 ? b : a;
+  return 'rv-$roomId-$channelId-$lo-$hi';
+}
+
+Map<String, Object?> roomVoiceMedia({
+  required String roomId,
+  required String channelId,
+}) =>
+    <String, Object?>{
+      'channel': 'room-voice',
+      'roomId': roomId,
+      'channelId': channelId,
+    };
+
+/// Only the lexicographically smaller peer sends the native offer.
+bool shouldOfferNativeRoomVoice(String selfPeerId, String remotePeerId) =>
+    selfPeerId.compareTo(remotePeerId) < 0;
+
+class _NativeVoiceLeg {
+  _NativeVoiceLeg({required this.session, required this.media});
+
+  final NativeCallSession session;
+  final NativeCallMedia media;
 }
 
 /// Reactive snapshot of the local user's room session.
@@ -347,6 +383,7 @@ class RoomManager extends StateNotifier<RoomState> {
     // as MessagingNotifier/DropNotifier.
     _defaultTransport = _ref.read(roomTransportProvider);
     _defaultTransport.bindRoom(RoomBridge(handleInbound: _handleInbound));
+    _defaultTransport.bindRoomVoice(_onNativeRoomVoice);
   }
 
   final Ref _ref;
@@ -377,6 +414,7 @@ class RoomManager extends StateNotifier<RoomState> {
 
   /// Active voice-mesh calls, keyed by remote peerId.
   final Map<String, PeerMediaConnection> _voiceConns = {};
+  final Map<String, _NativeVoiceLeg> _nativeVoice = {};
   MediaStream? _voiceStream;
 
   /// Per-peer subscriptions to remote-stream arrival; on web the spatial-audio
@@ -2275,21 +2313,6 @@ class RoomManager extends StateNotifier<RoomState> {
   /// [kMaxVoiceParticipants]-1 other room members directly.
   Future<void> _startVoiceMesh(String roomId) async {
     await _stopVoice();
-    // No native Hyperswarm room-voice mesh. Isolation must not set
-    // voice UI as if the user joined — fail closed here, before mic
-    // capture or outbound media dials. Product [kPeerjsIsolationMode]
-    // stays default-live; this uses [kIsWeb], never the no-arg form.
-    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
-      debugPrint('[room] voice: PeerJS isolation disallows native PeerJS');
-      return;
-    }
-    // Mark that we've entered this voice channel (drives the compact voice
-    // panel) even before the mic / mesh come up.
-    state = state.copyWith(
-      voiceChannelId: state.activeChannelId,
-      micEnabled: true,
-      micAvailable: false,
-    );
     final selfId = _selfPeerId();
     final members = await db.getRoomMembers(roomId);
     final peers = <String>[
@@ -2307,9 +2330,28 @@ class RoomManager extends StateNotifier<RoomState> {
       );
     }
     final targets = peers.take(maxOthers).toList();
+    // Isolation fail-closed before voice UI / getUserMedia / callPeer.
+    // Native DualStack still proceeds when a member is canUseNative.
+    // Product [kPeerjsIsolationMode] stays default-live; this uses
+    // [kIsWeb], never the no-arg form.
+    final peerJsOk = peerjsAllowedOnNative(isWeb: kIsWeb);
+    final nativeOk = targets.any(_connections.canUseNative);
+    if (!peerJsOk && !nativeOk) {
+      debugPrint('[room] voice: PeerJS isolation and no native mesh');
+      return;
+    }
+    // Mark that we've entered this voice channel (drives the compact voice
+    // panel) even before the mic / mesh come up.
+    state = state.copyWith(
+      voiceChannelId: state.activeChannelId,
+      micEnabled: true,
+      micAvailable: false,
+    );
 
     final peer = _rawPeer;
-    if (peer == null) {
+    final willPeerJs = peerJsOk && peer != null;
+    final willNative = !peerJsOk && nativeOk;
+    if (!willPeerJs && !willNative) {
       debugPrint('[room] voice: no PeerJS client available');
       return;
     }
@@ -2325,28 +2367,46 @@ class RoomManager extends StateNotifier<RoomState> {
     _voiceStream = stream;
     state = state.copyWith(micAvailable: true);
 
-    // Listen for INCOMING room-voice calls (other members dialling us). Live
-    // only while the mesh is up; _stopVoice cancels it.
-    _incomingCallSub?.cancel();
-    _incomingCallSub = peer.onCall.listen(_handleIncomingRoomCall);
-
     final voiceChannelId = state.activeChannelId;
     final connected = <String>{};
-    for (final t in targets) {
-      try {
-        final mc = await peer.callPeer(t, stream, metadata: {
-          'channel': 'room-voice',
-          'roomId': roomId,
-          'channelId': voiceChannelId,
-        });
-        _voiceConns[t] = mc;
-        connected.add(t);
-        _attachVoiceAudio(t, mc);
-      } catch (e) {
-        debugPrint('[room] voice: call to $t failed: $e');
+    final livePeer = peer;
+    if (willPeerJs && livePeer != null) {
+      // Listen for INCOMING room-voice calls (other members dialling us).
+      // Live only while the mesh is up; _stopVoice cancels it.
+      _incomingCallSub?.cancel();
+      _incomingCallSub = livePeer.onCall.listen(_handleIncomingRoomCall);
+      for (final t in targets) {
+        try {
+          final mc = await livePeer.callPeer(t, stream, metadata: {
+            'channel': 'room-voice',
+            'roomId': roomId,
+            'channelId': voiceChannelId,
+          });
+          _voiceConns[t] = mc;
+          connected.add(t);
+          _attachVoiceAudio(t, mc);
+        } catch (e) {
+          debugPrint('[room] voice: call to $t failed: $e');
+        }
       }
     }
-    state = state.copyWith(voicePeerIds: connected);
+    if (willNative) {
+      for (final t in targets) {
+        if (!_connections.canUseNative(t)) continue;
+        if (!shouldOfferNativeRoomVoice(selfId, t)) continue;
+        try {
+          await _offerNativeVoice(
+            t,
+            roomId: roomId,
+            channelId: voiceChannelId ?? '',
+            stream: stream,
+          );
+        } catch (e) {
+          debugPrint('[room] voice: native offer to $t failed: $e');
+        }
+      }
+    }
+    if (mounted) state = state.copyWith(voicePeerIds: connected);
   }
 
   /// Auto-answer an INCOMING room-voice call iff it's for our active voice
@@ -2371,7 +2431,7 @@ class RoomManager extends StateNotifier<RoomState> {
       roomId: state.roomId,
       activeChannelId: state.activeChannelId,
       members: members,
-      currentVoiceCount: _voiceConns.length,
+      currentVoiceCount: _voiceConns.length + _nativeVoice.length,
     );
     final stream = _voiceStream;
     if (!ok || stream == null) {
@@ -2424,6 +2484,10 @@ class RoomManager extends StateNotifier<RoomState> {
       } catch (_) {}
     }
     _voiceConns.clear();
+    for (final id in _nativeVoice.keys.toList()) {
+      _spatialAudio.detachPeer(id);
+      await _closeNativeLeg(id);
+    }
     final s = _voiceStream;
     _voiceStream = null;
     if (s != null) {
@@ -2465,6 +2529,167 @@ class RoomManager extends StateNotifier<RoomState> {
       }
     }
     state = state.copyWith(micEnabled: on);
+    for (final leg in _nativeVoice.values) {
+      unawaited(
+        leg.session.publishMediaState(
+          micEnabled: on,
+          videoEnabled: false,
+          screenSharing: false,
+        ),
+      );
+    }
+  }
+
+  Future<void> _offerNativeVoice(
+    String peerId, {
+    required String roomId,
+    required String channelId,
+    required MediaStream stream,
+  }) async {
+    if (channelId.isEmpty || channelId.contains('://')) return;
+    if (roomId.contains('://') || peerId.contains('://')) return;
+    final media = roomVoiceMedia(roomId: roomId, channelId: channelId);
+    final callId = roomVoiceCallId(
+      roomId: roomId,
+      channelId: channelId,
+      a: _selfPeerId(),
+      b: peerId,
+    );
+    if (callId.contains('://')) return;
+    final session = NativeCallSession(
+      send: (signal) => _sendNativeRoomVoice(peerId, signal),
+      defaultMedia: media,
+    )..callId = callId;
+    final rtc = NativeCallMedia(
+      session: session,
+      onRemoteStream: (remote) => _onNativeVoiceStream(peerId, remote),
+    );
+    await rtc.attachLocal(stream);
+    final sdp = await rtc.createOfferSdp();
+    _nativeVoice[peerId] = _NativeVoiceLeg(session: session, media: rtc);
+    await session.startOutgoing(callId: callId, sdp: sdp, media: media);
+  }
+
+  Future<void> _sendNativeRoomVoice(String peerId, CallSignal signal) {
+    return _defaultTransport.sendCallSignal(peerId, signal);
+  }
+
+  void _onNativeVoiceStream(String peerId, MediaStream remote) {
+    _spatialAudio.attachPeer(peerId, remote);
+    _applySpatialAudio(peerId);
+    if (!mounted) return;
+    state = state.copyWith(voicePeerIds: {...state.voicePeerIds, peerId});
+  }
+
+  void _onNativeRoomVoice(String from, CallSignal signal) {
+    if (!signal.isRoomVoice) return;
+    if (from.isEmpty || from.contains('://')) return;
+    unawaited(_handleNativeRoomVoice(from, signal));
+  }
+
+  Future<void> _handleNativeRoomVoice(String from, CallSignal signal) async {
+    switch (signal.type) {
+      case CallSignalType.offer:
+        await _answerNativeVoice(from, signal);
+      case CallSignalType.answer:
+        final leg = _nativeVoice[from];
+        if (leg == null || signal.sdp == null) return;
+        await leg.media.setRemoteAnswer(signal.sdp!);
+      case CallSignalType.iceCandidate:
+        final ice = signal.candidate;
+        if (ice == null) return;
+        await _nativeVoice[from]?.media.addRemoteIce(ice);
+      case CallSignalType.hangup:
+      case CallSignalType.reject:
+        await _closeNativeLeg(from, notify: false);
+        if (mounted) {
+          state = state.copyWith(
+            voicePeerIds: {...state.voicePeerIds}..remove(from),
+          );
+        }
+      case CallSignalType.mediaState:
+        break;
+      case CallSignalType.accept:
+        break;
+    }
+  }
+
+  Future<void> _answerNativeVoice(String from, CallSignal signal) async {
+    final stream = _voiceStream;
+    final roomId = state.roomId;
+    final members = <String>{
+      ...state.guestPeerIds,
+      if (state.hostPeerId != null) state.hostPeerId!,
+    };
+    final ok = shouldAnswerRoomVoiceCall(
+      metadata: signal.media ?? const <String, Object?>{},
+      fromPeerId: from,
+      role: state.role,
+      roomId: roomId,
+      activeChannelId: state.activeChannelId,
+      members: members,
+      currentVoiceCount: _voiceConns.length + _nativeVoice.length,
+    );
+    if (!ok ||
+        stream == null ||
+        roomId == null ||
+        signal.sdp == null ||
+        signal.sdp!.isEmpty) {
+      unawaited(
+        _sendNativeRoomVoice(
+          from,
+          CallSignal(
+            type: CallSignalType.reject,
+            callId: signal.callId,
+            media: signal.media ??
+                roomVoiceMedia(
+                  roomId: roomId ?? '',
+                  channelId: state.activeChannelId ?? '',
+                ),
+          ),
+        ),
+      );
+      return;
+    }
+    if (_nativeVoice.containsKey(from) &&
+        shouldOfferNativeRoomVoice(_selfPeerId(), from)) {
+      return;
+    }
+    if (_nativeVoice.containsKey(from)) {
+      await _closeNativeLeg(from);
+    }
+    final channelId = state.activeChannelId ?? '';
+    if (channelId.isEmpty || channelId.contains('://')) return;
+    final tags = roomVoiceMedia(roomId: roomId, channelId: channelId);
+    final session = NativeCallSession(
+      send: (next) => _sendNativeRoomVoice(from, next),
+      defaultMedia: tags,
+    )..callId = signal.callId;
+    session.applyRemote(signal);
+    final rtc = NativeCallMedia(
+      session: session,
+      onRemoteStream: (remote) => _onNativeVoiceStream(from, remote),
+    );
+    await rtc.attachLocal(stream);
+    for (final ice in session.remoteIce) {
+      await rtc.addRemoteIce(ice);
+    }
+    final sdp = await rtc.createAnswerSdp(signal.sdp ?? '');
+    _nativeVoice[from] = _NativeVoiceLeg(session: session, media: rtc);
+    await session.accept(sdp: sdp);
+  }
+
+  Future<void> _closeNativeLeg(String peerId, {bool notify = true}) async {
+    final leg = _nativeVoice.remove(peerId);
+    if (leg == null) return;
+    if (notify && !leg.session.closed) {
+      try {
+        await leg.session.hangup();
+      } catch (_) {}
+    }
+    try {
+      await leg.media.close();
+    } catch (_) {}
   }
 
   /// Poll for the reliable channel to [peerId] to open (~15s budget).
@@ -2520,6 +2745,14 @@ abstract class RoomTransport {
   /// [_ConnRoomTransport] forwards to [ConnectionsNotifier.canUseNative].
   bool canUseNative(String peerId) => false;
 
+  /// Native room-voice signaling on DualStack. Implementors that
+  /// `implements RoomTransport` must override this (Dart has no inherited
+  /// default on `implements`).
+  Future<void> sendCallSignal(String peerId, CallSignal signal) async {}
+
+  /// Incoming Hyperswarm `call` frames tagged room-voice.
+  void bindRoomVoice(void Function(String from, CallSignal signal)? handler) {}
+
   /// The active PeerJS client (for voice-mesh media calls), or null.
   PeerJsClient? get rawPeer;
 }
@@ -2546,6 +2779,14 @@ class _ConnRoomTransport implements RoomTransport {
 
   @override
   bool canUseNative(String peerId) => _c.canUseNative(peerId);
+
+  @override
+  Future<void> sendCallSignal(String peerId, CallSignal signal) =>
+      _c.sendCallSignal(peerId, signal);
+
+  @override
+  void bindRoomVoice(void Function(String from, CallSignal signal)? handler) =>
+      _c.bindRoomVoiceHandler(handler);
 
   @override
   PeerJsClient? get rawPeer =>

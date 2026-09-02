@@ -18,6 +18,7 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 
+import '../calls/hyperswarm_signaling.dart';
 import '../state/connections_notifier.dart' show RoomBridge;
 import '../transport/peerjs_window.dart';
 import 'helpers.dart' show isValidPeerId, normalizePeerId;
@@ -119,6 +120,12 @@ class RoomScopedTransport implements RoomTransport {
 
   @override
   bool canUseNative(String peerId) => false;
+
+  @override
+  Future<void> sendCallSignal(String peerId, CallSignal signal) async {}
+
+  @override
+  void bindRoomVoice(void Function(String from, CallSignal signal)? handler) {}
 
   @override
   void openReliable(String peerId) {

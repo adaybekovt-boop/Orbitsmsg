@@ -36,6 +36,13 @@ class CallSignal {
         if (media != null) 'media': media,
       };
 
+  /// Room-voice mesh signals ride the Hyperswarm `call` channel with
+  /// `media.channel == 'room-voice'` and a `rv-` callId. 1:1 calls must
+  /// ignore them so a room join does not open the personal overlay.
+  bool get isRoomVoice =>
+      media?['channel'] == 'room-voice' ||
+      (callId.startsWith('rv-') && !callId.contains('://'));
+
   static CallSignal fromJson(Map<String, Object?> json) {
     final typeName = json['type'] as String? ?? '';
     final type = CallSignalType.values.firstWhere(
@@ -66,9 +73,10 @@ class CallSignal {
 /// Offer / answer / ICE / hangup without PeerJS MediaConnection types.
 /// Media still uses flutter_webrtc after these signals land.
 class NativeCallSession {
-  NativeCallSession({required this.send});
+  NativeCallSession({required this.send, this.defaultMedia});
 
   final Future<void> Function(CallSignal signal) send;
+  final Map<String, Object?>? defaultMedia;
   CallSignalType? lastApplied;
   String? callId;
   String? remoteSdp;
@@ -87,14 +95,21 @@ class NativeCallSession {
         type: CallSignalType.offer,
         callId: callId,
         sdp: sdp,
-        media: media,
+        media: media ?? defaultMedia,
       ),
     );
   }
 
   Future<void> accept({required String sdp}) {
     final id = callId ?? '';
-    return send(CallSignal(type: CallSignalType.answer, callId: id, sdp: sdp));
+    return send(
+      CallSignal(
+        type: CallSignalType.answer,
+        callId: id,
+        sdp: sdp,
+        media: defaultMedia,
+      ),
+    );
   }
 
   Future<void> addIce(Map<String, Object?> candidate) {
@@ -103,6 +118,7 @@ class NativeCallSession {
         type: CallSignalType.iceCandidate,
         callId: callId ?? '',
         candidate: candidate,
+        media: defaultMedia,
       ),
     );
   }
@@ -110,7 +126,11 @@ class NativeCallSession {
   Future<void> hangup() async {
     closed = true;
     await send(
-      CallSignal(type: CallSignalType.hangup, callId: callId ?? ''),
+      CallSignal(
+        type: CallSignalType.hangup,
+        callId: callId ?? '',
+        media: defaultMedia,
+      ),
     );
   }
 
@@ -128,6 +148,7 @@ class NativeCallSession {
         type: CallSignalType.mediaState,
         callId: id,
         media: <String, Object?>{
+          ...?defaultMedia,
           'mic': micEnabled,
           'video': videoEnabled,
           'screen': screenSharing,

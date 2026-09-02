@@ -204,6 +204,15 @@ void main() {
       lessThan(replace.indexOf('_conn?.peerConnection')),
     );
 
+    final nativeSignal = src
+        .split('void _onNativeCallSignal(')[1]
+        .split('void _bindToCurrentPeer(')[0];
+    expect(nativeSignal, contains('signal.isRoomVoice'));
+    expect(
+      nativeSignal.indexOf('signal.isRoomVoice'),
+      lessThan(nativeSignal.indexOf('NativeCallSession')),
+    );
+
     expect(
       File('lib/ui/calls/call_overlay_mount.dart').readAsStringSync(),
       contains('remoteMicEnabled'),

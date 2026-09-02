@@ -262,6 +262,18 @@ void main() {
     expect(openChannel, contains('unawaited(_dual?.dial(normalized))'));
     expect(openChannel, contains('if (!peerjsAllowedOnNative(isWeb: kIsWeb))'));
     expect(openChannel, contains('return;'));
+    final connSrc =
+        File('lib/state/connections_notifier.dart').readAsStringSync();
+    expect(connSrc, contains('bindRoomVoiceHandler'));
+    expect(connSrc, contains('signal.isRoomVoice'));
+    expect(
+      connSrc.indexOf('signal.isRoomVoice'),
+      lessThan(connSrc.indexOf('_roomVoiceHandler?.call')),
+    );
+    expect(
+      connSrc.indexOf('_roomVoiceHandler?.call'),
+      lessThan(connSrc.indexOf('_callHandler?.call')),
+    );
     final rememberKnown = File('lib/transport/dual_stack_bridge.dart')
         .readAsStringSync()
         .split('Future<void> rememberKnownPeers')[1]

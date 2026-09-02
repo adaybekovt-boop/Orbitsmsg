@@ -201,6 +201,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   DualStackBridge? _dual;
   MemoryJournal? _nativeJournal;
   void Function(String from, CallSignal signal)? _callHandler;
+  void Function(String from, CallSignal signal)? _roomVoiceHandler;
 
   /// Keyed by `connKey(peerId, channel)`.
   final Map<String, _ConnBinding> _bindings = {};
@@ -277,6 +278,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       }
       ..onCallSignal = (signal, from) {
         _lastCallSignal = (from: from, signal: signal);
+        if (signal.isRoomVoice) {
+          _roomVoiceHandler?.call(from, signal);
+          return;
+        }
         _callHandler?.call(from, signal);
       }
       ..onDrop = (peerId, packet) {
@@ -459,6 +464,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   void bindCallHandler(void Function(String from, CallSignal signal)? handler) {
     _callHandler = handler;
+  }
+
+  void bindRoomVoiceHandler(
+    void Function(String from, CallSignal signal)? handler,
+  ) {
+    _roomVoiceHandler = handler;
   }
 
   // ─── Public API ────────────────────────────────────────────────

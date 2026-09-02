@@ -647,6 +647,7 @@ class CallsNotifier extends StateNotifier<CallState> {
   }
 
   void _onNativeCallSignal(String from, CallSignal signal) {
+    if (signal.isRoomVoice) return;
     _nativeSession ??= NativeCallSession(
       send: (next) =>
           _ref.read(connectionsNotifierProvider.notifier).sendCallSignal(from, next),

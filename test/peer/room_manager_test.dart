@@ -20,6 +20,7 @@ import 'package:flutter/foundation.dart'
     show TargetPlatform, debugDefaultTargetPlatformOverride;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbits_flutter/calls/hyperswarm_signaling.dart';
 import 'package:orbits_flutter/core/vault_kek.dart';
 import 'package:orbits_flutter/peer/peerjs_client.dart' show PeerJsClient;
 import 'package:orbits_flutter/peer/room_invite.dart' show RoomInvite;
@@ -57,6 +58,10 @@ class _FakeTransport implements RoomTransport {
   void openReliable(String peerId) => openReliableCalls.add(peerId);
   @override
   bool canUseNative(String peerId) => nativeReady;
+  @override
+  Future<void> sendCallSignal(String peerId, CallSignal signal) async {}
+  @override
+  void bindRoomVoice(void Function(String from, CallSignal signal)? handler) {}
   @override
   PeerJsClient? get rawPeer => null;
 }
@@ -446,6 +451,14 @@ void main() {
         reason: 'getUserMedia must sit after the isolation gate');
     expect(startVoice.indexOf('.callPeer'), greaterThan(gateIdx),
         reason: 'callPeer must sit after the isolation gate');
+    expect(startVoice, contains('canUseNative'));
+    expect(startVoice, contains('_offerNativeVoice'));
+    expect(startVoice, contains('willNative'));
+    expect(
+      startVoice.indexOf('canUseNative'),
+      lessThan(voiceUiIdx),
+      reason: 'native proceed check sits with the isolation gate',
+    );
 
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
     expect(kPeerjsSupportWindowOpen, isTrue);
