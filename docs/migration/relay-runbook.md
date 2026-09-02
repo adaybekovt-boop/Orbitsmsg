@@ -37,8 +37,9 @@ are never used as HyperDHT addresses. Without the module, every row
 is HTTP health. Hyperswarm bootstrap can also come from
 `ORBITS_DHT_BOOTSTRAP=host:port,…` or HyperDHT-shaped rows in
 `ORBITS_RELAY_DIRECTORY`. `tool/fleet/directory.js` maps fleet ports
-to unsigned directory rows (`live: false`). Identity-signed
-directories are Dart fixtures (`kLiveSignedRelayDirectory` stays
-false). Dart never fetches a directory URL. This does not claim a
-live NAT path.
+to unsigned directory rows (`live: false`). `tool/fleet/lab_directory.json`
+is the committed unsigned HTTP loopback fixture (empty signature; not
+a public fleet). Identity-signed directories are Dart fixtures
+(`kLiveSignedRelayDirectory` stays false). Dart never fetches a
+directory URL. This does not claim a live NAT path.
 

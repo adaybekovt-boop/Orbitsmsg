@@ -33,6 +33,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
@@ -40,6 +41,7 @@ import '../calls/hyperswarm_signaling.dart';
 import '../calls/system_calling.dart';
 import '../core/feature_flags.dart';
 import '../peer/peerjs_client.dart';
+import '../transport/peerjs_window.dart';
 import 'connections_notifier.dart';
 import 'peer_connection_provider.dart';
 
@@ -246,7 +248,19 @@ class CallsNotifier extends StateNotifier<CallState> {
         sdp: sdp,
         media: {'video': video},
       );
-      if (!isPeerjsFallbackEnabled() || peer == null) return;
+      if (!isPeerjsFallbackEnabled() ||
+          peer == null ||
+          !peerjsAllowedOnNative(isWeb: kIsWeb)) {
+        return;
+      }
+    }
+
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      try {
+        local.getTracks().forEach((t) => t.stop());
+      } catch (_) {}
+      _resetIdleWithError('Нет активного P2P-соединения');
+      return;
     }
 
     try {
@@ -318,7 +332,20 @@ class CallsNotifier extends StateNotifier<CallState> {
         sdp = answer.sdp ?? sdp;
       } catch (_) {}
       await _nativeSession!.accept(sdp: sdp);
-      if (!isPeerjsFallbackEnabled()) return;
+      if (!isPeerjsFallbackEnabled() ||
+          !peerjsAllowedOnNative(isWeb: kIsWeb)) {
+        return;
+      }
+    }
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      try {
+        local.getTracks().forEach((t) => t.stop());
+      } catch (_) {}
+      try {
+        await conn?.close();
+      } catch (_) {}
+      _resetIdleWithError('Нет активного P2P-соединения');
+      return;
     }
     try {
       await conn?.answer(local);
@@ -588,6 +615,7 @@ class CallsNotifier extends StateNotifier<CallState> {
 
     _boundPeer = current;
     if (current == null) return;
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
 
     _callSub = current.onCall.listen((conn) {
       // Room voice calls carry a `room-voice` tag and are owned by RoomManager —

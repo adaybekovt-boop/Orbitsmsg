@@ -164,5 +164,13 @@ void main() {
       File('lib/peer/room_signaling_host.dart').readAsStringSync(),
       contains('peerjsAllowedOnNative(isWeb: kIsWeb)'),
     );
+    expect(
+      File('lib/state/calls_provider.dart').readAsStringSync(),
+      contains('peerjsAllowedOnNative(isWeb: kIsWeb)'),
+    );
+    expect(
+      File('lib/state/calls_provider.dart').readAsStringSync(),
+      contains('_bindToCurrentPeer'),
+    );
   });
 }

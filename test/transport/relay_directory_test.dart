@@ -179,6 +179,29 @@ void main() {
     );
   });
 
+  test('committed lab_directory.json is unsigned and is not a DHT fleet',
+      () async {
+    final loaded =
+        await loadRelayDirectoryFile('tool/fleet/lab_directory.json');
+    expect(loaded, isNotNull);
+    final directory = loaded!;
+    expect(kLiveSignedRelayDirectory, isFalse);
+    expect(kLiveStorageFleet, isFalse);
+    expect(relayDirectoryIsUnsignedLab(directory), isTrue);
+    expect(directory.meetsFleetMinimum, isTrue);
+    expect(directory.signature, isEmpty);
+    expect(directory.identityPublicKey, isEmpty);
+    expect(await verifyRelayDirectory(directory), isFalse);
+    expect(bootstrapNodesFromDirectory(directory), isEmpty);
+    expect(relayThroughKeysFromDirectory(directory), isEmpty);
+    expect(
+      directory.pick(DirectoryPeerKind.bootstrap).every(
+            (p) => p.wireProtocol == 'http',
+          ),
+      isTrue,
+    );
+  });
+
   test('unsigned lab directory file loads; URLs are refused', () async {
     final dir = await Directory.systemTemp.createTemp('orbits-relay-dir');
     addTearDown(() => dir.delete(recursive: true));

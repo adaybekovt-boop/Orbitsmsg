@@ -2,8 +2,12 @@
 
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const http = require('node:http')
+const path = require('node:path')
 const { startLocalFleet } = require('./local_fleet.js')
+const { labFleet, labDirectoryDocument } = require('./lab_fleet.js')
+const { peersToDirectoryRows, meetsFleetMinimum } = require('./directory.js')
 
 function get(port, path) {
   return new Promise((resolve, reject) => {
@@ -16,6 +20,26 @@ function get(port, path) {
     }).on('error', reject)
   })
 }
+
+test('lab_directory.json matches peersToDirectoryRows(labFleet) and is not live', () => {
+  const fixturePath = path.join(__dirname, 'lab_directory.json')
+  const fixture = JSON.parse(fs.readFileSync(fixturePath, 'utf8'))
+  assert.deepEqual(fixture, labDirectoryDocument())
+  assert.equal(fixture.live, false)
+  assert.equal(fixture.signature, '')
+  assert.equal(fixture.identityPublicKey, '')
+  const rows = peersToDirectoryRows(labFleet())
+  assert.deepEqual(fixture.peers, rows)
+  assert.equal(meetsFleetMinimum(rows), true)
+  assert.equal(rows.filter((r) => r.kind === 'bootstrap').length, 3)
+  assert.equal(rows.filter((r) => r.kind === 'relay').length, 2)
+  assert.equal(rows.filter((r) => r.kind === 'storage').length, 2)
+  for (const row of rows) {
+    assert.equal(row.live, false)
+    assert.equal(row.host, '127.0.0.1')
+    assert.equal(row.protocol, 'http')
+  }
+})
 
 test('local fleet has 3 bootstrap / 2 relay / 2 storage and is not public', async (t) => {
   const fleet = await startLocalFleet()
@@ -48,7 +72,6 @@ test('skipDht fleet stays HTTP health including relays', async (t) => {
 })
 
 test('local fleet maps to unsigned directory rows and is not live', async (t) => {
-  const { peersToDirectoryRows, meetsFleetMinimum } = require('./directory.js')
   const fleet = await startLocalFleet()
   t.after(() => fleet.close())
   const rows = peersToDirectoryRows(fleet)
