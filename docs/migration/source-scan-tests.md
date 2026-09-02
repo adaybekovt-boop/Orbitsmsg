@@ -17,7 +17,7 @@ old scan may still sit next to it.
 | Hangup / ICE from a foreign peer | Helper-only before (`acceptInboundCallSignal` in `test/calls/call_sdp_and_session_test.dart`) | DualStack 3-peer + session in `phase0_adversarial_test.dart` |
 | Stale `callId` | Helper-only before | DualStack + session in `phase0_adversarial_test.dart` |
 | Cached `call-v1` without native carrier (PeerJS stays) | Helper-only (`shouldCloseLeftoverPeerJsCall`) + `calls_isolation_test` scans | DualStack unconnected + cache in `phase0_adversarial_test.dart` |
-| Fake / empty SDP not sent | Helper-only (`startOutgoingIfValid`) + `hyperswarm_signaling_test` scan of `sendCallSignal` | Session→DualStack + raw `sendCallSignal` in `phase0_adversarial_test.dart` |
+| Fake / empty SDP not sent | Helper-only (`startOutgoingIfValid`) + `hyperswarm_signaling_test` scan of `sendCallSignal` | Session→DualStack in `phase0_adversarial_test.dart`. Raw `DualStack.sendCallSignal` SDP gate is **skipped** (not wired yet) |
 | Unsigned / expired capability rejected | Partial (`signed_capabilities_test` verifies signatures) | DualStack `wireHello` / `capabilities` + wall-clock expiry in `phase0_adversarial_test.dart` |
 | TOFU pin-store throw fails closed | No prior scan of the catch | `phase0_adversarial_test.dart` (expects no auth) |
 | Application frame before Dart auth | DualStack already behavioral in `dual_stack_bridge_test.dart` | Re-driven in `phase0_adversarial_test.dart`. `InProcessBareWorklet.markAuthenticated` **skipped** (API absent). JS: `tool/connectivity_harness/test/phase1_*.js` |
