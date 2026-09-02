@@ -171,3 +171,66 @@ Future<String?> xorCipherPathToPlaintextFile(
     return null;
   }
 }
+
+Future<String?> copyLocalPathToStableFile(
+  String srcPath,
+  String destDirectory, {
+  String fileName = 'plain.bin',
+}) async {
+  final p = srcPath.trim();
+  final destRoot = destDirectory.trim();
+  final name = fileName.trim();
+  if (p.isEmpty ||
+      destRoot.isEmpty ||
+      name.isEmpty ||
+      p.contains('://') ||
+      destRoot.contains('://') ||
+      name.contains('://') ||
+      name.contains('/') ||
+      name.contains('\\') ||
+      name.contains('fileKey') ||
+      name.contains('peerId')) {
+    return null;
+  }
+  final src = File(p);
+  if (!src.existsSync()) return null;
+  const maxBytes = kMaxNativeAttachBytes;
+  try {
+    if (src.lengthSync() > maxBytes || src.lengthSync() <= 0) return null;
+  } catch (_) {
+    return null;
+  }
+  Directory? sub;
+  IOSink? sink;
+  try {
+    final root = Directory(destRoot);
+    if (!root.existsSync()) root.createSync(recursive: true);
+    sub = root.createTempSync('att-');
+    final dest = File('${sub.path}${Platform.pathSeparator}$name');
+    sink = dest.openWrite();
+    var total = 0;
+    await for (final piece in src.openRead()) {
+      if (piece.isEmpty) continue;
+      if (total + piece.length > maxBytes) {
+        throw StateError('copy exceeds cap');
+      }
+      sink.add(piece);
+      total += piece.length;
+    }
+    await sink.close();
+    sink = null;
+    if (total <= 0) {
+      sub.deleteSync(recursive: true);
+      return null;
+    }
+    return dest.path;
+  } catch (_) {
+    try {
+      await sink?.close();
+    } catch (_) {}
+    try {
+      sub?.deleteSync(recursive: true);
+    } catch (_) {}
+    return null;
+  }
+}

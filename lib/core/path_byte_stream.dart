@@ -58,3 +58,16 @@ Future<String?> xorCipherPathToPlaintextFile(
   List<int> fileKey,
 ) =>
     impl.xorCipherPathToPlaintextFile(cipherPath, fileKey);
+
+/// Stream-copy a local file into [destDirectory] without a Dart
+/// `Uint8List` of the body. Null on web / refused paths.
+Future<String?> copyLocalPathToStableFile(
+  String srcPath,
+  String destDirectory, {
+  String fileName = 'plain.bin',
+}) =>
+    impl.copyLocalPathToStableFile(
+      srcPath,
+      destDirectory,
+      fileName: fileName,
+    );

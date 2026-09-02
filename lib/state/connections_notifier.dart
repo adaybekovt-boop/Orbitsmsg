@@ -33,6 +33,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/attachment_store.dart';
 import '../core/path_byte_stream.dart';
 import '../core/bundle_cache.dart';
 import '../core/wire_crypto.dart'
@@ -836,7 +837,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         assembleNativeAttachmentPath: (rid, fileId, key) async {
           final dual = _dual;
           if (dual == null) return null;
-          return dual.decryptInboundAttachmentPath(rid, fileId, key);
+          final decrypted =
+              await dual.decryptInboundAttachmentPath(rid, fileId, key);
+          if (decrypted == null || decrypted.isEmpty) return null;
+          return persistLocalAttachmentPath(decrypted);
         },
     );
   }

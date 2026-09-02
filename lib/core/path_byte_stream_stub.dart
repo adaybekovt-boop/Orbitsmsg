@@ -23,3 +23,10 @@ Future<String?> xorCipherPathToPlaintextFile(
   List<int> fileKey,
 ) async =>
     null;
+
+Future<String?> copyLocalPathToStableFile(
+  String srcPath,
+  String destDirectory, {
+  String fileName = 'plain.bin',
+}) async =>
+    null;

@@ -74,6 +74,7 @@ void main() {
     expect(await stub.xorPlaintextPathToCipherFile('/tmp/x', [1]), isNull);
     expect(await stub.xorCipherPathToPlaintext('/tmp/x', [1]), isNull);
     expect(await stub.xorCipherPathToPlaintextFile('/tmp/x', [1]), isNull);
+    expect(await stub.copyLocalPathToStableFile('/tmp/x', '/tmp/y'), isNull);
   });
 
   test('xor ciphertext path to plaintext file never holds the fileKey', () async {
@@ -111,6 +112,53 @@ void main() {
     expect(
       File('lib/core/path_byte_stream_io.dart').readAsStringSync(),
       contains('xorCipherPathToPlaintextFile'),
+    );
+  });
+
+  test('copyLocalPathToStableFile streams without readAsBytes', () async {
+    expect(
+      await copyLocalPathToStableFile('https://evil.example/x', '/tmp'),
+      isNull,
+    );
+    expect(await copyLocalPathToStableFile('/nope', '/tmp'), isNull);
+
+    final dir = Directory.systemTemp.createTempSync('orbits-copy-src-');
+    final destRoot = Directory.systemTemp.createTempSync('orbits-copy-dest-');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+      if (destRoot.existsSync()) destRoot.deleteSync(recursive: true);
+    });
+    final plain = List<int>.generate(70 * 1024, (i) => i % 199);
+    final src = File('${dir.path}${Platform.pathSeparator}plain.bin')
+      ..writeAsBytesSync(plain);
+    expect(
+      await copyLocalPathToStableFile(src.path, 'https://evil.example/x'),
+      isNull,
+    );
+    final dest = await copyLocalPathToStableFile(src.path, destRoot.path);
+    expect(dest, isNotNull);
+    expect(dest!.contains('://'), isFalse);
+    expect(File(dest).readAsBytesSync(), plain);
+    expect(dest, isNot(src.path));
+    expect(
+      File('lib/core/path_byte_stream_io.dart').readAsStringSync(),
+      isNot(contains('readAsBytes')),
+    );
+    expect(
+      File('lib/core/attachment_store_io.dart').readAsStringSync(),
+      contains('orbits-file-blobs'),
+    );
+    expect(
+      File('lib/core/attachment_store_io.dart').readAsStringSync(),
+      isNot(contains('http://')),
+    );
+    expect(
+      File('lib/state/messaging_notifier.dart').readAsStringSync(),
+      contains('persistLocalAttachmentPath'),
+    );
+    expect(
+      File('lib/state/connections_notifier.dart').readAsStringSync(),
+      contains('persistLocalAttachmentPath'),
     );
   });
 }

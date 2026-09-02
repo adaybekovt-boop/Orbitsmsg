@@ -25,6 +25,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../attachments/resumable_blob.dart';
+import '../core/attachment_store.dart';
 import '../core/error_reporter.dart';
 import '../core/path_byte_stream.dart';
 import '../utils/heavy_codec.dart';
@@ -1235,6 +1236,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final sanitizedReply = _sanitizeReplyTo(replyTo);
     final fileId = msgId;
     final fileKey = _freshFileKey();
+    final persistPath = await persistLocalAttachmentPath(path);
 
     final attachmentRef = <String, Object?>{
       'name': safeName,
@@ -1246,7 +1248,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       'duration': durationSec,
       'chunked': true,
       'fileId': fileId,
-      'localPath': path,
+      'localPath': persistPath,
     };
     final payload = <String, Object?>{
       'id': msgId,
@@ -1266,11 +1268,11 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       'status': 'pending',
       'payload': payload,
     });
-    // Persist the picker path, not a plaintext blob. FileTile reads
+    // Persist a local path, not a plaintext blob. FileTile reads
     // `localPath` from file_blobs; Drift never holds the 50 MiB body.
     await db.saveFileBlobFromPath(
       msgId,
-      path,
+      persistPath,
       mime: mime,
       name: safeName,
       kind: kind,

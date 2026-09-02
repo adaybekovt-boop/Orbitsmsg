@@ -73,6 +73,14 @@ void main() {
       contains('xorCipherPathToPlaintextFile'),
     );
     expect(
+      File('lib/core/path_byte_stream.dart').readAsStringSync(),
+      contains('copyLocalPathToStableFile'),
+    );
+    expect(
+      File('lib/core/attachment_store.dart').readAsStringSync(),
+      contains('persistLocalAttachmentPath'),
+    );
+    expect(
       File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
       contains('decryptInboundAttachmentPath'),
     );
