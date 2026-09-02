@@ -32,8 +32,10 @@ void main() {
     expect(
       conns,
       contains(
-        'dropAllowed: (rid) => isVerified(rid) && '
-        '!_messaging.isPeerBlocked(rid)',
+        'dropAllowed: (rid) =>\n'
+        '          peerjsAllowedOnNative(isWeb: kIsWeb) &&\n'
+        '          isVerified(rid) &&\n'
+        '          !_messaging.isPeerBlocked(rid)',
       ),
     );
 

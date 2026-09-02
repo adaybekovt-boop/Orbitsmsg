@@ -2231,6 +2231,14 @@ class RoomManager extends StateNotifier<RoomState> {
   /// [kMaxVoiceParticipants]-1 other room members directly.
   Future<void> _startVoiceMesh(String roomId) async {
     await _stopVoice();
+    // No native Hyperswarm room-voice mesh. Isolation must not set
+    // voice UI as if the user joined — fail closed here, before mic
+    // capture or outbound media dials. Product [kPeerjsIsolationMode]
+    // stays default-live; this uses [kIsWeb], never the no-arg form.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      debugPrint('[room] voice: PeerJS isolation disallows native PeerJS');
+      return;
+    }
     // Mark that we've entered this voice channel (drives the compact voice
     // panel) even before the mic / mesh come up.
     state = state.copyWith(
@@ -2255,11 +2263,6 @@ class RoomManager extends StateNotifier<RoomState> {
       );
     }
     final targets = peers.take(maxOthers).toList();
-
-    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
-      debugPrint('[room] voice: PeerJS isolation disallows native PeerJS');
-      return;
-    }
 
     final peer = _rawPeer;
     if (peer == null) {
@@ -2307,6 +2310,8 @@ class RoomManager extends StateNotifier<RoomState> {
   /// room-voice call we can't accept is closed; non-room calls fall through to
   /// CallsNotifier untouched.
   Future<void> _handleIncomingRoomCall(PeerMediaConnection call) async {
+    // Mesh start is gated earlier in [_startVoiceMesh] (before voice UI /
+    // getUserMedia / callPeer). Keep this inbound fail-closed close().
     if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
       unawaited(call.close().catchError((_) {}));
       return;

@@ -958,7 +958,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         },
       ),
       dropInbound: (rid, packet) => _drop.handleInbound(rid, packet),
-      dropAllowed: (rid) => isVerified(rid) && !_messaging.isPeerBlocked(rid),
+      // PeerJS DataConnection router only. Native inbound drop uses DualStack
+      // onDrop → DropBridge, not this callback.
+      dropAllowed: (rid) =>
+          peerjsAllowedOnNative(isWeb: kIsWeb) &&
+          isVerified(rid) &&
+          !_messaging.isPeerBlocked(rid),
       isBlocked: (rid) => _messaging.isPeerBlocked(rid),
       roomInbound: (rid, packet) => _room.handleInbound(rid, packet),
     );

@@ -139,4 +139,35 @@ void main() {
       isTrue,
     );
   });
+
+  test('DropNotifier fail-closes leftover PeerJS inbound when isolation forbids it',
+      () {
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(kPeerjsSupportWindowOpen, isTrue);
+    expect(peerjsAllowedOnNative(), isTrue);
+
+    final src = File('lib/state/drop_provider.dart').readAsStringSync();
+    expect(src, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(src, isNot(contains('peerjsAllowedOnNative()')));
+    expect(src, contains('_isolationBlocksPeerjsDrop'));
+
+    final inbound = src
+        .split('handleInbound: (remoteId, packet)')[1]
+        .split('resetPeer:')[0];
+
+    expect(inbound, contains('_pendingInboundPeer = remoteId'));
+    expect(inbound, contains('_handleNativePathPacket'));
+    expect(inbound, contains('_isolationBlocksPeerjsDrop'));
+    expect(inbound, contains('_engine.handleInbound'));
+
+    final nativeIdx = inbound.indexOf('_handleNativePathPacket');
+    final gateIdx = inbound.indexOf('_isolationBlocksPeerjsDrop');
+    final engineIdx = inbound.indexOf('_engine.handleInbound');
+    expect(nativeIdx, greaterThanOrEqualTo(0));
+    expect(gateIdx, greaterThan(nativeIdx));
+    expect(engineIdx, greaterThan(gateIdx));
+
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(kPeerjsSupportWindowOpen, isTrue);
+  });
 }

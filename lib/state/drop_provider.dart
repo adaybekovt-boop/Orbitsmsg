@@ -116,6 +116,8 @@ class DropNotifier extends StateNotifier<DropState> {
             handleInbound: (remoteId, packet) {
               _pendingInboundPeer = remoteId;
               if (_handleNativePathPacket(remoteId, packet)) return;
+              final conns = _ref.read(connectionsNotifierProvider.notifier);
+              if (_isolationBlocksPeerjsDrop(conns, remoteId)) return;
               unawaited(_engine.handleInbound(packet, peerId: remoteId));
             },
             resetPeer: (remoteId) => _engine.resetPeer(remoteId),

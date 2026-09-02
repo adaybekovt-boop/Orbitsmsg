@@ -191,7 +191,10 @@ class CallsNotifier extends StateNotifier<CallState> {
     if (state.status != CallStatus.idle) return;
     final peer = _boundPeer;
     final conns = _ref.read(connectionsNotifierProvider.notifier);
-    if (peer == null && !conns.canUseNative(remotePeerId)) {
+    // Isolation fail-closed before media acquire: leftover PeerJS clients
+    // do not count when isolation forbids. Native DualStack still proceeds.
+    if ((!peerjsAllowedOnNative(isWeb: kIsWeb) || peer == null) &&
+        !conns.canUseNative(remotePeerId)) {
       state = state.copyWith(lastError: 'Нет активного P2P-соединения');
       return;
     }
@@ -290,6 +293,15 @@ class CallsNotifier extends StateNotifier<CallState> {
     final conn = _conn;
     if (state.status != CallStatus.ringing) return;
     if (conn == null && _nativeSession == null) return;
+    // Isolation fail-closed before getUserMedia when there is no native
+    // session. Leftover PeerJS `_conn` must not open the mic.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb) && _nativeSession == null) {
+      try {
+        unawaited(conn?.close().catchError((_) {}));
+      } catch (_) {}
+      _resetIdleWithError('Нет активного P2P-соединения');
+      return;
+    }
     state = state.copyWith(
       video: video,
       videoEnabled: video,
@@ -557,6 +569,10 @@ class CallsNotifier extends StateNotifier<CallState> {
   }
 
   void _attachConnection(PeerMediaConnection conn) {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      unawaited(conn.close().catchError((_) {}));
+      return;
+    }
     _conn = conn;
     _remoteStreamSub = conn.onStream.listen((remote) {
       if (!mounted) return;

@@ -35,7 +35,8 @@ import 'package:orbits_flutter/transport/peerjs_window.dart'
         kPeerjsIsolationDefaultLive,
         kPeerjsIsolationMode,
         kPeerjsIsolationRemoved,
-        kPeerjsIsolationWebOnly;
+        kPeerjsIsolationWebOnly,
+        kPeerjsSupportWindowOpen;
 import 'package:orbits_flutter/state/auth_notifier.dart' show AuthedUser;
 import 'package:orbits_flutter/state/connections_notifier.dart' show RoomBridge;
 import 'package:orbits_flutter/state/local_profile_provider.dart';
@@ -342,4 +343,44 @@ void main() {
     expect(await errorFor(SelfHostFailure.clientTimeout), contains('таймаут'));
     expect(await errorFor(SelfHostFailure.peerjsIsolation), contains('изоляции'));
   }, timeout: const Timeout(Duration(seconds: 20)));
+
+  // ── Voice-mesh isolation: fail closed before voice UI / getUserMedia. ──
+
+  test('_startVoiceMesh isolation gate sits before voiceChannelId and media',
+      () {
+    final src = File('lib/peer/room_manager.dart').readAsStringSync();
+    final startVoice = src
+        .split('Future<void> _startVoiceMesh(')[1]
+        .split('Future<void> _handleIncomingRoomCall')[0];
+    expect(startVoice, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(startVoice, isNot(contains('peerjsAllowedOnNative()')));
+    final gateIdx =
+        startVoice.indexOf('peerjsAllowedOnNative(isWeb: kIsWeb)');
+    expect(gateIdx, greaterThanOrEqualTo(0));
+
+    final voiceUiIdx = startVoice.indexOf('voiceChannelId:');
+    expect(voiceUiIdx, greaterThan(gateIdx),
+        reason: 'must not set voiceChannelId before isolation forbids PeerJS');
+
+    final copyWithVoice = startVoice.indexOf(
+      'state = state.copyWith(\n      voiceChannelId:',
+    );
+    expect(copyWithVoice, greaterThan(gateIdx),
+        reason: 'voice UI copyWith that sets voiceChannelId follows the gate');
+
+    expect(startVoice.indexOf('.getUserMedia'), greaterThan(gateIdx),
+        reason: 'getUserMedia must sit after the isolation gate');
+    expect(startVoice.indexOf('.callPeer'), greaterThan(gateIdx),
+        reason: 'callPeer must sit after the isolation gate');
+
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(kPeerjsSupportWindowOpen, isTrue);
+  });
+
+  test('_startVoiceMesh does not add a no-arg peerjsAllowedOnNative() call', () {
+    final src = File('lib/peer/room_manager.dart').readAsStringSync();
+    expect(src, isNot(contains('peerjsAllowedOnNative()')));
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(kPeerjsSupportWindowOpen, isTrue);
+  });
 }
