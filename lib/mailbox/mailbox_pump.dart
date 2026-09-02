@@ -4,6 +4,34 @@
 import 'blind_store.dart';
 import 'storage_peer_client.dart';
 
+/// Capability tokens are opaque. A URL or a secret-field fragment is
+/// not a mailbox grant.
+bool mailboxPumpTokenIsSafe(String token) {
+  if (token.isEmpty) return false;
+  if (token.contains('://')) return false;
+  if (token.contains('peerId')) return false;
+  if (token.contains('fileKey')) return false;
+  if (token.contains('rootKey')) return false;
+  if (token.contains('discoverySecret')) return false;
+  return true;
+}
+
+void _assertMailboxPumpArgs({
+  required String token,
+  required String writerKey,
+  List<int>? encryptedEnvelope,
+}) {
+  if (!mailboxPumpTokenIsSafe(token)) {
+    throw StateError('unsafe mailbox token');
+  }
+  if (writerKey.isEmpty) {
+    throw StateError('empty mailbox writer');
+  }
+  if (encryptedEnvelope != null && encryptedEnvelope.isEmpty) {
+    throw StateError('empty mailbox envelope');
+  }
+}
+
 class MailboxPump {
   int _seq = 0;
 
@@ -13,6 +41,11 @@ class MailboxPump {
     required String writerKey,
     required List<int> encryptedEnvelope,
   }) {
+    _assertMailboxPumpArgs(
+      token: token,
+      writerKey: writerKey,
+      encryptedEnvelope: encryptedEnvelope,
+    );
     store.put(
       token: token,
       writerKey: writerKey,
@@ -30,6 +63,7 @@ class MailboxPump {
     required String writerKey,
     int fromSeq = 0,
   }) {
+    _assertMailboxPumpArgs(token: token, writerKey: writerKey);
     return store.get(token: token, writerKey: writerKey, fromSeq: fromSeq);
   }
 
@@ -39,6 +73,11 @@ class MailboxPump {
     required String writerKey,
     required List<int> encryptedEnvelope,
   }) async {
+    _assertMailboxPumpArgs(
+      token: token,
+      writerKey: writerKey,
+      encryptedEnvelope: encryptedEnvelope,
+    );
     final seq = _seq;
     await client.put(
       token: token,
@@ -58,6 +97,7 @@ class MailboxPump {
     required String writerKey,
     int fromSeq = 0,
   }) {
+    _assertMailboxPumpArgs(token: token, writerKey: writerKey);
     return client.get(token: token, writerKey: writerKey, fromSeq: fromSeq);
   }
 }

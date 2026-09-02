@@ -318,12 +318,20 @@ class DualStackBridge {
     return isNativeConnected(norm) && authenticated.contains(norm);
   }
 
+  /// Opaque local capability only — same rules as [mailboxPumpTokenIsSafe].
+  bool _mailboxTokenSafe(String token) => mailboxPumpTokenIsSafe(token);
+
   /// Offline deposit: encrypted bytes only. Used when the recipient is not
   /// currently connected. The storage peer never sees keys.
   Future<bool> depositMailbox(List<int> encryptedEnvelope) async {
     final token = mailboxToken;
     final writer = mailboxWriterKey;
     if (token == null || writer == null) return false;
+    if (!_mailboxTokenSafe(token) ||
+        writer.isEmpty ||
+        encryptedEnvelope.isEmpty) {
+      return false;
+    }
     try {
       final client = storagePeer;
       if (client != null) {
@@ -362,8 +370,7 @@ class DualStackBridge {
   Future<void> _enqueueMailboxWake() async {
     final token = mailboxToken;
     final hook = onMailboxWake;
-    if (hook == null || token == null || token.isEmpty) return;
-    if (token.contains('peerId') || token.contains('://')) return;
+    if (hook == null || token == null || !_mailboxTokenSafe(token)) return;
     await hook(
       OpaqueWake(
         opaqueWakeToken: token,
@@ -451,22 +458,27 @@ class DualStackBridge {
     final token = mailboxToken;
     final writer = mailboxWriterKey;
     if (token == null || writer == null) return 0;
+    if (!_mailboxTokenSafe(token) || writer.isEmpty) return 0;
     final List<EncryptedBlock> blocks;
-    final client = storagePeer;
-    if (client != null) {
-      blocks = await _mailboxPump.collectClient(
-        client: client,
-        token: token,
-        writerKey: writer,
-      );
-    } else {
-      final store = mailbox;
-      if (store == null) return 0;
-      blocks = _mailboxPump.collect(
-        store: store,
-        token: token,
-        writerKey: writer,
-      );
+    try {
+      final client = storagePeer;
+      if (client != null) {
+        blocks = await _mailboxPump.collectClient(
+          client: client,
+          token: token,
+          writerKey: writer,
+        );
+      } else {
+        final store = mailbox;
+        if (store == null) return 0;
+        blocks = _mailboxPump.collect(
+          store: store,
+          token: token,
+          writerKey: writer,
+        );
+      }
+    } on StateError {
+      return 0;
     }
     final from = normalizePeerId(fromPeerId ?? writer);
     if (isBlocked(from)) {
@@ -603,7 +615,7 @@ class DualStackBridge {
       );
       return;
     }
-    if (token == null) return;
+    if (token == null || !_mailboxTokenSafe(token) || writer.isEmpty) return;
     final stats = await storagePeer?.stats(token: token, writerKey: writer);
     if (stats != null &&
         (stats.usedBytes >= maxBytes || stats.pendingCount >= maxCount)) {

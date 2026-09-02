@@ -50,3 +50,25 @@ test('opaque wake gateway rejects plaintext and does not claim deploy', async (t
   assert.equal(json.deployed, false)
   assert.equal(server.accepted.length, 1)
 })
+
+test('opaque wake gateway rejects fileKey and discoverySecret', async (t) => {
+  const server = createPushGateway()
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const port = server.address().port
+  const fileKey = await post(port, {
+    opaqueWakeToken: 'tok',
+    collapseId: 'c1',
+    protocolVersion: 1,
+    fileKey: 'must-not-relay',
+  })
+  assert.equal(fileKey.status, 400)
+  const discovery = await post(port, {
+    opaqueWakeToken: 'tok',
+    collapseId: 'c1',
+    protocolVersion: 1,
+    discoverySecret: 'must-not-relay',
+  })
+  assert.equal(discovery.status, 400)
+  assert.equal(server.accepted.length, 0)
+})

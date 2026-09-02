@@ -1,9 +1,23 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/push/opaque_wake.dart';
 import 'package:orbits_flutter/push/push_gateway.dart';
 import 'package:orbits_flutter/push/wake_service.dart';
 
 void main() {
+  test('JS FORBIDDEN stays in sync with OpaqueWake.forbiddenKeys', () {
+    final js = File('tool/push_gateway/server.js').readAsStringSync();
+    final start = js.indexOf('const FORBIDDEN');
+    expect(start, greaterThanOrEqualTo(0));
+    final end = js.indexOf(']', start);
+    expect(end, greaterThan(start));
+    final region = js.substring(start, end + 1);
+    for (final key in OpaqueWake.forbiddenKeys) {
+      expect(region, contains(key), reason: 'JS FORBIDDEN missing $key');
+    }
+  });
+
   test('APNs and FCM gateways are not deployed', () {
     expect(kLiveApnsGateway, isFalse);
     expect(kLiveFcmGateway, isFalse);

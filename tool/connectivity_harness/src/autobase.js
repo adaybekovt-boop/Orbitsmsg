@@ -7,17 +7,28 @@
  * Not the Holepunch Autobase npm package (that is not in bare_stdlib.zip).
  */
 
+// Projects lib/transport/layers.dart kForbiddenReplicationFields.
+// Autobase-only extras: b64, dataB64, bytes (attachment ciphertext).
+// Host-plaintext live `text` must survive — do not add `text` here.
 const STRIP = new Set([
   'b64',
   'dataB64',
-  'fileKey',
-  'fileKeyB64',
+  'bytes',
   'plaintext',
   'password',
   'kek',
+  'vaultKek',
   'rootKey',
-  'bytes',
+  'sendCk',
+  'recvCk',
+  'dhPriv',
+  'skipped',
   'discoverySecret',
+  'sharedDiscoverySecret',
+  'attachmentBytes',
+  'fileKey',
+  'fileKeyB64',
+  'privBytes',
 ])
 
 /** Journal rows that rebuild membership after restart. Not live packet kinds. */
@@ -27,16 +38,26 @@ const JOURNAL_MEMBERSHIP_KINDS = new Set([
 ])
 
 /** Skip the whole journal row if any of these keys appear (fields or nested). */
+// Same Dart forbidden names, plus text/b64 so journal hydrate
+// never copies message bodies or attachment ciphertext.
 const JOURNAL_FORBIDDEN = new Set([
   'text',
   'b64',
-  'fileKey',
-  'fileKeyB64',
   'plaintext',
   'password',
   'kek',
+  'vaultKek',
   'rootKey',
+  'sendCk',
+  'recvCk',
+  'dhPriv',
+  'skipped',
   'discoverySecret',
+  'sharedDiscoverySecret',
+  'attachmentBytes',
+  'fileKey',
+  'fileKeyB64',
+  'privBytes',
 ])
 
 const MEMBERSHIP_PAYLOAD_KEYS = ['peerId', 'action', 'displayName', 'roomId']
@@ -349,6 +370,7 @@ module.exports = {
   hydrateFromJournal,
   membershipEventFromJournalRow,
   isJournalMembershipKind,
+  STRIP,
   JOURNAL_FORBIDDEN,
   JOURNAL_MEMBERSHIP_KINDS,
 }

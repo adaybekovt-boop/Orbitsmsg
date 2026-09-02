@@ -7,7 +7,23 @@
 
 const http = require('node:http')
 
+/** Keep in sync with OpaqueWake.forbiddenKeys in lib/push/opaque_wake.dart */
 const FORBIDDEN = new Set([
+  'plaintext',
+  'password',
+  'kek',
+  'vaultKek',
+  'rootKey',
+  'sendCk',
+  'recvCk',
+  'dhPriv',
+  'skipped',
+  'discoverySecret',
+  'sharedDiscoverySecret',
+  'attachmentBytes',
+  'fileKey',
+  'fileKeyB64',
+  'privBytes',
   'text',
   'body',
   'title',

@@ -23,6 +23,7 @@ import 'package:orbits_flutter/core/path_byte_stream.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
+import 'package:orbits_flutter/transport/fleet_status.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
 import 'package:orbits_flutter/transport/mux_frames.dart';
 import 'package:orbits_flutter/transport/native_rollback.dart';
@@ -1229,6 +1230,128 @@ void main() {
     expect(seen!.toJson().containsKey('peerId'), isFalse);
     expect(seen!.toJson().containsKey('text'), isFalse);
     await a.detach();
+  });
+
+  test('mailbox deposit refuses URL, peerId, and empty envelopes before store',
+      () async {
+    expect(kLiveStorageFleet, isFalse);
+    Future<(DualStackBridge, BlindMailboxStore)> make({
+      required String token,
+      String writer = 'ORBIT-AAAAAAAAAAAAAAAA',
+    }) async {
+      final store = BlindMailboxStore()
+        ..grant(
+          MailboxCapability(
+            token: token.isEmpty ? 'cap-unused' : token,
+            quotaBytes: 4096,
+            retentionMs: 60 * 1000,
+            expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+          ),
+        );
+      setHyperswarmRollout(HyperswarmRollout.internal);
+      final pair = loopbackPair();
+      final a = DualStackBridge(
+        transport: pair.$1,
+        journal: MemoryJournal('a'),
+        selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+        selfDeviceId: 'a',
+        secrets: DiscoverySecretStore(),
+        isBlocked: (_) => false,
+        mailbox: store,
+        mailboxToken: token,
+        mailboxWriterKey: writer,
+        onPacket: (_, __) async {},
+      )..attach();
+      return (a, store);
+    }
+
+    for (final token in [
+      'https://evil/tok',
+      'ftp://x',
+      'tok-peerId',
+      'x-fileKey',
+      'x-rootKey',
+      'x-discoverySecret',
+    ]) {
+      final (a, store) = await make(token: token);
+      expect(await a.depositMailbox(const [1, 2, 3, 4]), isFalse);
+      expect(store.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 0);
+      await a.detach();
+    }
+
+    final (emptyEnv, emptyStore) = await make(token: 'cap-1');
+    expect(await emptyEnv.depositMailbox(const []), isFalse);
+    expect(emptyStore.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 0);
+    await emptyEnv.detach();
+
+    final (emptyTok, emptyTokStore) = await make(token: '');
+    expect(await emptyTok.depositMailbox(const [1, 2, 3, 4]), isFalse);
+    expect(emptyTokStore.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 0);
+    await emptyTok.detach();
+
+    final (emptyWriter, emptyWriterStore) =
+        await make(token: 'cap-1', writer: '');
+    expect(await emptyWriter.depositMailbox(const [1, 2, 3, 4]), isFalse);
+    expect(emptyWriterStore.pendingCount(''), 0);
+    await emptyWriter.detach();
+
+    final (ok, okStore) = await make(token: 'cap-1');
+    expect(await ok.depositMailbox(const [1, 2, 3, 4]), isTrue);
+    expect(okStore.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 1);
+    await ok.detach();
+  });
+
+  test('mailbox drain refuses URL tokens before collect', () async {
+    expect(kLiveStorageFleet, isFalse);
+    final store = BlindMailboxStore()
+      ..grant(
+        MailboxCapability(
+          token: 'cap-1',
+          quotaBytes: 4096,
+          retentionMs: 60 * 1000,
+          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+        ),
+      )
+      ..grant(
+        MailboxCapability(
+          token: 'https://evil/tok',
+          quotaBytes: 4096,
+          retentionMs: 60 * 1000,
+          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+        ),
+      );
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final a = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: DiscoverySecretStore(),
+      isBlocked: (_) => false,
+      mailbox: store,
+      mailboxToken: 'cap-1',
+      mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      onPacket: (_, __) async {},
+    )..attach();
+    final b = DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'b',
+      secrets: DiscoverySecretStore(),
+      isBlocked: (_) => false,
+      mailbox: store,
+      mailboxToken: 'https://evil/tok',
+      mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      onPacket: (_, __) async {},
+    )..attach();
+    expect(await a.depositMailbox(const [1, 2, 3, 4]), isTrue);
+    expect(store.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 1);
+    expect(await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA'), 0);
+    expect(store.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 1);
+    await a.detach();
+    await b.detach();
   });
 
   test('lost messages and journal mismatch rollback to PeerJS', () async {

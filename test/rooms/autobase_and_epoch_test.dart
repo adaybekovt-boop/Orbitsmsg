@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/rooms/autobase_log.dart';
@@ -233,6 +235,15 @@ void main() {
       raw.keys.toSet().difference(cleaned.keys.toSet()),
       kForbiddenReplicationFields,
     );
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('worklet autobase.js projects kForbiddenReplicationFields', () {
+    final js =
+        File('tool/connectivity_harness/src/autobase.js').readAsStringSync();
+    expect(js, contains('vaultKek'));
+    expect(js, contains('sendCk'));
+    expect(js, contains('fileKey'));
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
 }

@@ -10,7 +10,28 @@ const {
   roomEventFromNativePacket,
   hydrateFromJournal,
   membershipEventFromJournalRow,
+  STRIP,
+  JOURNAL_FORBIDDEN,
 } = require('../src/autobase')
+
+/** Mirrors lib/transport/layers.dart kForbiddenReplicationFields. */
+const DART_FORBIDDEN = [
+  'plaintext',
+  'password',
+  'kek',
+  'vaultKek',
+  'rootKey',
+  'sendCk',
+  'recvCk',
+  'dhPriv',
+  'skipped',
+  'discoverySecret',
+  'sharedDiscoverySecret',
+  'attachmentBytes',
+  'fileKey',
+  'fileKeyB64',
+  'privBytes',
+]
 const { Worklet, handleIpcRequest } = require('../src/worklet')
 
 function membershipRow(fields, extra = {}) {
@@ -188,18 +209,22 @@ test('hydrateFromJournal applies only roomMembershipChanged metadata', () => {
   assert.deepEqual(restarted.snapshot().messages, [])
 })
 
+test('STRIP and JOURNAL_FORBIDDEN project kForbiddenReplicationFields', () => {
+  const expectedStrip = new Set([...DART_FORBIDDEN, 'b64', 'dataB64', 'bytes'])
+  const expectedJournal = new Set([...DART_FORBIDDEN, 'text', 'b64'])
+  assert.equal(STRIP.has('text'), false)
+  assert.equal(STRIP.size, expectedStrip.size)
+  for (const key of expectedStrip) {
+    assert.equal(STRIP.has(key), true, 'STRIP missing ' + key)
+  }
+  assert.equal(JOURNAL_FORBIDDEN.size, expectedJournal.size)
+  for (const key of expectedJournal) {
+    assert.equal(JOURNAL_FORBIDDEN.has(key), true, 'JOURNAL_FORBIDDEN missing ' + key)
+  }
+})
+
 test('hydrateFromJournal skips rows with forbidden field names', () => {
-  const banned = [
-    'text',
-    'b64',
-    'fileKey',
-    'fileKeyB64',
-    'plaintext',
-    'password',
-    'kek',
-    'rootKey',
-    'discoverySecret',
-  ]
+  const banned = ['text', 'b64', ...DART_FORBIDDEN]
   const proj = new AutobaseProjection()
   const rows = banned.map((key, i) =>
     membershipRow(
@@ -296,6 +321,135 @@ test('worklet Autobase rebuilds members from journal after restart', async () =>
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('hydrateFromJournal skips sendCk, vaultKek, sharedDiscoverySecret, privBytes', () => {
+  const banned = ['sendCk', 'vaultKek', 'sharedDiscoverySecret', 'privBytes']
+  const proj = new AutobaseProjection()
+  const rows = banned.map((key, i) =>
+    membershipRow(
+      {
+        peerId: 'p-' + key,
+        action: 'join',
+        displayName: 'Bad',
+        roomId: 'r1',
+        [key]: 'leaked-' + key,
+      },
+      { seq: i + 1, writerDeviceId: 'w' + i },
+    ),
+  )
+  rows.push(
+    membershipRow(
+      {
+        peerId: 'ok',
+        action: 'join',
+        displayName: 'Ok',
+        roomId: 'r1',
+      },
+      { seq: 100, writerDeviceId: 'ok-dev' },
+    ),
+  )
+  assert.equal(proj.hydrateFromJournal(rows), 1)
+  const snap = proj.snapshot()
+  assert.equal(snap.members.ok, 'Ok')
+  for (const key of banned) {
+    assert.equal(snap.members['p-' + key], undefined)
+  }
+  const dumped = JSON.stringify(snap)
+  assert.equal(dumped.includes('leaked-'), false)
+  assert.equal(dumped.includes('sendCk'), false)
+  assert.equal(dumped.includes('vaultKek'), false)
+  assert.equal(dumped.includes('sharedDiscoverySecret'), false)
+  assert.equal(dumped.includes('privBytes'), false)
+})
+
+test('JOURNAL_FORBIDDEN rejects a membership journal row with text or fileKey', () => {
+  assert.equal(
+    membershipEventFromJournalRow(
+      membershipRow({
+        peerId: 'p-text',
+        action: 'join',
+        displayName: 'Bad',
+        roomId: 'r1',
+        text: 'hello-plaintext',
+      }),
+    ),
+    null,
+  )
+  assert.equal(
+    membershipEventFromJournalRow(
+      membershipRow({
+        peerId: 'p-file',
+        action: 'join',
+        displayName: 'Bad',
+        roomId: 'r1',
+        fileKey: 'smuggle-file',
+      }),
+    ),
+    null,
+  )
+  const ok = membershipEventFromJournalRow(
+    membershipRow({
+      peerId: 'p-ok',
+      action: 'join',
+      displayName: 'Ok',
+      roomId: 'r1',
+    }),
+  )
+  assert.equal(ok.kind, 'membership')
+  assert.equal(ok.payload.peerId, 'p-ok')
+  assert.equal(ok.payload.text, undefined)
+  assert.equal(ok.payload.fileKey, undefined)
+})
+
+test('apply strips sendCk, vaultKek, sharedDiscoverySecret, privBytes and keeps text', () => {
+  const proj = new AutobaseProjection()
+  proj.apply({
+    writerId: 'a',
+    seq: 1,
+    kind: 'message',
+    payload: {
+      id: 'm-hello',
+      text: 'hello',
+      fileKey: 'smuggle-file',
+      sendCk: 'smuggle-send',
+      vaultKek: 'smuggle-vault',
+      sharedDiscoverySecret: 'smuggle-shared',
+      privBytes: 'smuggle-priv',
+    },
+  })
+  const stored = proj.state.messages[0]
+  assert.equal(stored.text, 'hello')
+  assert.equal(stored.id, 'm-hello')
+  assert.equal(stored.fileKey, undefined)
+  assert.equal(stored.sendCk, undefined)
+  assert.equal(stored.vaultKek, undefined)
+  assert.equal(stored.sharedDiscoverySecret, undefined)
+  assert.equal(stored.privBytes, undefined)
+  const dumped = JSON.stringify(proj.snapshot())
+  assert.equal(dumped.includes('smuggle-'), false)
+})
+
+test('message event with text and fileKey keeps text and drops fileKey', () => {
+  const event = roomEventFromNativePacket(
+    {
+      type: 'autobase-event',
+      writerId: 'a',
+      seq: 4,
+      kind: 'message',
+      payload: { id: 'm1', text: 'hello', fileKey: 'smuggle-file' },
+    },
+    'fallback',
+  )
+  assert.equal(event.kind, 'message')
+  assert.equal(event.payload.text, 'hello')
+  assert.equal(event.payload.id, 'm1')
+  assert.equal(event.payload.fileKey, undefined)
+  const proj = new AutobaseProjection()
+  proj.apply(event)
+  const stored = proj.state.messages[0]
+  assert.equal(stored.text, 'hello')
+  assert.equal(stored.fileKey, undefined)
 })
 
 test('autobase.hydrate IPC applies supplied rows and ignores bodies', async () => {
