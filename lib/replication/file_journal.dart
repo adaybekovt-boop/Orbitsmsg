@@ -30,7 +30,7 @@ class FileJournal {
   final Future<List<String>> Function() _readLines;
 
   Future<void> append(JournalRecord record) async {
-    if (!replicationFieldsAreSafe(record.fields.keys)) {
+    if (!replicationValueIsSafe(record.fields)) {
       throw ArgumentError('refusing secret field in journal');
     }
     final line = jsonEncode({
@@ -67,7 +67,7 @@ class FileJournal {
       final rawFields = row['fields'];
       if (rawFields is! Map) continue;
       final fields = _decodeFields(rawFields);
-      if (!replicationFieldsAreSafe(fields.keys)) continue;
+      if (!replicationValueIsSafe(fields)) continue;
       final seqRaw = row['seq'];
       final seq = seqRaw is int
           ? seqRaw

@@ -29,6 +29,26 @@ void main() {
     expect(b.blocks.first.fields['encryptedEnvelope'], [1, 2, 3]);
     expect(b.blocks.first.fields.containsKey('plaintext'), isFalse);
   });
+
+  test('applyRemote returns null when fields nest fileKey', () {
+    final store = HypercoreLocalStore('dev-b');
+    expect(
+      store.applyRemote(<String, Object?>{
+        'type': 'repl-event',
+        'info': kReplicationEventInfo,
+        'kind': ReplicationEventKind.messageEnvelopeCreated.name,
+        'seq': 0,
+        'writerDeviceId': 'dev-a',
+        'fields': <String, Object?>{
+          'eventId': 'e1',
+          'encryptedEnvelope': <int>[1, 2, 3],
+          'extra': <String, Object?>{'fileKey': 'x'},
+        },
+      }),
+      isNull,
+    );
+    expect(store.blocks, isEmpty);
+  });
 }
 
 bool jsonFieldsHavePlaintext(Map<String, Object?> frame) {

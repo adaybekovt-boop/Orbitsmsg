@@ -16,6 +16,8 @@ void main() {
     for (final key in OpaqueWake.forbiddenKeys) {
       expect(region, contains(key), reason: 'JS FORBIDDEN missing $key');
     }
+    expect(js, contains('hasForbiddenKey'),
+        reason: 'JS must reject nested forbidden keys, not only top-level');
   });
 
   test('APNs and FCM gateways are not deployed', () {

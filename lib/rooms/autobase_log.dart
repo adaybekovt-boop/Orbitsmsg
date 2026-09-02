@@ -3,15 +3,41 @@
 
 import '../transport/layers.dart';
 
-/// Drop Hypercore-forbidden secrets from an Autobase event payload.
-/// Host-plaintext `text` stays. Attachment ciphertext `b64` is stripped
-/// separately in [AutobaseProjection.apply] — it is not in this set.
+/// Autobase attachment extras already used in JS `STRIP`
+/// (`tool/connectivity_harness/src/autobase.js`). Not live `text`.
+const Set<String> _kAutobaseAttachmentStripExtras = <String>{
+  'b64',
+  'dataB64',
+  'bytes',
+};
+
+bool _isStrippedAutobaseKey(String key) =>
+    kForbiddenReplicationFields.contains(key) ||
+    _kAutobaseAttachmentStripExtras.contains(key);
+
+/// Drop Hypercore-forbidden secrets and Autobase attachment extras
+/// (`b64`, `dataB64`, `bytes`) from an Autobase event payload at any depth.
+/// Host-plaintext `text` stays in the local projection.
 Map<String, Object?> stripForbiddenAutobasePayload(Map<String, Object?> raw) {
-  return <String, Object?>{
-    for (final entry in raw.entries)
-      if (!kForbiddenReplicationFields.contains(entry.key))
-        entry.key: entry.value,
-  };
+  final out = <String, Object?>{};
+  for (final entry in raw.entries) {
+    if (_isStrippedAutobaseKey(entry.key)) continue;
+    out[entry.key] = _stripForbiddenAutobaseNested(entry.value);
+  }
+  return out;
+}
+
+/// Recurse into Map / Map-like nested maps. Arrays stay opaque, matching JS
+/// `sanitize` (it returns arrays unchanged).
+Object? _stripForbiddenAutobaseNested(Object? value) {
+  if (value is! Map) return value;
+  final asStringKeyed = value is Map<String, Object?>
+      ? value
+      : <String, Object?>{
+          for (final e in value.entries)
+            if (e.key is String) e.key as String: e.value,
+        };
+  return stripForbiddenAutobasePayload(asStringKeyed);
 }
 
 class RoomEvent {

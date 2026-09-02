@@ -127,7 +127,7 @@ class DualStackBridge {
     final rows = <Map<String, Object?>>[];
     for (final rec in journal.records) {
       if (rec.kind != ReplicationEventKind.roomMembershipChanged) continue;
-      if (!replicationFieldsAreSafe(rec.fields.keys)) continue;
+      if (!replicationValueIsSafe(rec.fields)) continue;
       rows.add(journalRecordToWorklet(rec));
     }
     try {
@@ -145,7 +145,7 @@ class DualStackBridge {
 
   void hydrateHypercoreFromJournal() {
     for (final rec in journal.records) {
-      if (!replicationFieldsAreSafe(rec.fields.keys)) continue;
+      if (!replicationValueIsSafe(rec.fields)) continue;
       hypercore.append(rec);
     }
   }
@@ -162,7 +162,7 @@ class DualStackBridge {
 
   RoomEvent? _membershipEventFromJournal(JournalRecord rec) {
     if (rec.kind != ReplicationEventKind.roomMembershipChanged) return null;
-    if (!replicationFieldsAreSafe(rec.fields.keys)) return null;
+    if (!replicationValueIsSafe(rec.fields)) return null;
     for (final banned in const [
       'text',
       'b64',

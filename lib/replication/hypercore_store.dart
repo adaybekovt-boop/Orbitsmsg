@@ -14,7 +14,7 @@ class HypercoreLocalStore {
   final List<JournalRecord> blocks = <JournalRecord>[];
 
   JournalRecord append(JournalRecord record) {
-    if (!replicationFieldsAreSafe(record.fields.keys)) {
+    if (!replicationValueIsSafe(record.fields)) {
       throw ArgumentError('refusing secret field in hypercore');
     }
     if (_alreadyHas(record)) return record;
@@ -74,7 +74,7 @@ class HypercoreLocalStore {
         fields[k as String] = v;
       }
     });
-    if (!replicationFieldsAreSafe(fields.keys)) return null;
+    if (!replicationValueIsSafe(fields)) return null;
     final record = JournalRecord(
       seq: frame['seq'] as int? ?? blocks.length,
       writerDeviceId: frame['writerDeviceId'] as String? ?? '',

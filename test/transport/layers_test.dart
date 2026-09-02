@@ -136,6 +136,19 @@ void main() {
     expect(replicationFieldsAreSafe(['fileKey']), isFalse);
     expect(replicationFieldsAreSafe(['fileKeyB64']), isFalse);
     expect(replicationFieldsAreSafe(['attachmentBytes']), isFalse);
+    expect(
+      replicationValueIsSafe({
+        'extra': {'fileKey': 'x'},
+      }),
+      isFalse,
+    );
+    expect(
+      replicationValueIsSafe({
+        'eventId': 'e',
+        'encryptedEnvelope': [1],
+      }),
+      isTrue,
+    );
   });
 
   test('MessageEnvelopeCreated only exposes allowed journal keys', () {

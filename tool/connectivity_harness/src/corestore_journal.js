@@ -35,10 +35,19 @@ const ENVELOPE_KINDS = new Set([
 
 function fieldsAreSafe(fields) {
   if (!fields || typeof fields !== 'object') return false
-  for (const key of Object.keys(fields)) {
-    if (FORBIDDEN.has(key)) return false
+  const seen = new Set()
+  function walk(value) {
+    if (!value || typeof value !== 'object') return true
+    if (seen.has(value)) return true
+    seen.add(value)
+    if (Array.isArray(value)) return value.every(walk)
+    for (const [key, child] of Object.entries(value)) {
+      if (FORBIDDEN.has(key)) return false
+      if (!walk(child)) return false
+    }
+    return true
   }
-  return true
+  return walk(fields)
 }
 
 function isRemoteUrl(p) {

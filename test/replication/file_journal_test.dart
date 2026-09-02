@@ -183,4 +183,41 @@ void main() {
     expect(replayed.records.single.fields.containsKey('fileKey'), isFalse);
     expect(replayed.records.single.fields.containsKey('plaintext'), isFalse);
   });
+
+  test('replay drops a line whose fields nest discoverySecret', () async {
+    final lines = <String>[
+      jsonEncode(<String, Object?>{
+        'seq': 1,
+        'writerDeviceId': 'dev-b',
+        'kind': ReplicationEventKind.messageEnvelopeCreated.name,
+        'fields': <String, Object?>{
+          'eventId': 'e-ok',
+          'encryptedEnvelope': base64Encode(const <int>[1, 2, 3]),
+        },
+      }),
+      jsonEncode(<String, Object?>{
+        'seq': 2,
+        'writerDeviceId': 'dev-b',
+        'kind': ReplicationEventKind.messageEnvelopeCreated.name,
+        'fields': <String, Object?>{
+          'eventId': 'e-leak',
+          'encryptedEnvelope': base64Encode(const <int>[4, 5, 6]),
+          'extra': <String, Object?>{'discoverySecret': 'nope'},
+        },
+      }),
+    ];
+    final tampered = FileJournal(
+      writerDeviceId: 'dev-a',
+      writeLine: (line) async => lines.add(line),
+      readLines: () async => List<String>.from(lines),
+    );
+    final replayed = await tampered.replay();
+    expect(replayed.length, 1);
+    expect(replayed.records.single.fields['eventId'], 'e-ok');
+    expect(replayed.records.single.seq, 1);
+    expect(
+      replayed.records.any((r) => r.fields['eventId'] == 'e-leak'),
+      isFalse,
+    );
+  });
 }

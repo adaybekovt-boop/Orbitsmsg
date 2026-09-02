@@ -3,7 +3,7 @@
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const http = require('node:http')
-const { createPushGateway } = require('./server.js')
+const { createPushGateway, hasForbiddenKey } = require('./server.js')
 
 function post(port, body) {
   return new Promise((resolve, reject) => {
@@ -71,4 +71,77 @@ test('opaque wake gateway rejects fileKey and discoverySecret', async (t) => {
   })
   assert.equal(discovery.status, 400)
   assert.equal(server.accepted.length, 0)
+})
+
+test('hasForbiddenKey walks nested objects/arrays and is cycle-safe', () => {
+  assert.equal(hasForbiddenKey({ opaqueWakeToken: 'tok' }), false)
+  assert.equal(hasForbiddenKey({ meta: { fileKey: 'x' } }), true)
+  assert.equal(hasForbiddenKey({ extra: { text: 'hi' } }), true)
+  assert.equal(hasForbiddenKey({ extra: { discoverySecret: 'y' } }), true)
+  assert.equal(hasForbiddenKey({ items: [{ fileKey: 'x' }] }), true)
+  assert.equal(hasForbiddenKey({ note: 'fileKey' }), false)
+  const cyclic = { collapseId: 'c1' }
+  cyclic.self = cyclic
+  assert.equal(hasForbiddenKey(cyclic), false)
+  const cyclicForbidden = { extra: {} }
+  cyclicForbidden.extra.loop = cyclicForbidden
+  cyclicForbidden.extra.discoverySecret = 'y'
+  assert.equal(hasForbiddenKey(cyclicForbidden), true)
+})
+
+test('opaque wake gateway rejects nested fileKey/text/discoverySecret', async (t) => {
+  const server = createPushGateway()
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const port = server.address().port
+
+  const health = await new Promise((resolve, reject) => {
+    http
+      .get({ hostname: '127.0.0.1', port, path: '/health' }, (res) => {
+        const chunks = []
+        res.on('data', (c) => chunks.push(c))
+        res.on('end', () =>
+          resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }),
+        )
+      })
+      .on('error', reject)
+  })
+  assert.equal(health.status, 200)
+  assert.equal(JSON.parse(health.body).deployed, false)
+
+  const nestedFileKey = await post(port, {
+    opaqueWakeToken: 'tok',
+    collapseId: 'c1',
+    protocolVersion: 1,
+    meta: { fileKey: 'x' },
+  })
+  assert.equal(nestedFileKey.status, 400)
+
+  const nestedText = await post(port, {
+    opaqueWakeToken: 'tok',
+    collapseId: 'c1',
+    protocolVersion: 1,
+    extra: { text: 'hi' },
+  })
+  assert.equal(nestedText.status, 400)
+
+  const nestedDiscovery = await post(port, {
+    opaqueWakeToken: 'tok',
+    collapseId: 'c1',
+    protocolVersion: 1,
+    extra: { discoverySecret: 'y' },
+  })
+  assert.equal(nestedDiscovery.status, 400)
+  assert.equal(server.accepted.length, 0)
+
+  const ok = await post(port, {
+    opaqueWakeToken: 'tok',
+    collapseId: 'c1',
+    protocolVersion: 1,
+  })
+  assert.equal(ok.status, 200)
+  const json = JSON.parse(ok.body)
+  assert.equal(json.deployed, false)
+  assert.equal(json.accepted, true)
+  assert.equal(server.accepted.length, 1)
 })

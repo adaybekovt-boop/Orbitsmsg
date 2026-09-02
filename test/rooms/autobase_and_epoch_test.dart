@@ -201,6 +201,55 @@ void main() {
     expect(event.payload.containsKey('plaintext'), isFalse);
   });
 
+  test('stripForbiddenAutobasePayload walks nested maps and keeps text', () {
+    final cleaned = stripForbiddenAutobasePayload({
+      'text': 'hello',
+      'attachment': <dynamic, dynamic>{
+        'fileKey': 'x',
+        'b64': 'AQID',
+        'name': 'n',
+      },
+    });
+    expect(cleaned['text'], 'hello');
+    expect(cleaned.containsKey('fileKey'), isFalse);
+    expect(cleaned.containsKey('b64'), isFalse);
+    final attachment = Map<String, Object?>.from(cleaned['attachment']! as Map);
+    expect(attachment['name'], 'n');
+    expect(attachment.containsKey('fileKey'), isFalse);
+    expect(attachment.containsKey('b64'), isFalse);
+
+    final wired = RoomEvent.fromWire({
+      'type': 'autobase-event',
+      'writerId': 'a',
+      'seq': 9,
+      'kind': 'message',
+      'payload': {
+        'text': 'hello',
+        'attachment': {
+          'fileKey': 'x',
+          'b64': 'AQID',
+          'name': 'n',
+        },
+      },
+    });
+    expect(wired, isNotNull);
+    expect(wired!.payload['text'], 'hello');
+    final wiredAtt =
+        Map<String, Object?>.from(wired.payload['attachment']! as Map);
+    expect(wiredAtt['name'], 'n');
+    expect(wiredAtt.containsKey('fileKey'), isFalse);
+    expect(wiredAtt.containsKey('b64'), isFalse);
+
+    final proj = AutobaseProjection()..apply(wired);
+    final stored = proj.state.messages.single;
+    expect(stored['text'], 'hello');
+    final storedAtt = Map<String, Object?>.from(stored['attachment']! as Map);
+    expect(storedAtt['name'], 'n');
+    expect(storedAtt.containsKey('fileKey'), isFalse);
+    expect(storedAtt.containsKey('b64'), isFalse);
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
   test('stripForbiddenAutobasePayload matches kForbiddenReplicationFields', () {
     expect(
       kForbiddenReplicationFields,

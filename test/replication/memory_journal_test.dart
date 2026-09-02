@@ -212,6 +212,58 @@ void main() {
     }).seq, 5);
   });
 
+  test('append and fromWorklet refuse nested fileKey and rootKey', () {
+    final journal = MemoryJournal('dev-a');
+    expect(
+      () => journal.append(
+        ReplicationEventKind.attachmentPublished,
+        {
+          'eventId': 'att-1',
+          'encryptedEnvelope': <int>[1],
+          'extra': {'fileKey': 'x'},
+        },
+      ),
+      throwsArgumentError,
+    );
+    expect(journal.length, 0);
+    expect(
+      () => journal.append(
+        ReplicationEventKind.messageEnvelopeCreated,
+        {
+          'eventId': 'e1',
+          'encryptedEnvelope': <int>[1],
+          'meta': {'rootKey': 'nope'},
+        },
+      ),
+      throwsArgumentError,
+    );
+    expect(journal.length, 0);
+    expect(
+      journalRecordFromWorklet({
+        'kind': 'messageEnvelopeCreated',
+        'writerDeviceId': 'dev-a',
+        'fields': {
+          'eventId': 'e1',
+          'encryptedEnvelope': base64Encode(const <int>[1]),
+          'extra': {'fileKey': 'x'},
+        },
+      }),
+      isNull,
+    );
+    expect(
+      journalRecordFromWorklet({
+        'kind': 'deviceRevoked',
+        'writerDeviceId': 'dev-a',
+        'fields': {
+          'deviceId': 'gone',
+          'meta': {'rootKey': 'nope'},
+        },
+      }),
+      isNull,
+    );
+    expect(journal.length, 0);
+  });
+
   test('adopt refuses fileKey and plaintext', () {
     final journal = MemoryJournal('dev-a');
     expect(

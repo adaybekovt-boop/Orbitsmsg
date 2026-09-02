@@ -5,7 +5,12 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { CorestoreJournal, safeJournalDir } = require('../src/corestore_journal')
+const {
+  CorestoreJournal,
+  fieldsAreSafe,
+  parseStored,
+  safeJournalDir,
+} = require('../src/corestore_journal')
 
 function tmpJournalDir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix))
@@ -187,4 +192,128 @@ test('deviceRevoked metadata is journaled without an envelope', async () => {
     /encryptedEnvelope/,
   )
   await journal.close()
+})
+
+test('fieldsAreSafe walks nested objects and arrays; cycles do not hang', () => {
+  assert.equal(fieldsAreSafe(null), false)
+  assert.equal(fieldsAreSafe('x'), false)
+  assert.equal(
+    fieldsAreSafe({ eventId: 'e', encryptedEnvelope: 'x' }),
+    true,
+  )
+  assert.equal(
+    fieldsAreSafe({ eventId: 'e', extra: { fileKey: 'nope' } }),
+    false,
+  )
+  assert.equal(
+    fieldsAreSafe({ eventId: 'e', extra: { rootKey: 'nope' } }),
+    false,
+  )
+  assert.equal(
+    fieldsAreSafe({ eventId: 'e', extra: { discoverySecret: 'nope' } }),
+    false,
+  )
+  assert.equal(
+    fieldsAreSafe({ eventId: 'e', items: [{ fileKey: 'nope' }] }),
+    false,
+  )
+  assert.equal(
+    fieldsAreSafe({ eventId: 'e', items: [{ extra: { rootKey: 'nope' } }] }),
+    false,
+  )
+  const cyclic = { eventId: 'e', encryptedEnvelope: 'x' }
+  cyclic.self = cyclic
+  assert.equal(fieldsAreSafe(cyclic), true)
+  const cyclicBad = { eventId: 'e', extra: { fileKey: 'nope' } }
+  cyclicBad.extra.self = cyclicBad
+  assert.equal(fieldsAreSafe(cyclicBad), false)
+})
+
+test('append refuses nested secrets; list skips them on hydrate', async () => {
+  const journal = new CorestoreJournal('dev-a')
+  await journal.append({
+    fields: { eventId: 'e', encryptedEnvelope: 'safe-env' },
+  })
+  assert.equal(journal.list().length, 1)
+  assert.equal(journal.list()[0].fields.eventId, 'e')
+  assert.equal(journal.list()[0].fields.encryptedEnvelope, 'safe-env')
+
+  await assert.rejects(
+    () =>
+      journal.append({
+        fields: {
+          eventId: 'e',
+          extra: { fileKey: 'nope' },
+          encryptedEnvelope: 'x',
+        },
+      }),
+    /secret field/,
+  )
+  await assert.rejects(
+    () =>
+      journal.append({
+        fields: {
+          eventId: 'e',
+          extra: { rootKey: 'nope' },
+          encryptedEnvelope: 'x',
+        },
+      }),
+    /secret field/,
+  )
+  await assert.rejects(
+    () =>
+      journal.append({
+        fields: {
+          eventId: 'e',
+          extra: { discoverySecret: 'nope' },
+          encryptedEnvelope: 'x',
+        },
+      }),
+    /secret field/,
+  )
+  assert.equal(journal.list().length, 1)
+  await journal.close()
+
+  assert.equal(
+    parseStored({
+      kind: 'messageEnvelopeCreated',
+      fields: { eventId: 'e', extra: { fileKey: 'nope' }, encryptedEnvelope: 'x' },
+    }),
+    null,
+  )
+  assert.equal(
+    parseStored({
+      kind: 'messageEnvelopeCreated',
+      fields: { eventId: 'e', extra: { rootKey: 'nope' }, encryptedEnvelope: 'x' },
+    }),
+    null,
+  )
+  assert.equal(
+    parseStored({
+      kind: 'messageEnvelopeCreated',
+      fields: {
+        eventId: 'e',
+        extra: { discoverySecret: 'nope' },
+        encryptedEnvelope: 'x',
+      },
+    }),
+    null,
+  )
+
+  const dir = tmpJournalDir('orbits-journal-nested-secret-')
+  fs.appendFileSync(
+    path.join(dir, 'envelopes.jsonl'),
+    JSON.stringify({
+      kind: 'messageEnvelopeCreated',
+      fields: {
+        eventId: 'e',
+        extra: { fileKey: 'nope' },
+        encryptedEnvelope: 'x',
+      },
+    }) + '\n',
+  )
+  const hydrated = new CorestoreJournal('dev-a')
+  hydrated.useEncryptedEnvelopeFileJournal(dir)
+  assert.equal(hydrated.list().length, 0)
+  await hydrated.close()
 })

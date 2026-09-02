@@ -30,6 +30,28 @@ const FORBIDDEN = new Set([
   'peerId',
 ])
 
+/**
+ * Cycle-safe walk of objects/arrays. Rejects if any key is in FORBIDDEN,
+ * including nested `{ meta: { fileKey } }` / `{ extra: { peerId } }`.
+ */
+function hasForbiddenKey(value, seen) {
+  if (!value || typeof value !== 'object') return false
+  const walk = seen || new Set()
+  if (walk.has(value)) return false
+  walk.add(value)
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (hasForbiddenKey(item, walk)) return true
+    }
+    return false
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (FORBIDDEN.has(key)) return true
+    if (hasForbiddenKey(child, walk)) return true
+  }
+  return false
+}
+
 /** Keep in sync with kMailboxHttpMaxBodyBytes in lib/mailbox/blind_store.dart */
 const MAX_BODY_BYTES = 256 * 1024
 /** Keep in sync with kMailboxHttpRateLimit / kMailboxHttpRateWindowMs */
@@ -154,12 +176,10 @@ function createServer(opts = {}) {
       }
       if (req.method === 'POST' && url.pathname === '/v1/grant') {
         const body = JSON.parse((await readBody(req, maxBody)).toString('utf8'))
-        for (const key of Object.keys(body)) {
-          if (FORBIDDEN.has(key)) {
-            res.writeHead(400)
-            res.end()
-            return
-          }
+        if (hasForbiddenKey(body)) {
+          res.writeHead(400)
+          res.end()
+          return
         }
         if (!body.token) {
           res.writeHead(400)
@@ -178,12 +198,10 @@ function createServer(opts = {}) {
       }
       if (req.method === 'POST' && url.pathname === '/v1/blocks') {
         const body = JSON.parse((await readBody(req, maxBody)).toString('utf8'))
-        for (const key of Object.keys(body)) {
-          if (FORBIDDEN.has(key)) {
-            res.writeHead(400)
-            res.end()
-            return
-          }
+        if (hasForbiddenKey(body)) {
+          res.writeHead(400)
+          res.end()
+          return
         }
         if (!body.token || !body.writerKey) {
           res.writeHead(400)
@@ -202,12 +220,10 @@ function createServer(opts = {}) {
       }
       if (req.method === 'POST' && url.pathname === '/v1/tombstone') {
         const body = JSON.parse((await readBody(req, maxBody)).toString('utf8'))
-        for (const key of Object.keys(body)) {
-          if (FORBIDDEN.has(key)) {
-            res.writeHead(400)
-            res.end()
-            return
-          }
+        if (hasForbiddenKey(body)) {
+          res.writeHead(400)
+          res.end()
+          return
         }
         if (!body.token || !body.writerKey || body.seq == null) {
           res.writeHead(400)
@@ -283,6 +299,7 @@ module.exports = {
   stats,
   sweep,
   rateOk,
+  hasForbiddenKey,
   FORBIDDEN,
   MAX_BODY_BYTES,
   RATE_LIMIT,

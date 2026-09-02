@@ -3,7 +3,7 @@
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const http = require('node:http')
-const { createServer } = require('./server.js')
+const { createServer, hasForbiddenKey } = require('./server.js')
 
 function request(port, { method, path, body }) {
   return new Promise((resolve, reject) => {
@@ -135,6 +135,115 @@ test('HTTP storage peer rejects fileKey and discoverySecret on /v1/blocks', asyn
     },
   })
   assert.equal(ok.status, 200)
+})
+
+test('hasForbiddenKey walks nested objects/arrays and is cycle-safe', () => {
+  assert.equal(hasForbiddenKey({ token: 'cap' }), false)
+  assert.equal(hasForbiddenKey({ meta: { fileKey: 'x' } }), true)
+  assert.equal(hasForbiddenKey({ extra: { peerId: 'ORBIT-AA' } }), true)
+  assert.equal(hasForbiddenKey({ extra: { plaintext: 'nope' } }), true)
+  assert.equal(hasForbiddenKey({ items: [{ fileKey: 'x' }] }), true)
+  assert.equal(hasForbiddenKey({ note: 'fileKey' }), false)
+  const cyclic = { token: 'cap' }
+  cyclic.self = cyclic
+  assert.equal(hasForbiddenKey(cyclic), false)
+  const cyclicForbidden = { extra: {} }
+  cyclicForbidden.extra.loop = cyclicForbidden
+  cyclicForbidden.extra.fileKey = 'x'
+  assert.equal(hasForbiddenKey(cyclicForbidden), true)
+})
+
+test('HTTP storage peer rejects nested fileKey/peerId/plaintext and keeps ciphertext-only', async (t) => {
+  const server = createServer({ token: 'cap-nested' })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const port = server.address().port
+
+  const health = await request(port, { method: 'GET', path: '/health' })
+  assert.equal(health.status, 200)
+  const healthJson = JSON.parse(health.body)
+  assert.equal(healthJson.ok, true)
+  assert.notEqual(healthJson.deployed, true)
+  assert.equal(JSON.stringify(healthJson).includes('fleet'), false)
+
+  const nestedFileKey = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-nested',
+      writerKey: 'w-nested',
+      seq: 0,
+      b64: Buffer.from([1, 2, 3]).toString('base64'),
+      meta: { fileKey: 'x' },
+    },
+  })
+  assert.equal(nestedFileKey.status, 400)
+
+  const nestedPeerId = await request(port, {
+    method: 'POST',
+    path: '/v1/grant',
+    body: { token: 'cap-leaked', extra: { peerId: 'ORBIT-AA' } },
+  })
+  assert.equal(nestedPeerId.status, 400)
+
+  const nestedPlaintext = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-nested',
+      writerKey: 'w-nested',
+      seq: 1,
+      b64: Buffer.from([4, 5, 6]).toString('base64'),
+      extra: { plaintext: 'nope' },
+    },
+  })
+  assert.equal(nestedPlaintext.status, 400)
+
+  const leakedPut = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-leaked',
+      writerKey: 'w-leaked',
+      seq: 0,
+      b64: Buffer.from([7]).toString('base64'),
+    },
+  })
+  assert.equal(leakedPut.status, 400)
+
+  const empty = await request(port, {
+    method: 'GET',
+    path: '/v1/blocks?token=cap-nested&writerKey=w-nested&fromSeq=0',
+  })
+  assert.equal(empty.status, 200)
+  assert.equal(JSON.parse(empty.body).blocks.length, 0)
+
+  const grantOk = await request(port, {
+    method: 'POST',
+    path: '/v1/grant',
+    body: { token: 'cap-ok' },
+  })
+  assert.equal(grantOk.status, 200)
+
+  const put = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-ok',
+      writerKey: 'w-ok',
+      seq: 0,
+      b64: Buffer.from([1, 2, 3]).toString('base64'),
+    },
+  })
+  assert.equal(put.status, 200)
+
+  const got = await request(port, {
+    method: 'GET',
+    path: '/v1/blocks?token=cap-ok&writerKey=w-ok&fromSeq=0',
+  })
+  assert.equal(got.status, 200)
+  assert.equal(JSON.parse(got.body).blocks.length, 1)
+  assert.equal(JSON.parse(got.body).blocks[0].b64, Buffer.from([1, 2, 3]).toString('base64'))
 })
 
 test('HTTP storage peer caps body size, rate-limits, and GCs expired ciphertext', async (t) => {

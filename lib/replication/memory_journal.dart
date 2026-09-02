@@ -35,7 +35,7 @@ class MemoryJournal {
     ReplicationEventKind kind,
     Map<String, Object?> fields,
   ) {
-    if (!replicationFieldsAreSafe(fields.keys)) {
+    if (!replicationValueIsSafe(fields)) {
       throw ArgumentError('refusing secret field in journal');
     }
     final record = JournalRecord(
@@ -59,7 +59,7 @@ class MemoryJournal {
   /// [record.writerDeviceId]. Live [append] is unchanged. Advances [_seq]
   /// past the adopted writer seq so the next local write continues it.
   JournalRecord? adopt(JournalRecord record) {
-    if (!replicationFieldsAreSafe(record.fields.keys)) {
+    if (!replicationValueIsSafe(record.fields)) {
       throw ArgumentError('refusing secret field in journal');
     }
     if (_isDuplicate(record)) return null;
@@ -79,7 +79,7 @@ class MemoryJournal {
   /// Ingest a remote/carrier record. Skips duplicate envelope eventIds.
   /// Local seq is assigned here; use [adopt] to keep a Hypercore writer seq.
   JournalRecord? ingest(JournalRecord record) {
-    if (!replicationFieldsAreSafe(record.fields.keys)) {
+    if (!replicationValueIsSafe(record.fields)) {
       throw ArgumentError('refusing secret field in journal');
     }
     if (_isDuplicate(record)) return null;
@@ -167,7 +167,7 @@ JournalRecord? journalRecordFromWorklet(Map<String, Object?> row) {
       fields[key] = v;
     }
   });
-  if (!replicationFieldsAreSafe(fields.keys)) return null;
+  if (!replicationValueIsSafe(fields)) return null;
   if (journalKindRequiresEnvelope(kindName) &&
       fields['encryptedEnvelope'] is! List<int>) {
     return null;

@@ -36,6 +36,28 @@ const FORBIDDEN = new Set([
   'fileName',
 ])
 
+/**
+ * Cycle-safe walk of objects/arrays. Rejects if any key is in FORBIDDEN,
+ * including nested `{ meta: { fileKey } }` / `{ extra: { discoverySecret } }`.
+ */
+function hasForbiddenKey(value, seen) {
+  if (!value || typeof value !== 'object') return false
+  const walk = seen || new Set()
+  if (walk.has(value)) return false
+  walk.add(value)
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      if (hasForbiddenKey(item, walk)) return true
+    }
+    return false
+  }
+  for (const [key, child] of Object.entries(value)) {
+    if (FORBIDDEN.has(key)) return true
+    if (hasForbiddenKey(child, walk)) return true
+  }
+  return false
+}
+
 function createPushGateway() {
   const accepted = []
   const server = http.createServer(async (req, res) => {
@@ -49,12 +71,10 @@ function createPushGateway() {
         const chunks = []
         for await (const c of req) chunks.push(c)
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
-        for (const key of Object.keys(body)) {
-          if (FORBIDDEN.has(key)) {
-            res.writeHead(400)
-            res.end()
-            return
-          }
+        if (hasForbiddenKey(body)) {
+          res.writeHead(400)
+          res.end()
+          return
         }
         if (!body.opaqueWakeToken || !body.collapseId || !body.protocolVersion) {
           res.writeHead(400)
@@ -77,7 +97,7 @@ function createPushGateway() {
   return server
 }
 
-module.exports = { createPushGateway, FORBIDDEN }
+module.exports = { createPushGateway, FORBIDDEN, hasForbiddenKey }
 
 if (require.main === module) {
   const port = Number(process.env.ORBITS_PUSH_PORT || 8788)
