@@ -12,18 +12,28 @@ buildscript {
     }
 }
 
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
 apply plugin: "com.android.library"
 apply plugin: "kotlin-android"
 
 android {
     namespace = "app.orbits.transport"
-    compileSdk = 35
+    compileSdk = 36
     defaultConfig {
         minSdk = 24
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+    sourceSets {
+        main.java.srcDirs += "src/main/kotlin"
     }
 }
 

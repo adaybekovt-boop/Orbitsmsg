@@ -79,13 +79,22 @@ jobs:
       - name: Analyze each package in its own graph
         run: bash tool/ci/analyze_packages.sh
 
-      - name: Compile Linux host translation unit
+      - name: Compile and run fail-closed host translation units
         run: |
           set -euo pipefail
-          g++ -std=c++17 -c \
+          g++ -std=c++17 \
             packages/orbits_transport_linux/linux/orbits_transport_plugin.cc \
-            -o /tmp/orbits_transport_linux.o
-          echo "linux host compiled"
+            packages/orbits_transport_linux/linux/orbits_transport_host_test.cc \
+            -I packages/orbits_transport_linux/linux \
+            -o /tmp/orbits_transport_linux_host_test
+          /tmp/orbits_transport_linux_host_test
+          g++ -std=c++17 \
+            packages/orbits_transport_windows/windows/orbits_transport_plugin.cpp \
+            packages/orbits_transport_windows/windows/orbits_transport_host_test.cpp \
+            -I packages/orbits_transport_windows/windows \
+            -o /tmp/orbits_transport_windows_host_test
+          /tmp/orbits_transport_windows_host_test
+          echo "linux and windows host fail-closed tests passed"
 
   test-app:
     name: App tests

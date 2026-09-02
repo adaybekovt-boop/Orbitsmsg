@@ -5,26 +5,7 @@
 #include <stdint.h>
 #include <string.h>
 
-enum OrbitsHostCode {
-  kOrbitsHostOk = 0,
-  kOrbitsHostRemoteJs = -1,
-  kOrbitsHostNotStarted = -2,
-  kOrbitsHostSuspended = -3,
-  kOrbitsHostIpcFrame = -4,
-  kOrbitsHostPathRequired = -5,
-  kOrbitsHostOversize = -6,
-  kOrbitsHostBundleMissing = -7,
-  kOrbitsHostBundleTampered = -8,
-  kOrbitsHostAbiMismatch = -9,
-  kOrbitsHostMalformed = -10,
-  kOrbitsHostBareMissing = -11,
-};
-
-struct OrbitsBareHost {
-  int started;
-  int suspended;
-  int published;
-};
+#include "orbits_transport_host.h"
 
 static int looks_remote(const char* url) {
   if (url == NULL || url[0] == '\0') return 0;
