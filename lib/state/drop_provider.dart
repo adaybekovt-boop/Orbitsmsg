@@ -180,6 +180,52 @@ class DropNotifier extends StateNotifier<DropState> {
     return id;
   }
 
+  /// Web picker `readStream`: hash while sending. Never one Dart `Uint8List`
+  /// of the whole file. Native Drop still uses [sendFileFromPath].
+  Future<String?> sendFileFromStream(
+    String peerId,
+    Stream<List<int>> incoming, {
+    required String name,
+    required String mime,
+    required int sizeBytes,
+  }) async {
+    if (sizeBytes <= 0) return null;
+    final pid = normalizePeerId(peerId);
+    final conns = _ref.read(connectionsNotifierProvider.notifier);
+
+    if (!conns.hasReliable(pid)) {
+      conns.openReliable(pid);
+      final ok = await _waitForReliable(pid);
+      if (!ok) return null;
+    }
+
+    final id = dropNewFileId();
+    _upsert(DropTransfer(
+      id: id,
+      name: name,
+      size: sizeBytes,
+      mime: mime,
+      peerId: pid,
+      direction: DropDirection.outgoing,
+    ));
+
+    try {
+      await _engine.sendFileFromIncomingStream(
+        incoming: incoming,
+        size: sizeBytes,
+        name: name,
+        mime: mime,
+        fileId: id,
+        send: (packet) => conns.sendDrop(pid, packet),
+        waitForDrain: () => conns.waitForDropDrain(pid),
+        peerId: pid,
+      );
+    } catch (e) {
+      _patch(id, (t) => t.copyWith(status: DropStatus.failed, error: '$e'));
+    }
+    return id;
+  }
+
   /// Native carrier first. If Hyperswarm is off, stream the same path over
   /// PeerJS Drop without reading the file into a Dart `Uint8List`.
   Future<String?> sendFileFromPath(

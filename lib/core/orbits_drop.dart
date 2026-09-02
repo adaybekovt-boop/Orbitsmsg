@@ -10,7 +10,8 @@
 //   control (JSON map over the text channel):
 //     {type:'file-start', fileId, name, size, mime, hash, totalChunks}
 //     {type:'file-resume', fileId, offset}  // receiver → sender, optional
-//     {type:'file-end',   fileId}
+//     {type:'file-end',   fileId, hash?}  // hash when start omitted it (web stream)
+
 //     {type:'file-abort', fileId}
 //   chunk (binary message): [ver=1 (1B)][fileId (16B)][seq (4B, BE)][payload]
 //
@@ -23,6 +24,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:cryptography/dart.dart';
 
 import 'base64_helpers.dart';
 
@@ -147,6 +149,18 @@ Future<String> _sha256Hex(List<int> data) async {
   return _toHex(h.bytes);
 }
 
+/// Incremental SHA-256. [Sha256.newHashSink] on web is BrowserSha256, whose
+/// default sink buffers the whole input; [DartSha256] compresses 64-byte
+/// blocks as they arrive.
+Future<String> _sha256HexStreaming(Iterable<List<int>> chunks) async {
+  final sink = const DartSha256().newHashSink();
+  for (final chunk in chunks) {
+    if (chunk.isNotEmpty) sink.add(chunk);
+  }
+  sink.close();
+  return _toHex((await sink.hash()).bytes);
+}
+
 /// Where inbound Drop chunks land. The default is in-memory (web / tests).
 /// Native PeerJS Drop uses a path-backed store so a 10–50 MiB file is never
 /// held as one Dart `Uint8List`.
@@ -206,9 +220,11 @@ class MemoryDropChunkStore implements DropChunkStore {
 
   @override
   Future<String> digestHex() async {
-    final assembled = await assembledBytes();
-    if (assembled == null) return '';
-    return _sha256Hex(assembled);
+    final ordered = _chunks.keys.toList()..sort();
+    for (var i = 0; i < ordered.length; i++) {
+      if (ordered[i] != i) return '';
+    }
+    return _sha256HexStreaming(ordered.map((s) => _chunks[s]!));
   }
 
   @override
@@ -454,6 +470,130 @@ class DropEngine {
     }
   }
 
+  /// Web / one-shot stream send. Hashes incrementally and puts the digest
+  /// on `file-end` so the caller never holds the whole file. No resume.
+  Future<String> sendFileFromIncomingStream({
+    required Stream<List<int>> incoming,
+    required int size,
+    required String name,
+    required String mime,
+    required DropSend send,
+    Future<void> Function()? waitForDrain,
+    String? fileId,
+    String peerId = '',
+    bool waitForAck = true,
+    Duration ackTimeout = kDropAckTimeout,
+  }) async {
+    if (size < 0) {
+      throw StateError('stream size out of range');
+    }
+    final idBytes = fileId != null ? _hexToBytes(fileId) : _randomFileId();
+    final idHex = _toHex(idBytes);
+    final totalChunks = size == 0 ? 0 : ((size + chunkSize - 1) ~/ chunkSize);
+    final state = _Outgoing(peerId: peerId);
+    _outgoing[idHex] = state;
+
+    bool emit(Object packet) {
+      final ok = send(packet);
+      if (!ok && !state.ack.isCompleted) {
+        state.ack.complete(false);
+      }
+      return ok;
+    }
+
+    if (!emit(<String, Object?>{
+      'type': 'file-start',
+      'fileId': bytesToBase64(idBytes),
+      'name': name,
+      'size': size,
+      'mime': mime,
+      'hash': '',
+      'totalChunks': totalChunks,
+    })) {
+      _outgoing.remove(idHex);
+      throw StateError('Drop send failed');
+    }
+
+    // Not Sha256().newHashSink(): on web that buffers the whole file.
+    final hashSink = const DartSha256().newHashSink();
+    try {
+      final pending = BytesBuilder(copy: true);
+      var offset = 0;
+      var seq = 0;
+      await for (final piece in incoming) {
+        if (state.aborted) {
+          emit(<String, Object?>{
+            'type': 'file-abort',
+            'fileId': bytesToBase64(idBytes),
+          });
+          throw StateError('Transfer aborted');
+        }
+        if (piece.isEmpty) continue;
+        if (offset + pending.length + piece.length > size) {
+          throw StateError('stream exceeded declared size');
+        }
+        hashSink.add(piece);
+        pending.add(piece);
+        while (pending.length >= chunkSize) {
+          final buf = pending.takeBytes();
+          final slice = Uint8List.sublistView(buf, 0, chunkSize);
+          final rest = buf.sublist(chunkSize);
+          if (rest.isNotEmpty) pending.add(rest);
+          if (waitForDrain != null) await waitForDrain();
+          if (!emit(_frameChunk(idBytes, seq, slice))) {
+            throw StateError('Drop send failed');
+          }
+          offset += slice.length;
+          seq++;
+          onProgress?.call(idHex, offset, size, DropDirection.outgoing);
+        }
+      }
+      final tail = pending.takeBytes();
+      if (tail.isNotEmpty) {
+        if (waitForDrain != null) await waitForDrain();
+        if (!emit(_frameChunk(idBytes, seq, tail))) {
+          throw StateError('Drop send failed');
+        }
+        offset += tail.length;
+        seq++;
+        onProgress?.call(idHex, offset, size, DropDirection.outgoing);
+      }
+      hashSink.close();
+      final digest = _toHex((await hashSink.hash()).bytes);
+      if (offset != size) {
+        throw StateError('stream size mismatch');
+      }
+      if (!emit(<String, Object?>{
+        'type': 'file-end',
+        'fileId': bytesToBase64(idBytes),
+        'hash': digest,
+      })) {
+        throw StateError('Drop send failed');
+      }
+      onOutgoingSent?.call(idHex);
+      if (!waitForAck) {
+        onComplete?.call(idHex, DropDirection.outgoing);
+        return idHex;
+      }
+      final acked = await state.ack.future.timeout(ackTimeout, onTimeout: () {
+        return false;
+      });
+      if (!acked) {
+        onFailed?.call(
+          idHex,
+          DropDirection.outgoing,
+          'Получатель не подтвердил сохранение',
+        );
+        throw StateError('Drop not acknowledged');
+      }
+      onComplete?.call(idHex, DropDirection.outgoing);
+      return idHex;
+    } finally {
+      if (!state.ack.isCompleted) state.ack.complete(false);
+      _outgoing.remove(idHex);
+    }
+  }
+
   /// Mark an in-flight outgoing transfer as aborted; the send loop stops at
   /// its next chunk boundary.
   void abortOutgoing(String fileId) {
@@ -633,9 +773,23 @@ class DropEngine {
       return;
     }
 
-    if (state.meta.hash.isNotEmpty) {
+    var expectedHash = state.meta.hash;
+    final endHash = packet['hash'] as String? ?? '';
+    if (endHash.isNotEmpty) {
+      if (expectedHash.isNotEmpty && expectedHash != endHash) {
+        await state.store.dispose();
+        onFailed?.call(
+          idHex,
+          DropDirection.incoming,
+          'Проверка целостности не прошла (повреждённая передача)',
+        );
+        return;
+      }
+      expectedHash = endHash;
+    }
+    if (expectedHash.isNotEmpty) {
       final actual = await state.store.digestHex();
-      if (actual != state.meta.hash) {
+      if (actual != expectedHash) {
         await state.store.dispose();
         onFailed?.call(
           idHex,

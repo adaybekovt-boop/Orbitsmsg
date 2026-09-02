@@ -48,7 +48,8 @@ class _DropPageState extends ConsumerState<DropPage> {
       picked = await FilePicker.platform.pickFiles(
         type: FileType.any,
         allowMultiple: false,
-        withData: kIsWeb,
+        withData: false,
+        withReadStream: kIsWeb,
       );
     } catch (_) {
       _toast('Не удалось открыть файловый выбор');
@@ -65,6 +66,19 @@ class _DropPageState extends ConsumerState<DropPage> {
         final id = await ref.read(dropNotifierProvider.notifier).sendFileFromPath(
               peerId,
               path: pf.path!,
+              name: name,
+              mime: mime,
+              sizeBytes: pf.size,
+            );
+        if (id == null) _toast('Нет соединения с получателем');
+        return;
+      }
+
+      final stream = pf.readStream;
+      if (stream != null) {
+        final id = await ref.read(dropNotifierProvider.notifier).sendFileFromStream(
+              peerId,
+              stream,
               name: name,
               mime: mime,
               sizeBytes: pf.size,
