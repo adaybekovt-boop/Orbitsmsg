@@ -12,6 +12,7 @@ import '../helpers/pointycastle_ecdh.dart';
 
 void main() {
   test('connect checks keep ADR-0001 order', () {
+    expect(kDeviceBindingWireType, 'device-binding');
     expect(
       kConnectBindingChecks,
       [

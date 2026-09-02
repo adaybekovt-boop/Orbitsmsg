@@ -18,7 +18,6 @@ import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/rooms/autobase_log.dart';
 import 'package:orbits_flutter/core/path_byte_stream.dart';
-import 'package:orbits_flutter/transport/connect_binding.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
@@ -1546,7 +1545,7 @@ void main() {
     expect(a.remoteBindings['ORBIT-BBBBBBBBBBBBBBBB']?.deviceId, 'b');
     expect(
       File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
-      contains(kDeviceBindingWireType),
+      contains('kDeviceBindingWireType'),
     );
     await a.detach();
     await b.detach();
