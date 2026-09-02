@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -106,5 +107,44 @@ void main() {
       isNot(contains('ORBIT-BBBBBBBBBBBBBBBB')),
     );
     expect(ratchetKeysForRevokedDevice(dev('a1')), isEmpty);
+  });
+
+  test('authorize, revoke, and hydrate refuse URL-shaped deviceId', () async {
+    final reg = DeviceRegistry(
+      writeSnapshot: (_) async {},
+      readSnapshot: () async => null,
+    );
+    expect(
+      () => reg.authorize(dev('https://evil')),
+      throwsArgumentError,
+    );
+    expect(reg.all, isEmpty);
+    expect(reg.revoke('https://evil'), isNull);
+    expect(
+      () => AuthorizedDevice.fromJson(dev('https://evil').toJson()),
+      throwsArgumentError,
+    );
+
+    final mixed = DeviceRegistry(
+      writeSnapshot: (_) async {},
+      readSnapshot: () async => Uint8List.fromList(
+        utf8.encode(
+          jsonEncode({
+            'devices': [
+              dev('https://evil').toJson(),
+              dev('phone').toJson(),
+            ],
+          }),
+        ),
+      ),
+    );
+    await mixed.hydrate();
+    expect(mixed.acceptsWriter('https://evil'), isFalse);
+    expect(mixed.acceptsWriter('phone'), isTrue);
+
+    reg.authorize(dev('a1'));
+    expect(reg.acceptsWriter('a1'), isTrue);
+    expect(reg.revoke('a1')?.status, DeviceStatus.revoked);
+    expect(reg.acceptsWriter('a1'), isFalse);
   });
 }

@@ -309,7 +309,7 @@ Future<bool> saveFileBlob(
   int height = 0,
   int duration = 0,
 }) async {
-  if (id.isEmpty) return false;
+  if (id.isEmpty || id.contains('://')) return false;
   // Defense-in-depth byte cap (audit finding 4): mirror the send-side raw cap
   // `_maxFileRawBytes` (12 MiB).
   if (bytes.length > kMaxPeerJsFileRawBytes) return false;
@@ -352,7 +352,7 @@ Future<bool> saveFileBlobFromPath(
   int height = 0,
   int duration = 0,
 }) async {
-  if (id.isEmpty) return false;
+  if (id.isEmpty || id.contains('://')) return false;
   final p = path.trim();
   if (p.isEmpty ||
       p.contains('://') ||
@@ -387,7 +387,7 @@ Future<bool> saveFileBlobFromPath(
 }
 
 Future<Map<String, Object?>?> getFileBlob(String id) async {
-  if (id.isEmpty) return null;
+  if (id.isEmpty || id.contains('://')) return null;
   final db = orbitsDb();
   final row = await (db.select(db.fileBlobsTable)
         ..where((t) => t.id.equals(id)))
@@ -782,6 +782,7 @@ Future<bool> saveMessage(Map<String, Object?> message) async {
   final peerId = (message['peerId'] as String?) ?? '';
   final ts = (message['timestamp'] as num?)?.toInt() ?? _now();
   final id = (message['id'] as String?) ?? '$peerId-$ts';
+  if (id.contains('://') || peerId.contains('://')) return false;
   final direction = (message['direction'] as String?) ?? 'out';
   final status = _normalizeMessageStatus(message['status'], direction);
 
@@ -790,6 +791,8 @@ Future<bool> saveMessage(Map<String, Object?> message) async {
   // can page them by `channel_id`.
   final roomId = message['roomId'] as String?;
   final channelId = message['channelId'] as String?;
+  if (roomId is String && roomId.contains('://')) return false;
+  if (channelId is String && channelId.contains('://')) return false;
 
   final row = <String, Object?>{
     'id': id,
@@ -842,12 +845,13 @@ Future<bool> saveMessage(Map<String, Object?> message) async {
 /// Room-message IDs live in a separate namespace from DM IDs so a host
 /// cannot overwrite a guest's 1:1 row by reusing the same wire id (R07).
 String scopedRoomMessageId(String roomId, String rawId) {
+  if (roomId.contains('://') || rawId.contains('://')) return '';
   if (rawId.startsWith('room:')) return rawId;
   return 'room:$roomId:$rawId';
 }
 
 Future<Map<String, Object?>?> getMessageById(String id) async {
-  if (id.isEmpty) return null;
+  if (id.isEmpty || id.contains('://')) return null;
   final db = orbitsDb();
   final row = await (db.select(db.messagesTable)
         ..where((t) => t.id.equals(id)))
@@ -856,7 +860,7 @@ Future<Map<String, Object?>?> getMessageById(String id) async {
 }
 
 Future<bool> updateMessage(String id, Map<String, Object?> patch) async {
-  if (id.isEmpty) return false;
+  if (id.isEmpty || id.contains('://')) return false;
   // Fail closed: an unsafe payload patch must not merge secrets into the
   // stored blob. Other fields in the same patch are also skipped.
   if (patch.containsKey('payload') &&

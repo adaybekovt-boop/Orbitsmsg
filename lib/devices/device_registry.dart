@@ -11,6 +11,11 @@ import '../storage/wrapped_snapshot.dart';
 
 enum DeviceStatus { active, revoked }
 
+bool _deviceIdSafe(String id) => id.isNotEmpty && !id.contains('://');
+
+bool _optionalPeerSafe(String? id) =>
+    id == null || id.isEmpty || !id.contains('://');
+
 class AuthorizedDevice {
   const AuthorizedDevice({
     required this.deviceId,
@@ -65,8 +70,17 @@ class AuthorizedDevice {
 
   static AuthorizedDevice fromJson(Map<String, Object?> json) {
     final statusName = json['status'] as String? ?? DeviceStatus.active.name;
+    final deviceId = json['deviceId'] as String? ?? '';
+    if (!_deviceIdSafe(deviceId)) {
+      throw ArgumentError('refusing secret field in device registry');
+    }
+    final ownerPeerId = json['ownerPeerId'] as String? ?? '';
+    final transportPeerId = json['transportPeerId'] as String?;
+    if (!_optionalPeerSafe(ownerPeerId) || !_optionalPeerSafe(transportPeerId)) {
+      throw ArgumentError('refusing secret field in device registry');
+    }
     return AuthorizedDevice(
-      deviceId: json['deviceId'] as String? ?? '',
+      deviceId: deviceId,
       transportPublicKey: base64Decode(json['transportPublicKey'] as String? ?? ''),
       hypercorePublicKey: base64Decode(json['hypercorePublicKey'] as String? ?? ''),
       name: json['name'] as String? ?? '',
@@ -76,8 +90,8 @@ class AuthorizedDevice {
         (s) => s.name == statusName,
         orElse: () => DeviceStatus.active,
       ),
-      ownerPeerId: json['ownerPeerId'] as String? ?? '',
-      transportPeerId: json['transportPeerId'] as String?,
+      ownerPeerId: ownerPeerId,
+      transportPeerId: transportPeerId,
     );
   }
 }
@@ -103,6 +117,11 @@ class DeviceRegistry {
   AuthorizedDevice? getDevice(String deviceId) => _devices[deviceId];
 
   void authorize(AuthorizedDevice device) {
+    if (!_deviceIdSafe(device.deviceId) ||
+        !_optionalPeerSafe(device.ownerPeerId) ||
+        !_optionalPeerSafe(device.transportPeerId)) {
+      throw ArgumentError('refusing secret field in device registry');
+    }
     final existing = _devices[device.deviceId];
     if (existing?.status == DeviceStatus.revoked) {
       throw StateError('revoked device cannot be re-authorized in place');
@@ -112,6 +131,7 @@ class DeviceRegistry {
   }
 
   AuthorizedDevice? revoke(String deviceId) {
+    if (!_deviceIdSafe(deviceId)) return null;
     final existing = _devices[deviceId];
     if (existing == null) return null;
     final revoked = existing.revoke();
@@ -191,8 +211,17 @@ class DeviceRegistry {
       if (list is! List) return;
       for (final item in list) {
         if (item is! Map) continue;
-        final device = AuthorizedDevice.fromJson(Map<String, Object?>.from(item));
-        if (device.deviceId.isEmpty) continue;
+        final AuthorizedDevice device;
+        try {
+          device = AuthorizedDevice.fromJson(Map<String, Object?>.from(item));
+        } catch (_) {
+          continue;
+        }
+        if (!_deviceIdSafe(device.deviceId) ||
+            !_optionalPeerSafe(device.ownerPeerId) ||
+            !_optionalPeerSafe(device.transportPeerId)) {
+          continue;
+        }
         _devices[device.deviceId] = device;
       }
     } catch (_) {}

@@ -287,6 +287,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// Phase 10: revoke a linked device, journal it on the native carrier
   /// when bound, and drop that device's own RatchetState only.
   void revokeLinkedDevice(String deviceId) {
+    if (deviceId.isEmpty || deviceId.contains('://')) return;
     final bridge = _dual;
     if (bridge != null) {
       bridge.revokeDevice(deviceId);

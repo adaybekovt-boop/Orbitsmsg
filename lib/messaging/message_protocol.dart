@@ -554,6 +554,11 @@ Future<bool> dispatchReliablePlaintext(
   final fromRaw = data['from'];
   final from = normalizePeerId(fromRaw is String ? fromRaw : remoteId);
   final rawId = data['id'];
+  // Fail-close: URL-shaped ids must not be used as msgId, minted around,
+  // persisted, or echoed in an ack.
+  if (rawId is String && rawId.contains('://')) {
+    return true;
+  }
   final msgId = (rawId is String && rawId.isNotEmpty)
       ? rawId
       : '$from:$ts:${_randomHex()}';
@@ -849,6 +854,7 @@ Future<JsonMap> _assembleChunkedAttachment({
   if (fileId is! String ||
       fileId.isEmpty ||
       fileId.length > 200 ||
+      fileId.contains('://') ||
       keyB64 is! String ||
       keyB64.isEmpty ||
       keyB64.length > 64) {

@@ -333,6 +333,16 @@ void main() {
     );
     expect(waitForDropDrain, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
     expect(waitForDropDrain, contains('bufferedAmount'));
+
+    final revokeLinked = slice(
+      'void revokeLinkedDevice',
+      'void restoreReadModelFromJournal',
+    );
+    expect(revokeLinked, contains("deviceId.contains('://')"));
+    expect(
+      revokeLinked.indexOf("deviceId.contains('://')"),
+      lessThan(revokeLinked.indexOf('bridge.revokeDevice')),
+    );
   });
 
   test('_bindToCurrentPeer isolation gate sits before onConnection.listen', () {

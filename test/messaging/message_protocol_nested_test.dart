@@ -530,4 +530,72 @@ void main() {
       expect(consumed, isTrue);
     });
   });
+
+  group('URL-shaped chat msgId / attachment fileId', () {
+    test('msg with URL id is consumed without persist or ack', () async {
+      final persisted = <JsonMap>[];
+      final acks = <JsonMap>[];
+      final seen = <String>{};
+      final processing = <String>{};
+      final ctx = _ctx(
+        seen: seen,
+        processing: processing,
+        persisted: persisted,
+        acks: acks,
+        persist: (_, msg) async {
+          persisted.add(msg);
+          return InboundPersistResult.committed;
+        },
+      );
+      final consumed = await dispatchReliablePlaintext(
+        <String, Object?>{
+          'type': 'msg',
+          'id': 'https://evil',
+          'text': 'hello',
+          'ts': 1,
+        },
+        (_) {},
+        'ORBIT-PEER',
+        ctx,
+      );
+
+      expect(consumed, isTrue);
+      expect(persisted, isEmpty);
+      expect(acks, isEmpty);
+      expect(seen, isEmpty);
+      expect(processing, isEmpty);
+    });
+
+    test('honest msg id persists and acks', () async {
+      final (persisted, acks) = await _dispatch(<String, Object?>{
+        'type': 'msg',
+        'id': 'm1',
+        'text': 'hello',
+        'ts': 1,
+      });
+
+      expect(persisted, hasLength(1));
+      expect(persisted.single['id'], 'm1');
+      expect(persisted.single['text'], 'hello');
+      expect(acks.where((a) => a['type'] == 'ack'), hasLength(1));
+      expect(acks.single['id'], 'm1');
+    });
+
+    test('fileId URL guard is before saveFileBlobFromPath / assemble', () {
+      final src = File('lib/messaging/message_protocol.dart').readAsStringSync();
+      final assembleFn = src.indexOf('Future<JsonMap> _assembleChunkedAttachment');
+      expect(assembleFn, greaterThan(-1));
+      final body = src.substring(assembleFn);
+      final guardIdx = body.indexOf("fileId.contains('://')");
+      final pathAssembleIdx = body.indexOf('pathAssemble');
+      final assembleIdx = body.indexOf('ctx.assembleNativeAttachment');
+      final saveFromPathIdx = body.indexOf('saveFileBlobFromPath');
+      final saveBlobIdx = body.indexOf('saveFileBlob(');
+      expect(guardIdx, greaterThan(-1), reason: 'fileId URL fail-close');
+      expect(saveFromPathIdx, greaterThan(guardIdx));
+      expect(pathAssembleIdx, greaterThan(guardIdx));
+      expect(assembleIdx, greaterThan(guardIdx));
+      expect(saveBlobIdx, greaterThan(guardIdx));
+    });
+  });
 }

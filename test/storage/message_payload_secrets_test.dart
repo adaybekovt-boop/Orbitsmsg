@@ -136,4 +136,55 @@ void main() {
     expect(payload.containsKey('rootKey'), isFalse);
     expect(payload['text'], 'hi');
   });
+
+  test('saveMessage and updateMessage refuse URL-shaped ids', () async {
+    expect(
+      await db.saveMessage({
+        'id': 'https://evil',
+        'peerId': 'ORBIT-SECRETS05',
+        'timestamp': 1004,
+        'direction': 'out',
+        'status': 'sent',
+        'payload': {'type': 'text', 'text': 'nope'},
+      }),
+      isFalse,
+    );
+    expect(await db.getMessageById('https://evil'), isNull);
+    expect(
+      await db.saveMessage({
+        'id': 'm-ok-id',
+        'peerId': 'https://evil',
+        'timestamp': 1005,
+        'direction': 'out',
+        'status': 'sent',
+        'payload': {'type': 'text', 'text': 'nope'},
+      }),
+      isFalse,
+    );
+    expect(
+      await db.saveMessage({
+        'id': 'm-room-url',
+        'peerId': 'ORBIT-SECRETS05',
+        'timestamp': 1006,
+        'direction': 'out',
+        'status': 'sent',
+        'roomId': 'https://evil',
+        'payload': {'type': 'text', 'text': 'nope'},
+      }),
+      isFalse,
+    );
+    expect(await db.updateMessage('https://evil', {'status': 'read'}), isFalse);
+    expect(
+      await db.saveMessage({
+        'id': 'm-ok-id',
+        'peerId': 'ORBIT-SECRETS05',
+        'timestamp': 1007,
+        'direction': 'out',
+        'status': 'sent',
+        'payload': {'type': 'text', 'text': 'hi'},
+      }),
+      isTrue,
+    );
+    expect((await db.getMessageById('m-ok-id'))?['payload'], isA<Map>());
+  });
 }

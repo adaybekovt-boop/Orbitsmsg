@@ -406,6 +406,104 @@ void main() {
     await b.detach();
   });
 
+  test('revokeDevice refuses URL-shaped deviceId before journal', () async {
+    final (a, b, _) = await linked();
+    a.revokeDevice('https://evil');
+    expect(
+      a.journal.records.any((r) => r.kind == ReplicationEventKind.deviceRevoked),
+      isFalse,
+    );
+    a.revokeDevice('gone-device');
+    expect(
+      a.journal.records.any((r) => r.kind == ReplicationEventKind.deviceRevoked),
+      isTrue,
+    );
+    expect(
+      a.journal.records.any(
+        (r) =>
+            r.kind == ReplicationEventKind.deviceRevoked &&
+            r.fields['deviceId'] == 'gone-device',
+      ),
+      isTrue,
+    );
+    await a.detach();
+    await b.detach();
+  });
+
+  test('authorizeDevice refuses URL-shaped deviceId before journal', () async {
+    final (a, b, _) = await linked();
+    a.authorizeDevice(
+      AuthorizedDevice(
+        deviceId: 'https://evil',
+        transportPublicKey: List<int>.filled(32, 1),
+        hypercorePublicKey: List<int>.filled(32, 2),
+        name: 'evil',
+        kind: 'phone',
+        createdAt: 1,
+        status: DeviceStatus.active,
+        ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+      ),
+    );
+    expect(
+      a.journal.records.any(
+        (r) => r.kind == ReplicationEventKind.deviceAuthorized,
+      ),
+      isFalse,
+    );
+    a.authorizeDevice(
+      AuthorizedDevice(
+        deviceId: 'phone-2',
+        transportPublicKey: List<int>.filled(32, 1),
+        hypercorePublicKey: List<int>.filled(32, 2),
+        name: 'phone-2',
+        kind: 'phone',
+        createdAt: 1,
+        status: DeviceStatus.active,
+        ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+      ),
+    );
+    expect(
+      a.journal.records.any(
+        (r) =>
+            r.kind == ReplicationEventKind.deviceAuthorized &&
+            r.fields['deviceId'] == 'phone-2',
+      ),
+      isTrue,
+    );
+    await a.detach();
+    await b.detach();
+  });
+
+  test('journalContactBlocked refuses URL-shaped peerId before journal',
+      () async {
+    final (a, b, _) = await linked();
+    a.journalContactBlocked(
+      peerId: 'https://evil',
+      blocked: true,
+    );
+    expect(
+      a.journal.records.any(
+        (r) => r.kind == ReplicationEventKind.contactBlocked,
+      ),
+      isFalse,
+    );
+    a.journalContactBlocked(
+      peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+      blocked: true,
+    );
+    expect(
+      a.journal.records.any(
+        (r) =>
+            r.kind == ReplicationEventKind.contactBlocked &&
+            r.fields['peerId'] == 'ORBIT-BBBBBBBBBBBBBBBB' &&
+            r.fields['blocked'] == true,
+      ),
+      isTrue,
+    );
+    await a.detach();
+    await b.detach();
+  });
+
   test('journalAttachmentExpired refuses URL-shaped eventId or conversationId',
       () async {
     final (a, b, _) = await linked();
@@ -2435,6 +2533,34 @@ void main() {
     expect(
       expired.indexOf("eventId.contains('://')"),
       lessThan(expired.indexOf('journal.append')),
+    );
+  });
+
+  test(
+      'revokeDevice authorizeDevice journalContactBlocked refuse :// before journal.append',
+      () {
+    final src = File('lib/transport/dual_stack_bridge.dart').readAsStringSync();
+    expect(src, isNot(contains("import 'dart:io'")));
+    final revoke = src.split('void revokeDevice')[1].split('void authorizeDevice')[0];
+    expect(revoke, contains('://'));
+    expect(
+      revoke.indexOf('://'),
+      lessThan(revoke.indexOf('journal.append')),
+    );
+    final authorize =
+        src.split('void authorizeDevice')[1].split('void journalContactBlocked')[0];
+    expect(authorize, contains('://'));
+    expect(
+      authorize.indexOf('://'),
+      lessThan(authorize.indexOf('journal.append')),
+    );
+    final blocked = src
+        .split('void journalContactBlocked')[1]
+        .split('void journalAttachmentExpired')[0];
+    expect(blocked, contains('://'));
+    expect(
+      blocked.indexOf('://'),
+      lessThan(blocked.indexOf('journal.append')),
     );
   });
 

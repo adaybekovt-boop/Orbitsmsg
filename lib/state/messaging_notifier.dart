@@ -351,7 +351,17 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
 
     final safe = _clampChatMessage(Map<String, Object?>.from(uiMsg));
     final ts = (safe['ts'] as num?)?.toInt() ?? now();
-    final msgId = (safe['id'] as String?) ?? '$normalized:$ts:${_shortId()}';
+    final rawId = safe['id'];
+    // URL-shaped ids are hostile (file/http schemes). Refuse before Drift
+    // persist — do not fall through to a generated id for a caller-sent URL.
+    if (rawId is String && rawId.contains('://')) {
+      return InboundPersistResult.failed;
+    }
+    // Missing id (null / non-String) still gets a generated suffix.
+    final msgId = (rawId as String?) ?? '$normalized:$ts:${_shortId()}';
+    if (msgId.contains('://')) {
+      return InboundPersistResult.failed;
+    }
 
     try {
       await db.saveMessage({
@@ -400,7 +410,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     String msgId,
     Map<String, Object?> patch,
   ) {
-    if (msgId.isEmpty) return;
+    if (msgId.isEmpty || msgId.contains('://')) return;
     // Normalize `delivery: 'sent'|'delivered'|'read'` into the DB's `status`
     // column so the message stream renders the right tick.
     final mapped = <String, Object?>{...patch};

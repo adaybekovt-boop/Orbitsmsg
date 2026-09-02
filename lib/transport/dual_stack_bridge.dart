@@ -479,6 +479,7 @@ class DualStackBridge {
   /// Drops that device's own RatchetState (transportPeerId), never a
   /// sibling device's rootKey.
   void revokeDevice(String deviceId) {
+    if (deviceId.isEmpty || deviceId.contains('://')) return;
     final before = devices?.getDevice(deviceId);
     devices?.revoke(deviceId);
     final record = journal.append(
@@ -497,6 +498,7 @@ class DualStackBridge {
   }
 
   void authorizeDevice(AuthorizedDevice device) {
+    if (device.deviceId.isEmpty || device.deviceId.contains('://')) return;
     devices?.authorize(device);
     final record = journal.append(
       ReplicationEventKind.deviceAuthorized,
@@ -516,7 +518,9 @@ class DualStackBridge {
     required bool blocked,
   }) {
     final norm = normalizePeerId(peerId);
-    if (norm.isEmpty) return;
+    if (norm.isEmpty || peerId.contains('://') || norm.contains('://')) {
+      return;
+    }
     final record = journal.append(
       ReplicationEventKind.contactBlocked,
       <String, Object?>{
