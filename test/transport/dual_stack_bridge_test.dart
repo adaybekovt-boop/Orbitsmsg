@@ -3210,7 +3210,7 @@ void main() {
     await a.detach();
   });
 
-  test('sendEncrypted fans out to own-device sync copies via sendTargets',
+  test('own-device tablet is a sendTarget and dials on the local secret',
       () async {
     final devices = DeviceRegistry();
     final (a, _, _) = await linked(devices: devices);
@@ -3239,6 +3239,14 @@ void main() {
         'ORBIT-BBBBBBBBBBBBBBBB',
         'ORBIT-A2A2A2A2A2A2A2A2',
       ]),
+    );
+    expect(
+      a.discoverySecretFor('ORBIT-A2A2A2A2A2A2A2A2'),
+      localSecret,
+    );
+    expect(
+      a.discoverySecretFor('ORBIT-BBBBBBBBBBBBBBBB'),
+      isNot(equals(localSecret)),
     );
     final tablet = LoopbackOrbitsTransport(
       hub: (a.transport as LoopbackOrbitsTransport).hub,

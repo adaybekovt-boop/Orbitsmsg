@@ -330,13 +330,14 @@ class DualStackBridge {
   List<int>? discoverySecretFor(String peerId) {
     final direct = secrets.get(peerId);
     if (direct != null) return direct;
-    final owner = _ownerPeerIdForTransport(peerId);
-    if (owner != null) {
-      final owned = secrets.get(owner);
-      if (owned != null) return owned;
-    }
+    // Own devices advertise on the local secret, not HASH(peerId) and not
+    // a contact secret stored under the local live id.
     if (_isOwnDeviceTransport(peerId)) {
       return secrets.get(kLocalDiscoverySecretId);
+    }
+    final owner = _ownerPeerIdForTransport(peerId);
+    if (owner != null) {
+      return secrets.get(owner);
     }
     return null;
   }
