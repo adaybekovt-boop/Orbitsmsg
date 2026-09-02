@@ -159,6 +159,14 @@ void main() {
     );
     expect(
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'diagnosticsEnabled': true"),
+    );
+    expect(
+      File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
+      contains('diagnosticsEnabled'),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
       contains('appendJournal'),
     );
     expect(

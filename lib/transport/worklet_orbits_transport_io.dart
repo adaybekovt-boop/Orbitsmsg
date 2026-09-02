@@ -245,6 +245,7 @@ class WorkletOrbitsTransport implements OrbitsTransport {
       if (config.journalDir != null &&
           isLocalFsLocation(config.journalDir!))
         'journalDir': config.journalDir,
+      if (config.diagnosticsEnabled) 'diagnosticsEnabled': true,
     });
     noisePublicKey = noisePublicKeyFromHex(result['noisePublicKey'] as String?);
     await hydrateAutobase();

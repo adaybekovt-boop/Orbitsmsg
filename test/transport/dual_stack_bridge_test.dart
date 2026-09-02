@@ -3138,6 +3138,92 @@ void main() {
     await a.detach();
   });
 
+  test('authorizeDevice remembers transportPeerId Noise without a secret',
+      () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final tabletNoise = List<int>.generate(32, (i) => 31);
+    final devices = DeviceRegistry();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', List<int>.filled(32, 2));
+    final a = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: secrets,
+      devices: devices,
+      isBlocked: (_) => false,
+      tofuCheck: _allowTofu,
+      onPacket: (_, __) async {},
+    )..attach();
+    a.authorizeDevice(
+      AuthorizedDevice(
+        deviceId: 'bob-tablet',
+        transportPublicKey: tabletNoise,
+        hypercorePublicKey: List<int>.generate(32, (i) => 32),
+        name: 'tablet',
+        kind: 'tablet',
+        createdAt: 1,
+        status: DeviceStatus.active,
+        ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        transportPeerId: 'ORBIT-B1B1B1B1B1B1B1B1',
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(
+      pair.$1.rememberedPeers.any((p) => p.peerId == 'ORBIT-B1B1B1B1B1B1B1B1'),
+      isTrue,
+    );
+    expect(
+      pair.$1.rememberedPeers
+          .firstWhere((p) => p.peerId == 'ORBIT-B1B1B1B1B1B1B1B1')
+          .discoverySecret,
+      isNull,
+    );
+    expect(
+      a.discoverySecretFor('ORBIT-B1B1B1B1B1B1B1B1'),
+      List<int>.filled(32, 2),
+    );
+    await a.dial('ORBIT-B1B1B1B1B1B1B1B1');
+    expect(pair.$1.lastConnect?.peerId, 'ORBIT-B1B1B1B1B1B1B1B1');
+    expect(pair.$1.lastConnect?.noisePublicKey, tabletNoise);
+    expect(pair.$1.lastConnect?.discoverySecret, List<int>.filled(32, 2));
+    await a.detach();
+  });
+
+  test('ack maps use the receipt channel; pathChanged is recorded', () async {
+    final (a, b, _) = await linked();
+    a.journalDeliveryAcknowledged(
+      eventId: 'msg-1',
+      conversationId: 'ORBIT-BBBBBBBBBBBBBBBB',
+    );
+    expect(
+      a.journal.records.any(
+        (r) =>
+            r.kind == ReplicationEventKind.deliveryAcknowledged &&
+            r.fields['eventId'] == 'msg-1',
+      ),
+      isTrue,
+    );
+    (a.transport as LoopbackOrbitsTransport).emitEvent(
+      const TransportPathChanged(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        TransportPath.relay,
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(a.paths['ORBIT-BBBBBBBBBBBBBBBB'], TransportPath.relay);
+    final send = File('lib/transport/dual_stack_bridge.dart').readAsStringSync();
+    final body = send
+        .split('Future<bool> _sendEncryptedOne')[1]
+        .split('Future<bool> _waitAuthenticated')[0];
+    expect(body, contains('TransportChannel.receipt'));
+    expect(body, contains("msg['type'] == 'ack'"));
+    await a.detach();
+    await b.detach();
+  });
+
   test('relay blow-up and carrier error roll back to PeerJS', () async {
     setHyperswarmRollout(HyperswarmRollout.internal);
     clearNativeRollbackLogForTests();

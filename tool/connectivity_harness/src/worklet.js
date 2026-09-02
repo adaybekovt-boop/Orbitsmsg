@@ -135,6 +135,7 @@ class Worklet {
     this._peers = new Map()
     this._started = false
     this._suspended = false
+    this._diagnosticsEnabled = false
     this._config = null
     this._topic = null
     this.events = []
@@ -189,6 +190,7 @@ class Worklet {
 
   async start(config) {
     this._config = config
+    this._diagnosticsEnabled = Boolean(config && config.diagnosticsEnabled)
     this._started = true
     try {
       const journalDir = localJournalDir(config && config.journalDir)
@@ -222,6 +224,7 @@ class Worklet {
       port: this._loop.port,
       noisePublicKey: this.noisePublicKeyHex(),
       journalBackend: this._journal.backend,
+      diagnosticsEnabled: this._diagnosticsEnabled,
     })
   }
 

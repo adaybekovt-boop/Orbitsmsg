@@ -43,6 +43,20 @@ test('loopback info.id still wins when no Noise map exists', () => {
   )
 })
 
+test('start records diagnosticsEnabled without joining a topic', async () => {
+  const w = new Worklet({ backend: 'loopback' })
+  await w.start({
+    peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+    diagnosticsEnabled: true,
+  })
+  assert.equal(w._diagnosticsEnabled, true)
+  assert.equal(w._topic, null)
+  const started = w.events.find((e) => e && e.name === 'started')
+  assert.ok(started)
+  assert.equal(started.payload.diagnosticsEnabled, true)
+  await w.stop()
+})
+
 test('rememberPeer maps Noise to ORBIT without joinPeer', () => {
   const w = new Worklet({ backend: 'loopback' })
   const noise = 'cd'.repeat(32)

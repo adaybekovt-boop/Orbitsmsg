@@ -98,6 +98,7 @@ class ReliableInboundCtx {
     this.onHandshakeError,
     this.onDecryptError,
     this.onUnexpectedPlaintext,
+    this.onDeliveryAcked,
     this.persistInbound,
     this.isPeerBlocked,
     this.assembleNativeAttachment,
@@ -187,6 +188,7 @@ class ReliableInboundCtx {
   final void Function(Object err)? onHandshakeError;
   final void Function(Object err)? onDecryptError;
   final void Function(Object? data)? onUnexpectedPlaintext;
+  final void Function(String remoteId, String eventId)? onDeliveryAcked;
 
   /// Native `attach-chunk` reassembly. [fileKey] comes from the ratcheted
   /// envelope, never from the journal. Null when the default PeerJS
@@ -451,6 +453,9 @@ Future<bool> dispatchReliablePlaintext(
       'delivery': 'delivered',
     });
     ctx.queueAckStatus(ackId, 'delivered');
+    try {
+      ctx.onDeliveryAcked?.call(remoteId, ackId);
+    } catch (_) {}
     return true;
   }
 

@@ -66,6 +66,7 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   DeviceBinding? _binding;
   String? topicHex;
   PeerDescriptor? lastConnect;
+  TransportChannel? lastSendChannel;
   final List<PeerDescriptor> rememberedPeers = <PeerDescriptor>[];
   bool _started = false;
   bool _suspended = false;
@@ -176,6 +177,7 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
     if (remote == null) {
       throw StateError('not connected to $peerId');
     }
+    lastSendChannel = channel;
     remote._deliver(this.peerId, channel, Uint8List.fromList(frame));
   }
 

@@ -207,6 +207,11 @@ class DualStackBridge {
   /// which still refuse while live flags are false.
   Future<void> Function(OpaqueWake wake)? onMailboxWake;
 
+  void Function(String peerId, TransportPath path)? onPathChanged;
+  void Function(String detail)? onNetworkChanged;
+  void Function(String peerId, String state)? onDeliveryState;
+  final Map<String, TransportPath> paths = <String, TransportPath>{};
+
   void attach() {
     _sub ??= transport.events.listen(_onEvent);
     hydrateFromJournal();
@@ -285,20 +290,78 @@ class DualStackBridge {
   /// Inbound Hyperswarm connections need the Noise→ORBIT map before
   /// [dial]. Discovery secrets stay in Dart — not sent to the worklet.
   Future<void> rememberKnownPeers() async {
-    for (final id in secrets.knownPeerIds) {
-      if (id == normalizePeerId(kLocalDiscoverySecretId)) continue;
-      if (!isValidPeerId(id)) continue;
-      final noise = devices?.noisePublicKeyFor(id);
-      if (noise == null || noise.isEmpty) continue;
+    final seen = <String>{};
+    Future<void> remember(String id, List<int> noise) async {
+      final norm = normalizePeerId(id);
+      if (norm.isEmpty ||
+          norm.contains('://') ||
+          !isValidPeerId(norm) ||
+          noise.isEmpty) {
+        return;
+      }
+      if (!seen.add(norm)) return;
       try {
         await transport.rememberPeer(
           PeerDescriptor(
-            peerId: id,
-            noisePublicKey: noise,
+            peerId: norm,
+            noisePublicKey: List<int>.from(noise),
           ),
         );
       } catch (_) {}
     }
+
+    for (final id in secrets.knownPeerIds) {
+      if (id == normalizePeerId(kLocalDiscoverySecretId)) continue;
+      final noise = devices?.noisePublicKeyFor(id);
+      if (noise == null || noise.isEmpty) continue;
+      await remember(id, noise);
+    }
+    for (final device in devices?.active ?? const <AuthorizedDevice>[]) {
+      final tid = device.transportPeerId;
+      if (tid == null || tid.isEmpty) continue;
+      if (device.transportPublicKey.isEmpty) continue;
+      await remember(tid, device.transportPublicKey);
+    }
+  }
+
+  /// Contact discovery secret for [peerId], or the owner contact's
+  /// secret when [peerId] is a linked-device transport id. Never
+  /// HASH(peerId). Sibling own-device ids use the local advertise secret.
+  List<int>? discoverySecretFor(String peerId) {
+    final direct = secrets.get(peerId);
+    if (direct != null) return direct;
+    final owner = _ownerPeerIdForTransport(peerId);
+    if (owner != null) {
+      final owned = secrets.get(owner);
+      if (owned != null) return owned;
+    }
+    if (_isOwnDeviceTransport(peerId)) {
+      return secrets.get(kLocalDiscoverySecretId);
+    }
+    return null;
+  }
+
+  String? _ownerPeerIdForTransport(String peerId) {
+    final norm = normalizePeerId(peerId);
+    if (norm.isEmpty || norm.contains('://')) return null;
+    final devices = this.devices;
+    if (devices == null) return null;
+    for (final device in devices.active) {
+      final tid = device.transportPeerId;
+      if (tid == null || tid.isEmpty) continue;
+      if (normalizePeerId(tid) != norm) continue;
+      if (device.ownerPeerId.isEmpty || device.ownerPeerId.contains('://')) {
+        continue;
+      }
+      return normalizePeerId(device.ownerPeerId);
+    }
+    return null;
+  }
+
+  bool _isOwnDeviceTransport(String peerId) {
+    final owner = _ownerPeerIdForTransport(peerId);
+    if (owner == null) return false;
+    return owner == normalizePeerId(selfPeerId());
   }
 
   Future<void> detach() async {
@@ -320,14 +383,14 @@ class DualStackBridge {
 
   bool canUseNative(String peerId) {
     if (!nativeEnabled) return false;
-    if (secrets.get(peerId) == null) return false;
+    if (discoverySecretFor(peerId) == null) return false;
     final norm = normalizePeerId(peerId);
     return connected.contains(norm) && authenticated.contains(norm);
   }
 
   Future<void> dial(String peerId) async {
     if (!nativeEnabled) return;
-    final secret = secrets.get(peerId);
+    final secret = discoverySecretFor(peerId);
     if (secret == null) return;
     final noise = devices?.noisePublicKeyFor(peerId);
     await transport.connect(
@@ -356,6 +419,11 @@ class DualStackBridge {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return false;
     if (msg is Map && !outboundWireMapIsSendable(msg)) return false;
+    if (!isNativeConnected(norm) && discoverySecretFor(norm) != null) {
+      try {
+        await dial(norm);
+      } catch (_) {}
+    }
     if (!await _ensureNativeSendReady(norm)) {
       if (msg is Map &&
           (msg['type'] == 'wireHello' || msg['type'] == 'wireRekey')) {
@@ -382,9 +450,12 @@ class DualStackBridge {
       await waitForWireReady(norm, timeout: const Duration(seconds: 8));
     }
     final wire = await encryptWirePayload(norm, msg);
+    final channel = msg is Map && msg['type'] == 'ack'
+        ? TransportChannel.receipt
+        : TransportChannel.message;
     await transport.send(
       norm,
-      TransportChannel.message,
+      channel,
       utf8.encode(wire),
     );
     _appendEnvelope(norm, utf8.encode(wire));
@@ -503,6 +574,19 @@ class DualStackBridge {
     final tid = device.transportPeerId;
     if (tid != null && tid.contains('://')) return;
     devices?.authorize(device);
+    final rememberId = device.transportPeerId;
+    if (rememberId != null &&
+        rememberId.isNotEmpty &&
+        device.transportPublicKey.isNotEmpty) {
+      unawaited(
+        transport.rememberPeer(
+          PeerDescriptor(
+            peerId: normalizePeerId(rememberId),
+            noisePublicKey: List<int>.from(device.transportPublicKey),
+          ),
+        ),
+      );
+    }
     final record = journal.append(
       ReplicationEventKind.deviceAuthorized,
       <String, Object?>{
@@ -535,6 +619,28 @@ class DualStackBridge {
     );
     unawaited(_persistDurable(record));
     hypercore.append(record);
+  }
+
+  /// Inbound delivery receipt after decrypt. Metadata only — no ratchet
+  /// scalars or plaintext body.
+  void journalDeliveryAcknowledged({
+    required String eventId,
+    required String conversationId,
+  }) {
+    if (eventId.isEmpty || eventId.contains('://')) return;
+    if (conversationId.isEmpty || conversationId.contains('://')) return;
+    final conv = normalizePeerId(conversationId);
+    final record = journal.append(
+      ReplicationEventKind.deliveryAcknowledged,
+      <String, Object?>{
+        'eventId': eventId,
+        'conversationId': conv,
+        'createdAt': DateTime.now().millisecondsSinceEpoch,
+      },
+    );
+    unawaited(_persistDurable(record));
+    hypercore.append(record);
+    onDeliveryState?.call(conv, 'delivered');
   }
 
   /// Metadata-only expiry. Ciphertext and fileKey stay out of the journal.
@@ -1281,6 +1387,14 @@ class DualStackBridge {
         if (code == 'relay-blow-up') {
           noteRelayBlowUp(detail: message);
         }
+      case TransportPathChanged(:final peerId, :final path):
+        final norm = normalizePeerId(peerId);
+        paths[norm] = path;
+        onPathChanged?.call(norm, path);
+      case TransportNetworkChanged(:final detail):
+        onNetworkChanged?.call(detail);
+      case TransportDeliveryState(:final peerId, :final state):
+        onDeliveryState?.call(normalizePeerId(peerId), state);
       default:
         break;
     }
@@ -1423,6 +1537,9 @@ class DualStackBridge {
       }
     } catch (_) {
       return;
+    }
+    if (channel == TransportChannel.receipt) {
+      onDeliveryState?.call(norm, 'received');
     }
     unawaited(onPacket(norm, data));
   }

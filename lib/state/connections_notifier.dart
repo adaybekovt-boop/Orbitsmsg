@@ -453,7 +453,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   bool _nativeCarrierFor(String remoteId) {
     final dual = _dual;
     if (dual == null || !dual.nativeEnabled) return false;
-    if (dual.secrets.get(remoteId) == null) return false;
+    if (dual.discoverySecretFor(remoteId) == null) return false;
     return dual.canUseNative(remoteId) || dual.isNativeConnected(remoteId);
   }
 
@@ -479,7 +479,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     if (msg is Map && !outboundWireMapIsSendable(msg)) return false;
     final dual = _dual;
     if (dual != null && dual.nativeEnabled) {
-      final known = dual.secrets.get(remoteId) != null;
+      final known = dual.discoverySecretFor(remoteId) != null;
       if (known &&
           (dual.canUseNative(remoteId) ||
               dual.isNativeConnected(remoteId) ||
@@ -538,7 +538,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   bool canDepositMailbox(String remoteId) {
     final dual = _dual;
     if (dual == null || !dual.nativeEnabled) return false;
-    if (dual.secrets.get(remoteId) == null) return false;
+    if (dual.discoverySecretFor(remoteId) == null) return false;
     return dual.hasMailbox;
   }
 
@@ -971,6 +971,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         },
         queueAckStatus: (id, status) =>
             _messaging.queueAckStatus(id, status),
+        onDeliveryAcked: (rid, id) {
+          _dual?.journalDeliveryAcknowledged(
+            eventId: id,
+            conversationId: rid,
+          );
+        },
         // The ReliableInboundCtx field fixes `remoteId` up-front via closure
         // (it's a per-peer ctx), so the dispatched callback takes just the
         // payload map. Our local `sendEncrypted` helper still takes both
