@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../transport/layers.dart';
+
 /// Checkbox on the create/join sheet and the in-chat banner.
 const Key kRoomPlaintextAckKey = Key('room-plaintext-ack');
 
@@ -42,6 +44,7 @@ bool sendGuardedRoomPacket(
   required bool connected,
   required void Function(Map<String, Object?>) send,
 }) {
+  if (!replicationValueIsSafe(packet)) return false;
   if (!kRoomPlaintextSessionAck.allowsPacket(packet)) return false;
   if (!connected) return false;
   send(packet);

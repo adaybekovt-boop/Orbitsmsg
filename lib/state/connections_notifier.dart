@@ -64,6 +64,7 @@ import '../storage/db.dart' as db;
 import '../transport/replication_schema.dart';
 import '../transport/device_binding.dart';
 import '../transport/dual_stack_bridge.dart';
+import '../transport/layers.dart';
 import '../transport/peerjs_window.dart';
 import '../transport/signed_capabilities.dart';
 import '../transport/transport_api.dart';
@@ -528,6 +529,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// design (chunks are framed binary, protected in transit by the DataChannel
   /// DTLS layer). Returns false if no open reliable connection exists.
   bool sendDrop(String remoteId, Object packet) {
+    if (packet is Map && !replicationValueIsSafe(packet)) return false;
     final dual = _dual;
     if (dual != null && _nativeCarrierFor(remoteId)) {
       unawaited(dual.sendDrop(remoteId, packet));

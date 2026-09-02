@@ -240,6 +240,7 @@ void main() {
     expect(sendDrop, contains('_nativeCarrierFor'));
     expect(sendDrop, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
     expect(sendDrop, contains('conn.send'));
+    expect(sendDrop, contains('replicationValueIsSafe'));
 
     final sendRoomPacket = slice(
       'bool sendRoomPacket',

@@ -1,6 +1,8 @@
 // Phase 6: WebRTC signaling payloads on the Hyperswarm `call` channel.
 // Media still uses flutter_webrtc. This is not TURN.
 
+import '../transport/layers.dart';
+
 enum CallSignalType {
   offer,
   answer,
@@ -40,12 +42,19 @@ class CallSignal {
       (v) => v.name == typeName,
       orElse: () => throw FormatException('bad call signal $typeName'),
     );
+    final candidate = (json['candidate'] as Map?)?.cast<String, Object?>();
+    final media = (json['media'] as Map?)?.cast<String, Object?>();
+    if (!replicationValueIsSafe(json) ||
+        !replicationValueIsSafe(candidate) ||
+        !replicationValueIsSafe(media)) {
+      throw FormatException('call signal contains forbidden fields');
+    }
     return CallSignal(
       type: type,
       callId: json['callId'] as String? ?? '',
       sdp: json['sdp'] as String?,
-      candidate: (json['candidate'] as Map?)?.cast<String, Object?>(),
-      media: (json['media'] as Map?)?.cast<String, Object?>(),
+      candidate: candidate,
+      media: media,
     );
   }
 }

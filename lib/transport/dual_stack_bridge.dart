@@ -1031,6 +1031,7 @@ class DualStackBridge {
   Future<void> sendCallSignal(String peerId, CallSignal signal) async {
     final norm = normalizePeerId(peerId);
     if (!await _ensureNativeSendReady(norm)) return;
+    if (!replicationValueIsSafe(signal.toJson())) return;
     await transport.send(
       norm,
       TransportChannel.call,

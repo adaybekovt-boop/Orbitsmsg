@@ -260,6 +260,50 @@ void main() {
     });
   });
 
+  group('inbound nested refuse', () {
+    test(
+        'inbound room_msg with nested fileKey is dropped; subsequent text still works',
+        () async {
+      final h = await makeHost();
+      await h.tx.bridge.handleInbound('g1', joinPacket('g1'));
+      await h.tx.bridge.handleInbound('g2', joinPacket('g2'));
+      h.tx.sent.clear();
+
+      await h.tx.bridge.handleInbound('g1', {
+        ...msgPacket(h.generalId, 'secret'),
+        'meta': {'fileKey': 'x'},
+      });
+      expect(await db.watchChannelMessages(h.generalId).first, isEmpty,
+          reason: 'nested fileKey must not persist');
+      expect(h.tx.ofType('room_msg'), isEmpty,
+          reason: 'nested fileKey must not relay to other guests');
+
+      await h.tx.bridge.handleInbound('g1', msgPacket(h.generalId, 'hello'));
+      final msgs = await db.watchChannelMessages(h.generalId).first;
+      expect(msgs, hasLength(1));
+      expect((msgs.first['payload'] as Map)['text'], 'hello');
+      final relayed = [
+        for (final s in h.tx.sent)
+          if (s.packet['type'] == 'room_msg') s
+      ];
+      expect(relayed, isNotEmpty, reason: 'legit text still relays');
+      expect(relayed.every((s) => s.packet['text'] == 'hello'), isTrue);
+      expect(relayed.map((s) => s.to), contains('g2'));
+      expect(relayed.map((s) => s.to), isNot(contains('g1')));
+    });
+
+    test('inbound room_join with nested kek does not add the guest', () async {
+      final h = await makeHost();
+      await h.tx.bridge.handleInbound('g1', {
+        ...joinPacket('g1'),
+        'extra': {'kek': 'x'},
+      });
+      expect(h.mgr.state.guestPeerIds, isEmpty);
+      expect(h.tx.ofType('room_join_reject'), isEmpty,
+          reason: 'unsafe join is dropped, not rejected by the join handler');
+    });
+  });
+
   group('flood guard', () {
     test('blocks save + relay past the per-second limit', () async {
       final h = await makeHost();

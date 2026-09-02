@@ -329,6 +329,10 @@ Future<bool> dispatchReliablePlaintext(
   if (type == 'profile_req') {
     final lp = ctx.localProfile();
     if (lp == null) return true;
+    // Do not reply with a secret-bearing card if localProfile itself
+    // nests [kForbiddenReplicationFields] (`peerId` / `avatarDataUrl` are
+    // legitimate leaves and stay allowed).
+    if (!replicationValueIsSafe(lp)) return true;
     final nonce = data['nonce'] is num
         ? (data['nonce'] as num).toInt()
         : DateTime.now().millisecondsSinceEpoch;
@@ -350,6 +354,7 @@ Future<bool> dispatchReliablePlaintext(
     final p = data['profile'];
     if (p is! Map) return true;
     final pMap = Map<String, Object?>.from(p);
+    if (!replicationValueIsSafe(pMap)) return true;
     final avatarRaw = pMap['avatarDataUrl'];
 
     // Remote avatars are untrusted вЂ” validate MIME + size strictly (the

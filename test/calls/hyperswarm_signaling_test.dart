@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/calls/hyperswarm_signaling.dart';
 
@@ -12,6 +14,50 @@ void main() {
     expect(again.type, CallSignalType.offer);
     expect(again.sdp, 'v=0');
     expect(again.toJson().containsKey('OFFER'), isFalse);
+  });
+
+  test('legit ICE and media maps still parse', () {
+    final ice = CallSignal.fromJson({
+      'type': CallSignalType.iceCandidate.name,
+      'callId': 'c1',
+      'candidate': {'candidate': '1.1.1.1'},
+    });
+    expect(ice.type, CallSignalType.iceCandidate);
+    expect(ice.candidate, {'candidate': '1.1.1.1'});
+
+    const media = CallSignal(
+      type: CallSignalType.mediaState,
+      callId: 'c1',
+      media: {'muted': true},
+    );
+    final again = CallSignal.fromJson(media.toJson());
+    expect(again.type, CallSignalType.mediaState);
+    expect(again.media, {'muted': true});
+  });
+
+  test('fromJson refuses nested fileKey in candidate', () {
+    expect(
+      () => CallSignal.fromJson({
+        'type': CallSignalType.iceCandidate.name,
+        'callId': 'c1',
+        'candidate': {
+          'candidate': '1.1.1.1',
+          'extra': {'fileKey': 'x'},
+        },
+      }),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
+  test('fromJson refuses kek in media', () {
+    expect(
+      () => CallSignal.fromJson({
+        'type': CallSignalType.mediaState.name,
+        'callId': 'c1',
+        'media': {'muted': true, 'kek': 'x'},
+      }),
+      throwsA(isA<FormatException>()),
+    );
   });
 
   test('native session exchanges offer, ICE, answer, hangup', () async {
@@ -30,5 +76,19 @@ void main() {
       CallSignalType.hangup,
     ]);
     expect(session.closed, isTrue);
+  });
+
+  test('sendCallSignal refuses unsafe toJson before transport.send', () {
+    final src = File('lib/transport/dual_stack_bridge.dart').readAsStringSync();
+    expect(src, contains('replicationValueIsSafe'));
+    final method = src
+        .split('Future<void> sendCallSignal')[1]
+        .split('Future<bool> sendDrop')[0];
+    expect(method, contains('replicationValueIsSafe'));
+    expect(method, contains('signal.toJson()'));
+    expect(
+      method.indexOf('replicationValueIsSafe'),
+      lessThan(method.indexOf('transport.send')),
+    );
   });
 }

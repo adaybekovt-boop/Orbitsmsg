@@ -2,6 +2,8 @@
 // persist [kForbiddenReplicationFields] into uiMsg / Drift. A secret-bearing
 // map is dropped; the rest of the message (text + ACK) still lands.
 // `attachment.fileKeyB64` is assembly-only and must not appear on metaOut.
+// `profile_res.profile` with a nested forbidden key is consumed without
+// upsertPeer / setProfilesByPeer / avatar persist.
 
 import 'dart:io';
 
@@ -16,19 +18,30 @@ ReliableInboundCtx _ctx({
   required List<JsonMap> acks,
   required Future<InboundPersistResult> Function(String, JsonMap) persist,
   bool Function(String)? isBlocked,
+  JsonMap? Function()? localProfile,
+  List<(String, JsonMap)>? upserts,
+  JsonMap? profilesByPeer,
 }) {
   return ReliableInboundCtx(
     selfPeerId: 'ORBIT-SELF',
-    localProfile: () => null,
+    localProfile: localProfile ?? () => null,
     seenMsgIds: seen,
     processingMsgIds: processing,
     persistInbound: persist,
     pushMessage: persist,
     isPeerBlocked: isBlocked,
     updateMessage: (_, __, ___) {},
-    setProfilesByPeer: (_) {},
+    setProfilesByPeer: (updater) {
+      if (profilesByPeer == null) return;
+      final next = updater(Map<String, Object?>.from(profilesByPeer));
+      profilesByPeer
+        ..clear()
+        ..addAll(next);
+    },
     setMessagesByPeer: (_) {},
-    upsertPeer: (_, __) {},
+    upsertPeer: (id, patch) {
+      upserts?.add((id, patch));
+    },
     queueAckStatus: (_, __) {},
     sendEncrypted: acks.add,
     notifyNewMessage:
@@ -56,6 +69,35 @@ Future<(List<JsonMap> persisted, List<JsonMap> acks)> _dispatch(
   );
   await dispatchReliablePlaintext(packet, (_) {}, 'ORBIT-PEER', ctx);
   return (persisted, acks);
+}
+
+Future<
+    (
+      List<(String, JsonMap)> upserts,
+      JsonMap profiles,
+      List<JsonMap> sent,
+      bool consumed,
+    )> _dispatchProfile(
+  JsonMap packet, {
+  JsonMap? Function()? localProfile,
+  JsonMap? initialProfiles,
+}) async {
+  final upserts = <(String, JsonMap)>[];
+  final profiles = initialProfiles ?? <String, Object?>{};
+  final sent = <JsonMap>[];
+  final ctx = _ctx(
+    seen: <String>{},
+    processing: <String>{},
+    persisted: <JsonMap>[],
+    acks: sent,
+    persist: (_, msg) async => InboundPersistResult.committed,
+    localProfile: localProfile,
+    upserts: upserts,
+    profilesByPeer: profiles,
+  );
+  final consumed =
+      await dispatchReliablePlaintext(packet, (_) {}, 'ORBIT-PEER', ctx);
+  return (upserts, profiles, sent, consumed);
 }
 
 void _expectNoSecretKeys(Object? value) {
@@ -249,6 +291,75 @@ void main() {
       final body = match!.group(1)!;
       expect(body.contains('fileKey'), isFalse);
       expect(body.contains('fileKeyB64'), isFalse);
+    });
+  });
+
+  group('profile_res nested secrets', () {
+    test(
+        'profile_res with nested fileKey is consumed without upsert, profiles, or avatar persist',
+        () async {
+      final seed = <String, Object?>{
+        'ORBIT-OTHER': <String, Object?>{'displayName': 'keep'},
+      };
+      final (upserts, profiles, sent, consumed) = await _dispatchProfile(
+        <String, Object?>{
+          'type': 'profile_res',
+          'profile': <String, Object?>{
+            'displayName': 'A',
+            'extra': <String, Object?>{'fileKey': 'x'},
+          },
+        },
+        initialProfiles: Map<String, Object?>.from(seed),
+      );
+
+      expect(consumed, isTrue);
+      expect(upserts, isEmpty);
+      expect(profiles, seed);
+      expect(profiles.containsKey('ORBIT-PEER'), isFalse);
+      expect(sent, isEmpty);
+      _expectNoSecretKeys(profiles);
+    });
+
+    test('legit profile_res upserts displayName and setProfilesByPeer',
+        () async {
+      final (upserts, profiles, _, consumed) = await _dispatchProfile(
+        <String, Object?>{
+          'type': 'profile_res',
+          'profile': <String, Object?>{
+            'peerId': 'ORBIT-PEER',
+            'displayName': 'A',
+            'bio': 'hi',
+            // Non-data URL: not persisted, and not treated as an explicit
+            // clear (which would unawait db.deleteAvatar and trip Drift).
+            'avatarDataUrl': 'https://example.invalid/avatar.png',
+          },
+        },
+      );
+
+      expect(consumed, isTrue);
+      expect(upserts, hasLength(1));
+      expect(upserts.single.$1, 'ORBIT-PEER');
+      expect(upserts.single.$2['displayName'], 'A');
+      expect(profiles['ORBIT-PEER'], isA<Map>());
+      final stored = Map<String, Object?>.from(profiles['ORBIT-PEER']! as Map);
+      expect(stored['displayName'], 'A');
+      expect(stored['bio'], 'hi');
+      expect(stored['peerId'], 'ORBIT-PEER');
+      _expectNoSecretKeys(stored);
+    });
+
+    test('profile_req skips reply when localProfile nests a secret', () async {
+      final (_, _, sent, consumed) = await _dispatchProfile(
+        <String, Object?>{'type': 'profile_req', 'nonce': 1},
+        localProfile: () => <String, Object?>{
+          'peerId': 'ORBIT-SELF',
+          'displayName': 'Me',
+          'extra': <String, Object?>{'fileKey': 'x'},
+        },
+      );
+
+      expect(consumed, isTrue);
+      expect(sent, isEmpty);
     });
   });
 }

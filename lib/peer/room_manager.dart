@@ -43,6 +43,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../core/attachment_store.dart';
 import '../core/path_byte_stream.dart';
 import '../state/connections_notifier.dart';
+import '../transport/layers.dart';
 import '../transport/peerjs_window.dart';
 import '../state/local_profile_provider.dart';
 import '../state/peer_connection_provider.dart';
@@ -1636,6 +1637,9 @@ class RoomManager extends StateNotifier<RoomState> {
     // we're currently in. Anything else is dropped before any handler runs.
     final roomId = packet['roomId'];
     if (roomId is! String || roomId.isEmpty || roomId != state.roomId) return;
+    // Nested secrets (fileKey, kek, ratchet scalars, …) never persist, relay,
+    // or join. Host-plaintext `text` / `b64` and spatial `peerId` stay allowed.
+    if (!replicationValueIsSafe(packet)) return;
     try {
       switch (type) {
         case 'room_join':
