@@ -563,6 +563,7 @@ class Worklet {
             b64: buf.subarray(0, n).toString('base64'),
           })
           offset += n
+          await new Promise((resolve) => setImmediate(resolve))
         }
       } finally {
         fs.closeSync(fd)
