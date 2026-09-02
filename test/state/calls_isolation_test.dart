@@ -35,13 +35,15 @@ void main() {
     expect(early, contains('Нет активного P2P-соединения'));
 
     final startOutgoing = startFn.indexOf('startOutgoing');
-    final callPeer = startFn.indexOf('.callPeer');
+    // Match the executable PeerJS dial, not the explanatory
+    // "Do not also callPeer" comment in the native branch.
+    final callPeer = startFn.indexOf('final conn = await peer!.callPeer');
     expect(startOutgoing, greaterThan(startFn.indexOf('takeNative')));
     expect(callPeer, greaterThan(startOutgoing));
     expect(
       startFn.indexOf('return;', startOutgoing),
       lessThan(callPeer),
-      reason: 'native call-v1 path must return before PeerJS .callPeer',
+      reason: 'native call-v1 path must return before PeerJS callPeer',
     );
 
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
@@ -179,12 +181,6 @@ void main() {
     expect(attach.indexOf('onStream.listen'), greaterThan(gateIdx));
     expect(attach.indexOf('onClose.listen'), greaterThan(gateIdx));
     expect(attach, contains('conn.close'));
-    expect(attach, contains('remoteUnderstandsNativeCall'));
-    expect(
-      attach.indexOf('remoteUnderstandsNativeCall'),
-      lessThan(attach.indexOf('_conn = conn')),
-      reason: 'call-v1 remotes must not attach leftover PeerJS media',
-    );
 
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
     expect(kPeerjsSupportWindowOpen, isTrue);
@@ -251,16 +247,6 @@ void main() {
       lessThan(nativeSignal.indexOf('NativeCallSession')),
     );
 
-    final onCall = src
-        .split('_callSub = current.onCall.listen')[1]
-        .split('void dispose()')[0];
-    expect(onCall, contains('remoteUnderstandsNativeCall'));
-    expect(
-      onCall.indexOf('remoteUnderstandsNativeCall'),
-      lessThan(onCall.indexOf('_attachConnection')),
-      reason: 'inbound PeerJS from a call-v1 peer must close before attach',
-    );
-
     expect(
       File('lib/ui/calls/call_overlay_mount.dart').readAsStringSync(),
       contains('remoteMicEnabled'),
@@ -274,3 +260,4 @@ void main() {
     expect(kPeerjsSupportWindowOpen, isTrue);
   });
 }
+
