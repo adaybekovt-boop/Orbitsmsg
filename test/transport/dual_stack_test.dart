@@ -237,4 +237,12 @@ void main() {
     expect(waitForDropDrain, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
     expect(waitForDropDrain, contains('bufferedAmount'));
   });
+
+  test('RoomScopedTransport skips PeerJS when isolation disallows it', () {
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(
+      File('lib/peer/room_scoped_transport.dart').readAsStringSync(),
+      contains('peerjsAllowedOnNative(isWeb: kIsWeb)'),
+    );
+  });
 }

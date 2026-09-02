@@ -17,6 +17,7 @@ import '../mailbox/blind_store.dart';
 import '../mailbox/mailbox_pump.dart';
 import '../mailbox/storage_peer_client.dart';
 import '../peer/helpers.dart';
+import '../push/opaque_wake.dart';
 import '../replication/drift_projector.dart';
 import '../replication/file_journal.dart';
 import '../replication/hypercore_store.dart';
@@ -106,6 +107,11 @@ class DualStackBridge {
 
   /// Test / host hook: the transport id whose RatchetState was dropped.
   void Function(String peerId)? onRatchetDropped;
+
+  /// After a mailbox deposit of ciphertext. Must stay opaque — no peer
+  /// id, body, or attachment metadata. The host may enqueue APNs/FCM
+  /// which still refuse while live flags are false.
+  Future<void> Function(OpaqueWake wake)? onMailboxWake;
 
   void attach() {
     _sub ??= transport.events.listen(_onEvent);
@@ -256,6 +262,7 @@ class DualStackBridge {
           encryptedEnvelope: encryptedEnvelope,
         );
         await checkMailboxBacklog();
+        unawaited(_enqueueMailboxWake());
         return true;
       }
       final store = mailbox;
@@ -267,6 +274,7 @@ class DualStackBridge {
         encryptedEnvelope: encryptedEnvelope,
       );
       await checkMailboxBacklog();
+      unawaited(_enqueueMailboxWake());
       return true;
     } on StateError catch (e) {
       if ('$e'.contains('quota')) {
@@ -277,6 +285,20 @@ class DualStackBridge {
       }
       return false;
     }
+  }
+
+  Future<void> _enqueueMailboxWake() async {
+    final token = mailboxToken;
+    final hook = onMailboxWake;
+    if (hook == null || token == null || token.isEmpty) return;
+    if (token.contains('peerId') || token.contains('://')) return;
+    await hook(
+      OpaqueWake(
+        opaqueWakeToken: token,
+        collapseId: 'mailbox',
+        protocolVersion: 1,
+      ),
+    );
   }
 
   /// Authorization log: revoked writers are ignored on the next fan-out.

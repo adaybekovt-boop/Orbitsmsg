@@ -366,6 +366,36 @@ void main() {
     );
     expect(slow.relayBlownUp, isTrue);
   });
+
+  test('epoch-millis lab directories expire; dummy timestamps do not', () async {
+    final dir = await Directory.systemTemp.createTemp('orbits-relay-exp');
+    addTearDown(() => dir.delete(recursive: true));
+    final expired = File('${dir.path}/expired.json');
+    await expired.writeAsString(
+      jsonEncode({
+        'issuedAt': 1000000000000,
+        'expiresAt': 1000000001000,
+        'peers': _fleetPeers().map((p) => p.toJson()).toList(),
+      }),
+    );
+    expect(
+      await loadRelayDirectoryFile(expired.path, nowMs: 1000000002000),
+      isNull,
+    );
+    final live = File('${dir.path}/live.json');
+    await live.writeAsString(
+      jsonEncode({
+        'issuedAt': 1000000000000,
+        'expiresAt': 2000000000000,
+        'peers': _fleetPeers().map((p) => p.toJson()).toList(),
+      }),
+    );
+    expect(
+      await loadRelayDirectoryFile(live.path, nowMs: 1500000000000),
+      isNotNull,
+    );
+    expect(kLiveSignedRelayDirectory, isFalse);
+  });
 }
 
 String utf8Payload(RelayDirectory directory) =>

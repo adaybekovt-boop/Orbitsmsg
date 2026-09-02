@@ -16,7 +16,10 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+
 import '../state/connections_notifier.dart' show RoomBridge;
+import '../transport/peerjs_window.dart';
 import 'helpers.dart' show isValidPeerId, normalizePeerId;
 import 'peerjs_client.dart';
 import 'room_manager.dart' show RoomTransport;
@@ -90,12 +93,14 @@ class RoomScopedTransport implements RoomTransport {
 
   @override
   bool hasReliable(String peerId) {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
     final c = _reliable[normalizePeerId(peerId)];
     return c != null && c.open;
   }
 
   @override
   bool sendRoomPacket(String peerId, Map<String, Object?> packet) {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
     final c = _reliable[normalizePeerId(peerId)];
     return sendGuardedRoomPacket(
       packet,
@@ -106,6 +111,7 @@ class RoomScopedTransport implements RoomTransport {
 
   @override
   void openReliable(String peerId) {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
     if (_disposed) return;
     final id = normalizePeerId(peerId);
     if (!isValidPeerId(id)) return;

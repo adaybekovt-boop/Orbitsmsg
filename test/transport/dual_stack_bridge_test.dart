@@ -12,6 +12,7 @@ import 'package:orbits_flutter/devices/device_registry.dart';
 import 'package:orbits_flutter/mailbox/blind_store.dart';
 import 'package:orbits_flutter/mailbox/storage_peer_client.dart';
 import 'package:orbits_flutter/mailbox/storage_peer_http.dart';
+import 'package:orbits_flutter/push/opaque_wake.dart';
 import 'package:orbits_flutter/transport/replication_schema.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
@@ -1182,6 +1183,46 @@ void main() {
       nativeRollbackLog.last.reason,
       NativeRollbackReason.relayMailboxBacklog,
     );
+    await a.detach();
+  });
+
+  test('mailbox deposit enqueues an opaque wake without secrets', () async {
+    final store = BlindMailboxStore()
+      ..grant(
+        MailboxCapability(
+          token: 'cap-wake',
+          quotaBytes: 1024,
+          retentionMs: 60 * 1000,
+          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+        ),
+      );
+    OpaqueWake? seen;
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final a = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: DiscoverySecretStore(),
+      isBlocked: (_) => false,
+      mailbox: store,
+      mailboxToken: 'cap-wake',
+      mailboxWriterKey: 'writer',
+      onPacket: (_, __) async {},
+    )
+      ..onMailboxWake = (w) async {
+        seen = w;
+      }
+      ..attach();
+    expect(await a.depositMailbox(const [1, 2, 3, 4]), isTrue);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(seen, isNotNull);
+    expect(seen!.opaqueWakeToken, 'cap-wake');
+    expect(seen!.collapseId, 'mailbox');
+    expect(OpaqueWake.isSafe(seen!.toJson()), isTrue);
+    expect(seen!.toJson().containsKey('peerId'), isFalse);
+    expect(seen!.toJson().containsKey('text'), isFalse);
     await a.detach();
   });
 

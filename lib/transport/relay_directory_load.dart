@@ -39,9 +39,25 @@ Map<String, Object?> relayDirectoryToJson(RelayDirectory directory) =>
 bool relayDirectoryIsUnsignedLab(RelayDirectory directory) =>
     directory.signature.isEmpty;
 
+/// Wall-clock expiry. Dummy lab/test timestamps (`expiresAt` < 1e12)
+/// are not epoch millis and stay loadable. Live-looking timestamps expire.
+const int kRelayDirectoryEpochMsFloor = 1000000000000;
+
+bool relayDirectoryIsClockExpired(
+  RelayDirectory directory, {
+  int? nowMs,
+}) {
+  if (directory.expiresAt < kRelayDirectoryEpochMsFloor) return false;
+  final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+  return now >= directory.expiresAt;
+}
+
 /// File path only. `http://` / `https://` is refused so Dart cannot
 /// download a directory.
-Future<RelayDirectory?> loadRelayDirectoryFile(String path) async {
+Future<RelayDirectory?> loadRelayDirectoryFile(
+  String path, {
+  int? nowMs,
+}) async {
   final trimmed = path.trim();
   if (trimmed.isEmpty) return null;
   final lower = trimmed.toLowerCase();
@@ -60,6 +76,7 @@ Future<RelayDirectory?> loadRelayDirectoryFile(String path) async {
   }
   final directory = relayDirectoryFromJson(json);
   if (directory.peers.isEmpty) return null;
+  if (relayDirectoryIsClockExpired(directory, nowMs: nowMs)) return null;
   if (relayDirectoryIsUnsignedLab(directory)) {
     // Lab fixture. Not a live signed directory.
     if (kLiveSignedRelayDirectory) return null;

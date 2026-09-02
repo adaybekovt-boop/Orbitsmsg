@@ -14,6 +14,7 @@ import '../mailbox/storage_peer_client.dart';
 import '../mailbox/storage_peer_http.dart';
 import '../push/push_gateway.dart';
 import '../push/push_registration.dart';
+import '../push/push_send.dart';
 import '../push/wake_service.dart';
 import '../replication/memory_journal.dart';
 import '../state/auth_notifier.dart';
@@ -207,6 +208,12 @@ class NativeTransportHost {
     );
     wake = OpaqueWakeService(onAccepted: (_) => lifecycle!.onOpaqueWake());
     push = PushGateway(wake!);
+    _ref.read(connectionsNotifierProvider.notifier).nativeBridge?.onMailboxWake =
+        (w) async {
+      await wake?.handle(w.toJson());
+      await const PushSender().sendApns(deviceToken: 'undeployed', wake: w);
+      await const PushSender().sendFcm(deviceToken: 'undeployed', wake: w);
+    };
     attached = true;
   }
 

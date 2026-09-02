@@ -5,6 +5,7 @@
 // host relay, author canonicalisation, and the validation/size guards.
 
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:drift/native.dart';
@@ -12,6 +13,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/vault_kek.dart';
 import 'package:orbits_flutter/peer/peerjs_client.dart' show PeerJsClient;
+import 'package:orbits_flutter/peer/room_disclaimer.dart';
+import 'package:orbits_flutter/peer/room_file_store.dart';
 import 'package:orbits_flutter/peer/room_manager.dart';
 import 'package:orbits_flutter/state/auth_notifier.dart' show AuthedUser;
 import 'package:orbits_flutter/state/connections_notifier.dart' show RoomBridge;
@@ -338,6 +341,95 @@ void main() {
       final relay = h.tx.ofType('room_msg').single;
       expect(relay['kind'], 'file');
       expect(relay['b64'], b64);
+    });
+
+    test('sendRoomFileFromPath streams host-plaintext chunks, not one b64 frame',
+        () async {
+      final h = await makeHost();
+      await h.tx.bridge.handleInbound('g1', {
+        'type': 'room_join',
+        'roomId': hostId,
+        'guestName': 'G',
+        'guestPeerId': 'g1',
+      });
+      h.tx.sent.clear();
+      final dir = await Directory.systemTemp.createTemp('orbits-room-file');
+      addTearDown(() => dir.delete(recursive: true));
+      final file = File('${dir.path}/note.bin');
+      final payload = List<int>.generate(80 * 1024, (i) => i & 0xff);
+      await file.writeAsBytes(payload);
+
+      await h.mgr.sendRoomFileFromPath(
+        hostId,
+        h.generalId,
+        file.path,
+        name: 'note.bin',
+        mime: 'application/octet-stream',
+        kind: 'file',
+      );
+
+      expect(h.tx.ofType('room_msg'), isEmpty);
+      final chunks = h.tx.ofType('room_file_chunk').toList();
+      expect(chunks, isNotEmpty);
+      expect(chunks.first['offset'], 0);
+      expect(chunks.first.containsKey('fileKey'), isFalse);
+      expect(
+        chunks.every((c) => (c['b64'] as String).length <= kMaxRoomFileChunkB64Len),
+        isTrue,
+      );
+      expect(kRoomsApplicationE2eImplemented, isFalse);
+
+      final msgs = await db.watchChannelMessages(h.generalId).first;
+      expect(msgs, hasLength(1));
+      expect((msgs.first['payload'] as Map)['type'], 'file');
+      final blob = await db.getFileBlob(msgs.first['id'] as String);
+      expect(blob, isNotNull);
+      expect(blob!['localPath'], isNotNull);
+    });
+
+    test('host assembles inbound room_file_chunk onto a path', () async {
+      final h = await makeHost();
+      await h.tx.bridge.handleInbound('g1', {
+        'type': 'room_join',
+        'roomId': hostId,
+        'guestName': 'G',
+        'guestPeerId': 'g1',
+      });
+      h.tx.sent.clear();
+      final raw = List<int>.generate(1000, (i) => i & 0xff);
+      final att = {
+        'name': 'chunk.bin',
+        'size': raw.length,
+        'mime': 'application/octet-stream',
+        'kind': 'file',
+        'thumb': null,
+        'width': 0,
+        'height': 0,
+        'duration': 0,
+      };
+      await h.tx.bridge.handleInbound('g1', {
+        'type': 'room_file_chunk',
+        'id': 'g1:1:x',
+        'roomId': hostId,
+        'channelId': h.generalId,
+        'offset': 0,
+        'total': raw.length,
+        'last': true,
+        'b64': base64Encode(raw),
+        'fromName': 'G',
+        'fromPeerId': 'g1',
+        'ts': 1,
+        'attachment': att,
+      });
+      final msgs = await db.watchChannelMessages(h.generalId).first;
+      expect(msgs, hasLength(1));
+      expect(msgs.first['peerId'], 'g1');
+      final blob = await db.getFileBlob(msgs.first['id'] as String);
+      expect(blob, isNotNull);
+      final relays = h.tx.ofType('room_file_chunk').toList();
+      expect(relays, isNotEmpty);
+      expect(relays.first['fromPeerId'], 'g1');
+      expect(h.tx.sent.every((s) => s.to != 'g1'), isTrue);
     });
   });
 }

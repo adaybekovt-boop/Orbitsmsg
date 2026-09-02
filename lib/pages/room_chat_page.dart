@@ -18,6 +18,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mime/mime.dart';
 
+import '../core/path_byte_stream.dart';
 import '../core/read_picked_bytes.dart';
 import '../peer/room_disclaimer.dart';
 import '../peer/room_manager.dart';
@@ -116,10 +117,9 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
   /// pickers on Android, which throws on the second).
   bool _roomAttachBusy = false;
 
-  /// Pick a file and send it into [channelId]. Native uses a path +
-  /// [readPickedBytes] (stat then read under the 12 MiB cap) so this
-  /// page stays free of `dart:io`. Web still needs picker bytes.
-  /// Rooms stay host-plaintext PeerJS — not Bare path-stream Drop.
+  /// Pick a file and send it into [channelId]. Native streams host-plaintext
+  /// 64 KiB chunks from the picker path (not one 12 MiB base64 frame). Web
+  /// still uses picker bytes + `room_msg` b64. Cap stays 12 MiB. No fileKey.
   Future<void> _pickRoomAttachment(String roomId, String channelId) async {
     if (_roomAttachBusy) return;
     _roomAttachBusy = true;
@@ -137,6 +137,31 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
       }
       if (picked == null || picked.files.isEmpty) return;
       final pf = picked.files.single;
+      final name = pf.name;
+      final mime = lookupMimeType(name) ?? 'application/octet-stream';
+      final kind = _classifyFileKind(mime);
+      final nativePath = pf.path;
+      if (!kIsWeb && nativePath != null && nativePath.isNotEmpty) {
+        final size = localPathLength(nativePath);
+        if (size == null) {
+          _toast('Не удалось прочитать файл');
+          return;
+        }
+        if (size > kMaxRoomFileRawBytes) {
+          final mb = (size / (1024 * 1024)).ceil();
+          _toast('Файл больше 12 МБ — отправка невозможна ($mb МБ).');
+          return;
+        }
+        await _rooms.sendRoomFileFromPath(
+          roomId,
+          channelId,
+          nativePath,
+          name: name,
+          mime: mime,
+          kind: kind,
+        );
+        return;
+      }
       final pickedBytes = await readPickedBytes(
         pf,
         maxRawBytes: kMaxRoomFileRawBytes,
@@ -151,10 +176,6 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
         _toast('Не удалось прочитать файл');
         return;
       }
-
-      final name = pf.name;
-      final mime = lookupMimeType(name) ?? 'application/octet-stream';
-      final kind = _classifyFileKind(mime);
 
       Uint8List? thumbBytes;
       var width = 0;

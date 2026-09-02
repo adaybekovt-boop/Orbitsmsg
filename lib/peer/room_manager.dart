@@ -18,6 +18,9 @@
 //   room_destroy         host → guests  {roomId}
 //   room_leave           guest → host   {roomId, guestPeerId}
 //   room_spatial_update  both           {roomId, peerId, x, y}  (host relays)
+//   room_file_chunk      both           {roomId, channelId, id, offset, total,
+//                                        b64, last, attachment?} host-plaintext
+//                                        path-stream (not one 12 MiB frame)
 //
 // Architecture mirrors `messaging_notifier` / `connections_notifier`: the
 // manager registers a [RoomBridge] on the connection registry (no provider
@@ -37,6 +40,8 @@ import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
+import '../core/attachment_store.dart';
+import '../core/path_byte_stream.dart';
 import '../state/connections_notifier.dart';
 import '../transport/peerjs_window.dart';
 import '../state/local_profile_provider.dart';
@@ -46,6 +51,7 @@ import '../utils/common.dart' show safeAvatarDataUrl;
 import 'helpers.dart';
 import 'peerjs_client.dart';
 import 'peer_server_core.dart';
+import 'room_file_store.dart';
 import 'room_invite.dart';
 import 'room_plaintext_gate.dart';
 import 'room_scoped_transport.dart';
@@ -115,6 +121,7 @@ const Set<String> kRoomPacketTypes = <String>{
   'room_destroy',
   'room_leave',
   'room_spatial_update',
+  'room_file_chunk',
 };
 
 /// Pure authorization check for an incoming room-voice media call (audit item
@@ -276,6 +283,18 @@ class RoomState {
 
 const Object _unset = Object();
 
+class _RoomFileTransfer {
+  _RoomFileTransfer({
+    required this.id,
+    required this.ts,
+    required this.attachment,
+  });
+
+  final String id;
+  final int ts;
+  final Map<String, Object?> attachment;
+}
+
 /// Validated content of a `room_msg`, regardless of kind (text/sticker/file).
 /// Built from an inbound packet (after sanitisation) and reused to derive both
 /// the DB payload ([payload]) and the host→guest relay fields ([wireFields]).
@@ -376,6 +395,13 @@ class RoomManager extends StateNotifier<RoomState> {
   /// `getStats` — a previous `recordPeerConnection` wrapper was dead code
   /// and was removed so it could not look like live protection.
   final SecurityMonitor _security = SecurityMonitor();
+
+  /// In-flight host-plaintext path-streamed room files, keyed by
+  /// `$roomId:$author:$channelId`. Never holds a fileKey.
+  final Map<String, RoomIncomingFile> _incomingRoomFiles =
+      <String, RoomIncomingFile>{};
+  final Map<String, _RoomFileTransfer> _incomingRoomMeta =
+      <String, _RoomFileTransfer>{};
 
   /// Delegates to the (possibly faked) transport. Named `_connections` for
   /// continuity — the method surface (sendRoomPacket/openReliable/hasReliable)
@@ -1002,6 +1028,143 @@ class RoomManager extends StateNotifier<RoomState> {
     }
   }
 
+  /// Native host-plaintext path-stream. Reads [path] in 64 KiB chunks and
+  /// sends `room_file_chunk` packets. Never a fileKey. Web/PeerJS byte
+  /// send stays [sendRoomFile]. Cap remains [kMaxRoomFileRawBytes].
+  Future<void> sendRoomFileFromPath(
+    String roomId,
+    String channelId,
+    String path, {
+    required String name,
+    required String mime,
+    required String kind,
+    int width = 0,
+    int height = 0,
+    double durationSec = 0,
+  }) async {
+    if (roomId.isEmpty || channelId.isEmpty) return;
+    final trimmed = path.trim();
+    if (trimmed.isEmpty || trimmed.contains('://')) return;
+    final size = localPathLength(trimmed);
+    if (size == null || size <= 0 || size > kMaxRoomFileRawBytes) return;
+    if (name.isEmpty || mime.isEmpty || kind.isEmpty) return;
+    final self = _ref.read(localProfileProvider);
+    final selfId = self?.peerId ?? _selfPeerId();
+    if (selfId.isEmpty) return;
+
+    final ts = now();
+    final id = '$selfId:$ts:${_shortRand()}';
+    final fromName = self?.displayName ?? '';
+    final safeName = _clipField(name, 200);
+    final persistPath = await persistLocalAttachmentPath(
+      trimmed,
+      fileName: safeName,
+    );
+
+    final attachment = <String, Object?>{
+      'name': safeName,
+      'size': size,
+      'mime': mime,
+      'kind': kind,
+      'thumb': null,
+      'width': width,
+      'height': height,
+      'duration': durationSec,
+    };
+
+    await db.saveFileBlobFromPath(
+      id,
+      persistPath,
+      mime: mime,
+      name: safeName,
+      kind: kind,
+      size: size,
+      width: width,
+      height: height,
+      duration: durationSec.toInt(),
+    );
+    await db.saveMessage({
+      'id': id,
+      'peerId': selfId,
+      'roomId': roomId,
+      'channelId': channelId,
+      'timestamp': ts,
+      'direction': 'out',
+      'status': 'pending',
+      'payload': {
+        'type': 'file',
+        'attachment': attachment,
+        'fromName': fromName,
+      },
+    });
+
+    final ok = await _dispatchRoomFileFromPath(
+      persistPath,
+      id: id,
+      roomId: roomId,
+      channelId: channelId,
+      attachment: attachment,
+      fromName: fromName,
+      fromPeerId: selfId,
+      ts: ts,
+    );
+    if (ok) {
+      await db.updateMessageStatus(id, 'sent');
+    }
+  }
+
+  Future<bool> _dispatchRoomFileFromPath(
+    String path, {
+    required String id,
+    required String roomId,
+    required String channelId,
+    required Map<String, Object?> attachment,
+    required String fromName,
+    required String fromPeerId,
+    required int ts,
+  }) async {
+    final total = localPathLength(path);
+    if (total == null || total <= 0 || total > kMaxRoomFileRawBytes) {
+      return false;
+    }
+    final stream = openLocalPathByteStream(path);
+    if (stream == null) return false;
+    var offset = 0;
+    var sent = true;
+    await for (final piece in stream) {
+      var i = 0;
+      while (i < piece.length) {
+        final end = i + kRoomFileChunkBytes > piece.length
+            ? piece.length
+            : i + kRoomFileChunkBytes;
+        final slice = piece.sublist(i, end);
+        final last = offset + slice.length >= total;
+        final packet = <String, Object?>{
+          'type': kRoomFileChunkType,
+          'id': id,
+          'roomId': roomId,
+          'channelId': channelId,
+          'offset': offset,
+          'total': total,
+          'last': last,
+          'b64': base64Encode(slice),
+          'fromName': fromName,
+          'fromPeerId': fromPeerId,
+          'ts': ts,
+          if (offset == 0) 'attachment': attachment,
+        };
+        if (!_dispatchRoomPacket(packet)) {
+          sent = false;
+          break;
+        }
+        offset += slice.length;
+        i = end;
+      }
+      if (!sent) break;
+    }
+    return sent && offset >= total;
+  }
+
   /// Route an outbound `room_msg` packet: a host broadcasts to all guests; a
   /// guest sends to the host (who relays). Shared by text/sticker/file sends
   /// AND by the room outbox flush. Returns whether the packet was accepted by
@@ -1099,6 +1262,25 @@ class RoomManager extends StateNotifier<RoomState> {
           if (att is! Map) continue;
           try {
             final blob = await db.getFileBlob(id);
+            final localPath = blob?['localPath'];
+            if (localPath is String &&
+                localPath.isNotEmpty &&
+                !localPath.contains('://')) {
+              final streamed = await _dispatchRoomFileFromPath(
+                localPath,
+                id: id,
+                roomId: roomId,
+                channelId: channelId,
+                attachment: Map<String, Object?>.from(att),
+                fromName: fromName,
+                fromPeerId: r['peerId'] as String? ?? '',
+                ts: ts,
+              );
+              if (!streamed) break;
+              await db.updateMessageStatus(id, 'sent');
+              delivered++;
+              continue;
+            }
             final bytes = blob?['blob'];
             if (bytes is! Uint8List || bytes.isEmpty) continue;
             final b64 = base64Encode(bytes);
@@ -1371,6 +1553,9 @@ class RoomManager extends StateNotifier<RoomState> {
         case 'room_spatial_update':
           await _onSpatialUpdate(remoteId, packet);
           break;
+        case 'room_file_chunk':
+          await _onRoomFileChunk(remoteId, packet);
+          break;
       }
     } catch (e) {
       // Malformed/unexpected room packets must never crash the connection.
@@ -1412,6 +1597,173 @@ class RoomManager extends StateNotifier<RoomState> {
       );
       _applySpatialAudio(peerId);
     }
+  }
+
+  /// Host-plaintext path-streamed file chunk. Same star-topology rules as
+  /// [room_msg]: host canonicalises author/id; guests accept only the host.
+  /// Chunks write at [offset] on disk (or a bounded in-memory buffer on web).
+  Future<void> _onRoomFileChunk(
+    String remoteId,
+    Map<String, Object?> packet,
+  ) async {
+    final roomId = state.roomId;
+    if (roomId == null) return;
+    final channelId = (packet['channelId'] as String?) ?? '';
+    if (channelId.isEmpty) return;
+    final offset = (packet['offset'] as num?)?.toInt() ?? -1;
+    final total = (packet['total'] as num?)?.toInt() ?? 0;
+    if (offset < 0 || total <= 0 || total > kMaxRoomFileRawBytes) return;
+    if (offset + 1 > total) return;
+    final b64 = packet['b64'];
+    if (b64 is! String ||
+        b64.isEmpty ||
+        b64.length > kMaxRoomFileChunkB64Len) {
+      return;
+    }
+    List<int> bytes;
+    try {
+      bytes = base64Decode(b64);
+    } catch (_) {
+      return;
+    }
+    if (bytes.isEmpty || offset + bytes.length > total) return;
+    final last = packet['last'] == true || offset + bytes.length >= total;
+    final fromName = _clampName(packet['fromName'] as String?);
+    final packetId = packet['id'] as String? ?? '';
+    final key = state.role == RoomRole.guest && packetId.isNotEmpty
+        ? '$roomId:$packetId'
+        : '$roomId:$remoteId:$channelId';
+
+    _RoomFileTransfer? meta = _incomingRoomMeta[key];
+    if (state.role == RoomRole.host) {
+      if (!state.serverActive) return;
+      if (!state.guestPeerIds.contains(remoteId)) return;
+      if (!await _channelExists(roomId, channelId)) return;
+      if (meta == null) {
+        if (offset != 0) return;
+        if (_security.recordMessage(remoteId, now())) {
+          debugPrint('[room] flood guard: dropped file from $remoteId');
+          return;
+        }
+        final att = _sanitizeRoomAttachment(packet['attachment']);
+        if (att == null) return;
+        final ts = now();
+        meta = _RoomFileTransfer(
+          id: _canonicalMsgId(remoteId, ts),
+          ts: ts,
+          attachment: att,
+        );
+        _incomingRoomMeta[key] = meta;
+      }
+    } else if (state.role == RoomRole.guest) {
+      if (remoteId != state.hostPeerId) return;
+      final author = (packet['fromPeerId'] as String?) ?? '';
+      if (author.isEmpty) return;
+      if (!await _channelExists(roomId, channelId)) return;
+      if (meta == null) {
+        if (offset != 0) return;
+        final att = _sanitizeRoomAttachment(packet['attachment']);
+        if (att == null) return;
+        final ts = (packet['ts'] as num?)?.toInt() ?? now();
+        final rawId =
+            (packet['id'] as String?) ?? _canonicalMsgId(author, ts);
+        meta = _RoomFileTransfer(
+          id: db.scopedRoomMessageId(roomId, rawId),
+          ts: ts,
+          attachment: att,
+        );
+        _incomingRoomMeta[key] = meta;
+      }
+    } else {
+      return;
+    }
+
+    final author = state.role == RoomRole.host
+        ? remoteId
+        : ((packet['fromPeerId'] as String?) ?? remoteId);
+    var incoming = _incomingRoomFiles[key];
+    if (incoming == null) {
+      if (offset != 0) return;
+      incoming = await openRoomIncomingFile(
+        id: meta.id,
+        name: meta.attachment['name'] as String? ?? 'file',
+        totalBytes: total,
+      );
+      if (incoming == null) return;
+      _incomingRoomFiles[key] = incoming;
+    }
+    await incoming.writeChunk(offset, bytes);
+
+    if (state.role == RoomRole.host) {
+      _broadcastToGuests({
+        'type': kRoomFileChunkType,
+        'id': meta.id,
+        'roomId': roomId,
+        'channelId': channelId,
+        'offset': offset,
+        'total': total,
+        'last': last,
+        'b64': b64,
+        'fromName': fromName,
+        'fromPeerId': author,
+        'ts': meta.ts,
+        if (offset == 0) 'attachment': meta.attachment,
+      }, except: remoteId);
+    }
+
+    if (!last && !incoming.isComplete) return;
+    if (!incoming.isComplete) {
+      await incoming.close();
+      _incomingRoomFiles.remove(key);
+      _incomingRoomMeta.remove(key);
+      return;
+    }
+    final path = await incoming.finish();
+    final mem = incoming.assembledBytes;
+    await incoming.close();
+    _incomingRoomFiles.remove(key);
+    _incomingRoomMeta.remove(key);
+    final attachment = meta.attachment;
+    final transferId = meta.id;
+    final ts = meta.ts;
+    if (path != null && path.isNotEmpty) {
+      await db.saveFileBlobFromPath(
+        transferId,
+        path,
+        mime: attachment['mime'] as String?,
+        name: attachment['name'] as String?,
+        kind: attachment['kind'] as String? ?? 'file',
+        size: total,
+        width: (attachment['width'] as num?)?.toInt() ?? 0,
+        height: (attachment['height'] as num?)?.toInt() ?? 0,
+        duration: (attachment['duration'] as num?)?.toInt() ?? 0,
+      );
+    } else if (mem != null &&
+        mem.isNotEmpty &&
+        mem.length <= kMaxRoomFileRawBytes) {
+      await db.saveFileBlob(
+        transferId,
+        Uint8List.fromList(mem),
+        mime: attachment['mime'] as String? ?? 'application/octet-stream',
+        name: attachment['name'] as String? ?? 'file',
+        kind: attachment['kind'] as String? ?? 'file',
+        size: total,
+      );
+    }
+    await db.saveMessage({
+      'id': transferId,
+      'peerId': author,
+      'roomId': roomId,
+      'channelId': channelId,
+      'timestamp': ts,
+      'direction': 'in',
+      'status': 'delivered',
+      'payload': {
+        'type': 'file',
+        'attachment': attachment,
+        'fromName': fromName,
+      },
+    });
   }
 
   /// Host: a guest announced itself. Persist them, send them the channel set
@@ -2016,8 +2368,11 @@ class RoomManager extends StateNotifier<RoomState> {
   void dispose() {
     unawaited(_stopVoice());
     _stopRoomOutboxTimer();
-    // Release the embedded server + room-scoped client; skip rebinding the
-    // bridge since this manager is going away.
+    for (final f in _incomingRoomFiles.values) {
+      unawaited(f.close());
+    }
+    _incomingRoomFiles.clear();
+    _incomingRoomMeta.clear();
     unawaited(_teardownSelfHost(rebind: false));
     _spatialAudio.dispose();
     super.dispose();
