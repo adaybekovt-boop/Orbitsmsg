@@ -614,7 +614,11 @@ class DualStackBridge {
       );
       if (_isOwnDeviceTransport(rememberId) &&
           discoverySecretFor(rememberId) != null) {
-        unawaited(dial(rememberId));
+        unawaited(() async {
+          try {
+            await dial(rememberId);
+          } catch (_) {}
+        }());
       }
     }
     final record = journal.append(
