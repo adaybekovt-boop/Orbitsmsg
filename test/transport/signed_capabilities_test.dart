@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/spki_codec.dart';
 import 'package:orbits_flutter/transport/capabilities.dart';
+import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/hello_capabilities.dart';
 import 'package:orbits_flutter/transport/signed_capabilities.dart';
 
@@ -94,5 +95,76 @@ void main() {
       'caps': record.toWire(),
     });
     expect(remoteCapabilityCache.get('ORBIT-BBBBBBBBBBBBBBBB'), isNull);
+  });
+
+  test('identity key signs device binding; Noise is not used', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final names = advertisedLocalCapabilityWireNames();
+    expect(names, contains('mailbox-v1'));
+    expect(names, contains('hypercore-v1'));
+    expect(names, contains('multi-device-v1'));
+    expect(names, contains('peerjs-v4'));
+    expect(names, contains('hyperswarm-v1'));
+    expect(names, isNot(contains('://')));
+
+    final binding = await issueDeviceBinding(
+      identityPublicKey: spki,
+      deviceId: 'local-device',
+      transportPublicKey:
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 1)),
+      hypercorePublicKey:
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 2)),
+      capabilities: names,
+      createdAt: 1,
+      expiresAt: 10,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    expect(await verifyDeviceBinding(binding), isTrue);
+    expect(binding.capabilities, names);
+    expect(
+      binding.signatureByIdentityKey,
+      isNot(equals(Uint8List(0))),
+    );
+
+    final capRecord = await issueCapabilityRecord(
+      peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+      deviceId: 'local-device',
+      capabilities: advertisedLocalCapabilities(),
+      issuedAt: 1,
+      expiresAt: 10,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    expect(
+      binding.signatureByIdentityKey,
+      isNot(equals(capRecord.signature)),
+    );
+
+    final tampered = DeviceBinding(
+      version: binding.version,
+      identityPublicKey: binding.identityPublicKey,
+      deviceId: binding.deviceId,
+      transportPublicKey: binding.transportPublicKey,
+      hypercorePublicKey: binding.hypercorePublicKey,
+      capabilities: const ['hyperswarm-v1', 'peerjs-v4'],
+      createdAt: binding.createdAt,
+      expiresAt: binding.expiresAt,
+      signatureByIdentityKey: binding.signatureByIdentityKey,
+    );
+    expect(await verifyDeviceBinding(tampered), isFalse);
+    await expectLater(
+      issueDeviceBinding(
+        identityPublicKey: spki,
+        deviceId: 'local-device',
+        transportPublicKey: Uint8List.fromList(const [1]),
+        hypercorePublicKey: Uint8List.fromList(const [2]),
+        capabilities: const ['https://evil.example/cap'],
+        createdAt: 1,
+        expiresAt: 10,
+        sign: (payload) async => signP256Ecdsa(pair, payload),
+      ),
+      throwsA(isA<ArgumentError>()),
+    );
   });
 }

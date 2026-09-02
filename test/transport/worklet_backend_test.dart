@@ -49,6 +49,11 @@ void main() {
     expect(src, contains('spawnWorkletTransport(backend: preferred)'));
     expect(src, contains("backend == 'hyperswarm'"));
     expect(src, contains('httpStoragePeerClient'));
+    expect(src, contains('advertisedLocalCapabilities'));
+    expect(src, contains('issueLocalDeviceBinding'));
+    expect(src, contains('advertisedLocalCapabilityWireNames'));
+    expect(src, isNot(contains("capabilities: const ['hyperswarm-v1', 'peerjs-v4']")));
+    expect(src, isNot(contains('caps?.signature')));
     expect(src, contains('PushGateway'));
     expect(src, contains('ingestFcm'));
     expect(src, contains('acceptPushToken'));

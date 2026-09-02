@@ -68,3 +68,10 @@ Set<TransportCapability> advertisedLocalCapabilities() => {
       TransportCapability.hypercoreV1,
       TransportCapability.multiDeviceV1,
     };
+
+/// Sorted wire names for [DeviceBinding.capabilities]. Never URLs.
+List<String> advertisedLocalCapabilityWireNames() {
+  final names = advertisedLocalCapabilities().map((c) => c.wireName).toList()
+    ..sort();
+  return names;
+}

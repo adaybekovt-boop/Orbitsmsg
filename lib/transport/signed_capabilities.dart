@@ -10,6 +10,7 @@ import 'package:pointycastle/export.dart' as pc;
 import '../core/identity_key.dart';
 import '../core/spki_codec.dart';
 import 'capabilities.dart';
+import 'device_binding.dart';
 
 const String kCapabilityRecordInfo = 'orbits-capabilities-v1';
 
@@ -143,6 +144,102 @@ Future<bool> verifyCapabilityRecord(CapabilityRecord record) async {
     record.identityPublicKey,
     record.signedPayload(),
     record.signature,
+  );
+}
+
+bool _capabilityNameIsSafe(String name) {
+  if (name.isEmpty || name.length > 64) return false;
+  if (name.contains('://') ||
+      name.contains('fileKey') ||
+      name.contains('peerId') ||
+      name.contains('rootKey') ||
+      name.contains('opaqueWakeToken')) {
+    return false;
+  }
+  return true;
+}
+
+/// Identity-signs [DeviceBinding.signedPayload]. Not the capability-record
+/// signature and not a Noise key.
+Future<DeviceBinding> issueDeviceBinding({
+  required Uint8List identityPublicKey,
+  required String deviceId,
+  required Uint8List transportPublicKey,
+  required Uint8List hypercorePublicKey,
+  required List<String> capabilities,
+  required int createdAt,
+  required int expiresAt,
+  required Future<Uint8List> Function(List<int> payload) sign,
+}) async {
+  final names = [...capabilities]..sort();
+  if (deviceId.isEmpty ||
+      identityPublicKey.isEmpty ||
+      transportPublicKey.isEmpty ||
+      hypercorePublicKey.isEmpty ||
+      names.isEmpty ||
+      names.any((n) => !_capabilityNameIsSafe(n))) {
+    throw ArgumentError('device binding: refusing unsafe fields');
+  }
+  final draft = DeviceBinding(
+    version: kDeviceBindingVersion,
+    identityPublicKey: identityPublicKey,
+    deviceId: deviceId,
+    transportPublicKey: transportPublicKey,
+    hypercorePublicKey: hypercorePublicKey,
+    capabilities: names,
+    createdAt: createdAt,
+    expiresAt: expiresAt,
+    signatureByIdentityKey: Uint8List(0),
+  );
+  final signature = await sign(draft.signedPayload());
+  return DeviceBinding(
+    version: kDeviceBindingVersion,
+    identityPublicKey: identityPublicKey,
+    deviceId: deviceId,
+    transportPublicKey: transportPublicKey,
+    hypercorePublicKey: hypercorePublicKey,
+    capabilities: names,
+    createdAt: createdAt,
+    expiresAt: expiresAt,
+    signatureByIdentityKey: signature,
+  );
+}
+
+Future<DeviceBinding> issueLocalDeviceBinding({
+  required String deviceId,
+  required Uint8List transportPublicKey,
+  required Uint8List hypercorePublicKey,
+  required List<String> capabilities,
+  required int createdAt,
+  required int expiresAt,
+}) async {
+  return issueDeviceBinding(
+    identityPublicKey: await exportIdentityPubSpki(),
+    deviceId: deviceId,
+    transportPublicKey: transportPublicKey,
+    hypercorePublicKey: hypercorePublicKey,
+    capabilities: capabilities,
+    createdAt: createdAt,
+    expiresAt: expiresAt,
+    sign: signBytes,
+  );
+}
+
+Future<bool> verifyDeviceBinding(DeviceBinding binding) async {
+  if (binding.expiresAt <= binding.createdAt) return false;
+  if (binding.identityPublicKey.isEmpty ||
+      binding.transportPublicKey.isEmpty ||
+      binding.hypercorePublicKey.isEmpty ||
+      binding.signatureByIdentityKey.isEmpty) {
+    return false;
+  }
+  if (binding.capabilities.any((n) => !_capabilityNameIsSafe(n))) {
+    return false;
+  }
+  return verifyIdentitySignedBytes(
+    binding.identityPublicKey,
+    binding.signedPayload(),
+    binding.signatureByIdentityKey,
   );
 }
 

@@ -18,10 +18,10 @@ import '../push/wake_service.dart';
 import '../replication/memory_journal.dart';
 import '../state/auth_notifier.dart';
 import '../state/connections_notifier.dart';
-import 'capabilities.dart';
 import 'device_binding.dart';
 import 'dht_bootstrap.dart';
 import 'discovery_secret_store.dart';
+import 'hello_capabilities.dart';
 import 'journal_file_io.dart' if (dart.library.html) 'journal_file_stub.dart';
 import 'loopback_transport.dart';
 import 'native_rollback.dart';
@@ -110,13 +110,7 @@ class NativeTransportHost {
       caps = await issueLocalCapabilityRecord(
         peerId: auth.user.peerId,
         deviceId: 'local-device',
-        capabilities: {
-          TransportCapability.hyperswarmV1,
-          TransportCapability.peerjsV4,
-          TransportCapability.mailboxV1,
-          TransportCapability.hypercoreV1,
-          TransportCapability.multiDeviceV1,
-        },
+        capabilities: advertisedLocalCapabilities(),
         issuedAt: DateTime.now().millisecondsSinceEpoch,
         expiresAt: DateTime.now().millisecondsSinceEpoch + 86400000 * 30,
       );
@@ -131,19 +125,32 @@ class NativeTransportHost {
     final hypercorePublicKey = derivedHypercorePublicPlaceholder(seed);
     transportNoiseSeedStore.rememberPublished(transportPublicKey);
     try {
-      await transport!.publish(
-        DeviceBinding(
+      final capNames = advertisedLocalCapabilityWireNames();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      DeviceBinding binding;
+      try {
+        binding = await issueLocalDeviceBinding(
+          deviceId: 'local-device',
+          transportPublicKey: transportPublicKey,
+          hypercorePublicKey: hypercorePublicKey,
+          capabilities: capNames,
+          createdAt: now,
+          expiresAt: now + 86400000 * 30,
+        );
+      } catch (_) {
+        binding = DeviceBinding(
           version: kDeviceBindingVersion,
           identityPublicKey: caps?.identityPublicKey ?? Uint8List(0),
           deviceId: 'local-device',
           transportPublicKey: transportPublicKey,
           hypercorePublicKey: hypercorePublicKey,
-          capabilities: const ['hyperswarm-v1', 'peerjs-v4'],
-          createdAt: DateTime.now().millisecondsSinceEpoch,
-          expiresAt: DateTime.now().millisecondsSinceEpoch + 86400000 * 30,
-          signatureByIdentityKey: caps?.signature ?? Uint8List(0),
-        ),
-      );
+          capabilities: capNames,
+          createdAt: now,
+          expiresAt: now + 86400000 * 30,
+          signatureByIdentityKey: Uint8List(0),
+        );
+      }
+      await transport!.publish(binding);
     } catch (_) {}
 
     final cap = MailboxCapability(
