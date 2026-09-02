@@ -18,6 +18,7 @@ import '../mailbox/blind_store.dart';
 import '../mailbox/mailbox_pump.dart';
 import '../mailbox/storage_peer_client.dart';
 import '../peer/helpers.dart';
+import '../peer/wire_transport.dart' show outboundWireMapIsSendable;
 import '../push/opaque_wake.dart';
 import '../replication/drift_projector.dart';
 import '../replication/file_journal.dart';
@@ -346,10 +347,13 @@ class DualStackBridge {
   Future<bool> _sendEncryptedOne(String peerId, Object? msg) async {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return false;
+    if (msg is Map && !outboundWireMapIsSendable(msg)) return false;
     if (!await _ensureNativeSendReady(norm)) {
       if (msg is Map &&
           (msg['type'] == 'wireHello' || msg['type'] == 'wireRekey')) {
-        return await depositMailbox(jsonPayload(Map<String, Object?>.from(msg)));
+        // Offline hello/rekey must wait for connect. Mailbox is
+        // encrypted bytes only — never plaintext JSON hellos.
+        return false;
       }
       if (!isWireReady(norm)) return false;
       final queued = await encryptWirePayload(norm, msg);
@@ -947,6 +951,7 @@ class DualStackBridge {
 
   Future<bool> sendEphemeral(String peerId, Object? msg) async {
     final norm = normalizePeerId(peerId);
+    if (msg is Map && !outboundWireMapIsSendable(msg)) return false;
     if (!await _ensureNativeSendReady(norm) || !isWireReady(norm)) {
       return false;
     }

@@ -171,6 +171,10 @@ class WireTransport {
     final norm = normalizePeerId(remoteId);
     try {
       final result = await initWireSession(peerId: norm, myPeerId: selfPeerId());
+      // Handshake hello is not an encrypted chat map — do not send via
+      // sendEncryptedOn. Still refuse a secret-bearing envelope (same
+      // walk as outboundWireMapIsSendable for wireHello).
+      if (!helloEnvelopeIsSafe(result.hello)) return;
       try {
         conn.send(result.hello);
       } catch (_) {}

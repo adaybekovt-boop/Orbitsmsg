@@ -10,6 +10,7 @@ const {
   roomEventFromNativePacket,
   hydrateFromJournal,
   membershipEventFromJournalRow,
+  objectHasLiveForbiddenKeys,
   STRIP,
   JOURNAL_FORBIDDEN,
 } = require('../src/autobase')
@@ -548,6 +549,132 @@ test('autobase.hydrate IPC applies supplied rows and ignores bodies', async () =
     const dumped = JSON.stringify(result)
     assert.equal(dumped.includes('nope'), false)
     assert.equal(dumped.includes('"hi"'), false)
+  } finally {
+    await worklet.stop()
+  }
+})
+
+test('applyFromPacket refuses room_join with top-level fileKey', () => {
+  const proj = new AutobaseProjection()
+  const event = proj.applyFromPacket(
+    {
+      type: 'room_join',
+      peerId: 'hostile',
+      guestName: 'Eve',
+      fileKey: 'smuggle-file',
+      abWriter: 'a',
+      abSeq: 0,
+    },
+    'fallback',
+  )
+  assert.equal(event, null)
+  const snap = proj.snapshot()
+  assert.deepEqual(snap.members, {})
+  const dumped = JSON.stringify(snap)
+  assert.equal(dumped.includes('fileKey'), false)
+  assert.equal(dumped.includes('smuggle-file'), false)
+})
+
+test('applyFromPacket refuses room_msg with nested discoverySecret', () => {
+  const proj = new AutobaseProjection()
+  const event = proj.applyFromPacket(
+    {
+      type: 'room_msg',
+      id: 'm-bad',
+      text: 'host-plaintext',
+      meta: { discoverySecret: 'leaked-topic' },
+      abWriter: 'a',
+      abSeq: 1,
+    },
+    'fallback',
+  )
+  assert.equal(event, null)
+  assert.deepEqual(proj.snapshot().messages, [])
+})
+
+test('applyFromPacket still joins a legit room_join', () => {
+  const proj = new AutobaseProjection()
+  const event = proj.applyFromPacket(
+    {
+      type: 'room_join',
+      peerId: 'ORBIT-BB',
+      guestName: 'Bee',
+      abWriter: 'a',
+      abSeq: 0,
+    },
+    'fallback',
+  )
+  assert.equal(event.kind, 'membership')
+  assert.equal(event.payload.peerId, 'ORBIT-BB')
+  assert.equal(proj.snapshot().members['ORBIT-BB'], 'Bee')
+})
+
+test('applyFromPacket still records host-plaintext room_msg text', () => {
+  assert.equal(STRIP.has('text'), false)
+  assert.equal(
+    objectHasLiveForbiddenKeys({
+      type: 'room_msg',
+      id: 'm1',
+      text: 'host-plaintext',
+      peerId: 'ORBIT-AA',
+      b64: 'AQID',
+      dataB64: 'xx',
+      bytes: [1],
+    }),
+    false,
+  )
+  const proj = new AutobaseProjection()
+  const event = proj.applyFromPacket(
+    {
+      type: 'room_msg',
+      id: 'm1',
+      text: 'host-plaintext',
+      abWriter: 'a',
+      abSeq: 1,
+    },
+    'fallback',
+  )
+  assert.equal(event.kind, 'message')
+  assert.equal(event.payload.text, 'host-plaintext')
+  assert.equal(proj.snapshot().messages[0].text, 'host-plaintext')
+})
+
+test('worklet control path refuses hostile fileKey membership', async () => {
+  const worklet = new Worklet()
+  await worklet.start({ peerId: 'ORBIT-AA' })
+  try {
+    worklet._applyControlAutobase(
+      Buffer.from(
+        JSON.stringify({
+          type: 'room_join',
+          peerId: 'hostile',
+          guestName: 'Eve',
+          fileKey: 'smuggle-file',
+          abWriter: 'a',
+          abSeq: 0,
+        }),
+      ),
+      'ORBIT-AA',
+    )
+    worklet._onFrame(
+      'peer-x',
+      'control',
+      Buffer.from(
+        JSON.stringify({
+          type: 'room_join',
+          peerId: 'hostile2',
+          guestName: 'Eve2',
+          fileKey: 'smuggle2',
+          abWriter: 'b',
+          abSeq: 1,
+        }),
+      ),
+    )
+    const snap = worklet._autobase.snapshot()
+    assert.deepEqual(snap.members, {})
+    const dumped = JSON.stringify(snap)
+    assert.equal(dumped.includes('fileKey'), false)
+    assert.equal(dumped.includes('smuggle'), false)
   } finally {
     await worklet.stop()
   }

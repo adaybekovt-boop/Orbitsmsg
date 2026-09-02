@@ -21,13 +21,13 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "cf91ccb49f4e258451c18470c528448c048d58b2fb90f60f261e2600c6325b91"
+          "content": "e85901d4d087c47d5d979751be1465f258c394c9a3b22a1ac171d4a69806254a"
         }
       ],
       "properties": [
         {
           "name": "pinnedWorkletSha256",
-          "value": "cf91ccb49f4e258451c18470c528448c048d58b2fb90f60f261e2600c6325b91"
+          "value": "e85901d4d087c47d5d979751be1465f258c394c9a3b22a1ac171d4a69806254a"
         },
         {
           "name": "remoteJs",
@@ -57,13 +57,13 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "761ff7901da6e08c898cbee27fca675977d7d885438f63931801f770918e16c8"
+          "content": "5c82009d17035249860105d22621861998bff977db9f050c8c108a0314aeb770"
         }
       ],
       "properties": [
         {
           "name": "pinnedSourceSha256",
-          "value": "761ff7901da6e08c898cbee27fca675977d7d885438f63931801f770918e16c8"
+          "value": "5c82009d17035249860105d22621861998bff977db9f050c8c108a0314aeb770"
         },
         {
           "name": "remoteJs",

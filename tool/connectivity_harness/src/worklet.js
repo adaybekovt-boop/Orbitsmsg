@@ -22,7 +22,7 @@ const { contactDiscoveryTopic } = require('./discovery')
 const { LoopbackBackend } = require('./loopback')
 const { REQUEST, RESPONSE, EVENT, encode, Decoder } = require('./ipc')
 const { CorestoreJournal } = require('./corestore_journal')
-const { AutobaseProjection } = require('./autobase')
+const { AutobaseProjection, objectHasLiveForbiddenKeys } = require('./autobase')
 
 const FILE_CHUNK = 64 * 1024
 
@@ -459,7 +459,9 @@ class Worklet {
       if (this._handleIncomingFile(peerId, body) === true) return
     }
     if (channel === 'control') {
-      this._autobase.applyFromPacket(body, peerId)
+      if (!objectHasLiveForbiddenKeys(body)) {
+        this._autobase.applyFromPacket(body, peerId)
+      }
     }
     this._emit('frame', { peerId, channel, body, frameB64 })
   }
@@ -618,6 +620,7 @@ class Worklet {
   _applyControlAutobase(payload, fallbackWriter) {
     try {
       const body = JSON.parse(payload.toString('utf8'))
+      if (objectHasLiveForbiddenKeys(body)) return
       this._autobase.applyFromPacket(body, fallbackWriter)
     } catch {
       // binary / non-JSON control frames are not Autobase events

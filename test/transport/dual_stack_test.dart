@@ -248,6 +248,18 @@ void main() {
     expect(sendDrop, contains('conn.send'));
     expect(sendDrop, contains('replicationValueIsSafe'));
 
+    final sendFileFromPath = slice(
+      'Future<bool> sendFileFromPath',
+      'bool sendRoomPacket',
+    );
+    expect(sendFileFromPath, contains("contains('://')"));
+    expect(sendFileFromPath, contains('return false'));
+    expect(sendFileFromPath, contains('_nativeCarrierFor'));
+    final schemeIdx = sendFileFromPath.indexOf("contains('://')");
+    final dualCall = sendFileFromPath.indexOf('dual.sendFileFromPath');
+    expect(schemeIdx, greaterThanOrEqualTo(0));
+    expect(dualCall, greaterThan(schemeIdx));
+
     final sendRoomPacket = slice(
       'bool sendRoomPacket',
       'Future<bool> sendAutobaseEvent',

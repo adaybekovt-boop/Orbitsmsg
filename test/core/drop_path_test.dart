@@ -105,6 +105,25 @@ void main() {
     expect(peerjsFallback, greaterThan(nativeCall));
   });
 
+  test('ConnectionsNotifier.sendFileFromPath refuses :// before dual', () {
+    final src = File('lib/state/connections_notifier.dart').readAsStringSync();
+    expect(src, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(src, isNot(contains('peerjsAllowedOnNative()')));
+
+    String slice(String start, String end) => src.split(start)[1].split(end)[0];
+    final sendPath = slice(
+      'Future<bool> sendFileFromPath',
+      'bool sendRoomPacket',
+    );
+    expect(sendPath, contains("contains('://')"));
+    expect(sendPath, contains('return false'));
+    expect(sendPath, contains('_nativeCarrierFor'));
+    final schemeIdx = sendPath.indexOf("contains('://')");
+    final dualCall = sendPath.indexOf('dual.sendFileFromPath');
+    expect(schemeIdx, greaterThanOrEqualTo(0));
+    expect(dualCall, greaterThan(schemeIdx));
+  });
+
   test('sendDropFileFromFilesystem refuses :// before File(path)', () {
     final src = File('lib/state/drop_path_send_io.dart').readAsStringSync();
     expect(src, contains("path.isEmpty || path.contains('://')"));

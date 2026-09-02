@@ -1,8 +1,14 @@
 // PeerJS inbound wireHello / wireRekey must refuse a secret-bearing
 // envelope *before* [acceptWireHello]. Caps caching already dropped
-// forbidden keys; the handshake itself must not run.
+// forbidden keys; the handshake itself must not run. [acceptHello]
+// must apply the same envelope walk before reading pub / allocating.
+
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbits_flutter/core/feature_flags.dart';
+import 'package:orbits_flutter/core/key_store.dart';
+import 'package:orbits_flutter/core/wire_session.dart';
 import 'package:orbits_flutter/messaging/message_protocol.dart';
 import 'package:orbits_flutter/transport/hello_capabilities.dart';
 import 'package:orbits_flutter/transport/layers.dart';
@@ -233,6 +239,116 @@ void main() {
       // not consumed as a refused hello.
       expect(consumed, isFalse);
       expect(unexpected, hasLength(1));
+    });
+  });
+
+  group('acceptHello envelope scrub', () {
+    setUp(() {
+      setKeyStore(InMemoryKeyStore());
+      resetFlagsForTests();
+      resetSessionsForTests();
+    });
+
+    final throwsForbiddenFields = throwsA(
+      isA<FormatException>().having(
+        (e) => e.message,
+        'message',
+        contains('forbidden fields'),
+      ),
+    );
+
+    void expectNoSession(String peerId) {
+      expect(getVerification(peerId), isNull);
+      expect(isReady(peerId), isFalse);
+    }
+
+    test('hostile extra.fileKey with pub throws forbidden-fields, no session',
+        () async {
+      await expectLater(
+        acceptHello(
+          peerId: 'ORBIT-PEER',
+          myPeerId: 'ORBIT-SELF',
+          hello: <String, Object?>{
+            'type': 'wireHello',
+            'v': 3,
+            'pub': 'dGVzdA==',
+            'extra': <String, Object?>{'fileKey': 'x'},
+          },
+        ),
+        throwsForbiddenFields,
+      );
+      expectNoSession('ORBIT-PEER');
+    });
+
+    test('hostile nested kek throws and does not allocate a session', () async {
+      await expectLater(
+        acceptHello(
+          peerId: 'ORBIT-PEER',
+          myPeerId: 'ORBIT-SELF',
+          hello: <String, Object?>{
+            'type': 'wireHello',
+            'v': 3,
+            'pub': 'dGVzdA==',
+            'nested': <String, Object?>{'kek': 'x'},
+          },
+        ),
+        throwsForbiddenFields,
+      );
+      expectNoSession('ORBIT-PEER');
+    });
+
+    test('hostile opaqueWakeToken throws and does not allocate a session',
+        () async {
+      await expectLater(
+        acceptHello(
+          peerId: 'ORBIT-PEER',
+          myPeerId: 'ORBIT-SELF',
+          hello: <String, Object?>{
+            'type': 'wireHello',
+            'v': 3,
+            'pub': 'dGVzdA==',
+            'wake': <String, Object?>{'opaqueWakeToken': 'tok'},
+          },
+        ),
+        throwsForbiddenFields,
+      );
+      expectNoSession('ORBIT-PEER');
+    });
+
+    test('legit dummy hello missing pub still throws Hello missing pub',
+        () async {
+      await expectLater(
+        acceptHello(
+          peerId: 'ORBIT-PEER',
+          myPeerId: 'ORBIT-SELF',
+          hello: <String, Object?>{
+            'type': 'wireHello',
+            'v': 3,
+            'peerId': 'ORBIT-PEER',
+          },
+        ),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            contains('Hello missing pub'),
+          ),
+        ),
+      );
+      expectNoSession('ORBIT-PEER');
+    });
+
+    test('source-scan: helloEnvelopeIsSafe before hello[pub]', () {
+      final src = File('lib/core/wire_session.dart').readAsStringSync();
+      final body = src
+          .split('Future<AcceptHelloResult> acceptHello')[1]
+          .split('Future<void> waitReady')[0];
+      expect(body, contains('helloEnvelopeIsSafe'));
+      expect(body, contains("hello['pub']"));
+      expect(
+        body.indexOf('helloEnvelopeIsSafe'),
+        lessThan(body.indexOf("hello['pub']")),
+      );
     });
   });
 }

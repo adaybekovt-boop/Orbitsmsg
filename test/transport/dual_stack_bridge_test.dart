@@ -16,6 +16,7 @@ import 'package:orbits_flutter/push/opaque_wake.dart';
 import 'package:orbits_flutter/transport/replication_schema.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
+import 'package:orbits_flutter/peer/wire_transport.dart';
 import 'package:orbits_flutter/replication/file_journal.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/rooms/autobase_log.dart';
@@ -828,17 +829,14 @@ void main() {
       onPacket: (peer, data) async => seen.add(data),
     )..attach();
     expect(
-      await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
-        'type': 'wireHello',
-        'v': 4,
-      }),
+      await a.depositMailbox(utf8.encode('v2:aaa:bbb:ccc')),
       isTrue,
     );
     await pair.$1.stop();
     final n = await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA');
     expect(n, greaterThan(0));
     expect(
-      seen.whereType<Map>().any((m) => m['type'] == 'wireHello'),
+      seen.whereType<String>().any((p) => p.startsWith('v2:')),
       isTrue,
     );
     expect(store.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 0);
@@ -1361,17 +1359,14 @@ void main() {
     )..attach();
     expect(a.hasMailbox, isTrue);
     expect(
-      await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
-        'type': 'wireHello',
-        'v': 4,
-      }),
+      await a.depositMailbox(utf8.encode('v2:aaa:bbb:ccc')),
       isTrue,
     );
     await pair.$1.stop();
     final n = await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA');
     expect(n, greaterThan(0));
     expect(
-      seen.whereType<Map>().any((m) => m['type'] == 'wireHello'),
+      seen.whereType<String>().any((p) => p.startsWith('v2:')),
       isTrue,
     );
     expect(await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA'), 0);
@@ -1494,10 +1489,7 @@ void main() {
       onPacket: (peer, data) async => seen.add(data),
     )..attach();
     expect(
-      await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
-        'type': 'wireHello',
-        'v': 4,
-      }),
+      await a.depositMailbox(utf8.encode('v2:aaa:bbb:ccc')),
       isTrue,
     );
     final n = await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA');
@@ -1507,6 +1499,184 @@ void main() {
     expect(store.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 0);
     await a.detach();
     await b.detach();
+  });
+
+  test('sendEncrypted refuses offline plaintext hello mailbox deposit',
+      () async {
+    final store = BlindMailboxStore()
+      ..grant(
+        MailboxCapability(
+          token: 'cap-1',
+          quotaBytes: 4096,
+          retentionMs: 60 * 1000,
+          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+        ),
+      );
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(await _bind('a'));
+    await pair.$2.publish(await _bind('b'));
+    final a = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: secrets,
+      isBlocked: (_) => false,
+      mailbox: store,
+      mailboxToken: 'cap-1',
+      mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      tofuCheck: _allowTofu,
+      onPacket: (peer, data) async {},
+    )..attach();
+    DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'b',
+      secrets: secrets,
+      isBlocked: (_) => false,
+      mailbox: store,
+      mailboxToken: 'cap-1',
+      mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      tofuCheck: _allowTofu,
+      onPacket: (peer, data) async {},
+    ).attach();
+    expect(
+      await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'wireHello',
+        'v': 4,
+      }),
+      isFalse,
+    );
+    expect(store.pendingCount('ORBIT-AAAAAAAAAAAAAAAA'), 0);
+    expect(
+      await a.depositMailbox(utf8.encode('v2:aaa:bbb:ccc')),
+      isTrue,
+    );
+    await a.detach();
+    await pair.$1.stop();
+    await pair.$2.stop();
+  });
+
+  test('sendEncrypted refuses unsendable maps before native send', () async {
+    final (a, b, _) = await linked();
+    expect(
+      await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'wireHello',
+        'v': 4,
+        'extra': <String, Object?>{'fileKey': 'x'},
+      }),
+      isFalse,
+    );
+    expect(
+      await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'msg',
+        'text': 'hi',
+        'sticker': <String, Object?>{
+          'extra': <String, Object?>{'kek': 'x'},
+        },
+      }),
+      isFalse,
+    );
+    expect(
+      await a.sendEphemeral('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'typing',
+        'isTyping': true,
+        'nested': <String, Object?>{'discoverySecret': 'x'},
+      }),
+      isFalse,
+    );
+    // attachment.fileKeyB64 is allowed by outboundWireMapIsSendable (chunked
+    // file outbox). Do not await encrypt here — wire may not be ready.
+    final src = File('lib/transport/dual_stack_bridge.dart').readAsStringSync();
+    expect(src, isNot(contains("import 'dart:io'")));
+    final sendEncryptedOne = src
+        .split('Future<bool> _sendEncryptedOne')[1]
+        .split('Future<bool> _waitAuthenticated')[0];
+    expect(sendEncryptedOne, contains('outboundWireMapIsSendable'));
+    expect(
+      sendEncryptedOne.indexOf('outboundWireMapIsSendable'),
+      lessThan(sendEncryptedOne.indexOf('depositMailbox')),
+    );
+    expect(
+      sendEncryptedOne.indexOf('outboundWireMapIsSendable'),
+      lessThan(sendEncryptedOne.indexOf('encryptWirePayload')),
+    );
+    expect(
+      sendEncryptedOne.indexOf('outboundWireMapIsSendable'),
+      lessThan(sendEncryptedOne.indexOf('transport.send')),
+    );
+    expect(sendEncryptedOne, isNot(contains('replicationValueIsSafe')));
+    expect(
+      outboundWireMapIsSendable(<String, Object?>{
+        'type': 'msg',
+        'msgType': 'file',
+        'attachment': <String, Object?>{
+          'name': 'a',
+          'fileKeyB64': 'xx',
+          'chunked': true,
+        },
+      }),
+      isTrue,
+    );
+    await a.detach();
+    await b.detach();
+  });
+
+  test('DualStackBridge outbound send paths scrub before deposit or send', () {
+    final src = File('lib/transport/dual_stack_bridge.dart').readAsStringSync();
+    expect(src, isNot(contains("import 'dart:io'")));
+    expect(src, contains("show outboundWireMapIsSendable"));
+
+    final sendEncryptedOne = src
+        .split('Future<bool> _sendEncryptedOne')[1]
+        .split('Future<bool> _waitAuthenticated')[0];
+    expect(sendEncryptedOne, contains('outboundWireMapIsSendable'));
+    expect(
+      sendEncryptedOne.indexOf('outboundWireMapIsSendable'),
+      lessThan(sendEncryptedOne.indexOf('depositMailbox')),
+    );
+    expect(
+      sendEncryptedOne.indexOf('outboundWireMapIsSendable'),
+      lessThan(sendEncryptedOne.indexOf('encryptWirePayload')),
+    );
+    expect(
+      sendEncryptedOne.indexOf('outboundWireMapIsSendable'),
+      lessThan(sendEncryptedOne.indexOf('transport.send')),
+    );
+
+    final sendEphemeral = src
+        .split('Future<bool> sendEphemeral')[1]
+        .split('bool sendRoomPacket')[0];
+    expect(sendEphemeral, contains('outboundWireMapIsSendable'));
+    expect(
+      sendEphemeral.indexOf('outboundWireMapIsSendable'),
+      lessThan(sendEphemeral.indexOf('encryptWirePayload')),
+    );
+    expect(
+      sendEphemeral.indexOf('outboundWireMapIsSendable'),
+      lessThan(sendEphemeral.indexOf('transport.send')),
+    );
+    expect(
+      sendEphemeral.indexOf('outboundWireMapIsSendable'),
+      lessThan(sendEphemeral.indexOf('_ensureNativeSendReady')),
+    );
   });
 
   test('mailbox quota and backlog force PeerJS rollback', () async {

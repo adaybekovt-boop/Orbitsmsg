@@ -578,6 +578,11 @@ Future<AcceptHelloResult> acceptHello({
   // rejected hello (missing pub, downgrade, bad signature) must not leave a
   // half-initialised _Session вЂ” its readyCompleter would dangle with no
   // listener. Session creation is deferred to just before its first use.
+  // Envelope walk first: nested secrets / wake tokens / URL-ish keys must
+  // not reach pub decode, signature, or TOFU.
+  if (!helloEnvelopeIsSafe(hello)) {
+    throw const FormatException('hello: forbidden fields');
+  }
   final pubB64 = hello['pub'];
   if (pubB64 is! String || pubB64.isEmpty) {
     throw StateError('Hello missing pub');

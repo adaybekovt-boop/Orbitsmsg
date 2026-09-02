@@ -86,6 +86,20 @@ void main() {
       );
     });
 
+    test('initiateHandshakeOnOpen gates hello before conn.send', () {
+      final src = File('lib/peer/wire_transport.dart').readAsStringSync();
+      final handshake = src.split('Future<void> initiateHandshakeOnOpen')[1];
+      final gate = handshake.contains('helloEnvelopeIsSafe')
+          ? 'helloEnvelopeIsSafe'
+          : 'outboundWireMapIsSendable';
+      expect(handshake, contains(gate));
+      expect(handshake, contains('conn.send'));
+      expect(
+        handshake.indexOf(gate),
+        lessThan(handshake.indexOf('conn.send')),
+      );
+    });
+
     test('_buildOutboxEnvelope omits unsafe replyTo/sticker and keeps fileKeyB64',
         () {
       final src =

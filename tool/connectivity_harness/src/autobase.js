@@ -60,6 +60,25 @@ const JOURNAL_FORBIDDEN = new Set([
   'privBytes',
 ])
 
+/** Live packets: Dart kForbiddenReplicationFields only. Not text/b64/peerId. */
+const LIVE_FORBIDDEN = new Set([
+  'plaintext',
+  'password',
+  'kek',
+  'vaultKek',
+  'rootKey',
+  'sendCk',
+  'recvCk',
+  'dhPriv',
+  'skipped',
+  'discoverySecret',
+  'sharedDiscoverySecret',
+  'attachmentBytes',
+  'fileKey',
+  'fileKeyB64',
+  'privBytes',
+])
+
 const MEMBERSHIP_PAYLOAD_KEYS = ['peerId', 'action', 'displayName', 'roomId']
 
 function sanitize(value, seen) {
@@ -78,19 +97,28 @@ function sanitize(value, seen) {
   return out
 }
 
-function objectHasForbiddenKeys(value, seen) {
+function objectHasKeysFrom(value, forbidden, seen) {
   if (!value || typeof value !== 'object') return false
   const walk = seen || new Set()
   if (walk.has(value)) return false
   walk.add(value)
   if (Array.isArray(value)) {
-    return value.some((item) => objectHasForbiddenKeys(item, walk))
+    return value.some((item) => objectHasKeysFrom(item, forbidden, walk))
   }
   for (const [k, v] of Object.entries(value)) {
-    if (JOURNAL_FORBIDDEN.has(k)) return true
-    if (objectHasForbiddenKeys(v, walk)) return true
+    if (forbidden.has(k)) return true
+    if (objectHasKeysFrom(v, forbidden, walk)) return true
   }
   return false
+}
+
+function objectHasForbiddenKeys(value, seen) {
+  return objectHasKeysFrom(value, JOURNAL_FORBIDDEN, seen)
+}
+
+/** Live control packets. Do not use JOURNAL_FORBIDDEN (that set includes text). */
+function objectHasLiveForbiddenKeys(value, seen) {
+  return objectHasKeysFrom(value, LIVE_FORBIDDEN, seen)
 }
 
 function isJournalMembershipKind(kind) {
@@ -345,6 +373,8 @@ class AutobaseProjection {
   }
 
   applyFromPacket(packet, fallbackWriter) {
+    if (!packet || typeof packet !== 'object') return null
+    if (objectHasLiveForbiddenKeys(packet)) return null
     const event = roomEventFromNativePacket(packet, fallbackWriter)
     if (event) this.apply(event)
     return event
@@ -376,7 +406,9 @@ module.exports = {
   hydrateFromJournal,
   membershipEventFromJournalRow,
   isJournalMembershipKind,
+  objectHasLiveForbiddenKeys,
   STRIP,
   JOURNAL_FORBIDDEN,
+  LIVE_FORBIDDEN,
   JOURNAL_MEMBERSHIP_KINDS,
 }

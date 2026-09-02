@@ -549,6 +549,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     String remoteId,
     TransportFileDescriptor file,
   ) async {
+    if (file.path.isEmpty || file.path.contains('://')) return false;
     final dual = _dual;
     if (dual != null && _nativeCarrierFor(remoteId)) {
       return dual.sendFileFromPath(remoteId, file);
