@@ -265,7 +265,7 @@ void main() {
     final rememberKnown = File('lib/transport/dual_stack_bridge.dart')
         .readAsStringSync()
         .split('Future<void> rememberKnownPeers')[1]
-        .split('Future<void> detach')[0];
+        .split('List<int>? discoverySecretFor')[0];
     expect(rememberKnown, contains('transport.rememberPeer'));
     expect(rememberKnown, contains('noisePublicKey'));
     expect(rememberKnown, isNot(contains('discoverySecret')));
