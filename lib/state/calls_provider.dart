@@ -143,9 +143,9 @@ const Object _unset = Object();
 
 class CallsNotifier extends StateNotifier<CallState> {
   CallsNotifier(this._ref) : super(const CallState.idle()) {
-    _ref.read(connectionsNotifierProvider.notifier).bindCallHandler(
-          _onNativeCallSignal,
-        );
+    _ref
+        .read(connectionsNotifierProvider.notifier)
+        .bindCallHandler(_onNativeCallSignal);
     _ref.listen<PeerConnectionState>(
       peerConnectionProvider,
       (_, __) => _bindToCurrentPeer(),
@@ -180,10 +180,7 @@ class CallsNotifier extends StateNotifier<CallState> {
   /// Dial [remotePeerId]. If [video] is true, requests camera too;
   /// otherwise audio-only. Throws if no peer is connected or media
   /// permissions are denied.
-  Future<void> startCall(
-    String remotePeerId, {
-    bool video = false,
-  }) async {
+  Future<void> startCall(String remotePeerId, {bool video = false}) async {
     if (state.status != CallStatus.idle) return;
     final peer = _boundPeer;
     final conns = _ref.read(connectionsNotifierProvider.notifier);
@@ -253,7 +250,7 @@ class CallsNotifier extends StateNotifier<CallState> {
       final conn = await peer!.callPeer(remotePeerId, local);
       if (!mounted) {
         try {
-          await conn?.close();
+          await conn.close();
         } catch (_) {}
         try {
           local.getTracks().forEach((t) => t.stop());
@@ -276,11 +273,7 @@ class CallsNotifier extends StateNotifier<CallState> {
     final conn = _conn;
     if (state.status != CallStatus.ringing) return;
     if (conn == null && _nativeSession == null) return;
-    state = state.copyWith(
-      video: video,
-      videoEnabled: video,
-      micEnabled: true,
-    );
+    state = state.copyWith(video: video, videoEnabled: video, micEnabled: true);
     MediaStream? local;
     try {
       local = await navigator.mediaDevices.getUserMedia({
@@ -378,8 +371,10 @@ class CallsNotifier extends StateNotifier<CallState> {
       MediaStreamTrack? cameraTrack = _cameraTrackBackup;
       if (cameraTrack == null) {
         try {
-          final tmp = await navigator.mediaDevices
-              .getUserMedia({'audio': false, 'video': true});
+          final tmp = await navigator.mediaDevices.getUserMedia({
+            'audio': false,
+            'video': true,
+          });
           cameraTrack = tmp.getVideoTracks().firstOrNull;
         } catch (_) {
           state = state.copyWith(lastError: 'Не удалось вернуть камеру');
@@ -456,7 +451,9 @@ class CallsNotifier extends StateNotifier<CallState> {
     final remote = state.remotePeerId;
     if (remote != null) {
       unawaited(
-        _ref.read(connectionsNotifierProvider.notifier).sendCallSignal(
+        _ref
+            .read(connectionsNotifierProvider.notifier)
+            .sendCallSignal(
               remote,
               CallSignal(type: CallSignalType.hangup, callId: remote),
             ),
@@ -484,7 +481,7 @@ class CallsNotifier extends StateNotifier<CallState> {
     _closeSub = null;
     if (conn != null) {
       try {
-        await conn?.close();
+        await conn.close();
       } catch (_) {}
     }
     if (stream != null) {
@@ -503,7 +500,9 @@ class CallsNotifier extends StateNotifier<CallState> {
   // ─── Internal helpers ─────────────────────────────────────────
 
   Future<void> _replaceVideoTrack(
-      MediaStreamTrack newTrack, MediaStream stream) async {
+    MediaStreamTrack newTrack,
+    MediaStream stream,
+  ) async {
     final conn = _conn;
     if (conn == null) return;
     final senders = await conn.peerConnection.getSenders();
@@ -527,10 +526,7 @@ class CallsNotifier extends StateNotifier<CallState> {
     _conn = conn;
     _remoteStreamSub = conn.onStream.listen((remote) {
       if (!mounted) return;
-      state = state.copyWith(
-        status: CallStatus.inCall,
-        remoteStream: remote,
-      );
+      state = state.copyWith(status: CallStatus.inCall, remoteStream: remote);
     });
     _closeSub = conn.onClose.listen((_) {
       // Peer hung up — wipe local state too. Best-effort: hangUp is
@@ -545,8 +541,9 @@ class CallsNotifier extends StateNotifier<CallState> {
 
   void _onNativeCallSignal(String from, CallSignal signal) {
     _nativeSession ??= NativeCallSession(
-      send: (next) =>
-          _ref.read(connectionsNotifierProvider.notifier).sendCallSignal(from, next),
+      send: (next) => _ref
+          .read(connectionsNotifierProvider.notifier)
+          .sendCallSignal(from, next),
     );
     _nativeSession!.applyRemote(signal);
     if (!mounted) return;
@@ -632,8 +629,9 @@ class CallsNotifier extends StateNotifier<CallState> {
 
 // ─── Providers ────────────────────────────────────────────────────
 
-final callsNotifierProvider =
-    StateNotifierProvider<CallsNotifier, CallState>((ref) {
+final callsNotifierProvider = StateNotifierProvider<CallsNotifier, CallState>((
+  ref,
+) {
   return CallsNotifier(ref);
 });
 

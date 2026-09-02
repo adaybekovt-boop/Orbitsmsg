@@ -14,20 +14,19 @@ import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
-import 'package:orbits_flutter/transport/mux_frames.dart';
 import 'package:orbits_flutter/transport/transport_api.dart';
 
 DeviceBinding _bind(String id) => DeviceBinding(
-      version: kDeviceBindingVersion,
-      identityPublicKey: Uint8List.fromList(const [1]),
-      deviceId: id,
-      transportPublicKey: Uint8List.fromList(List<int>.generate(32, (i) => i + 1)),
-      hypercorePublicKey: Uint8List.fromList(List<int>.generate(32, (i) => i + 2)),
-      capabilities: const ['hyperswarm-v1'],
-      createdAt: 1,
-      expiresAt: 2,
-      signatureByIdentityKey: Uint8List.fromList(const [3]),
-    );
+  version: kDeviceBindingVersion,
+  identityPublicKey: Uint8List.fromList(const [1]),
+  deviceId: id,
+  transportPublicKey: Uint8List.fromList(List<int>.generate(32, (i) => i + 1)),
+  hypercorePublicKey: Uint8List.fromList(List<int>.generate(32, (i) => i + 2)),
+  capabilities: const ['hyperswarm-v1'],
+  createdAt: 1,
+  expiresAt: 2,
+  signatureByIdentityKey: Uint8List.fromList(const [3]),
+);
 
 void main() {
   setUp(resetFlagsForTests);
@@ -45,7 +44,11 @@ void main() {
       ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
       ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
     final packets = <Object?>[];
-    DualStackBridge make(LoopbackOrbitsTransport t, String self, String device) {
+    DualStackBridge make(
+      LoopbackOrbitsTransport t,
+      String self,
+      String device,
+    ) {
       return DualStackBridge(
         transport: t,
         journal: MemoryJournal(device),
@@ -133,70 +136,71 @@ void main() {
     expect(seen, isEmpty);
   });
 
-  test('two natives exchange current wire + rooms + call signals without Hypercore',
-      () async {
-    final (a, b, packets) = await linked();
-    expect(a.canUseNative('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
-    kRoomPlaintextSessionAck.setAcknowledged(true);
-    final rooms = <Map<String, Object?>>[];
-    CallSignal? hangup;
-    b.onPacket = (peer, data) async {
-      if (data is Map) rooms.add(Map<String, Object?>.from(data));
-      packets.add(data);
-    };
-    b.onCallSignal = (signal, from) {
-      hangup = signal;
-    };
+  test(
+    'two natives exchange current wire + rooms + call signals without Hypercore',
+    () async {
+      final (a, b, packets) = await linked();
+      expect(a.canUseNative('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+      kRoomPlaintextSessionAck.setAcknowledged(true);
+      final rooms = <Map<String, Object?>>[];
+      CallSignal? hangup;
+      b.onPacket = (peer, data) async {
+        if (data is Map) rooms.add(Map<String, Object?>.from(data));
+        packets.add(data);
+      };
+      b.onCallSignal = (signal, from) {
+        hangup = signal;
+      };
 
-    await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
-      'type': 'wireHello',
-      'v': 4,
-    });
-    await a.transport.send(
-      'ORBIT-BBBBBBBBBBBBBBBB',
-      TransportChannel.message,
-      utf8.encode('v2:aaa:bbb:ccc'),
-    );
-    expect(
-      a.sendRoomPacket('ORBIT-BBBBBBBBBBBBBBBB', {
-        'type': 'room_msg',
-        'text': 'host-plaintext',
-      }),
-      isTrue,
-    );
-    final caller = NativeCallSession(
-      send: (s) => a.sendCallSignal('ORBIT-BBBBBBBBBBBBBBBB', s),
-    );
-    await caller.startOutgoing(callId: 'c1', sdp: 'v=0-offer');
-    await caller.addIce({'candidate': '1.2.3.4'});
-    await caller.accept(sdp: 'v=0-answer');
-    await a.sendCallSignal(
-      'ORBIT-BBBBBBBBBBBBBBBB',
-      const CallSignal(type: CallSignalType.hangup, callId: 'c1'),
-    );
-    await Future<void>.delayed(const Duration(milliseconds: 40));
+      await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'wireHello',
+        'v': 4,
+      });
+      await a.transport.send(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        TransportChannel.message,
+        utf8.encode('v2:aaa:bbb:ccc'),
+      );
+      expect(
+        a.sendRoomPacket('ORBIT-BBBBBBBBBBBBBBBB', {
+          'type': 'room_msg',
+          'text': 'host-plaintext',
+        }),
+        isTrue,
+      );
+      final caller = NativeCallSession(
+        send: (s) => a.sendCallSignal('ORBIT-BBBBBBBBBBBBBBBB', s),
+      );
+      await caller.startOutgoing(callId: 'c1', sdp: 'v=0-offer');
+      await caller.addIce({'candidate': '1.2.3.4'});
+      await caller.accept(sdp: 'v=0-answer');
+      await a.sendCallSignal(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        const CallSignal(type: CallSignalType.hangup, callId: 'c1'),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 40));
 
-    expect(
-      packets.whereType<String>().any((p) => p.startsWith('v2:')),
-      isTrue,
-    );
-    expect(
-      rooms.any((r) => r['type'] == 'wireHello' && r['v'] == 4),
-      isTrue,
-    );
-    expect(
-      rooms.any((r) => r['type'] == 'room_msg' && r['text'] == 'host-plaintext'),
-      isTrue,
-    );
-    expect(hangup?.type, CallSignalType.hangup);
-    expect(b.journal.length, greaterThan(0));
-    expect(
-      b.journal.records.every((r) => !r.fields.containsKey('plaintext')),
-      isTrue,
-    );
-    expect(kRoomsApplicationE2eImplemented, isFalse);
-    kRoomPlaintextSessionAck.reset();
-  });
+      expect(
+        packets.whereType<String>().any((p) => p.startsWith('v2:')),
+        isTrue,
+      );
+      expect(rooms.any((r) => r['type'] == 'wireHello' && r['v'] == 4), isTrue);
+      expect(
+        rooms.any(
+          (r) => r['type'] == 'room_msg' && r['text'] == 'host-plaintext',
+        ),
+        isTrue,
+      );
+      expect(hangup?.type, CallSignalType.hangup);
+      expect(b.journal.length, greaterThan(0));
+      expect(
+        b.journal.records.every((r) => !r.fields.containsKey('plaintext')),
+        isTrue,
+      );
+      expect(kRoomsApplicationE2eImplemented, isFalse);
+      kRoomPlaintextSessionAck.reset();
+    },
+  );
 
   test('recipient reads mailbox after the sender is gone', () async {
     final store = BlindMailboxStore()
@@ -262,10 +266,7 @@ void main() {
     await pair.$1.stop();
     final n = await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA');
     expect(n, greaterThan(0));
-    expect(
-      seen.whereType<Map>().any((m) => m['type'] == 'wireHello'),
-      isTrue,
-    );
+    expect(seen.whereType<Map>().any((m) => m['type'] == 'wireHello'), isTrue);
   });
 
   test('drop chunks and hypercore replication ride native channels', () async {
@@ -295,56 +296,61 @@ void main() {
     );
   });
 
-  test('device revoke is journaled and drops that writer from fan-out', () async {
-    setHyperswarmRollout(HyperswarmRollout.internal);
-    final pair = loopbackPair();
-    final secrets = DiscoverySecretStore()
-      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
-      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
-    final devices = DeviceRegistry();
-    final a = DualStackBridge(
-      transport: pair.$1,
-      journal: MemoryJournal('dev-a'),
-      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
-      selfDeviceId: 'dev-a',
-      secrets: secrets,
-      devices: devices,
-      isBlocked: (_) => false,
-      onPacket: (_, __) async {},
-    )..attach();
-    a.authorizeDevice(
-      AuthorizedDevice(
-        deviceId: 'phone-2',
-        transportPublicKey: List<int>.filled(32, 1),
-        hypercorePublicKey: List<int>.filled(32, 2),
-        name: 'phone-2',
-        kind: 'phone',
-        createdAt: 1,
-        status: DeviceStatus.active,
-        ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
-        transportPeerId: 'ORBIT-B2B2B2B2B2B2B2B2',
-      ),
-    );
-    expect(
-      devices.transportTargets('ORBIT-BBBBBBBBBBBBBBBB'),
-      contains('ORBIT-B2B2B2B2B2B2B2B2'),
-    );
-    a.revokeDevice('phone-2');
-    expect(devices.acceptsWriter('phone-2'), isFalse);
-    expect(
-      devices.transportTargets('ORBIT-BBBBBBBBBBBBBBBB'),
-      isNot(contains('ORBIT-B2B2B2B2B2B2B2B2')),
-    );
-    expect(
-      a.journal.records.any((r) => r.kind == ReplicationEventKind.deviceRevoked),
-      isTrue,
-    );
-    expect(
-      a.journal.records.every((r) => !r.fields.containsKey('plaintext')),
-      isTrue,
-    );
-    await a.detach();
-  });
+  test(
+    'device revoke is journaled and drops that writer from fan-out',
+    () async {
+      setHyperswarmRollout(HyperswarmRollout.internal);
+      final pair = loopbackPair();
+      final secrets = DiscoverySecretStore()
+        ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+        ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+      final devices = DeviceRegistry();
+      final a = DualStackBridge(
+        transport: pair.$1,
+        journal: MemoryJournal('dev-a'),
+        selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+        selfDeviceId: 'dev-a',
+        secrets: secrets,
+        devices: devices,
+        isBlocked: (_) => false,
+        onPacket: (_, __) async {},
+      )..attach();
+      a.authorizeDevice(
+        AuthorizedDevice(
+          deviceId: 'phone-2',
+          transportPublicKey: List<int>.filled(32, 1),
+          hypercorePublicKey: List<int>.filled(32, 2),
+          name: 'phone-2',
+          kind: 'phone',
+          createdAt: 1,
+          status: DeviceStatus.active,
+          ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+          transportPeerId: 'ORBIT-B2B2B2B2B2B2B2B2',
+        ),
+      );
+      expect(
+        devices.transportTargets('ORBIT-BBBBBBBBBBBBBBBB'),
+        contains('ORBIT-B2B2B2B2B2B2B2B2'),
+      );
+      a.revokeDevice('phone-2');
+      expect(devices.acceptsWriter('phone-2'), isFalse);
+      expect(
+        devices.transportTargets('ORBIT-BBBBBBBBBBBBBBBB'),
+        isNot(contains('ORBIT-B2B2B2B2B2B2B2B2')),
+      );
+      expect(
+        a.journal.records.any(
+          (r) => r.kind == ReplicationEventKind.deviceRevoked,
+        ),
+        isTrue,
+      );
+      expect(
+        a.journal.records.every((r) => !r.fields.containsKey('plaintext')),
+        isTrue,
+      );
+      await a.detach();
+    },
+  );
 
   test('room_msg is blocked without the plaintext ack', () {
     kRoomPlaintextSessionAck.reset();

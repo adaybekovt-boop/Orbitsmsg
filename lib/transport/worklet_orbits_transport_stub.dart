@@ -3,10 +3,11 @@ import 'transport_api.dart';
 
 Future<WorkletOrbitsTransport?> spawnWorkletTransport({
   String backend = 'loopback',
-}) async =>
-    null;
+}) async => null;
 
 class WorkletOrbitsTransport implements OrbitsTransport {
+  String get runtime => 'missing';
+
   @override
   Stream<TransportEvent> get events => const Stream.empty();
 

@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/push/doze_adapter.dart';
-import 'package:orbits_flutter/push/opaque_wake.dart';
 import 'package:orbits_flutter/push/wake_service.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
 import 'package:orbits_flutter/transport/transport_api.dart';
