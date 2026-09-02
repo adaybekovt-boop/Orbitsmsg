@@ -197,16 +197,22 @@ class Worklet {
 
   async connect(peer) {
     if (this._suspended) throw new Error('suspended')
+    this.rememberPeer(peer)
+    if (this.backend === 'loopback') {
+      if (peer.port == null) throw new Error('loopback connect needs port')
+      await this._loop.connect(peer.port)
+    } else if (this._swarm) {
+      const noise =
+        peer && peer.noisePublicKey != null ? String(peer.noisePublicKey) : ''
+      if (noise) this._swarm.swarm.joinPeer(Buffer.from(noise, 'hex'))
+    }
+  }
+
+  rememberPeer(peer) {
     const noise =
       peer && peer.noisePublicKey != null ? String(peer.noisePublicKey) : ''
     const orbitId = peer && peer.peerId != null ? String(peer.peerId) : ''
     this._rememberOrbitPeer(orbitId, noise)
-    if (this.backend === 'loopback') {
-      if (peer.port == null) throw new Error('loopback connect needs port')
-      await this._loop.connect(peer.port)
-    } else if (this._swarm && noise) {
-      this._swarm.swarm.joinPeer(Buffer.from(noise, 'hex'))
-    }
   }
 
   async send(peerId, channel, frame) {
@@ -576,6 +582,9 @@ async function handleIpcRequest(worklet, body) {
       return {}
     case 'connect':
       await worklet.connect(params)
+      return {}
+    case 'rememberPeer':
+      worklet.rememberPeer(params)
       return {}
     case 'send':
       await worklet.send(

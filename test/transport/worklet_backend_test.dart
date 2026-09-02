@@ -206,6 +206,42 @@ void main() {
       contains('_resolvePeerId'),
     );
     expect(
+      File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
+      contains('rememberPeer'),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('rememberKnownPeers'),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'rememberPeer'"),
+    );
+    final remember = File('lib/transport/worklet_orbits_transport_io.dart')
+        .readAsStringSync()
+        .split('Future<void> rememberPeer')[1]
+        .split('Future<void> disconnect')[0];
+    expect(remember, contains('noisePublicKey'));
+    expect(remember, isNot(contains('discoverySecret')));
+    expect(
+      File('lib/state/connections_notifier.dart').readAsStringSync(),
+      contains('peerjsAllowedOnNative'),
+    );
+    final openChannel = File('lib/state/connections_notifier.dart')
+        .readAsStringSync()
+        .split('void _openChannel')[1]
+        .split('Future<void> attachConn')[0];
+    expect(openChannel, contains('unawaited(_dual?.dial(normalized))'));
+    expect(openChannel, contains('if (!peerjsAllowedOnNative())'));
+    expect(openChannel, contains('return;'));
+    final rememberKnown = File('lib/transport/dual_stack_bridge.dart')
+        .readAsStringSync()
+        .split('Future<void> rememberKnownPeers')[1]
+        .split('Future<void> detach')[0];
+    expect(rememberKnown, contains('transport.rememberPeer'));
+    expect(rememberKnown, contains('noisePublicKey: noise'));
+    expect(rememberKnown, isNot(contains('discoverySecret')));
+    expect(
       File('lib/transport/native_transport_host.dart').readAsStringSync(),
       contains('localBinding: issuedBinding'),
     );

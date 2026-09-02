@@ -30,6 +30,9 @@ class WorkletOrbitsTransport implements OrbitsTransport {
   Future<void> connect(PeerDescriptor peer) async {}
 
   @override
+  Future<void> rememberPeer(PeerDescriptor peer) async {}
+
+  @override
   Future<void> disconnect(String peerId) async {}
 
   @override

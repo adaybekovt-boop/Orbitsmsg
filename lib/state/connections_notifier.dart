@@ -63,6 +63,7 @@ import '../rooms/autobase_log.dart';
 import '../storage/db.dart' as db;
 import '../transport/device_binding.dart';
 import '../transport/dual_stack_bridge.dart';
+import '../transport/peerjs_window.dart';
 import '../transport/signed_capabilities.dart';
 import '../transport/transport_api.dart';
 import 'auth_notifier.dart';
@@ -572,6 +573,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     if (reliable) {
       unawaited(_dual?.dial(normalized));
     }
+    // Phase 14 isolation: native-only modes must not open PeerJS.
+    // Product mode stays default-live, so this is a no-op until the
+    // support window closes in writing.
+    if (!peerjsAllowedOnNative()) {
+      return;
+    }
     final peer = _boundPeer;
     if (peer == null || peer.destroyed || !peer.open) {
       // PeerJS not ready yet (cold-boot race: user taps chat row faster
@@ -983,6 +990,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     if (current == null) return;
 
     _peerSubs.add(current.onConnection.listen((conn) {
+      if (!peerjsAllowedOnNative()) {
+        unawaited(conn.close());
+        return;
+      }
       final ch = (conn.metadata['channel'] as String?) == 'ephemeral'
           ? 'ephemeral'
           : 'reliable';
@@ -1019,6 +1030,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// `_openChannel` (e.g. the peer goes back to not-ready in the middle of
   /// the loop) can't cause an infinite re-entry.
   void _flushPendingReliable() {
+    if (!peerjsAllowedOnNative()) {
+      _pendingReliableTargets.clear();
+      return;
+    }
     if (_pendingReliableTargets.isEmpty) return;
     final targets = List<String>.from(_pendingReliableTargets);
     _pendingReliableTargets.clear();

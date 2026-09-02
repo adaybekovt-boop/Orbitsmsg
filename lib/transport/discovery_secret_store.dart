@@ -31,6 +31,9 @@ class DiscoverySecretStore {
 
   List<int>? get(String peerId) => _secrets[normalizePeerId(peerId)];
 
+  /// Contact ids that already have a discovery secret. Not DHT topics.
+  Iterable<String> get knownPeerIds => _secrets.keys;
+
   void remove(String peerId) {
     _secrets.remove(normalizePeerId(peerId));
     unawaited(persist());

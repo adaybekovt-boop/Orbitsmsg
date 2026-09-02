@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
 import 'package:orbits_flutter/transport/capabilities.dart';
@@ -145,5 +147,14 @@ void main() {
       TransportRoute.peerjs,
     );
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+  });
+
+  test('native openChannel skips PeerJS when isolation disallows it', () {
+    final src = File('lib/state/connections_notifier.dart').readAsStringSync();
+    expect(src, contains('if (!peerjsAllowedOnNative())'));
+    expect(src, contains('unawaited(_dual?.dial(normalized))'));
+    expect(src, contains('_flushPendingReliable'));
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(peerjsAllowedOnNative(), isTrue);
   });
 }

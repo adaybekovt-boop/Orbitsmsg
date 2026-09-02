@@ -66,6 +66,7 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   DeviceBinding? _binding;
   String? topicHex;
   PeerDescriptor? lastConnect;
+  final List<PeerDescriptor> rememberedPeers = <PeerDescriptor>[];
   bool _started = false;
   bool _suspended = false;
   bool _published = false;
@@ -144,6 +145,11 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
     }
     _link(remote);
     remote._link(this);
+  }
+
+  @override
+  Future<void> rememberPeer(PeerDescriptor peer) async {
+    rememberedPeers.add(peer);
   }
 
   @override

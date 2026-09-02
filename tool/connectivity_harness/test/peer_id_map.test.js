@@ -42,3 +42,19 @@ test('loopback info.id still wins when no Noise map exists', () => {
     'outbound:9',
   )
 })
+
+test('rememberPeer maps Noise to ORBIT without joinPeer', () => {
+  const w = new Worklet({ backend: 'loopback' })
+  const noise = 'cd'.repeat(32)
+  w.rememberPeer({
+    peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+    noisePublicKey: noise,
+    discoverySecret: 'must-not-be-used',
+  })
+  assert.equal(
+    w._resolvePeerId({ publicKey: Buffer.from(noise, 'hex') }),
+    'ORBIT-BBBBBBBBBBBBBBBB',
+  )
+  assert.equal(w._swarm, null)
+  assert.equal(w._topic, null)
+})

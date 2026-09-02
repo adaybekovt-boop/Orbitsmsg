@@ -234,6 +234,16 @@ class WorkletOrbitsTransport implements OrbitsTransport {
   }
 
   @override
+  Future<void> rememberPeer(PeerDescriptor peer) async {
+    final noise = peer.noisePublicKey ?? peer.binding?.transportPublicKey;
+    if (noise == null || noise.isEmpty) return;
+    await _client.request('rememberPeer', {
+      'peerId': peer.peerId,
+      'noisePublicKey': hexEncode(noise),
+    });
+  }
+
+  @override
   Future<void> disconnect(String peerId) =>
       _client.request('disconnect', {'peerId': peerId});
 

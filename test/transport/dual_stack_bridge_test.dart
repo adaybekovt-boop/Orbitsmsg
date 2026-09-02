@@ -1328,6 +1328,48 @@ void main() {
     await a.detach();
   });
 
+  test('attach maps known contacts without sending discovery secrets', () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final noise = List<int>.generate(32, (i) => 21);
+    final devices = DeviceRegistry()
+      ..authorize(
+        AuthorizedDevice(
+          deviceId: 'bob-phone',
+          transportPublicKey: noise,
+          hypercorePublicKey: List<int>.generate(32, (i) => 22),
+          name: 'Bob',
+          kind: 'phone',
+          createdAt: 1,
+          status: DeviceStatus.active,
+          ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+          transportPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        ),
+      );
+    final secrets = DiscoverySecretStore()
+      ..put(kLocalDiscoverySecretId, List<int>.filled(32, 1))
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', List<int>.filled(32, 2))
+      ..put('not-a-peer', List<int>.filled(32, 3));
+    final a = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: secrets,
+      devices: devices,
+      isBlocked: (_) => false,
+      tofuCheck: _allowTofu,
+      onPacket: (_, __) async {},
+    )..attach();
+    await a.rememberKnownPeers();
+    expect(pair.$1.rememberedPeers, hasLength(1));
+    expect(pair.$1.rememberedPeers.single.peerId, 'ORBIT-BBBBBBBBBBBBBBBB');
+    expect(pair.$1.rememberedPeers.single.noisePublicKey, noise);
+    expect(pair.$1.rememberedPeers.single.discoverySecret, isNull);
+    expect(pair.$1.lastConnect, isNull);
+    await a.detach();
+  });
+
   test('relay blow-up and carrier error roll back to PeerJS', () async {
     setHyperswarmRollout(HyperswarmRollout.internal);
     clearNativeRollbackLogForTests();

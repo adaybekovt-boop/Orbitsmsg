@@ -109,6 +109,26 @@ class DualStackBridge {
 
   void attach() {
     _sub ??= transport.events.listen(_onEvent);
+    unawaited(rememberKnownPeers());
+  }
+
+  /// Inbound Hyperswarm connections need the Noise→ORBIT map before
+  /// [dial]. Discovery secrets stay in Dart — not sent to the worklet.
+  Future<void> rememberKnownPeers() async {
+    for (final id in secrets.knownPeerIds) {
+      if (id == normalizePeerId(kLocalDiscoverySecretId)) continue;
+      if (!isValidPeerId(id)) continue;
+      final noise = devices?.noisePublicKeyFor(id);
+      if (noise == null || noise.isEmpty) continue;
+      try {
+        await transport.rememberPeer(
+          PeerDescriptor(
+            peerId: id,
+            noisePublicKey: noise,
+          ),
+        );
+      } catch (_) {}
+    }
   }
 
   Future<void> detach() async {

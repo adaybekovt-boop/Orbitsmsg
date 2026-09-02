@@ -205,6 +205,12 @@ abstract class OrbitsTransport {
   Future<void> connect(PeerDescriptor peer);
   Future<void> disconnect(String peerId);
 
+  /// Map a Noise public key to [peer.peerId] without dialing, so an
+  /// inbound Hyperswarm connection is keyed by the contact ORBIT id.
+  /// Does not join a topic and must not carry a discovery secret.
+  /// No-op on carriers that already key by ORBIT id (loopback).
+  Future<void> rememberPeer(PeerDescriptor peer) async {}
+
   Future<void> send(String peerId, TransportChannel channel, List<int> frame);
   Future<void> sendFile(String peerId, TransportFileDescriptor file);
 
