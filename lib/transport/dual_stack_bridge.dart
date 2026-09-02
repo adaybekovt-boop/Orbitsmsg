@@ -5,13 +5,17 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart' show sha256;
+
 import '../attachments/resumable_blob.dart';
 import '../calls/hyperswarm_signaling.dart';
 import '../core/feature_flags.dart';
 import '../core/wire_crypto.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
+import '../mailbox/mailbox_protocol.dart';
 import '../mailbox/mailbox_pump.dart';
+import '../mailbox/storage_peer_client.dart';
 import '../peer/helpers.dart';
 import '../replication/file_journal.dart';
 import '../replication/hypercore_store.dart';
@@ -39,11 +43,13 @@ class DualStackBridge {
     this.mailbox,
     this.mailboxToken,
     this.mailboxWriterKey,
+    this.storagePeer,
+    this.mailboxCapability,
     this.localCapabilities,
     this.devices,
     HypercoreLocalStore? hypercore,
-  })  : secrets = secrets ?? discoverySecretStore,
-        hypercore = hypercore ?? HypercoreLocalStore(selfDeviceId);
+  }) : secrets = secrets ?? discoverySecretStore,
+       hypercore = hypercore ?? HypercoreLocalStore(selfDeviceId);
 
   final OrbitsTransport transport;
   final MemoryJournal journal;
@@ -56,6 +62,8 @@ class DualStackBridge {
   final BlindMailboxStore? mailbox;
   final String? mailboxToken;
   final String? mailboxWriterKey;
+  final StoragePeerClient? storagePeer;
+  final SignedMailboxCapability? mailboxCapability;
   final CapabilityRecord? localCapabilities;
   final DeviceRegistry? devices;
   final HypercoreLocalStore hypercore;
@@ -99,8 +107,8 @@ class DualStackBridge {
   }
 
   Future<bool> sendEncrypted(String peerId, Object? msg) async {
-    final targets = devices?.transportTargets(peerId) ??
-        <String>{normalizePeerId(peerId)};
+    final targets =
+        devices?.transportTargets(peerId) ?? <String>{normalizePeerId(peerId)};
     if (targets.length > 1) {
       var any = false;
       for (final target in targets) {
@@ -117,11 +125,11 @@ class DualStackBridge {
     if (!isNativeConnected(norm)) {
       if (msg is Map &&
           (msg['type'] == 'wireHello' || msg['type'] == 'wireRekey')) {
-        return depositMailbox(jsonPayload(Map<String, Object?>.from(msg)));
+        return enqueueMailbox(jsonPayload(Map<String, Object?>.from(msg)));
       }
       if (!isWireReady(norm)) return false;
       final queued = await encryptWirePayload(norm, msg);
-      return depositMailbox(utf8.encode(queued));
+      return enqueueMailbox(utf8.encode(queued));
     }
     if (msg is Map &&
         (msg['type'] == 'wireHello' || msg['type'] == 'wireRekey')) {
@@ -136,18 +144,30 @@ class DualStackBridge {
       await waitForWireReady(norm, timeout: const Duration(seconds: 8));
     }
     final wire = await encryptWirePayload(norm, msg);
-    await transport.send(
-      norm,
-      TransportChannel.message,
-      utf8.encode(wire),
-    );
+    await transport.send(norm, TransportChannel.message, utf8.encode(wire));
     _appendEnvelope(norm, utf8.encode(wire));
     return true;
   }
 
+  Future<bool> enqueueMailbox(
+    List<int> encryptedEnvelope, {
+    String? envelopeId,
+  }) async {
+    if (storagePeer != null && mailboxCapability != null) {
+      return depositMailboxRemote(encryptedEnvelope, envelopeId: envelopeId);
+    }
+    return depositMailbox(encryptedEnvelope, envelopeId: envelopeId);
+  }
+
   /// Offline deposit: encrypted bytes only. Used when the recipient is not
   /// currently connected. The storage peer never sees keys.
-  bool depositMailbox(List<int> encryptedEnvelope) {
+  bool depositMailbox(List<int> encryptedEnvelope, {String? envelopeId}) {
+    if (storagePeer != null && mailboxCapability != null) {
+      unawaited(
+        depositMailboxRemote(encryptedEnvelope, envelopeId: envelopeId),
+      );
+      return true;
+    }
     final store = mailbox;
     final token = mailboxToken;
     final writer = mailboxWriterKey;
@@ -157,8 +177,32 @@ class DualStackBridge {
       token: token,
       writerKey: writer,
       encryptedEnvelope: encryptedEnvelope,
+      envelopeId: envelopeId ?? _stableEnvelopeId(encryptedEnvelope),
     );
     return true;
+  }
+
+  Future<bool> depositMailboxRemote(
+    List<int> encryptedEnvelope, {
+    String? envelopeId,
+  }) async {
+    final client = storagePeer;
+    final cap = mailboxCapability;
+    if (client == null || cap == null) return false;
+    await _mailboxPump.depositRemote(
+      client: client,
+      capability: cap,
+      envelopeId: envelopeId ?? _stableEnvelopeId(encryptedEnvelope),
+      encryptedEnvelope: encryptedEnvelope,
+    );
+    return true;
+  }
+
+  String _stableEnvelopeId(List<int> encryptedEnvelope) {
+    return sha256.convert([
+      ...utf8.encode(selfDeviceId),
+      ...encryptedEnvelope,
+    ]).toString();
   }
 
   /// Authorization log: revoked writers are ignored on the next fan-out.
@@ -189,6 +233,9 @@ class DualStackBridge {
   }
 
   Future<int> drainMailbox({String? fromPeerId}) async {
+    if (storagePeer != null && mailboxCapability != null) {
+      return drainMailboxRemote(fromPeerId: fromPeerId);
+    }
     final store = mailbox;
     final token = mailboxToken;
     final writer = mailboxWriterKey;
@@ -199,12 +246,48 @@ class DualStackBridge {
       writerKey: writer,
     );
     final from = normalizePeerId(fromPeerId ?? writer);
+    var projected = 0;
     for (final block in blocks) {
+      final id = block.envelopeId ?? _stableEnvelopeId(block.bytes);
+      if (!_mailboxPump.markProjected(id)) continue;
       _appendEnvelope(from, block.bytes);
       final text = utf8.decode(block.bytes);
-      await onPacket(from, isWireCiphertext(text) ? text : decodeJsonPayload(block.bytes));
+      await onPacket(
+        from,
+        isWireCiphertext(text) ? text : decodeJsonPayload(block.bytes),
+      );
+      projected += 1;
     }
-    return blocks.length;
+    return projected;
+  }
+
+  Future<int> drainMailboxRemote({String? fromPeerId}) async {
+    final client = storagePeer;
+    final cap = mailboxCapability;
+    if (client == null || cap == null) return 0;
+    final blocks = await _mailboxPump.collectRemote(
+      client: client,
+      capability: cap,
+    );
+    final from = normalizePeerId(fromPeerId ?? cap.mailboxId);
+    var projected = 0;
+    for (final block in blocks) {
+      final id = block.envelopeId ?? _stableEnvelopeId(block.bytes);
+      if (!_mailboxPump.markProjected(id)) continue;
+      _appendEnvelope(from, block.bytes);
+      final text = utf8.decode(block.bytes);
+      await onPacket(
+        from,
+        isWireCiphertext(text) ? text : decodeJsonPayload(block.bytes),
+      );
+      await _mailboxPump.acknowledgeRemote(
+        client: client,
+        capability: cap,
+        envelopeId: id,
+      );
+      projected += 1;
+    }
+    return projected;
   }
 
   Future<void> sendAttachmentChunks(
@@ -309,10 +392,7 @@ class DualStackBridge {
             transport.send(
               normalizePeerId(peerId),
               TransportChannel.control,
-              jsonPayload({
-                'type': 'capabilities',
-                ...caps.toWire(),
-              }),
+              jsonPayload({'type': 'capabilities', ...caps.toWire()}),
             ),
           );
         }
@@ -369,7 +449,8 @@ class DualStackBridge {
       } else {
         final decoded = decodeJsonPayload(bytes);
         data = decoded;
-        if (decoded['type'] == 'capabilities' || decoded['type'] == 'wireHello') {
+        if (decoded['type'] == 'capabilities' ||
+            decoded['type'] == 'wireHello') {
           try {
             if (decoded['type'] == 'capabilities') {
               remoteCapabilities.add(CapabilityRecord.fromWire(decoded));
