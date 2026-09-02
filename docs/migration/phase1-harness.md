@@ -49,19 +49,33 @@ still PeerJS. Do not treat this document as a closed NAT gate.
   `HASH(peerId)`. IPC `send` / `sendFile` / `journal.append` reject
   `identityPrivateKey`, `fileKey`, `fileKeyB64`, `discoverySecret`.
 - CLI `src/cli.js` (`bin`: `orbits-harness`): `listen`, `dial
-  <host:port|topic-hex>`, stdin `echo` / `send-file` / `resume-file` /
+  [host:port]`, stdin `echo` / `send-file` / `resume-file` /
   `diagnostics` / `shutdown`. Flags: `--backend`, `--secret-file`,
-  `--timeout-ms`, `--diagnostics-out`, `--listen-host`, `--bootstrap`.
-  SIGINT/SIGTERM write diagnostics (if asked) and stop. No remote fetch.
+  `--timeout-ms`, `--diagnostics-out`, `--listen-host`, `--incoming-dir`,
+  `--bootstrap`. Stdin is queued until the peer is connected and
+  authenticated; timeout prints `ERR NOT_CONNECTED <cmd>` and exits
+  non-zero. Listener prints `OK PEER connected|disconnected` and
+  `OK FILE received <id> <bytes> sha256=… path=…`. `--help` / `-h` exit
+  0. Hyperswarm dial **ignores** the optional target; the topic is
+  always `HASH("orbits-contact-discovery-v1" || secret-file)`.
+  `--diagnostics-out` is written after `stop()` (`lifecycle: stopped`).
+  SIGINT/SIGTERM. No remote fetch.
 
 Mux max is **1 MiB** (64 KiB attachment chunks base64 to ~87 KiB). IPC
 max is **4 MiB**.
 
 ## What is verified automatically
 
-`npm test` in `tool/connectivity_harness` (Node 22). Behavioral tests,
-not source-text `includes()` except the labeled source scan for
-eval/remote import.
+```text
+cd tool/connectivity_harness
+npm test
+node --test --test-force-exit test/cli_two_process.test.js
+```
+
+`npm test` is the full suite (Node 22). The second command is the
+two-process CLI integration test alone. Behavioral tests, not
+source-text `includes()` except the labeled source scan for eval/remote
+import.
 
 Covered on **loopback**:
 
@@ -75,7 +89,10 @@ Covered on **loopback**:
 - resource cleanup / no hanging handles after `stop()`
 - short / missing discovery secret rejected; `://` paths rejected
 - pre-auth application frames dropped and counted
-- two child `node src/cli.js` processes exchange echo and exit 0
+- two child `node src/cli.js` processes: queued echo before
+  `OK CONNECTED`, 1 MiB `send-file` with listener `OK FILE received`
+  (matching sha256), diagnostics after stop (`lifecycle: stopped`,
+  `totals.bytesSent > 0`, `peers.*.authenticated`)
 
 Hyperswarm-backend tests **skip if the module is missing**, same as
 before. They use a **local** HyperDHT bootstrap only. They do **not**
@@ -105,38 +122,47 @@ Loopback across a LAN (direct TCP, no NAT claim):
 # Machine A
 cd tool/connectivity_harness
 node src/cli.js listen --backend loopback --listen-host 0.0.0.0 \
-  --secret-file ./secret.bin --diagnostics-out ./a-diag.json --timeout-ms 15000
-# stdout: OK LISTENING 0.0.0.0:<port> TOPIC <64-hex>
+  --secret-file ./secret.bin --diagnostics-out ./a-diag.json \
+  --incoming-dir ./incoming --timeout-ms 15000
+# stdout:
+#   OK LISTENING 0.0.0.0:<port> TOPIC <64-hex>
+#   OK PEER connected <peerId> path=direct
+#   OK FILE received <id> <bytes> sha256=<hex> path=./incoming/<name>
+#   OK PEER disconnected <peerId> reason=<reason>
 # tell B the reachable A address and port (LAN IP, not 0.0.0.0)
 
 # Machine B
 cd tool/connectivity_harness
 node src/cli.js dial <A-LAN-IP>:<port> --backend loopback \
   --secret-file ./secret.bin --diagnostics-out ./b-diag.json --timeout-ms 15000
-# stdin on B:
+# stdout: OK CONNECTED <peerId> TOPIC <64-hex>
+# stdin on B (safe to type or pipe before OK CONNECTED):
 echo ping
+send-file ./file.bin
 shutdown
 ```
 
 Hyperswarm (still not a NAT gate). Both sides need the **same**
 secret file and an **explicit** bootstrap. There is no public-DHT
-default.
+default. **`dial` does not take a topic hex as the join target** — both
+sides already `publish` the secret-derived topic.
 
 ```bash
 # Machine A (after you have a bootstrap host:port you control)
 node src/cli.js listen --backend hyperswarm --secret-file ./secret.bin \
-  --bootstrap <dht-host>:<dht-port> --diagnostics-out ./a-diag.json
-# copy the printed TOPIC hex to B (the topic is HASH(info||secret), not a peer id)
+  --bootstrap <dht-host>:<dht-port> --diagnostics-out ./a-diag.json \
+  --incoming-dir ./incoming
+# stdout: OK LISTENING hyperswarm TOPIC <64-hex>
+# The hex is HASH("orbits-contact-discovery-v1" || secret), not HASH(peerId).
+# B does not need that hex to dial.
 
 # Machine B
-node src/cli.js dial <topic-hex-from-A> --backend hyperswarm \
-  --secret-file ./secret.bin --bootstrap <dht-host>:<dht-port> \
-  --diagnostics-out ./b-diag.json
-# dial refuses a topic hex that does not match the secret-file
+node src/cli.js dial --backend hyperswarm --secret-file ./secret.bin \
+  --bootstrap <dht-host>:<dht-port> --diagnostics-out ./b-diag.json
+# optional leftover host:port / hex on argv is ignored
+# stdout: OK CONNECTED <peerId> TOPIC <same 64-hex>
+# stdin: echo ping / send-file ./file.bin / shutdown
 ```
-
-Dial target for loopback is `host:port`. Dial target for Hyperswarm is
-the 64-char topic hex printed by listen (must match the secret).
 
 ## What needs a real NAT / UDP / Kazakhstan matrix
 
@@ -149,18 +175,24 @@ claim those gates are closed.
 ## Diagnostics and logs
 
 - Worklet: `worklet.diagnostics()` and IPC `diagnostics`.
-- CLI: `--diagnostics-out <path>` writes JSON on SIGINT/SIGTERM/`shutdown`.
-- Stdout lines: `OK LISTENING …`, `OK CONNECTED …`, `OK ECHO …`,
-  `OK FILE …`, `OK DIAGNOSTICS {…}`, `OK SHUTDOWN`, or `ERR …`.
+- CLI: `--diagnostics-out <path>` writes JSON **after** `stop()` on
+  SIGINT/SIGTERM/`shutdown` (`lifecycle: stopped`, last-known peers).
+- Stdout lines: `OK LISTENING …`, `OK CONNECTED …`,
+  `OK PEER connected <id> path=direct|relay`,
+  `OK PEER disconnected <id> reason=…`, `OK ECHO …`,
+  `OK FILE sent …`, `OK FILE received <id> <bytes> sha256=… path=…`,
+  `OK DIAGNOSTICS {…}`, `OK SHUTDOWN`, or `ERR NOT_CONNECTED <cmd>`.
 - Peer drop reasons include `malformed-frame`, `oversized-frame`,
   `closed`, `local-disconnect`.
 
-Expected local echo:
+Expected local echo + file:
 
 ```text
-OK LISTENING 127.0.0.1:41234 TOPIC a1… 
+OK LISTENING 127.0.0.1:41234 TOPIC a1…
+OK PEER connected outbound:41234 path=direct
 OK CONNECTED outbound:41234 TOPIC a1…
 OK ECHO ping
+OK FILE received abcd… 1048576 sha256=… path=/tmp/orbits-harness-incoming/…
 OK SHUTDOWN
 ```
 
