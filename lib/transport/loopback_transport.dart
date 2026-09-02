@@ -10,6 +10,7 @@ import 'package:crypto/crypto.dart' show sha256;
 
 import '../attachments/path_attachment.dart';
 import '../replication/memory_journal.dart';
+import '../rooms/autobase_log.dart';
 import 'device_binding.dart';
 import 'discovery.dart';
 import 'layers.dart';
@@ -57,6 +58,7 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   final Map<String, Completer<int>> _resumeWaiters = <String, Completer<int>>{};
   Future<void> _attachmentIo = Future<void>.value();
   final List<Map<String, Object?>> _journal = <Map<String, Object?>>[];
+  final AutobaseProjection _autobase = AutobaseProjection();
 
   /// Test hook: stop [sendFile] after this many payload bytes from the
   /// agreed offset, without sending `harness-file-end`.
@@ -67,7 +69,11 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   String? topicHex;
   PeerDescriptor? lastConnect;
   TransportChannel? lastSendChannel;
+  final List<String> sentPeerIds = <String>[];
   final List<PeerDescriptor> rememberedPeers = <PeerDescriptor>[];
+
+  /// Shared in-process hub. Own-device sync copies join a second topic.
+  LoopbackHub get hub => _hub;
   bool _started = false;
   bool _suspended = false;
   bool _published = false;
@@ -136,10 +142,9 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
     if (!_published) {
       throw StateError('publish before connect');
     }
+    // Join the remote's discovery topic. Local advertise topic may differ
+    // (own-device sync copy uses the local secret, not the contact secret).
     final topic = hexOf(await contactDiscoveryTopic(secret));
-    if (topic != topicHex) {
-      throw StateError('discovery secret does not match published topic');
-    }
     final remote = _hub.find(topic, peer.peerId);
     if (remote == null) {
       throw StateError('peer not published on topic');
@@ -178,6 +183,7 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
       throw StateError('not connected to $peerId');
     }
     lastSendChannel = channel;
+    sentPeerIds.add(peerId);
     remote._deliver(this.peerId, channel, Uint8List.fromList(frame));
   }
 
@@ -344,7 +350,9 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
         throw ArgumentError('journal requires encryptedEnvelope');
       }
     }
-    _journal.add(Map<String, Object?>.from(record));
+    final stored = Map<String, Object?>.from(record);
+    _journal.add(stored);
+    _autobase.hydrateFromJournal([stored]);
   }
 
   @override
@@ -352,11 +360,12 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
       List<Map<String, Object?>>.from(_journal);
 
   @override
-  Future<Map<String, Object?>> listAutobase() async =>
-      const <String, Object?>{};
+  Future<Map<String, Object?>> listAutobase() async => _autobase.snapshot();
 
   @override
-  Future<void> hydrateAutobase([List<Map<String, Object?>>? rows]) async {}
+  Future<void> hydrateAutobase([List<Map<String, Object?>>? rows]) async {
+    _autobase.hydrateFromJournal(rows ?? _journal);
+  }
 
   /// Harness helper: inject a carrier event (relay blow-up, crash, …).
   void emitEvent(TransportEvent event) => _events.add(event);

@@ -388,6 +388,81 @@ void main() {
     await b.stop();
   });
 
+  test('connect joins a remote topic that is not the local advertise topic',
+      () async {
+    final pair = loopbackPair();
+    final a = pair.$1;
+    final tabletSecret = List<int>.generate(32, (i) => i + 40);
+    final tablet = LoopbackOrbitsTransport(hub: a.hub);
+    await a.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await tablet.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-A2A2A2A2A2A2A2A2',
+        discoverySecret: tabletSecret,
+      ),
+    );
+    await a.publish(_binding('dev-a'));
+    await tablet.publish(_binding('dev-a2'));
+    await a.connect(
+      PeerDescriptor(
+        peerId: 'ORBIT-A2A2A2A2A2A2A2A2',
+        discoverySecret: tabletSecret,
+      ),
+    );
+    expect(a.lastConnect?.peerId, 'ORBIT-A2A2A2A2A2A2A2A2');
+    await a.send(
+      'ORBIT-A2A2A2A2A2A2A2A2',
+      TransportChannel.message,
+      utf8.encode('sync-copy'),
+    );
+    expect(a.sentPeerIds, contains('ORBIT-A2A2A2A2A2A2A2A2'));
+    await a.stop();
+    await tablet.stop();
+  });
+
+  test('hydrateAutobase and listAutobase rebuild membership from journal',
+      () async {
+    final pair = loopbackPair();
+    await pair.$1.start(
+      const TransportLocalConfiguration(peerId: 'ORBIT-AAAAAAAAAAAAAAAA'),
+    );
+    expect(await pair.$1.listAutobase(), containsPair('members', isEmpty));
+    await pair.$1.appendJournal({
+      'kind': 'roomMembershipChanged',
+      'writerDeviceId': 'dev-a',
+      'seq': 0,
+      'fields': {
+        'peerId': 'ORBIT-CCCCCCCCCCCCCCCC',
+        'action': 'join',
+        'displayName': 'C',
+        'roomId': 'room-1',
+      },
+    });
+    final snap = await pair.$1.listAutobase();
+    expect((snap['members'] as Map)['ORBIT-CCCCCCCCCCCCCCCC'], 'C');
+    await pair.$1.hydrateAutobase([
+      {
+        'kind': 'roomMembershipChanged',
+        'writerDeviceId': 'dev-a',
+        'seq': 1,
+        'fields': {
+          'peerId': 'ORBIT-DDDDDDDDDDDDDDDD',
+          'action': 'join',
+          'displayName': 'D',
+        },
+      },
+    ]);
+    final again = await pair.$1.listAutobase();
+    expect((again['members'] as Map)['ORBIT-DDDDDDDDDDDDDDDD'], 'D');
+    expect((again['members'] as Map)['ORBIT-CCCCCCCCCCCCCCCC'], 'C');
+    await pair.$1.stop();
+  });
+
   test('appendJournal refuses URL-shaped identifier values', () async {
     final pair = loopbackPair();
     await pair.$1.start(

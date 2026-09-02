@@ -32,6 +32,14 @@ void main() {
     expect(alice.isRevoked('a1'), isTrue);
     expect(alice.isRevoked('unknown-device'), isFalse);
     expect(
+      alice.sendTargets(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        selfPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        sendingDeviceId: 'a1',
+      ),
+      {'ORBIT-BBBBBBBBBBBBBBBB'},
+    );
+    expect(
       () => alice.authorize(dev('a1')),
       throwsStateError,
     );
@@ -83,6 +91,78 @@ void main() {
     expect(
       again.noisePublicKeyFor('ORBIT-BBBBBBBBBBBBBBBB'),
       List<int>.filled(32, 1),
+    );
+  });
+
+  test('sendTargets include recipient devices and own-device sync copies', () {
+    final reg = DeviceRegistry()
+      ..authorize(
+        AuthorizedDevice(
+          deviceId: 'alice-phone',
+          transportPublicKey: List<int>.filled(32, 1),
+          hypercorePublicKey: List<int>.filled(32, 2),
+          name: 'phone',
+          kind: 'phone',
+          createdAt: 1,
+          status: DeviceStatus.active,
+          ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+          transportPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        ),
+      )
+      ..authorize(
+        AuthorizedDevice(
+          deviceId: 'alice-tablet',
+          transportPublicKey: List<int>.filled(32, 3),
+          hypercorePublicKey: List<int>.filled(32, 4),
+          name: 'tablet',
+          kind: 'tablet',
+          createdAt: 2,
+          status: DeviceStatus.active,
+          ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+          transportPeerId: 'ORBIT-A2A2A2A2A2A2A2A2',
+        ),
+      )
+      ..authorize(
+        AuthorizedDevice(
+          deviceId: 'bob-phone',
+          transportPublicKey: List<int>.filled(32, 5),
+          hypercorePublicKey: List<int>.filled(32, 6),
+          name: 'phone',
+          kind: 'phone',
+          createdAt: 3,
+          status: DeviceStatus.active,
+          ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+          transportPeerId: 'ORBIT-B1B1B1B1B1B1B1B1',
+        ),
+      );
+    expect(
+      reg.sendTargets(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        selfPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        sendingDeviceId: 'alice-phone',
+      ),
+      {
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        'ORBIT-B1B1B1B1B1B1B1B1',
+        'ORBIT-A2A2A2A2A2A2A2A2',
+      },
+    );
+    expect(
+      reg.sendTargets(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        selfPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        sendingDeviceId: 'alice-phone',
+      ),
+      isNot(contains('ORBIT-AAAAAAAAAAAAAAAA')),
+    );
+    reg.revoke('alice-tablet');
+    expect(
+      reg.sendTargets(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        selfPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        sendingDeviceId: 'alice-phone',
+      ),
+      isNot(contains('ORBIT-A2A2A2A2A2A2A2A2')),
     );
   });
 

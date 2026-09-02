@@ -267,8 +267,14 @@ void main() {
         .split('Future<void> rememberKnownPeers')[1]
         .split('Future<void> detach')[0];
     expect(rememberKnown, contains('transport.rememberPeer'));
-    expect(rememberKnown, contains('noisePublicKey: noise'));
+    expect(rememberKnown, contains('noisePublicKey'));
     expect(rememberKnown, isNot(contains('discoverySecret')));
+    final sendEncrypted = File('lib/transport/dual_stack_bridge.dart')
+        .readAsStringSync()
+        .split('Future<bool> sendEncrypted')[1]
+        .split('Future<bool> _sendEncryptedOne')[0];
+    expect(sendEncrypted, contains('sendTargets'));
+    expect(sendEncrypted, isNot(contains('discoverySecret')));
     expect(
       File('lib/transport/native_transport_host.dart').readAsStringSync(),
       contains('localBinding: issuedBinding'),

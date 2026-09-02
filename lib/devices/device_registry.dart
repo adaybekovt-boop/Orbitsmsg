@@ -179,6 +179,29 @@ class DeviceRegistry {
     return out;
   }
 
+  /// Live send fan-out: every active recipient device, plus own devices
+  /// except the sending one (sync copy). Never the local live peer id.
+  Set<String> sendTargets(
+    String recipientPeerId, {
+    required String selfPeerId,
+    required String sendingDeviceId,
+  }) {
+    final out = transportTargets(recipientPeerId);
+    final self = normalizePeerId(selfPeerId);
+    if (self.isEmpty || sendingDeviceId.contains('://')) return out;
+    for (final device in active) {
+      if (device.deviceId == sendingDeviceId) continue;
+      if (!_deviceIdSafe(device.deviceId)) continue;
+      if (normalizePeerId(device.ownerPeerId) != self) continue;
+      final tid = device.transportPeerId;
+      if (tid == null || tid.isEmpty || !_optionalPeerSafe(tid)) continue;
+      final norm = normalizePeerId(tid);
+      if (norm.isEmpty || norm == self) continue;
+      out.add(norm);
+    }
+    return out;
+  }
+
   /// Noise public key for a transport or owner id. Not the identity key.
   List<int>? noisePublicKeyFor(String peerId) {
     final norm = normalizePeerId(peerId);

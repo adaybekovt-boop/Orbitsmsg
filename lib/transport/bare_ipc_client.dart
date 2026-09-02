@@ -4,6 +4,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import '../rooms/autobase_log.dart';
 import 'ipc_codec.dart';
 
 typedef IpcWrite = void Function(List<int> bytes);
@@ -90,6 +91,7 @@ class InProcessBareWorklet {
   final List<String> methods = <String>[];
   final List<Map<String, Object?>> rememberedPeers = <Map<String, Object?>>[];
   final List<Map<String, Object?>> journal = <Map<String, Object?>>[];
+  final AutobaseProjection _autobase = AutobaseProjection();
   Map<String, Object?> autobase = <String, Object?>{};
 
   Map<String, Object?> _params(Map<String, Object?> body) {
@@ -138,8 +140,12 @@ class InProcessBareWorklet {
       case 'journal.append':
         final record = _params(body);
         journal.add(record);
+        _autobase.hydrateFromJournal([record]);
+        autobase = _autobase.snapshot();
         return {'ok': true, 'result': record};
       case 'journal.list':
+        _autobase.hydrateFromJournal(journal);
+        autobase = _autobase.snapshot();
         return {
           'ok': true,
           'result': <String, Object?>{
@@ -147,17 +153,21 @@ class InProcessBareWorklet {
           },
         };
       case 'autobase.hydrate':
+        final params = _params(body);
+        final raw = params['rows'] ?? params['blocks'] ?? journal;
+        final rows = <Map<String, Object?>>[
+          if (raw is List)
+            for (final row in raw)
+              if (row is Map) Map<String, Object?>.from(row),
+        ];
+        final hydrated = _autobase.hydrateFromJournal(rows);
         autobase = <String, Object?>{
-          'hydrated': true,
-          'members': <String, Object?>{},
-          'roles': <String, Object?>{},
-          'channels': <String, Object?>{},
-          'messages': <Object?>[],
-          'attachments': <String, Object?>{},
-          'applied': <Object?>[],
+          'hydrated': hydrated,
+          ..._autobase.snapshot(),
         };
         return {'ok': true, 'result': Map<String, Object?>.from(autobase)};
       case 'autobase.state':
+        autobase = _autobase.snapshot();
         return {'ok': true, 'result': Map<String, Object?>.from(autobase)};
       default:
         throw StateError('unknown method $method');

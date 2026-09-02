@@ -47,10 +47,31 @@ void main() {
     expect((listed['blocks'] as List).length, 1);
 
     final hydrated = await pair.client.request('autobase.hydrate');
-    expect(hydrated['hydrated'], isTrue);
+    expect(hydrated['hydrated'], 0);
+    expect(hydrated['members'], isA<Map>());
+
+    await pair.client.request('journal.append', {
+      'kind': 'roomMembershipChanged',
+      'writerDeviceId': 'dev-a',
+      'seq': 0,
+      'fields': {
+        'peerId': 'ORBIT-CCCCCCCCCCCCCCCC',
+        'action': 'join',
+        'displayName': 'C',
+      },
+    });
+    final membership = await pair.client.request('autobase.hydrate', {
+      'rows': pair.worklet.journal,
+    });
+    expect(membership['hydrated'], greaterThanOrEqualTo(1));
+    expect(
+      (membership['members'] as Map)['ORBIT-CCCCCCCCCCCCCCCC'],
+      'C',
+    );
 
     final state = await pair.client.request('autobase.state');
     expect(state, isA<Map<String, Object?>>());
+    expect((state['members'] as Map)['ORBIT-CCCCCCCCCCCCCCCC'], 'C');
     expect(pair.worklet.methods, containsAll([
       'rememberPeer',
       'journal.append',

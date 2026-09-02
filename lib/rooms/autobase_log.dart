@@ -1,6 +1,8 @@
 // Deterministic multiwriter projection for rooms (Phase 12).
 // Does not encrypt. Host-plaintext warning stays in place.
 
+import 'dart:collection';
+
 import '../transport/layers.dart';
 
 /// Autobase attachment extras already used in JS `STRIP`
@@ -80,6 +82,107 @@ bool _roomPayloadIdentifiersSafe(Object? payload) {
     if (!_roomIdentifierValueSafe(payload[key])) return false;
   }
   return true;
+}
+
+/// Journal kinds that rebuild Autobase membership after restart.
+/// Mirrors `JOURNAL_MEMBERSHIP_KINDS` in `autobase.js`.
+const Set<String> kAutobaseJournalMembershipKinds = {
+  'roomMembershipChanged',
+  'RoomMembershipChanged',
+};
+
+/// Journal hydrate extra bans. Live Autobase keeps host-plaintext `text`;
+/// the restart path must not copy message bodies or chunk `b64`.
+const Set<String> _kAutobaseJournalHydrateForbidden = {
+  'text',
+  'b64',
+};
+
+bool _autobaseJournalHydrateForbidden(Object? value, [Set<Object>? seen]) {
+  if (value == null || value is bool || value is num || value is String) {
+    return false;
+  }
+  if (value is List<int>) return false;
+  final walk = seen ?? HashSet<Object>.identity();
+  if (value is Map) {
+    if (!walk.add(value)) return false;
+    for (final e in value.entries) {
+      final key = '${e.key}';
+      if (kForbiddenReplicationFields.contains(key) ||
+          _kAutobaseJournalHydrateForbidden.contains(key)) {
+        return true;
+      }
+      if (_autobaseJournalHydrateForbidden(e.value, walk)) return true;
+    }
+    return false;
+  }
+  if (value is Iterable) {
+    if (!walk.add(value)) return false;
+    for (final item in value) {
+      if (_autobaseJournalHydrateForbidden(item, walk)) return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+Map<String, Object?>? _journalFieldsOf(Map<String, Object?> row) {
+  final fields = row['fields'];
+  if (fields is Map) {
+    return <String, Object?>{
+      for (final e in fields.entries)
+        if (e.key is String) e.key as String: e.value,
+    };
+  }
+  return row;
+}
+
+/// Map a worklet / loopback journal row to a membership event.
+/// Only `roomMembershipChanged`. Never ciphertext, `text`, or `fileKey`.
+RoomEvent? membershipEventFromJournalRow(Map<String, Object?> row) {
+  final kindName = row['kind'];
+  if (kindName is! String ||
+      !kAutobaseJournalMembershipKinds.contains(kindName)) {
+    return null;
+  }
+  if (_autobaseJournalHydrateForbidden(row)) return null;
+  final fields = _journalFieldsOf(row);
+  if (fields == null || _autobaseJournalHydrateForbidden(fields)) {
+    return null;
+  }
+  final peerId = fields['peerId'];
+  if (peerId is! String || peerId.isEmpty) return null;
+  final payload = <String, Object?>{};
+  for (final key in const ['peerId', 'action', 'displayName', 'roomId']) {
+    if (!fields.containsKey(key)) continue;
+    final value = fields[key];
+    if (key == 'peerId' || key == 'action' || key == 'displayName') {
+      if (value is! String || value.isEmpty) continue;
+    } else if (value == null || value == '') {
+      continue;
+    }
+    payload[key] = value;
+  }
+  if (payload['peerId'] == null) return null;
+  if (!_roomPayloadIdentifiersSafe(payload)) return null;
+  payload.putIfAbsent('action', () => 'join');
+  final fromFields = fields['writerId'];
+  final fromRow = row['writerDeviceId'] ?? row['writerId'];
+  final writer = fromFields is String && fromFields.isNotEmpty
+      ? fromFields
+      : fromRow is String && fromRow.isNotEmpty
+          ? fromRow
+          : 'journal';
+  if (writer.contains('://')) return null;
+  final seq = (fields['seq'] as num?)?.toInt() ??
+      (row['seq'] as num?)?.toInt() ??
+      0;
+  return RoomEvent(
+    writerId: writer,
+    seq: seq,
+    kind: 'membership',
+    payload: payload,
+  );
 }
 
 class RoomEvent {
@@ -322,4 +425,38 @@ class AutobaseProjection {
       apply(event);
     }
   }
+
+  /// Restart path. Membership metadata only — never message bodies.
+  int hydrateFromJournal(Iterable<Object?> rows) {
+    final events = <RoomEvent>[];
+    for (final row in rows) {
+      if (row is! Map) continue;
+      final event = membershipEventFromJournalRow(
+        row is Map<String, Object?>
+            ? row
+            : <String, Object?>{
+                for (final e in row.entries)
+                  if (e.key is String) e.key as String: e.value,
+              },
+      );
+      if (event != null) events.add(event);
+    }
+    applyAll(events);
+    return events.length;
+  }
+
+  /// Same shape as JS `AutobaseProjection.snapshot()`. Never fileKey.
+  Map<String, Object?> snapshot() => <String, Object?>{
+        'members': Map<String, String>.from(state.members),
+        'roles': Map<String, String>.from(state.roles),
+        'channels': Map<String, String>.from(state.channels),
+        'messages': <Map<String, Object?>>[
+          for (final m in state.messages) Map<String, Object?>.from(m),
+        ],
+        'attachments': <String, Map<String, Object?>>{
+          for (final e in state.attachments.entries)
+            e.key: Map<String, Object?>.from(e.value),
+        },
+        'applied': state.applied.toList(),
+      };
 }

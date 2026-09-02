@@ -403,7 +403,11 @@ class DualStackBridge {
   }
 
   Future<bool> sendEncrypted(String peerId, Object? msg) async {
-    final targets = devices?.transportTargets(peerId) ??
+    final targets = devices?.sendTargets(
+          peerId,
+          selfPeerId: selfPeerId(),
+          sendingDeviceId: selfDeviceId,
+        ) ??
         <String>{normalizePeerId(peerId)};
     if (targets.length > 1) {
       var any = false;

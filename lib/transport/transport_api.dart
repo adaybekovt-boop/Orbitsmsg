@@ -225,12 +225,13 @@ abstract class OrbitsTransport {
   Future<List<Map<String, Object?>>> listJournal() async =>
       const <Map<String, Object?>>[];
 
-  /// Worklet Autobase snapshot (membership/channel/attachment metadata).
-  /// Empty on carriers without a worklet. Never file bytes or fileKey.
+  /// Autobase snapshot (membership/channel/attachment metadata).
+  /// Loopback and the worklet return a projection; stubs stay empty.
+  /// Never file bytes or fileKey.
   Future<Map<String, Object?>> listAutobase() async =>
       const <String, Object?>{};
 
-  /// Rebuild worklet Autobase membership from journal rows.
-  /// Membership metadata only. No-op on carriers without a worklet.
+  /// Rebuild Autobase membership from journal rows.
+  /// Membership metadata only. No-op on stubs without a projection.
   Future<void> hydrateAutobase([List<Map<String, Object?>>? rows]) async {}
 }

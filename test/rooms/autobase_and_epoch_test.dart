@@ -791,6 +791,55 @@ void main() {
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
 
+  test('hydrateFromJournal rebuilds membership and snapshot matches JS shape',
+      () {
+    final log = AutobaseProjection();
+    expect(
+      log.hydrateFromJournal([
+        {
+          'kind': 'roomMembershipChanged',
+          'writerDeviceId': 'dev-a',
+          'seq': 0,
+          'fields': {
+            'peerId': 'ORBIT-CCCCCCCCCCCCCCCC',
+            'action': 'join',
+            'displayName': 'C',
+            'roomId': 'room-1',
+            'writerId': 'dev-a',
+            'seq': 0,
+          },
+        },
+        {
+          'kind': 'messageEnvelopeCreated',
+          'fields': {
+            'encryptedEnvelope': 'djI6Y2lwaGVy',
+            'text': 'must-not-land',
+          },
+        },
+        {
+          'kind': 'roomMembershipChanged',
+          'fields': {
+            'peerId': 'ORBIT-DDDDDDDDDDDDDDDD',
+            'action': 'join',
+            'fileKey': 'nope',
+          },
+        },
+      ]),
+      1,
+    );
+    expect(log.state.members['ORBIT-CCCCCCCCCCCCCCCC'], 'C');
+    expect(log.state.members.containsKey('ORBIT-DDDDDDDDDDDDDDDD'), isFalse);
+    expect(log.state.messages, isEmpty);
+    final snap = log.snapshot();
+    expect(snap['members'], {'ORBIT-CCCCCCCCCCCCCCCC': 'C'});
+    expect(snap['roles'], isA<Map>());
+    expect(snap['channels'], isA<Map>());
+    expect(snap['messages'], isA<List>());
+    expect(snap['attachments'], isA<Map>());
+    expect(snap['applied'], contains('dev-a:0'));
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
   test('worklet autobase.js projects kForbiddenReplicationFields', () {
     final js =
         File('tool/connectivity_harness/src/autobase.js').readAsStringSync();

@@ -3142,6 +3142,18 @@ void main() {
       () async {
     setHyperswarmRollout(HyperswarmRollout.internal);
     final pair = loopbackPair();
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
     final tabletNoise = List<int>.generate(32, (i) => 31);
     final devices = DeviceRegistry();
     final secrets = DiscoverySecretStore()
@@ -3189,6 +3201,93 @@ void main() {
     expect(pair.$1.lastConnect?.peerId, 'ORBIT-B1B1B1B1B1B1B1B1');
     expect(pair.$1.lastConnect?.noisePublicKey, tabletNoise);
     expect(pair.$1.lastConnect?.discoverySecret, List<int>.filled(32, 2));
+    await a.detach();
+  });
+
+  test('sendEncrypted fans out to own-device sync copies via sendTargets',
+      () async {
+    final devices = DeviceRegistry();
+    final (a, _, _) = await linked(devices: devices);
+    final localSecret = List<int>.generate(32, (i) => 40 + i);
+    a.secrets.put(kLocalDiscoverySecretId, localSecret);
+    a.authorizeDevice(
+      AuthorizedDevice(
+        deviceId: 'alice-tablet',
+        transportPublicKey: List<int>.generate(32, (i) => 41),
+        hypercorePublicKey: List<int>.generate(32, (i) => 42),
+        name: 'tablet',
+        kind: 'tablet',
+        createdAt: 1,
+        status: DeviceStatus.active,
+        ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        transportPeerId: 'ORBIT-A2A2A2A2A2A2A2A2',
+      ),
+    );
+    expect(
+      devices.sendTargets(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        selfPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        sendingDeviceId: 'dev-a',
+      ),
+      containsAll([
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        'ORBIT-A2A2A2A2A2A2A2A2',
+      ]),
+    );
+    final tablet = LoopbackOrbitsTransport(
+      hub: (a.transport as LoopbackOrbitsTransport).hub,
+    );
+    await tablet.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-A2A2A2A2A2A2A2A2',
+        discoverySecret: localSecret,
+      ),
+    );
+    await tablet.publish(await _bind('a'));
+    await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
+      'type': 'ack',
+      'id': 'sync-1',
+    });
+    expect(
+      (a.transport as LoopbackOrbitsTransport).lastConnect?.peerId,
+      'ORBIT-A2A2A2A2A2A2A2A2',
+    );
+    expect(
+      (a.transport as LoopbackOrbitsTransport).lastConnect?.discoverySecret,
+      localSecret,
+    );
+    await tablet.stop();
+    await a.detach();
+  });
+
+  test('sendEncrypted source-scan uses sendTargets not only transportTargets',
+      () {
+    final src = File('lib/transport/dual_stack_bridge.dart').readAsStringSync();
+    final send = src
+        .split('Future<bool> sendEncrypted')[1]
+        .split('Future<bool> _sendEncryptedOne')[0];
+    expect(send, contains('sendTargets'));
+    expect(send, contains('selfPeerId: selfPeerId()'));
+    expect(send, contains('sendingDeviceId: selfDeviceId'));
+    expect(send, isNot(contains('transportTargets(peerId)')));
+  });
+
+  test('loopback Autobase lists DualStack membership after room_join',
+      () async {
+    final (a, _, _) = await linked();
+    expect(
+      a.sendRoomPacket('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'room_join',
+        'roomId': 'room-ab',
+        'guestPeerId': 'ORBIT-CCCCCCCCCCCCCCCC',
+        'guestName': 'C',
+      }),
+      isTrue,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    final snap = await a.transport.listAutobase();
+    expect((snap['members'] as Map)['ORBIT-CCCCCCCCCCCCCCCC'], 'C');
+    expect(kRoomsApplicationE2eImplemented, isFalse);
     await a.detach();
   });
 
