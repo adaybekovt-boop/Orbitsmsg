@@ -179,6 +179,12 @@ void main() {
     expect(attach.indexOf('onStream.listen'), greaterThan(gateIdx));
     expect(attach.indexOf('onClose.listen'), greaterThan(gateIdx));
     expect(attach, contains('conn.close'));
+    expect(attach, contains('remoteUnderstandsNativeCall'));
+    expect(
+      attach.indexOf('remoteUnderstandsNativeCall'),
+      lessThan(attach.indexOf('_conn = conn')),
+      reason: 'call-v1 remotes must not attach leftover PeerJS media',
+    );
 
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
     expect(kPeerjsSupportWindowOpen, isTrue);
@@ -243,6 +249,16 @@ void main() {
     expect(
       nativeSignal.indexOf('signal.isRoomVoice'),
       lessThan(nativeSignal.indexOf('NativeCallSession')),
+    );
+
+    final onCall = src
+        .split('_callSub = current.onCall.listen')[1]
+        .split('void dispose()')[0];
+    expect(onCall, contains('remoteUnderstandsNativeCall'));
+    expect(
+      onCall.indexOf('remoteUnderstandsNativeCall'),
+      lessThan(onCall.indexOf('_attachConnection')),
+      reason: 'inbound PeerJS from a call-v1 peer must close before attach',
     );
 
     expect(

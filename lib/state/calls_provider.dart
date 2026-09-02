@@ -605,6 +605,13 @@ class CallsNotifier extends StateNotifier<CallState> {
       unawaited(conn.close().catchError((_) {}));
       return;
     }
+    final nativeCall = _ref
+        .read(connectionsNotifierProvider.notifier)
+        .remoteUnderstandsNativeCall(conn.peer);
+    if (nativeCall) {
+      unawaited(conn.close().catchError((_) {}));
+      return;
+    }
     _conn = conn;
     _remoteStreamSub = conn.onStream.listen((remote) {
       if (!mounted) return;
@@ -708,7 +715,10 @@ class CallsNotifier extends StateNotifier<CallState> {
       // never surface them as a 1:1 call (audit item 6). Normal 1:1 calls have
       // no such tag and continue exactly as before.
       if (conn.metadata['channel'] == 'room-voice') return;
-      if (_nativeSession != null || _nativeMedia != null) {
+      final conns = _ref.read(connectionsNotifierProvider.notifier);
+      if (_nativeSession != null ||
+          _nativeMedia != null ||
+          conns.remoteUnderstandsNativeCall(conn.peer)) {
         unawaited(conn.close().catchError((_) {}));
         return;
       }
