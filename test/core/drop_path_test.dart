@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbits_flutter/state/drop_provider.dart';
 import 'package:orbits_flutter/transport/peerjs_window.dart';
 
 void main() {
@@ -169,5 +170,97 @@ void main() {
 
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
     expect(kPeerjsSupportWindowOpen, isTrue);
+  });
+
+  test('DropNotifier harness-file path refuses nested secrets and remote URLs',
+      () {
+    final src = File('lib/state/drop_provider.dart').readAsStringSync();
+    expect(src, contains('harnessFilePacketIsSafe'));
+    expect(src, contains('replicationValueIsSafe'));
+    expect(src, contains('kForbiddenReplicationFields'));
+    expect(src, contains('sanitizeDropFileName'));
+    expect(src, contains("contains('://')"));
+    expect(src, contains("contains('fileKey')"));
+    expect(src, contains("contains('opaqueWakeToken')"));
+
+    final handler = src
+        .split('bool _handleNativePathPacket')[1]
+        .split('Future<bool> _persistIncoming')[0];
+    expect(handler, contains('harnessFilePacketIsSafe'));
+    expect(handler, contains('sanitizeDropFileName'));
+    final safetyIdx = handler.indexOf('harnessFilePacketIsSafe');
+    final typeIdx = handler.indexOf("packet['type']");
+    expect(safetyIdx, greaterThanOrEqualTo(0));
+    expect(typeIdx, greaterThan(safetyIdx));
+  });
+
+  test('harnessFilePacketIsSafe rejects nested fileKey on harness-file-start',
+      () {
+    expect(
+      harnessFilePacketIsSafe({
+        'type': 'harness-file-start',
+        'id': 'x',
+        'name': 'ok',
+        'meta': {'fileKey': 'k'},
+      }),
+      isFalse,
+    );
+  });
+
+  test('harnessFilePacketIsSafe rejects remote URL path on harness-file-received',
+      () {
+    expect(
+      harnessFilePacketIsSafe({
+        'type': 'harness-file-received',
+        'id': 'x',
+        'path': 'https://evil/file',
+      }),
+      isFalse,
+    );
+  });
+
+  test('harnessFilePacketIsSafe accepts local path on harness-file-received',
+      () {
+    expect(
+      harnessFilePacketIsSafe({
+        'type': 'harness-file-received',
+        'id': 'x',
+        'path': '/tmp/ok.bin',
+      }),
+      isTrue,
+    );
+  });
+
+  test('harnessFilePacketIsSafe accepts harness-file-start without secrets', () {
+    expect(
+      harnessFilePacketIsSafe({
+        'type': 'harness-file-start',
+        'id': 'x',
+        'name': 'ok.jpg',
+        'size': 1,
+      }),
+      isTrue,
+    );
+  });
+
+  test(
+      'harnessFilePacketIsSafe rejects fileKey or opaqueWakeToken in received path',
+      () {
+    expect(
+      harnessFilePacketIsSafe({
+        'type': 'harness-file-received',
+        'id': 'x',
+        'path': '/tmp/fileKey-secret',
+      }),
+      isFalse,
+    );
+    expect(
+      harnessFilePacketIsSafe({
+        'type': 'harness-file-received',
+        'id': 'x',
+        'path': '/tmp/opaqueWakeToken-leak',
+      }),
+      isFalse,
+    );
   });
 }

@@ -38,6 +38,7 @@ import '../core/wire_crypto.dart';
 import '../peer/helpers.dart';
 import '../utils/heavy_codec.dart';
 import '../storage/db.dart' as db;
+import '../transport/layers.dart';
 import '../utils/common.dart';
 import 'message_auth.dart';
 
@@ -531,15 +532,18 @@ Future<bool> dispatchReliablePlaintext(
       ? rawId
       : '$from:$ts:${_randomHex()}';
   final msgType = data['msgType'] is String ? data['msgType'] as String : 'text';
-  final sticker = data['sticker'] is Map
+  JsonMap? sticker = data['sticker'] is Map
       ? Map<String, Object?>.from(data['sticker'] as Map)
       : null;
-  final replyTo = data['replyTo'] is Map
+  if (sticker != null && !replicationValueIsSafe(sticker)) sticker = null;
+  JsonMap? replyTo = data['replyTo'] is Map
       ? Map<String, Object?>.from(data['replyTo'] as Map)
       : null;
-  final voiceMeta = data['voice'] is Map
+  if (replyTo != null && !replicationValueIsSafe(replyTo)) replyTo = null;
+  JsonMap? voiceMeta = data['voice'] is Map
       ? Map<String, Object?>.from(data['voice'] as Map)
       : null;
+  if (voiceMeta != null && !replicationValueIsSafe(voiceMeta)) voiceMeta = null;
   final attachmentMeta = data['attachment'] is Map
       ? Map<String, Object?>.from(data['attachment'] as Map)
       : null;

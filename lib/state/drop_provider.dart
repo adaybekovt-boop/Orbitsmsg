@@ -14,6 +14,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/orbits_drop.dart';
 import '../peer/helpers.dart';
 import '../storage/db.dart' as db;
+import '../transport/layers.dart';
 import '../transport/peerjs_window.dart';
 import '../transport/transport_api.dart';
 import 'auth_notifier.dart';
@@ -90,6 +91,25 @@ class DropState {
 
   DropState copyWith({List<DropTransfer>? transfers}) =>
       DropState(transfers: transfers ?? this.transfers);
+}
+
+/// True when a native `harness-file-*` packet may be upserted or patched.
+///
+/// Walks nested maps with [replicationValueIsSafe] ([kForbiddenReplicationFields]).
+/// For `harness-file-received`, also refuses a remote URL / scheme and path
+/// strings that embed `fileKey` or `opaqueWakeToken`.
+bool harnessFilePacketIsSafe(Map packet) {
+  if (!replicationValueIsSafe(packet)) return false;
+  if (packet['type'] == 'harness-file-received') {
+    final path = packet['path'];
+    if (path is String &&
+        (path.contains('://') ||
+            path.contains('fileKey') ||
+            path.contains('opaqueWakeToken'))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 class DropNotifier extends StateNotifier<DropState> {
@@ -453,13 +473,14 @@ class DropNotifier extends StateNotifier<DropState> {
 
   bool _handleNativePathPacket(String peerId, Object packet) {
     if (packet is! Map) return false;
+    if (!harnessFilePacketIsSafe(packet)) return true;
     final type = packet['type'];
     if (type == 'harness-file-start') {
       final id = packet['id'] as String? ?? '';
       if (id.isEmpty) return true;
       _upsert(DropTransfer(
         id: id,
-        name: (packet['name'] as String?) ?? 'file',
+        name: sanitizeDropFileName(packet['name'] as String?),
         size: (packet['size'] as num?)?.toInt() ?? 0,
         mime: (packet['mime'] as String?) ?? 'application/octet-stream',
         peerId: peerId,
@@ -487,7 +508,7 @@ class DropNotifier extends StateNotifier<DropState> {
       if (existing.isEmpty) {
         _upsert(DropTransfer(
           id: id,
-          name: (packet['name'] as String?) ?? 'file',
+          name: sanitizeDropFileName(packet['name'] as String?),
           size: size,
           mime: 'application/octet-stream',
           peerId: peerId,

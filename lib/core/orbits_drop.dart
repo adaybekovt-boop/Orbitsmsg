@@ -26,6 +26,7 @@ import 'dart:typed_data';
 import 'package:cryptography/cryptography.dart';
 import 'package:cryptography/dart.dart';
 
+import '../transport/layers.dart';
 import 'base64_helpers.dart';
 
 /// 64 KB per chunk — same as the JS engine.
@@ -618,6 +619,17 @@ class DropEngine {
     }
     if (packet is Map) {
       final type = packet['type'];
+      if (type == 'file-start' ||
+          type == 'file-resume' ||
+          type == 'file-end' ||
+          type == 'file-abort' ||
+          type == 'file-ack' ||
+          type == 'file-nack') {
+        // Nested [kForbiddenReplicationFields] at any depth — consume and drop
+        // before opening a transfer or mutating state. Binary chunks stay on
+        // the Uint8List path above and are not walked as maps.
+        if (!replicationValueIsSafe(packet)) return true;
+      }
       if (type == 'file-start') {
         await _handleStart(packet, peerId);
         return true;

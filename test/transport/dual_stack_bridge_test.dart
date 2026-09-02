@@ -924,6 +924,112 @@ void main() {
     );
   });
 
+  test('sendRoomPacket refuses nested fileKey and still sends host-plaintext',
+      () async {
+    final (a, b, packets) = await linked();
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    final rooms = <Map<String, Object?>>[];
+    b.onPacket = (peer, data) async {
+      if (data is Map) rooms.add(Map<String, Object?>.from(data));
+      packets.add(data);
+    };
+
+    expect(
+      a.sendRoomPacket('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'room_msg',
+        'id': 'm-secret',
+        'text': 'hello',
+        'meta': {'fileKey': 'x'},
+      }),
+      isFalse,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(
+      rooms.any((r) => r['id'] == 'm-secret' || jsonEncode(r).contains('fileKey')),
+      isFalse,
+    );
+    expect(
+      a.rooms.state.messages.any((m) => m['id'] == 'm-secret'),
+      isFalse,
+    );
+    expect(
+      b.rooms.state.messages.any((m) => m['id'] == 'm-secret'),
+      isFalse,
+    );
+
+    expect(
+      a.sendRoomPacket('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'room_msg',
+        'id': 'm-ok',
+        'text': 'hello',
+      }),
+      isTrue,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(
+      rooms.any((r) => r['type'] == 'room_msg' && r['text'] == 'hello'),
+      isTrue,
+    );
+    expect(
+      b.rooms.state.messages.any((m) => m['text'] == 'hello'),
+      isTrue,
+    );
+    kRoomPlaintextSessionAck.reset();
+    await a.detach();
+    await b.detach();
+  });
+
+  test('sendDrop refuses nested fileKey on Map packets', () async {
+    final (a, b, _) = await linked();
+    final dropped = <Object>[];
+    b.onDrop = (peer, packet) => dropped.add(packet);
+    expect(
+      await a.sendDrop('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'file-start',
+        'fileId': 'f-secret',
+        'name': 'a.bin',
+        'size': 3,
+        'extra': {'fileKey': 'x'},
+      }),
+      isFalse,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(dropped, isEmpty);
+    expect(
+      dropped.whereType<Map>().any((m) => jsonEncode(m).contains('fileKey')),
+      isFalse,
+    );
+    await a.detach();
+    await b.detach();
+  });
+
+  test('sendFileFromPath refuses remote URL paths', () async {
+    final (a, b, _) = await linked();
+    final dropped = <Object>[];
+    b.onDrop = (peer, packet) => dropped.add(packet);
+    await expectLater(
+      a.sendFileFromPath(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        const TransportFileDescriptor(
+          path: 'https://evil.example/file.bin',
+          sizeBytes: 1,
+          fileName: 'file.bin',
+        ),
+      ),
+      throwsA(
+        isA<StateError>().having(
+          (e) => e.message,
+          'message',
+          contains('needs a local path'),
+        ),
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(dropped, isEmpty);
+    await a.detach();
+    await b.detach();
+  });
+
   test('native path attachment survives loss and resumes from offset', () async {
     setHyperswarmRollout(HyperswarmRollout.internal);
     final pair = loopbackPair();

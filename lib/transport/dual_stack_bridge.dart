@@ -958,9 +958,11 @@ class DualStackBridge {
   bool sendRoomPacket(String peerId, Map<String, Object?> packet) {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return false;
+    if (!replicationValueIsSafe(packet)) return false;
     final framed = Map<String, Object?>.from(packet)
       ..putIfAbsent('abWriter', () => selfDeviceId)
       ..putIfAbsent('abSeq', () => _roomSeq++);
+    if (!replicationValueIsSafe(framed)) return false;
     final event = roomEventFromNativePacket(
       framed,
       fallbackWriter: selfDeviceId,
@@ -1040,6 +1042,7 @@ class DualStackBridge {
     final norm = normalizePeerId(peerId);
     if (!await _ensureNativeSendReady(norm)) return false;
     if (packet is Map) {
+      if (!replicationValueIsSafe(packet)) return false;
       await transport.send(
         norm,
         TransportChannel.attachment,
@@ -1062,8 +1065,8 @@ class DualStackBridge {
   ) async {
     final norm = normalizePeerId(peerId);
     if (!await _ensureNativeSendReady(norm)) return false;
-    if (file.path.isEmpty) {
-      throw StateError('sendFileFromPath needs a path');
+    if (file.path.isEmpty || file.path.contains('://')) {
+      throw StateError('sendFileFromPath needs a local path');
     }
     await transport.sendFile(norm, file);
     return true;
