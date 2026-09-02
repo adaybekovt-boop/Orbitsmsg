@@ -322,6 +322,7 @@ class DualStackBridge {
       if (device.transportPublicKey.isEmpty) continue;
       await remember(tid, device.transportPublicKey);
     }
+    unawaited(_dialOwnKnownDevices());
   }
 
   /// Contact discovery secret for [peerId], or the owner contact's
@@ -363,6 +364,20 @@ class DualStackBridge {
     final owner = _ownerPeerIdForTransport(peerId);
     if (owner == null) return false;
     return owner == normalizePeerId(selfPeerId());
+  }
+
+  /// Own-device sync copies join the local advertise topic after
+  /// [rememberPeer]. Never HASH(peerId).
+  Future<void> _dialOwnKnownDevices() async {
+    for (final device in devices?.active ?? const <AuthorizedDevice>[]) {
+      final tid = device.transportPeerId;
+      if (tid == null || tid.isEmpty) continue;
+      if (!_isOwnDeviceTransport(tid)) continue;
+      if (discoverySecretFor(tid) == null) continue;
+      try {
+        await dial(tid);
+      } catch (_) {}
+    }
   }
 
   Future<void> detach() async {
@@ -572,6 +587,7 @@ class DualStackBridge {
     );
     unawaited(_persistDurable(record));
     hypercore.append(record);
+    _replicateToAuthenticated(record);
     for (final key in ratchetKeysForRevokedDevice(before)) {
       onRatchetDropped?.call(key);
       unawaited(teardownWireSession(key));
@@ -596,6 +612,10 @@ class DualStackBridge {
           ),
         ),
       );
+      if (_isOwnDeviceTransport(rememberId) &&
+          discoverySecretFor(rememberId) != null) {
+        unawaited(dial(rememberId));
+      }
     }
     final record = journal.append(
       ReplicationEventKind.deviceAuthorized,
@@ -606,6 +626,7 @@ class DualStackBridge {
     );
     unawaited(_persistDurable(record));
     hypercore.append(record);
+    _replicateToAuthenticated(record);
   }
 
   /// Local block list is Drift + the inbound [isBlocked] hook. This
@@ -629,6 +650,7 @@ class DualStackBridge {
     );
     unawaited(_persistDurable(record));
     hypercore.append(record);
+    _replicateToAuthenticated(record);
   }
 
   /// Inbound delivery receipt after decrypt. Metadata only — no ratchet
@@ -650,6 +672,7 @@ class DualStackBridge {
     );
     unawaited(_persistDurable(record));
     hypercore.append(record);
+    _replicateToSendTargets(conv, record);
     onDeliveryState?.call(conv, 'delivered');
   }
 
@@ -674,6 +697,11 @@ class DualStackBridge {
     );
     unawaited(_persistDurable(record));
     hypercore.append(record);
+    if (conversationId != null && conversationId.isNotEmpty) {
+      _replicateToSendTargets(conversationId, record);
+    } else {
+      _replicateToAuthenticated(record);
+    }
   }
 
   Future<int> drainMailbox({String? fromPeerId}) async {
@@ -854,7 +882,6 @@ class DualStackBridge {
     List<int> fileKey, {
     String fileId = '',
   }) async {
-    if (!await _ensureNativeSendReady(peerId)) return;
     return _sendAttachmentChunks(
       peerId,
       ResumableAttachment.chunk(plaintext, fileKey),
@@ -872,24 +899,29 @@ class DualStackBridge {
     List<int> fileKey, {
     String fileId = '',
   }) async {
-    final norm = normalizePeerId(peerId);
-    if (!await _ensureNativeSendReady(norm)) return;
     final id = fileId.isEmpty
         ? 'att-${DateTime.now().millisecondsSinceEpoch}'
         : fileId;
+    if (id.contains('://')) return;
+    final targets = _sendPeerIds(peerId);
     List<int>? firstCipher;
     var count = 0;
     var total = 0;
+    var any = false;
     await for (final chunk
         in ResumableAttachment.chunkStream(plaintext, fileKey)) {
-      await _sendOneAttachChunk(norm, chunk, fileId: id);
+      for (final target in targets) {
+        if (!await _ensureNativeSendReady(target)) continue;
+        await _sendOneAttachChunk(target, chunk, fileId: id);
+        any = true;
+      }
       firstCipher ??= List<int>.from(chunk.ciphertext);
       count++;
       total += chunk.ciphertext.length;
     }
-    if (firstCipher == null) return;
+    if (firstCipher == null || !any) return;
     _journalAttachmentPublished(
-      norm,
+      normalizePeerId(peerId),
       firstCipher: firstCipher,
       chunkCount: count,
       totalBytes: total,
@@ -938,22 +970,25 @@ class DualStackBridge {
     List<AttachmentChunk> chunks, {
     String fileId = '',
   }) async {
-    final norm = normalizePeerId(peerId);
-    if (!await _ensureNativeSendReady(norm)) return;
     final id = fileId.isEmpty
         ? 'att-${DateTime.now().millisecondsSinceEpoch}'
         : fileId;
     if (id.isEmpty || id.contains('://')) return;
-    for (final chunk in chunks) {
-      await _sendOneAttachChunk(norm, chunk, fileId: id);
+    var any = false;
+    for (final target in _sendPeerIds(peerId)) {
+      if (!await _ensureNativeSendReady(target)) continue;
+      for (final chunk in chunks) {
+        await _sendOneAttachChunk(target, chunk, fileId: id);
+      }
+      any = true;
     }
-    if (chunks.isEmpty) return;
+    if (!any || chunks.isEmpty) return;
     var total = 0;
     for (final chunk in chunks) {
       total += chunk.ciphertext.length;
     }
     _journalAttachmentPublished(
-      norm,
+      normalizePeerId(peerId),
       firstCipher: List<int>.from(chunks.first.ciphertext),
       chunkCount: chunks.length,
       totalBytes: total,
@@ -1124,7 +1159,9 @@ class DualStackBridge {
       fallbackWriter: selfDeviceId,
     );
     if (event != null) _applyRoom(event);
-    unawaited(_sendControlWhenReady(norm, framed));
+    for (final target in _sendPeerIds(peerId)) {
+      unawaited(_sendControlWhenReady(target, framed));
+    }
     return true;
   }
 
@@ -1155,13 +1192,17 @@ class DualStackBridge {
       return false;
     }
     _applyRoom(event);
-    if (!await _ensureNativeSendReady(norm)) return false;
-    await transport.send(
-      norm,
-      TransportChannel.control,
-      jsonPayload(event.toWire()),
-    );
-    return true;
+    var any = false;
+    for (final target in _sendPeerIds(peerId)) {
+      if (!await _ensureNativeSendReady(target)) continue;
+      await transport.send(
+        target,
+        TransportChannel.control,
+        jsonPayload(event.toWire()),
+      );
+      any = true;
+    }
+    return any;
   }
 
   void _applyRoom(RoomEvent event, {bool persist = true}) {
@@ -1195,15 +1236,16 @@ class DualStackBridge {
   }
 
   Future<void> sendCallSignal(String peerId, CallSignal signal) async {
-    final norm = normalizePeerId(peerId);
-    if (!await _ensureNativeSendReady(norm)) return;
     if (!replicationValueIsSafe(signal.toJson())) return;
     if (signal.callId.isEmpty || signal.callId.contains('://')) return;
-    await transport.send(
-      norm,
-      TransportChannel.call,
-      jsonPayload(signal.toJson()),
-    );
+    for (final target in _sendPeerIds(peerId)) {
+      if (!await _ensureNativeSendReady(target)) continue;
+      await transport.send(
+        target,
+        TransportChannel.call,
+        jsonPayload(signal.toJson()),
+      );
+    }
   }
 
   Future<bool> sendDrop(String peerId, Object packet) async {
@@ -1278,7 +1320,19 @@ class DualStackBridge {
     );
     unawaited(_persistDurable(record));
     hypercore.append(record);
-    _replicateRecord(peerId, record);
+    _replicateToSendTargets(peerId, record);
+  }
+
+  void _replicateToSendTargets(String ownerPeerId, JournalRecord record) {
+    for (final target in _sendPeerIds(ownerPeerId)) {
+      _replicateRecord(target, record);
+    }
+  }
+
+  void _replicateToAuthenticated(JournalRecord record) {
+    for (final peer in List<String>.from(authenticated)) {
+      _replicateRecord(peer, record);
+    }
   }
 
   void _replicateRecord(String peerId, JournalRecord record) {

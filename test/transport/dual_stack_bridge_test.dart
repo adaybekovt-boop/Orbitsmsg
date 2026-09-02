@@ -3302,6 +3302,51 @@ void main() {
         .split('Future<bool> sendAttachmentCipherPath')[1]
         .split('Future<void> _sendAttachmentChunks')[0];
     expect(attach, contains('_sendPeerIds'));
+    final chunks = src
+        .split('Future<void> _sendAttachmentChunks')[1]
+        .split('Future<void> _sendOneAttachChunk')[0];
+    expect(chunks, contains('_sendPeerIds'));
+    final stream = src
+        .split('Future<void> sendAttachmentStream')[1]
+        .split('Future<bool> sendAttachmentCipherPath')[0];
+    expect(stream, contains('_sendPeerIds'));
+    final call = src
+        .split('Future<void> sendCallSignal')[1]
+        .split('Future<bool> sendDrop')[0];
+    expect(call, contains('_sendPeerIds'));
+    expect(
+      call.indexOf('replicationValueIsSafe'),
+      lessThan(call.indexOf('_sendPeerIds')),
+    );
+    final room = src
+        .split('bool sendRoomPacket')[1]
+        .split('Future<void> _sendControlWhenReady')[0];
+    expect(room, contains('_sendPeerIds'));
+    final autobase = src
+        .split('Future<bool> sendAutobaseEvent')[1]
+        .split('void _applyRoom')[0];
+    expect(autobase, contains('_sendPeerIds'));
+    expect(src, contains('_replicateToSendTargets'));
+    expect(src, contains('_replicateToAuthenticated'));
+    final envelope = src
+        .split('void _appendEnvelope')[1]
+        .split('void _replicateToSendTargets')[0];
+    expect(envelope, contains('_replicateToSendTargets'));
+    expect(envelope, isNot(contains('_replicateRecord(peerId, record)')));
+    final revoke = src
+        .split('void revokeDevice')[1]
+        .split('void authorizeDevice')[0];
+    expect(revoke, contains('_replicateToAuthenticated'));
+    final authorize = src
+        .split('void authorizeDevice')[1]
+        .split('void journalContactBlocked')[0];
+    expect(authorize, contains('_replicateToAuthenticated'));
+    expect(authorize, contains('unawaited(dial'));
+    final remember = src
+        .split('Future<void> rememberKnownPeers')[1]
+        .split('List<int>? discoverySecretFor')[0];
+    expect(remember, contains('_dialOwnKnownDevices'));
+    expect(remember, isNot(contains('discoverySecret')));
   });
 
   test('loopback Autobase lists DualStack membership after room_join',

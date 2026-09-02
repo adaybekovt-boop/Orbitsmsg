@@ -87,6 +87,7 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   Future<void> start(TransportLocalConfiguration config) async {
     _config = config;
     _started = true;
+    _autobase.hydrateFromJournal(_journal);
   }
 
   @override

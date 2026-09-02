@@ -425,6 +425,32 @@ void main() {
     await tablet.stop();
   });
 
+  test('start hydrates Autobase from journal rows already on the carrier',
+      () async {
+    final t = LoopbackOrbitsTransport();
+    await t.appendJournal({
+      'kind': 'roomMembershipChanged',
+      'writerDeviceId': 'dev-a',
+      'seq': 0,
+      'fields': {
+        'peerId': 'ORBIT-CCCCCCCCCCCCCCCC',
+        'action': 'join',
+        'displayName': 'C',
+      },
+    });
+    await t.start(
+      const TransportLocalConfiguration(peerId: 'ORBIT-AAAAAAAAAAAAAAAA'),
+    );
+    final snap = await t.listAutobase();
+    expect((snap['members'] as Map)['ORBIT-CCCCCCCCCCCCCCCC'], 'C');
+    final start = File('lib/transport/loopback_transport.dart')
+        .readAsStringSync()
+        .split('Future<void> start')[1]
+        .split('Future<void> stop')[0];
+    expect(start, contains('hydrateFromJournal'));
+    await t.stop();
+  });
+
   test('hydrateAutobase and listAutobase rebuild membership from journal',
       () async {
     final pair = loopbackPair();
