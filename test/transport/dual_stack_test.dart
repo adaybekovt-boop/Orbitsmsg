@@ -156,5 +156,13 @@ void main() {
     expect(src, contains('_flushPendingReliable'));
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
     expect(peerjsAllowedOnNative(), isTrue);
+    expect(
+      File('lib/peer/peer_connection_manager.dart').readAsStringSync(),
+      contains('peerjsAllowedOnNative(isWeb: kIsWeb)'),
+    );
+    expect(
+      File('lib/peer/room_signaling_host.dart').readAsStringSync(),
+      contains('peerjsAllowedOnNative(isWeb: kIsWeb)'),
+    );
   });
 }

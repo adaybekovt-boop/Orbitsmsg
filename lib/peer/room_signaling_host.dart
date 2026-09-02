@@ -12,6 +12,7 @@ import 'package:flutter/foundation.dart'
 import 'peerjs_client.dart';
 import 'room_invite.dart';
 import 'signaling.dart';
+import '../transport/peerjs_window.dart';
 // dart:io impls on desktop/mobile; no-op stubs on web.
 import 'embedded_signaling_server.dart'
     if (dart.library.html) 'embedded_signaling_server_stub.dart';
@@ -88,6 +89,9 @@ PeerJsClient buildRoomScopedClient({
   required int port,
   String key = 'peerjs',
 }) {
+  if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+    throw StateError('peerjs isolation');
+  }
   final env = PeerEnv(
     peerPort: port,
     peerSecure: false,

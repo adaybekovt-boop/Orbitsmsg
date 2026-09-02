@@ -10,6 +10,9 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+
+import '../transport/peerjs_window.dart';
 import 'helpers.dart';
 import 'multi_tab_lock.dart';
 import 'peerjs_client.dart';
@@ -121,6 +124,14 @@ class PeerConnectionManager {
       return null;
     }
 
+    // Phase 14 isolation: native-only modes must not construct PeerJS.
+    // Product mode stays default-live, so this is a no-op until the
+    // support window closes in writing.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      cb.setStatus?.call('disconnected');
+      return null;
+    }
+
     cb.setStatus?.call('connecting');
     cb.setError?.call(null);
     reconnectAttempt = 0;
@@ -173,6 +184,7 @@ class PeerConnectionManager {
   /// Recreate peer under a new id. Used for host rotation and
   /// `unavailable-id` recovery. Mirrors swapPeerId in JS.
   Future<void> swapPeerId(String nextId) async {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
     if (_swapping) return;
     if (isDropInProgress) return;
     // Rate-limit full client rebuilds. If we've swapped too often recently,
@@ -250,6 +262,9 @@ class PeerConnectionManager {
   }
 
   Future<PeerJsClient> _createPeerNow(String id) async {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      throw StateError('peerjs isolation');
+    }
     final host = signalingHosts?[signalingIndex] ?? '';
     final endpoint = resolveEndpoint(host: host, env: env);
     final rtc = buildRtcConfig(env);
