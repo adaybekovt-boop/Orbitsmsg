@@ -23,6 +23,8 @@ class TransportFileDescriptor {
     required this.sizeBytes,
     this.mime,
     this.fileName,
+    this.transferId,
+    this.resumeOffset = 0,
   });
 
   /// Local filesystem path or platform handle. Not a byte array over IPC.
@@ -30,6 +32,8 @@ class TransportFileDescriptor {
   final int sizeBytes;
   final String? mime;
   final String? fileName;
+  final String? transferId;
+  final int resumeOffset;
 }
 
 class PeerDescriptor {

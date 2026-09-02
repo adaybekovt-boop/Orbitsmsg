@@ -6,6 +6,7 @@
  */
 
 const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
 const { createHash } = require('node:crypto')
 const { encodeMux, MuxDecoder } = require('./mux')
@@ -15,6 +16,17 @@ const { REQUEST, RESPONSE, EVENT, encode, Decoder } = require('./ipc')
 const { CorestoreJournal } = require('./corestore_journal')
 
 const FILE_CHUNK = 64 * 1024
+
+function osTmp() {
+  return os.tmpdir()
+}
+
+function persistTransferState(statePath, state) {
+  fs.mkdirSync(path.dirname(statePath), { recursive: true })
+  const tmp = statePath + '.tmp'
+  fs.writeFileSync(tmp, JSON.stringify(state))
+  fs.renameSync(tmp, statePath)
+}
 
 class Worklet {
   constructor(opts = {}) {
@@ -75,26 +87,124 @@ class Worklet {
   }
 
   async sendFile(peerId, file) {
-    const bytes = fs.readFileSync(file.path)
-    const digest = createHash('sha256').update(bytes).digest('hex')
-    const id = digest.slice(0, 16)
-    await this.send(peerId, 'attachment', {
-      type: 'harness-file-start',
-      id,
-      name: file.fileName || path.basename(file.path),
-      size: bytes.length,
-      sha256: digest,
-    })
-    for (let offset = 0; offset < bytes.length; offset += FILE_CHUNK) {
-      const chunk = bytes.subarray(offset, offset + FILE_CHUNK)
-      await this.send(peerId, 'attachment', {
-        type: 'harness-file-chunk',
-        id,
-        offset,
-        b64: chunk.toString('base64'),
-      })
+    if (!file || typeof file.path !== 'string' || file.path.length === 0) {
+      throw new Error('path required')
     }
-    await this.send(peerId, 'attachment', { type: 'harness-file-end', id })
+    if (file.path.includes('\0') || file.path.includes('..')) {
+      throw new Error('path traversal')
+    }
+    const resolved = path.resolve(file.path)
+    let lst
+    try {
+      lst = fs.lstatSync(resolved)
+    } catch {
+      throw new Error('file missing')
+    }
+    if (lst.isSymbolicLink()) throw new Error('symlink rejected')
+    if (!lst.isFile()) throw new Error('not a regular file')
+    if (file.sizeBytes != null && Number(file.sizeBytes) !== lst.size) {
+      throw new Error('size mismatch')
+    }
+    if (lst.size > 50 * 1024 * 1024) throw new Error('oversized')
+    const resumeFrom = Number(file.resumeOffset || 0)
+    if (!Number.isInteger(resumeFrom) || resumeFrom < 0 || resumeFrom > lst.size) {
+      throw new Error('malformed offset')
+    }
+    const id =
+      file.transferId ||
+      createHash('sha256').update(resolved + ':' + lst.size).digest('hex').slice(0, 16)
+    const statePath = file.resumeStatePath || path.join(osTmp(), 'orbits-transfers', id + '.json')
+    const hash = createHash('sha256')
+    const fd = fs.openSync(resolved, 'r')
+    this._sendFileFd = fd
+    this._sendFileBytesRead = 0
+    this._sendFilePeakBuffer = FILE_CHUNK
+    this._cancelledTransfers = this._cancelledTransfers || new Set()
+    try {
+      const prefixBuf = Buffer.alloc(FILE_CHUNK)
+      let hashed = 0
+      while (hashed < resumeFrom) {
+        const n = fs.readSync(fd, prefixBuf, 0, Math.min(FILE_CHUNK, resumeFrom - hashed), hashed)
+        if (n <= 0) break
+        hash.update(prefixBuf.subarray(0, n))
+        hashed += n
+      }
+      if (resumeFrom === 0) {
+        await this.send(peerId, 'attachment', {
+          type: 'harness-file-start',
+          id,
+          name: file.fileName || path.basename(resolved),
+          size: lst.size,
+        })
+      }
+      const buf = Buffer.alloc(FILE_CHUNK)
+      let offset = resumeFrom
+      while (offset < lst.size) {
+        if (this._cancelledTransfers.has(id)) throw new Error('cancelled')
+        const live = fs.lstatSync(resolved)
+        if (live.size !== lst.size || Number(live.mtimeMs) !== Number(lst.mtimeMs)) {
+          throw new Error('file mutated')
+        }
+        const n = fs.readSync(fd, buf, 0, FILE_CHUNK, offset)
+        if (n <= 0) break
+        const chunk = buf.subarray(0, n)
+        hash.update(chunk)
+        this._sendFileBytesRead += n
+        const peer = this._peers.get(peerId)
+        if (peer && peer.socket && peer.socket.writableNeedDrain) {
+          await new Promise((resolve) => peer.socket.once('drain', resolve))
+        }
+        const chunkHash = createHash('sha256').update(chunk).digest('hex')
+        await this.send(peerId, 'attachment', {
+          type: 'harness-file-chunk',
+          id,
+          offset,
+          sha256: chunkHash,
+          b64: chunk.toString('base64'),
+        })
+        offset += n
+        persistTransferState(statePath, {
+          id,
+          path: resolved,
+          size: lst.size,
+          mtimeMs: lst.mtimeMs,
+          offset,
+        })
+      }
+      const digest = hash.digest('hex')
+      await this.send(peerId, 'attachment', {
+        type: 'harness-file-end',
+        id,
+        sha256: digest,
+      })
+      try {
+        fs.unlinkSync(statePath)
+      } catch {
+        // already gone
+      }
+    } finally {
+      if (this._sendFileFd != null) {
+        try {
+          fs.closeSync(this._sendFileFd)
+        } catch {
+          // already closed by cancel
+        }
+        this._sendFileFd = null
+      }
+    }
+  }
+
+  cancelFile(transferId) {
+    this._cancelledTransfers = this._cancelledTransfers || new Set()
+    this._cancelledTransfers.add(transferId)
+    if (this._sendFileFd != null) {
+      try {
+        fs.closeSync(this._sendFileFd)
+      } catch {
+        // already closed
+      }
+      this._sendFileFd = null
+    }
   }
 
   async suspend() {
@@ -189,6 +299,9 @@ async function handleIpcRequest(worklet, body) {
       return {}
     case 'sendFile':
       await worklet.sendFile(params.peerId, params.file)
+      return {}
+    case 'cancelFile':
+      worklet.cancelFile(params.transferId)
       return {}
     case 'suspend':
       await worklet.suspend()

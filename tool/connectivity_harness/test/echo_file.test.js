@@ -77,6 +77,99 @@ test('file stream from a path', async () => {
   await b.stop()
 })
 
+test('10 and 50 MiB path sends stay chunked and can resume', async () => {
+  for (const size of [10 * 1024 * 1024, 50 * 1024 * 1024]) {
+    const { a, b, peerId } = await pair()
+    const src = path.join(os.tmpdir(), `orbits-file-${size}.bin`)
+    fs.writeFileSync(src, Buffer.alloc(size, 9))
+    const chunks = []
+    const prev = b._emit
+    const done = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('sendFile timeout ' + size)), 120_000)
+      b._emit = (name, payload) => {
+        prev(name, payload)
+        if (name === 'frame' && payload.channel === 'attachment') {
+          chunks.push(payload.body)
+          if (payload.body.type === 'harness-file-end') {
+            clearTimeout(timer)
+            resolve()
+          }
+        }
+      }
+    })
+    await a.sendFile(peerId, { path: src, fileName: path.basename(src), sizeBytes: size })
+    await done
+    const dataChunks = chunks.filter((c) => c.type === 'harness-file-chunk')
+    assert.ok(dataChunks.length > 1)
+    assert.ok(dataChunks.every((c) => Buffer.from(c.b64, 'base64').length <= 64 * 1024))
+    assert.equal(a._sendFilePeakBuffer, 64 * 1024)
+    assert.ok(chunks.some((c) => c.type === 'harness-file-end' && c.sha256))
+    await a.stop()
+    await b.stop()
+    fs.unlinkSync(src)
+  }
+})
+
+test('sendFile resumes after interrupt and rejects mutation', async () => {
+  const { a, b, peerId } = await pair()
+  const src = path.join(os.tmpdir(), 'orbits-resume.bin')
+  fs.writeFileSync(src, Buffer.alloc(256 * 1024, 3))
+  const id = 'xfer-resume'
+  let firstOffset = -1
+  const prev = b._emit
+  const firstChunk = new Promise((resolve) => {
+    b._emit = (name, payload) => {
+      prev(name, payload)
+      if (name === 'frame' && payload.body && payload.body.type === 'harness-file-chunk') {
+        if (firstOffset < 0) {
+          firstOffset = payload.body.offset
+          resolve()
+        }
+      }
+    }
+  })
+  const pending = a.sendFile(peerId, {
+    path: src,
+    transferId: id,
+    sizeBytes: 256 * 1024,
+  })
+  await firstChunk
+  a.cancelFile(id)
+  await assert.rejects(pending)
+  const statePath = path.join(os.tmpdir(), 'orbits-transfers', id + '.json')
+  const resumeFrom = firstOffset + 64 * 1024
+  const second = new Worklet({ backend: 'loopback' })
+  await second.start({ peerId: 'A2', discoverySecret: Buffer.alloc(32, 9) })
+  await second.connect({ port: b._loop.port })
+  const secondPeer = Array.from(second._peers.keys())[0]
+  const done = new Promise((resolve) => {
+    const prevB = b._emit
+    b._emit = (name, payload) => {
+      prevB(name, payload)
+      if (name === 'frame' && payload.body && payload.body.type === 'harness-file-end') resolve()
+    }
+  })
+  await second.sendFile(secondPeer, {
+    path: src,
+    transferId: id,
+    sizeBytes: 256 * 1024,
+    resumeOffset: resumeFrom,
+    resumeStatePath: statePath,
+  })
+  await done
+  fs.writeFileSync(src, Buffer.alloc(200 * 1024, 4))
+  await assert.rejects(() =>
+    second.sendFile(secondPeer, {
+      path: src,
+      transferId: id + '-mut',
+      sizeBytes: 256 * 1024,
+    }),
+  )
+  await a.stop()
+  await b.stop()
+  await second.stop()
+})
+
 test('suspend blocks send', async () => {
   const { a, b, peerId } = await pair()
   await a.suspend()
