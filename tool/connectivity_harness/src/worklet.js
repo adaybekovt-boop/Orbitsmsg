@@ -200,7 +200,7 @@ function hashPath(filePath) {
 class Worklet {
   constructor(opts = {}) {
     this.backend = opts.backend || 'loopback'
-    this._harnessAuth = opts.harnessAuth || 'local'
+    this._harnessAuth = opts.harnessAuth === 'local' ? 'local' : 'strict'
     this._loop = new LoopbackBackend()
     this._swarm = null
     this._peers = new Map()
@@ -284,9 +284,29 @@ class Worklet {
     return pk
   }
 
+  _applyStartAuth(config) {
+    const mode = config && config.harnessAuth
+    if (mode == null || mode === '') return
+    if (mode === 'strict') {
+      this._harnessAuth = 'strict'
+      return
+    }
+    if (mode === 'local') {
+      if (config.allowLocalAuth === true) {
+        this._harnessAuth = 'local'
+        return
+      }
+      const err = new Error('refusing harnessAuth local without allowLocalAuth')
+      err.code = 'refusing-local-auth'
+      throw err
+    }
+    throw new Error('unknown harnessAuth ' + mode)
+  }
+
   async start(config) {
-    this._lifecycle = 'starting'
     this._config = config || {}
+    this._applyStartAuth(this._config)
+    this._lifecycle = 'starting'
     if (this._config.discoverySecret != null) {
       asSecret(this._config.discoverySecret)
     }
@@ -874,8 +894,15 @@ class Worklet {
 
   _isAuthenticated(peerId) {
     const peer = this._peers.get(peerId)
-    if (!peer) return this._harnessAuth === 'local'
+    if (!peer) return false
     return Boolean(peer.authenticated)
+  }
+
+  _preAuthAllowed(channel, body) {
+    if (channel !== 'control' || !body) return false
+    if (body.type === 'device-binding') return true
+    if (body.type === 'harness-hello' && this._harnessAuth === 'local') return true
+    return false
   }
 
   _onFrame(peerId, channel, payload) {
@@ -891,13 +918,15 @@ class Worklet {
       this._emit('frame', { peerId, channel, frameB64 })
       return
     }
-    const preAuthAllowed =
-      channel === 'control' && body && PRE_AUTH_TYPES.has(body.type)
-    if (!this._isAuthenticated(peerId) && !preAuthAllowed) {
+    if (!this._isAuthenticated(peerId) && !this._preAuthAllowed(channel, body)) {
       this._droppedPreAuth += 1
       return
     }
     if (channel === 'control' && body && body.type === 'harness-hello') {
+      if (this._harnessAuth !== 'local') {
+        this._droppedPreAuth += 1
+        return
+      }
       this.markAuthenticated(peerId)
       const peer = this._peers.get(peerId)
       if (peer && !peer.helloSent) {
@@ -906,8 +935,8 @@ class Worklet {
       }
     }
     if (channel === 'control' && body && body.type === 'device-binding') {
-      // Dart marks the peer after its own checks. Emit so the host can
-      // call markAuthenticated. Do not auto-auth in strict mode.
+      // Dart marks the peer after its own ADR-0001 checks via
+      // markAuthenticated. Never auto-auth from this frame.
     }
     if (channel === 'message' && body.type === 'harness-echo') {
       this.send(peerId, 'message', {

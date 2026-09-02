@@ -23,15 +23,19 @@ function waitEmit(worklet, name, pred, timeoutMs) {
 }
 
 async function pair() {
-  const a = new Worklet({ backend: 'loopback', harnessAuth: 'local' })
-  const b = new Worklet({ backend: 'loopback', harnessAuth: 'local' })
+  const a = new Worklet({ backend: 'loopback' })
+  const b = new Worklet({ backend: 'loopback' })
   const secret = Buffer.alloc(32, 11)
   await a.start({ peerId: 'A', discoverySecret: secret })
   await b.start({ peerId: 'B', discoverySecret: secret })
   await a.publish({ deviceId: 'a' })
   await b.publish({ deviceId: 'b' })
   await a.connect({ port: b._loop.port })
-  return { a, b, peerId: Array.from(a._peers.keys())[0] }
+  const peerId = Array.from(a._peers.keys())[0]
+  const bPeer = Array.from(b._peers.keys())[0]
+  a.markAuthenticated(peerId)
+  if (bPeer) b.markAuthenticated(bPeer)
+  return { a, b, peerId }
 }
 
 function writePatternFile(filePath, megabytes) {
@@ -94,8 +98,12 @@ test('interrupted transfer + reconnect resumes from confirmed offset', { timeout
   const incoming = Array.from(b._files.values())[0]
   const confirmed = incoming.ranges && incoming.ranges.length ? incoming.ranges[0][1] : 0
   assert.ok(confirmed > 0, 'receiver confirmed a contiguous offset')
+  const bJoined = waitEmit(b, 'connected')
   await a.connect({ port: b._loop.port })
+  const bPeer2 = (await bJoined).peerId
   const peerId2 = Array.from(a._peers.keys())[0]
+  a.markAuthenticated(peerId2)
+  if (bPeer2) b.markAuthenticated(bPeer2)
   const done = waitEmit(
     b,
     'frame',

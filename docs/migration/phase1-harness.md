@@ -16,11 +16,15 @@ still PeerJS. Do not treat this document as a closed NAT gate.
   **max frame size**, bounded pending buffers, and typed
   `malformed-frame` / `oversized-frame` errors. The worklet destroys that
   peer socket and emits `disconnected` with the same reason.
-- Per-peer `authenticated` flag. Until auth, only control
-  `device-binding` and `harness-hello` are processed; other frames are
-  dropped and counted (`droppedPreAuth`, not queued). `harnessAuth:
-  'local'` (CLI and default tests) auto-authenticates so Dart is not
-  required.
+- Per-peer `authenticated` flag. **Default is `strict`**: a peer starts
+  unauthenticated. Only `markAuthenticated(peerId)` (IPC from Dart after
+  ADR-0001 DeviceBinding checks) flips it. Production Dart never sets
+  `harnessAuth: 'local'` or `allowLocalAuth`. IPC `start` refuses
+  `harnessAuth: 'local'` unless `allowLocalAuth === true`. In strict
+  mode the only pre-auth pass-through is control `device-binding`
+  (emitted, never auto-auth). `harness-hello` is dropped and counted in
+  `droppedPreAuth`. Other frames are dropped, not queued. `'local'` is
+  only for the CLI, `stand.js`, and tests that opt in.
 - Per-peer outbound queue with a 4 MiB byte cap; `send()` waits for
   socket `drain`; overflow is `outbound-queue-full`. File send honours
   that backpressure per 64 KiB chunk. `MAX_FILE_BYTES` is 64 MiB on send

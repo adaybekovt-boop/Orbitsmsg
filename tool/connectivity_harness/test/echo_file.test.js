@@ -19,6 +19,9 @@ async function pair() {
   await b.publish({ deviceId: 'b' })
   await a.connect({ port: b._loop.port })
   const peerId = Array.from(a._peers.keys())[0]
+  const bPeer = Array.from(b._peers.keys())[0]
+  a.markAuthenticated(peerId)
+  if (bPeer) b.markAuthenticated(bPeer)
   return { a, b, peerId }
 }
 
