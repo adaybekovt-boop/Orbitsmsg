@@ -65,7 +65,21 @@ class DeviceBinding {
 }
 
 /// Connect-time checklist. Crypto verify is Phase 10; Phase 0 locks order.
-List<String> requiredBindingChecks() => List<String>.from(kConnectBindingChecks);
+List<String> requiredBindingChecks() =>
+    List<String>.from(kConnectBindingChecks);
+
+/// Reject expired, not-yet-valid, or clock-skewed certificates before
+/// decrypt / Drift persist. [maxSkewMs] is the allowed future-date window.
+bool deviceBindingClockIsValid(
+  DeviceBinding binding, {
+  required int nowMs,
+  int maxSkewMs = 5 * 60 * 1000,
+}) {
+  if (binding.expiresAt <= binding.createdAt) return false;
+  if (nowMs > binding.expiresAt) return false;
+  if (binding.createdAt > nowMs + maxSkewMs) return false;
+  return true;
+}
 
 bool noiseKeyMatchesBinding({
   required List<int> connectionNoisePublicKey,

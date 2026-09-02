@@ -13,8 +13,8 @@ class FileJournal {
     required this.writerDeviceId,
     required Future<void> Function(String line) writeLine,
     required Future<List<String>> Function() readLines,
-  })  : _writeLine = writeLine,
-        _readLines = readLines;
+  }) : _writeLine = writeLine,
+       _readLines = readLines;
 
   factory FileJournal.memory(String writerDeviceId) {
     final lines = <String>[];
@@ -46,12 +46,25 @@ class FileJournal {
     final out = MemoryJournal(writerDeviceId);
     for (final line in await _readLines()) {
       if (line.trim().isEmpty) continue;
-      final row = jsonDecode(line) as Map<String, Object?>;
-      final kindName = row['kind'] as String;
-      final kind = ReplicationEventKind.values.firstWhere(
-        (k) => k.name == kindName,
-      );
-      out.append(kind, _decodeFields(row['fields'] as Map));
+      try {
+        final decoded = jsonDecode(line);
+        if (decoded is! Map) continue;
+        final row = decoded.cast<String, Object?>();
+        final writer = row['writerDeviceId'] as String? ?? writerDeviceId;
+        if (writer != writerDeviceId) continue;
+        final kindName = row['kind'] as String?;
+        if (kindName == null) continue;
+        final kind = ReplicationEventKind.values.where(
+          (k) => k.name == kindName,
+        );
+        if (kind.isEmpty) continue;
+        final fields = row['fields'];
+        if (fields is! Map) continue;
+        out.append(kind.first, _decodeFields(fields));
+      } catch (_) {
+        // Truncated or corrupted line: skip and keep later sound records.
+        continue;
+      }
     }
     return out;
   }
