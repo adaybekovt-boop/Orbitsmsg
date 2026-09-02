@@ -70,7 +70,6 @@ void main() {
         'offset': 0,
         'total': 4,
         'b64': 'AQIDBA==',
-        'fileKey': 'nope',
         'attachment': {
           'name': 'note.bin',
           'size': 4,
@@ -134,7 +133,7 @@ void main() {
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
 
-  test('apply message keeps host-plaintext text and drops forbidden keys', () {
+  test('apply refuses nested fileKey/kek and does not consume writer:seq', () {
     final proj = AutobaseProjection()
       ..apply(
         const RoomEvent(
@@ -151,18 +150,60 @@ void main() {
           },
         ),
       );
-    final stored = proj.state.messages.single;
-    expect(stored['text'], 'hello');
-    expect(stored['id'], 'm-hello');
-    expect(stored.containsKey('fileKey'), isFalse);
-    expect(stored.containsKey('kek'), isFalse);
-    expect(stored.containsKey('rootKey'), isFalse);
-    expect(stored.containsKey('discoverySecret'), isFalse);
+    expect(proj.state.messages, isEmpty);
+    expect(proj.state.members, isEmpty);
+    expect(proj.state.applied, isEmpty);
+    proj.apply(
+      const RoomEvent(
+        writerId: 'a',
+        seq: 1,
+        kind: 'message',
+        payload: {'id': 'm-hello', 'text': 'hello'},
+      ),
+    );
+    expect(proj.state.messages.single['text'], 'hello');
+    expect(proj.state.applied, contains('a:1'));
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
 
-  test('apply attachment strips b64 and fileKeyB64', () {
+  test('apply refuses membership that nests fileKey', () {
     final proj = AutobaseProjection()
+      ..apply(
+        const RoomEvent(
+          writerId: 'a',
+          seq: 0,
+          kind: 'membership',
+          payload: {
+            'peerId': 'eve',
+            'action': 'join',
+            'displayName': 'Eve',
+            'extra': {'fileKey': 'x', 'kek': 'y'},
+          },
+        ),
+      );
+    expect(proj.state.members, isEmpty);
+    expect(proj.state.messages, isEmpty);
+    expect(proj.state.applied, isEmpty);
+  });
+
+  test('apply of a clean message keeps host-plaintext text', () {
+    final proj = AutobaseProjection()
+      ..apply(
+        const RoomEvent(
+          writerId: 'a',
+          seq: 1,
+          kind: 'message',
+          payload: {'id': 'm-hello', 'text': 'hello'},
+        ),
+      );
+    final stored = proj.state.messages.single;
+    expect(stored['text'], 'hello');
+    expect(stored['id'], 'm-hello');
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('apply attachment strips residual b64 on a clean envelope', () {
+    final hostile = AutobaseProjection()
       ..apply(
         const RoomEvent(
           writerId: 'a',
@@ -177,11 +218,25 @@ void main() {
           },
         ),
       );
+    expect(hostile.state.attachments, isEmpty);
+    expect(hostile.state.applied, isEmpty);
+
+    final proj = AutobaseProjection()
+      ..apply(
+        const RoomEvent(
+          writerId: 'a',
+          seq: 2,
+          kind: 'attachment',
+          payload: {
+            'id': 'att-1',
+            'name': 'note.bin',
+            'b64': 'AQIDBA==',
+          },
+        ),
+      );
     final stored = proj.state.attachments['att-1']!;
     expect(stored['name'], 'note.bin');
     expect(stored.containsKey('b64'), isFalse);
-    expect(stored.containsKey('fileKeyB64'), isFalse);
-    expect(stored.containsKey('fileKey'), isFalse);
   });
 
   test('toWire strips nested forbidden payload keys and keeps text', () {
@@ -212,8 +267,39 @@ void main() {
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
 
-  test('fromWire drops plaintext from autobase-event payload', () {
-    final event = RoomEvent.fromWire({
+  test('fromWire refuses autobase-event that nests fileKey or plaintext', () {
+    expect(
+      RoomEvent.fromWire({
+        'type': 'autobase-event',
+        'writerId': 'a',
+        'seq': 9,
+        'kind': 'message',
+        'payload': {
+          'text': 'hello',
+          'attachment': {
+            'fileKey': 'x',
+            'b64': 'AQID',
+            'name': 'n',
+          },
+        },
+      }),
+      isNull,
+    );
+    expect(
+      RoomEvent.fromWire({
+        'type': 'autobase-event',
+        'writerId': 'w',
+        'seq': 3,
+        'kind': 'message',
+        'payload': {
+          'id': 'm2',
+          'text': 'still here',
+          'plaintext': 'must-not-keep',
+        },
+      }),
+      isNull,
+    );
+    final clean = RoomEvent.fromWire({
       'type': 'autobase-event',
       'writerId': 'w',
       'seq': 3,
@@ -221,12 +307,11 @@ void main() {
       'payload': {
         'id': 'm2',
         'text': 'still here',
-        'plaintext': 'must-not-keep',
       },
     });
-    expect(event, isNotNull);
-    expect(event!.payload['text'], 'still here');
-    expect(event.payload.containsKey('plaintext'), isFalse);
+    expect(clean, isNotNull);
+    expect(clean!.payload['text'], 'still here');
+    expect(kRoomsApplicationE2eImplemented, isFalse);
   });
 
   test('stripForbiddenAutobasePayload walks nested maps and keeps text', () {
@@ -245,7 +330,10 @@ void main() {
     expect(attachment['name'], 'n');
     expect(attachment.containsKey('fileKey'), isFalse);
     expect(attachment.containsKey('b64'), isFalse);
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
 
+  test('fromWire of nested fileKey is null; apply does not project it', () {
     final wired = RoomEvent.fromWire({
       'type': 'autobase-event',
       'writerId': 'a',
@@ -260,21 +348,26 @@ void main() {
         },
       },
     });
-    expect(wired, isNotNull);
-    expect(wired!.payload['text'], 'hello');
-    final wiredAtt =
-        Map<String, Object?>.from(wired.payload['attachment']! as Map);
-    expect(wiredAtt['name'], 'n');
-    expect(wiredAtt.containsKey('fileKey'), isFalse);
-    expect(wiredAtt.containsKey('b64'), isFalse);
+    expect(wired, isNull);
 
-    final proj = AutobaseProjection()..apply(wired);
-    final stored = proj.state.messages.single;
-    expect(stored['text'], 'hello');
-    final storedAtt = Map<String, Object?>.from(stored['attachment']! as Map);
-    expect(storedAtt['name'], 'n');
-    expect(storedAtt.containsKey('fileKey'), isFalse);
-    expect(storedAtt.containsKey('b64'), isFalse);
+    final proj = AutobaseProjection()
+      ..apply(
+        const RoomEvent(
+          writerId: 'a',
+          seq: 9,
+          kind: 'message',
+          payload: {
+            'text': 'hello',
+            'attachment': {
+              'fileKey': 'x',
+              'b64': 'AQID',
+              'name': 'n',
+            },
+          },
+        ),
+      );
+    expect(proj.state.messages, isEmpty);
+    expect(proj.state.applied, isEmpty);
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
 
@@ -335,6 +428,139 @@ void main() {
       raw.keys.toSet().difference(cleaned.keys.toSet()),
       kForbiddenReplicationFields,
     );
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('autobaseLiveEnvelopeIsSafe ignores text/b64/peerId and is cycle-safe',
+      () {
+    expect(kForbiddenReplicationFields.contains('text'), isFalse);
+    expect(kForbiddenReplicationFields.contains('b64'), isFalse);
+    expect(kForbiddenReplicationFields.contains('peerId'), isFalse);
+    expect(
+      autobaseLiveEnvelopeIsSafe({
+        'type': 'room_msg',
+        'text': 'hello',
+        'b64': 'AQID',
+        'peerId': 'p1',
+      }),
+      isTrue,
+    );
+    expect(
+      autobaseLiveEnvelopeIsSafe({
+        'text': 'hello',
+        'meta': {'fileKey': 'x'},
+      }),
+      isFalse,
+    );
+    final cyclic = <String, Object?>{'text': 'ok', 'peerId': 'p', 'b64': 'x'};
+    cyclic['self'] = cyclic;
+    expect(autobaseLiveEnvelopeIsSafe(cyclic), isTrue);
+    final cyclicBad = <String, Object?>{'kek': 'x'};
+    cyclicBad['self'] = cyclicBad;
+    expect(autobaseLiveEnvelopeIsSafe(cyclicBad), isFalse);
+  });
+
+  test('roomEventFromNativePacket refuses fileKey and discoverySecret', () {
+    expect(
+      roomEventFromNativePacket(
+        {
+          'type': 'room_join',
+          'peerId': 'hostile',
+          'guestName': 'Eve',
+          'fileKey': 'smuggle-file',
+          'abWriter': 'a',
+          'abSeq': 0,
+        },
+        fallbackWriter: 'x',
+      ),
+      isNull,
+    );
+    expect(
+      roomEventFromNativePacket(
+        {
+          'type': 'room_join',
+          'guestPeerId': 'p1',
+          'guestName': 'Pat',
+          'extra': {'fileKey': 'x'},
+          'abWriter': 'a',
+          'abSeq': 0,
+        },
+        fallbackWriter: 'x',
+      ),
+      isNull,
+    );
+    expect(
+      roomEventFromNativePacket(
+        {
+          'type': 'room_msg',
+          'id': 'm-bad',
+          'text': 'host-plaintext',
+          'meta': {'discoverySecret': 'leaked-topic'},
+          'abWriter': 'a',
+          'abSeq': 1,
+        },
+        fallbackWriter: 'x',
+      ),
+      isNull,
+    );
+    expect(
+      roomEventFromNativePacket(
+        {
+          'type': 'room_msg',
+          'id': 'm-top',
+          'text': 'hello',
+          'fileKey': 'x',
+          'abWriter': 'a',
+          'abSeq': 1,
+        },
+        fallbackWriter: 'x',
+      ),
+      isNull,
+    );
+    expect(
+      roomEventFromNativePacket(
+        {
+          'type': 'room_file_chunk',
+          'id': 'f-bad',
+          'offset': 0,
+          'fileKey': 'nope',
+          'attachment': {'name': 'note.bin'},
+          'abWriter': 'a',
+          'abSeq': 2,
+        },
+        fallbackWriter: 'x',
+      ),
+      isNull,
+    );
+
+    final join = roomEventFromNativePacket(
+      {
+        'type': 'room_join',
+        'roomId': 'room-1',
+        'abWriter': 'a',
+        'abSeq': 0,
+        'guestPeerId': 'p1',
+        'guestName': 'Pat',
+      },
+      fallbackWriter: 'x',
+    );
+    expect(join?.kind, 'membership');
+    expect(join?.payload['peerId'], 'p1');
+    expect(join?.payload['displayName'], 'Pat');
+
+    final msg = roomEventFromNativePacket(
+      {
+        'type': 'room_msg',
+        'id': 'm1',
+        'text': 'hello host-plaintext',
+        'peerId': 'ORBIT-AA',
+        'abWriter': 'a',
+        'abSeq': 1,
+      },
+      fallbackWriter: 'x',
+    );
+    expect(msg?.kind, 'message');
+    expect(msg?.payload['text'], 'hello host-plaintext');
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
 

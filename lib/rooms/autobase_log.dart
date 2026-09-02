@@ -15,9 +15,17 @@ bool _isStrippedAutobaseKey(String key) =>
     kForbiddenReplicationFields.contains(key) ||
     _kAutobaseAttachmentStripExtras.contains(key);
 
+/// Live Autobase / room envelopes. True iff no [kForbiddenReplicationFields]
+/// key appears at any depth. Same cycle-safe Map / Iterable walk as
+/// [replicationValueIsSafe] (`text`, `b64`, and `peerId` are not forbidden).
+bool autobaseLiveEnvelopeIsSafe(Object? value) =>
+    replicationValueIsSafe(value);
+
 /// Drop Hypercore-forbidden secrets and Autobase attachment extras
 /// (`b64`, `dataB64`, `bytes`) from an Autobase event payload at any depth.
 /// Host-plaintext `text` stays in the local projection.
+/// Residual strip for a **clean** envelope — refuse first with
+/// [autobaseLiveEnvelopeIsSafe].
 Map<String, Object?> stripForbiddenAutobasePayload(Map<String, Object?> raw) {
   final out = <String, Object?>{};
   for (final entry in raw.entries) {
@@ -71,6 +79,8 @@ class RoomEvent {
 
   static RoomEvent? fromWire(Map<String, Object?> packet) {
     if (packet['type'] != 'autobase-event') return null;
+    // Refuse the whole envelope before strip — type / writer / kind / payload.
+    if (!autobaseLiveEnvelopeIsSafe(packet)) return null;
     final writer = packet['writerId'] as String?;
     final kind = packet['kind'] as String?;
     if (writer == null || kind == null) return null;
@@ -92,6 +102,7 @@ RoomEvent? roomEventFromNativePacket(
   Map<String, Object?> packet, {
   required String fallbackWriter,
 }) {
+  if (!autobaseLiveEnvelopeIsSafe(packet)) return null;
   if (packet['type'] == 'autobase-event') return RoomEvent.fromWire(packet);
   final writer = packet['abWriter'] as String? ?? fallbackWriter;
   final seq = (packet['abSeq'] as num?)?.toInt() ?? 0;
@@ -204,6 +215,14 @@ class AutobaseProjection {
   void apply(RoomEvent event) {
     final key = state.keyOf(event);
     if (state.applied.contains(key)) return;
+    // Refuse without marking applied so a later clean writer:seq can land.
+    if (!autobaseLiveEnvelopeIsSafe(<String, Object?>{
+          'kind': event.kind,
+          'payload': event.payload,
+          'writerId': event.writerId,
+        })) {
+      return;
+    }
     state.applied.add(key);
     final payload = stripForbiddenAutobasePayload(event.payload);
     switch (event.kind) {

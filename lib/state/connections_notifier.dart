@@ -582,6 +582,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   }
 
   Future<bool> sendAutobaseEvent(String remoteId, RoomEvent event) async {
+    if (!replicationValueIsSafe(event.payload)) return false;
     final dual = _dual;
     if (dual == null || !_nativeCarrierFor(remoteId)) return false;
     return dual.sendAutobaseEvent(remoteId, event);

@@ -399,6 +399,11 @@ Future<Map<String, Object?>> _buildSignedHello({
     deviceId: 'local-device',
   );
   if (caps != null) hello['caps'] = caps;
+  // Belt-and-suspenders: refuse to return a secret-bearing hello even if
+  // localHelloCapabilities / caps were somehow hostile. Same gate as acceptHello.
+  if (!helloEnvelopeIsSafe(hello)) {
+    throw const FormatException('hello: forbidden fields');
+  }
   return hello;
 }
 

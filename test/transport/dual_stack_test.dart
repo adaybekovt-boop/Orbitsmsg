@@ -268,6 +268,20 @@ void main() {
     expect(sendRoomPacket, contains('dual.sendRoomPacket'));
     expect(sendRoomPacket, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
 
+    final sendAutobaseEvent = slice(
+      'Future<bool> sendAutobaseEvent',
+      'Future<void> sendCallSignal',
+    );
+    expect(sendAutobaseEvent, contains('replicationValueIsSafe'));
+    expect(sendAutobaseEvent, contains('event.payload'));
+    expect(sendAutobaseEvent, contains('_nativeCarrierFor'));
+    expect(
+      sendAutobaseEvent.indexOf('replicationValueIsSafe'),
+      lessThan(sendAutobaseEvent.indexOf('dual.sendAutobaseEvent')),
+    );
+    expect(src, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(src, isNot(contains('peerjsAllowedOnNative()')));
+
     final waitForDropDrain = slice(
       'Future<void> waitForDropDrain',
       'void openEphemeral',

@@ -994,6 +994,15 @@ class DualStackBridge {
   Future<bool> sendAutobaseEvent(String peerId, RoomEvent event) async {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return false;
+    // Refuse before apply/send. toWire() strips secrets, so a nested
+    // fileKey would otherwise mutate Autobase and ride a cleaned event.
+    if (event.writerId.contains('://') || event.kind.contains('://')) {
+      return false;
+    }
+    if (!replicationValueIsSafe(event.payload) ||
+        !replicationValueIsSafe(event.toWire())) {
+      return false;
+    }
     _applyRoom(event);
     if (!await _ensureNativeSendReady(norm)) return false;
     await transport.send(

@@ -351,4 +351,24 @@ void main() {
       );
     });
   });
+
+  group('hello builder envelope scrub', () {
+    test('source-scan: helloEnvelopeIsSafe after hello[caps] before return', () {
+      final src = File('lib/core/wire_session.dart').readAsStringSync();
+      final body = src
+          .split('Future<Map<String, Object?>> _buildSignedHello')[1]
+          .split('class _HelloVerifyResult')[0];
+      expect(body, contains('helloEnvelopeIsSafe'));
+      expect(body, contains("hello['caps']"));
+      expect(body, contains('return hello'));
+      expect(
+        body.indexOf("hello['caps']"),
+        lessThan(body.indexOf('helloEnvelopeIsSafe')),
+      );
+      expect(
+        body.indexOf('helloEnvelopeIsSafe'),
+        lessThan(body.indexOf('return hello')),
+      );
+    });
+  });
 }

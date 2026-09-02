@@ -2018,6 +2018,159 @@ void main() {
   });
 
   test(
+      'sendAutobaseEvent refuses nested fileKey before apply, send, and journal',
+      () async {
+    final (a, b, _) = await linked();
+    final membersA = Map<String, String>.from(a.rooms.state.members);
+    final membersB = Map<String, String>.from(b.rooms.state.members);
+    final membershipA = a.journal.records
+        .where((r) => r.kind == ReplicationEventKind.roomMembershipChanged)
+        .length;
+    final membershipB = b.journal.records
+        .where((r) => r.kind == ReplicationEventKind.roomMembershipChanged)
+        .length;
+
+    expect(
+      await a.sendAutobaseEvent(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        const RoomEvent(
+          writerId: 'a',
+          seq: 0,
+          kind: 'membership',
+          payload: {
+            'roomId': 'room-secret',
+            'peerId': 'ORBIT-CCCCCCCCCCCCCCCC',
+            'action': 'join',
+            'displayName': 'C',
+            'meta': {'fileKey': 'x'},
+          },
+        ),
+      ),
+      isFalse,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+
+    expect(a.rooms.state.members, membersA);
+    expect(b.rooms.state.members, membersB);
+    expect(a.rooms.state.members.containsKey('ORBIT-CCCCCCCCCCCCCCCC'), isFalse);
+    expect(b.rooms.state.members.containsKey('ORBIT-CCCCCCCCCCCCCCCC'), isFalse);
+    expect(
+      a.journal.records
+          .where((r) => r.kind == ReplicationEventKind.roomMembershipChanged)
+          .length,
+      membershipA,
+    );
+    expect(
+      b.journal.records
+          .where((r) => r.kind == ReplicationEventKind.roomMembershipChanged)
+          .length,
+      membershipB,
+    );
+    expect(
+      a.journal.records.any(
+        (r) =>
+            r.kind == ReplicationEventKind.roomMembershipChanged &&
+            r.fields['peerId'] == 'ORBIT-CCCCCCCCCCCCCCCC',
+      ),
+      isFalse,
+    );
+    expect(jsonEncode(a.journal.records.map((r) => r.fields).toList()),
+        isNot(contains('fileKey')));
+    await a.detach();
+    await b.detach();
+  });
+
+  test(
+      'sendAutobaseEvent legit membership applies on both sides after linked',
+      () async {
+    final (a, b, _) = await linked();
+    expect(
+      await a.sendAutobaseEvent(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        const RoomEvent(
+          writerId: 'a',
+          seq: 0,
+          kind: 'membership',
+          payload: {
+            'roomId': 'room-ok',
+            'peerId': 'ORBIT-AAAAAAAAAAAAAAAA',
+            'action': 'join',
+            'displayName': 'A',
+          },
+        ),
+      ),
+      isTrue,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(a.rooms.state.members['ORBIT-AAAAAAAAAAAAAAAA'], 'A');
+    expect(b.rooms.state.members['ORBIT-AAAAAAAAAAAAAAAA'], 'A');
+    expect(
+      a.journal.records.any(
+        (r) =>
+            r.kind == ReplicationEventKind.roomMembershipChanged &&
+            r.fields['roomId'] == 'room-ok' &&
+            r.fields['peerId'] == 'ORBIT-AAAAAAAAAAAAAAAA' &&
+            r.fields['action'] == 'join' &&
+            r.fields['displayName'] == 'A',
+      ),
+      isTrue,
+    );
+    expect(
+      await b.sendAutobaseEvent(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        const RoomEvent(
+          writerId: 'b',
+          seq: 1,
+          kind: 'message',
+          payload: {'id': 'm-host', 'text': 'host-plaintext'},
+        ),
+      ),
+      isTrue,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(
+      a.rooms.state.messages.any((m) => m['text'] == 'host-plaintext'),
+      isTrue,
+    );
+    expect(
+      b.rooms.state.messages.any((m) => m['text'] == 'host-plaintext'),
+      isTrue,
+    );
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+    await a.detach();
+    await b.detach();
+  });
+
+  test(
+      'sendAutobaseEvent source-scan uses replicationValueIsSafe before apply and send',
+      () {
+    final src = File('lib/transport/dual_stack_bridge.dart').readAsStringSync();
+    expect(src, isNot(contains("import 'dart:io'")));
+    final sendAutobase = src
+        .split('Future<bool> sendAutobaseEvent')[1]
+        .split('void _applyRoom')[0];
+    expect(sendAutobase, contains('replicationValueIsSafe(event.payload)'));
+    expect(sendAutobase, contains('replicationValueIsSafe(event.toWire())'));
+    expect(sendAutobase, isNot(contains('outboundWireMapIsSendable')));
+    expect(
+      sendAutobase.indexOf('replicationValueIsSafe'),
+      lessThan(sendAutobase.indexOf('_applyRoom')),
+    );
+    expect(
+      sendAutobase.indexOf('replicationValueIsSafe'),
+      lessThan(sendAutobase.indexOf('transport.send')),
+    );
+    expect(
+      sendAutobase.indexOf('replicationValueIsSafe(event.payload)'),
+      lessThan(sendAutobase.indexOf('_applyRoom')),
+    );
+    expect(
+      sendAutobase.indexOf('replicationValueIsSafe(event.toWire())'),
+      lessThan(sendAutobase.indexOf('_applyRoom')),
+    );
+  });
+
+  test(
       'Autobase membership and Hypercore envelopes hydrate from journal without re-append',
       () async {
     final (a, b, _) = await linked();
