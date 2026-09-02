@@ -8,7 +8,9 @@ void main() {
   test('Drop prefers a filesystem path and does not force picker bytes on native', () {
     final page = File('lib/pages/drop_page.dart').readAsStringSync();
     expect(page, contains('sendFileFromPath'));
-    expect(page, contains('withReadStream: kIsWeb'));
+    expect(page, contains('withReadStream: true'));
+    expect(page, contains('materializePickedLocalPath'));
+    expect(page, contains('kMaxDropFileBytes'));
     expect(page, contains('sendFileFromStream'));
     expect(page, contains('withData: false'));
     expect(

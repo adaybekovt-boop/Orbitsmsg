@@ -16,7 +16,9 @@ import 'package:mime/mime.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../core/attachment_preview.dart' show formatBytes;
-import '../core/orbits_drop.dart' show DropDirection, uniqueDropSaveFileName;
+import '../core/orbits_drop.dart'
+    show DropDirection, kMaxDropFileBytes, uniqueDropSaveFileName;
+import '../core/read_picked_bytes.dart';
 import '../state/connections_notifier.dart';
 import '../state/drop_provider.dart';
 import '../state/peers_provider.dart';
@@ -49,7 +51,7 @@ class _DropPageState extends ConsumerState<DropPage> {
         type: FileType.any,
         allowMultiple: false,
         withData: false,
-        withReadStream: kIsWeb,
+        withReadStream: true,
       );
     } catch (_) {
       _toast('Не удалось открыть файловый выбор');
@@ -62,16 +64,28 @@ class _DropPageState extends ConsumerState<DropPage> {
 
     setState(() => _sendingToPeer = peerId);
     try {
-      if (!kIsWeb && pf.path != null && pf.path!.isNotEmpty) {
-        final id = await ref.read(dropNotifierProvider.notifier).sendFileFromPath(
-              peerId,
-              path: pf.path!,
-              name: name,
-              mime: mime,
-              sizeBytes: pf.size,
-            );
-        if (id == null) _toast('Нет соединения с получателем');
-        return;
+      if (!kIsWeb) {
+        final material = await materializePickedLocalPath(
+          pf,
+          maxBytes: kMaxDropFileBytes,
+        );
+        if (material.tooLarge) {
+          _toast('Файл слишком большой');
+          return;
+        }
+        final nativePath = material.path;
+        if (nativePath != null && nativePath.isNotEmpty) {
+          final id =
+              await ref.read(dropNotifierProvider.notifier).sendFileFromPath(
+                    peerId,
+                    path: nativePath,
+                    name: name,
+                    mime: mime,
+                    sizeBytes: material.sizeBytes,
+                  );
+          if (id == null) _toast('Нет соединения с получателем');
+          return;
+        }
       }
 
       final stream = pf.readStream;

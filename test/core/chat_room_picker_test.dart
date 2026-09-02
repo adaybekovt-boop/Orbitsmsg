@@ -26,6 +26,10 @@ void main() {
     expect(room, contains('withData: kIsWeb'));
     expect(room, isNot(contains('withData: true')));
     expect(room, contains('readPickedBytes'));
+    expect(room, contains('materializePickedLocalPath'));
+    expect(room, contains('withReadStream: !kIsWeb'));
+    expect(room, contains('sendRoomFileFromPath'));
+    expect(room, isNot(contains('localPathLength')));
     expect(room, isNot(contains("import 'dart:io'")));
     expect(room, isNot(contains('room_crypto.dart')));
 

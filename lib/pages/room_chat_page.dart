@@ -18,7 +18,6 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mime/mime.dart';
 
-import '../core/path_byte_stream.dart';
 import '../core/read_picked_bytes.dart';
 import '../peer/room_disclaimer.dart';
 import '../peer/room_manager.dart';
@@ -130,6 +129,7 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
           type: FileType.any,
           allowMultiple: false,
           withData: kIsWeb,
+          withReadStream: !kIsWeb,
         );
       } catch (_) {
         _toast('Не удалось открыть файловый выбор');
@@ -140,27 +140,28 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
       final name = pf.name;
       final mime = lookupMimeType(name) ?? 'application/octet-stream';
       final kind = _classifyFileKind(mime);
-      final nativePath = pf.path;
-      if (!kIsWeb && nativePath != null && nativePath.isNotEmpty) {
-        final size = localPathLength(nativePath);
-        if (size == null) {
-          _toast('Не удалось прочитать файл');
-          return;
-        }
-        if (size > kMaxRoomFileRawBytes) {
-          final mb = (size / (1024 * 1024)).ceil();
+      if (!kIsWeb) {
+        final material = await materializePickedLocalPath(
+          pf,
+          maxBytes: kMaxRoomFileRawBytes,
+        );
+        if (material.tooLarge) {
+          final mb = (material.sizeBytes / (1024 * 1024)).ceil();
           _toast('Файл больше 12 МБ — отправка невозможна ($mb МБ).');
           return;
         }
-        await _rooms.sendRoomFileFromPath(
-          roomId,
-          channelId,
-          nativePath,
-          name: name,
-          mime: mime,
-          kind: kind,
-        );
-        return;
+        final nativePath = material.path;
+        if (nativePath != null && nativePath.isNotEmpty) {
+          await _rooms.sendRoomFileFromPath(
+            roomId,
+            channelId,
+            nativePath,
+            name: name,
+            mime: mime,
+            kind: kind,
+          );
+          return;
+        }
       }
       final pickedBytes = await readPickedBytes(
         pf,
