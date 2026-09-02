@@ -31,6 +31,7 @@ a closed store-review gate.
 | Camera / mic / Face ID / local network strings | `ios/Runner/Info.plist` |
 | Encryption export | Uses standard HTTPS + on-device E2E; no custom “military” claims. Packet: `encryptionExport` in [store-data-safety.json](store-data-safety.json) |
 | App Privacy / Data Safety | [store-data-safety.json](store-data-safety.json) (`filed: false`; `kLiveStorageFleet` / `kLiveSignedRelayDirectory` / `kBareBinaryShipped` / `kHolepunchCorestoreAddonLinked` false) |
+| PWA official mode | `pwaOfficialMode` / `pwaFinalFateChosen` in [store-data-safety.json](store-data-safety.json) (`compatibility-client-on-PeerJS`; final fate not chosen) |
 | Privacy policy / support URL | Placeholder until counsel fills `kLegalPendingPlaceholder` |
 | Complaint | `lib/pages/settings/complaint_page.dart` + GitHub Issues |
 | Block user | Existing 1:1 block list (before decrypt / Drift persist) |

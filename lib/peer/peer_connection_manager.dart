@@ -100,9 +100,23 @@ class PeerConnectionManager {
 
   String get currentPeerId => peer?.id ?? desiredPeerId;
 
-  /// Start the PeerJS pipeline. Returns null if a multi-tab lock conflict was
-  /// detected (caller should set status=multitab).
-  Future<PeerJsClient?> start() async {
+  /// Start the PeerJS pipeline. Returns null if isolation forbids PeerJS
+  /// (status=disconnected) or a multi-tab lock conflict was detected
+  /// (caller should set status=multitab).
+  ///
+  /// [isolationMode] defaults to the product [kPeerjsIsolationMode]. Tests
+  /// pass an explicit mode; do not flip the live constant.
+  Future<PeerJsClient?> start({String? isolationMode}) async {
+    // Phase 14 isolation: fail closed BEFORE signaling-host callback,
+    // MultiTabLock, or PeerJsClient. Product default-live still starts PeerJS.
+    final allowPeerJs = isolationMode != null
+        ? peerjsAllowedOnNativeFor(isolationMode, isWeb: kIsWeb)
+        : peerjsAllowedOnNative(isWeb: kIsWeb);
+    if (!allowPeerJs) {
+      cb.setStatus?.call('disconnected');
+      return null;
+    }
+
     signalingHosts ??= buildSignalingHosts(env);
     final currentHost = signalingHosts![signalingIndex];
     cb.setSignalingHost?.call(env.peerServer ?? currentHost);
@@ -121,14 +135,6 @@ class PeerConnectionManager {
     if (!acquired) {
       cb.setStatus?.call('multitab');
       cb.setError?.call('Открыта другая вкладка с этим Peer ID');
-      return null;
-    }
-
-    // Phase 14 isolation: native-only modes must not construct PeerJS.
-    // Product mode stays default-live, so this is a no-op until the
-    // support window closes in writing.
-    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
-      cb.setStatus?.call('disconnected');
       return null;
     }
 

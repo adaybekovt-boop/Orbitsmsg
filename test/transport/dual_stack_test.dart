@@ -257,6 +257,28 @@ void main() {
     expect(waitForDropDrain, contains('bufferedAmount'));
   });
 
+  test('_bindToCurrentPeer isolation gate sits before onConnection.listen', () {
+    final src = File('lib/state/connections_notifier.dart').readAsStringSync();
+    final bind = src
+        .split('void _bindToCurrentPeer()')[1]
+        .split('void _flushPendingReliable()')[0];
+    expect(bind, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(bind, isNot(contains('peerjsAllowedOnNative()')));
+    final boundIdx = bind.indexOf('_boundPeer = current');
+    final gateIdx = bind.indexOf('peerjsAllowedOnNative(isWeb: kIsWeb)');
+    final listenIdx = bind.indexOf('onConnection.listen');
+    final openIdx = bind.indexOf('onOpen.listen');
+    final flushIdx = bind.indexOf('_flushPendingReliable()');
+    expect(boundIdx, greaterThanOrEqualTo(0));
+    expect(gateIdx, greaterThan(boundIdx));
+    expect(listenIdx, greaterThan(gateIdx));
+    expect(openIdx, greaterThan(gateIdx));
+    expect(flushIdx, greaterThan(gateIdx));
+    expect(bind, isNot(contains('onCall.listen')));
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(peerjsAllowedOnNative(), isTrue);
+  });
+
   test('RoomScopedTransport skips PeerJS when isolation disallows it', () {
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
     expect(

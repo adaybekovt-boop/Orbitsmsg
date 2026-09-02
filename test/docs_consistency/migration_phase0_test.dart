@@ -82,6 +82,8 @@ void main() {
     expect(raw, isA<Map>());
     final packet = Map<String, Object?>.from(raw as Map);
     expect(packet['filed'], isFalse);
+    expect(packet['pwaOfficialMode'], 'compatibility-client-on-PeerJS');
+    expect(packet['pwaFinalFateChosen'], isFalse);
     expect(packet['kRoomsApplicationE2eImplemented'], isFalse);
     expect(packet['kLiveApnsGateway'], isFalse);
     expect(packet['kLiveFcmGateway'], isFalse);
@@ -95,5 +97,15 @@ void main() {
     final export = Map<String, Object?>.from(packet['encryptionExport'] as Map);
     expect(export['customMilitaryClaims'], isFalse);
     expect(export['usesStandardHttps'], isTrue);
+
+    final pwa = read('docs/migration/pwa-versioning-metrics.md');
+    expect(pwa, contains('compatibility client on PeerJS'));
+    expect(pwa, contains('pwaOfficialMode'));
+    expect(pwa, contains('pwaFinalFateChosen'));
+    expect(pwa, contains('**not** chosen'));
+    expect(
+      read('docs/migration/app-review-notes.md'),
+      contains('pwaOfficialMode'),
+    );
   });
 }

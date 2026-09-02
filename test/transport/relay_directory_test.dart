@@ -202,6 +202,142 @@ void main() {
     );
   });
 
+  test(
+      'identity-signed lab_directory.json verifies and is not a live fleet',
+      () async {
+    final fixtureFile = File('tool/fleet/lab_directory.json');
+    final raw = Map<String, Object?>.from(
+      jsonDecode(await fixtureFile.readAsString()) as Map,
+    );
+    expect(raw['live'], isFalse);
+    expect(raw['signature'], '');
+    expect(raw['identityPublicKey'], '');
+    expect(kLiveSignedRelayDirectory, isFalse);
+    expect(kLiveStorageFleet, isFalse);
+
+    final unsigned = await loadRelayDirectoryFile(fixtureFile.path);
+    expect(unsigned, isNotNull);
+    expect(relayDirectoryIsUnsignedLab(unsigned!), isTrue);
+    expect(await verifyRelayDirectory(unsigned), isFalse);
+
+    // Ephemeral identity-signing-v1 key. Not production. Not Noise.
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final signed = await issueRelayDirectory(
+      issuedAt: unsigned.issuedAt,
+      expiresAt: unsigned.expiresAt,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+      peers: unsigned.peers,
+    );
+    expect(await verifyRelayDirectory(signed), isTrue);
+    expect(signed.signature, isNotEmpty);
+    expect(kLiveSignedRelayDirectory, isFalse);
+
+    final dir = await Directory.systemTemp.createTemp('orbits-lab-signed');
+    addTearDown(() => dir.delete(recursive: true));
+    final signedFile = File('${dir.path}/lab_directory_signed.json');
+    await signedFile.writeAsString(
+      jsonEncode(_signedLabDirectoryJson(unsignedBody: raw, signed: signed)),
+    );
+
+    final loaded = await loadRelayDirectoryFile(signedFile.path);
+    expect(loaded, isNotNull);
+    expect(await verifyRelayDirectory(loaded!), isTrue);
+    expect(relayDirectoryIsUnsignedLab(loaded), isFalse);
+    expect(kLiveSignedRelayDirectory, isFalse);
+    expect(kLiveStorageFleet, isFalse);
+
+    final reloadedRaw = jsonDecode(await signedFile.readAsString()) as Map;
+    expect(reloadedRaw['live'], isFalse);
+    expect(reloadedRaw['signature'], isNotEmpty);
+    expect(
+      loaded.peers.every((p) => p.host == '127.0.0.1'),
+      isTrue,
+    );
+    expect(
+      loaded.pick(DirectoryPeerKind.bootstrap).every(
+            (p) => p.wireProtocol == 'http',
+          ),
+      isTrue,
+    );
+    expect(bootstrapNodesFromDirectory(loaded), isEmpty);
+    expect(relayThroughKeysFromDirectory(loaded), isEmpty);
+    expect(isDeniedPublicDhtHost('127.0.0.1'), isFalse);
+
+    expect(loaded.meetsFleetMinimum, isTrue);
+    expect(kFleetMinBootstrap, 3);
+    expect(kFleetMinRelay, 2);
+    expect(kFleetMinStorage, 2);
+    expect(loaded.pick(DirectoryPeerKind.bootstrap), hasLength(3));
+    expect(loaded.pick(DirectoryPeerKind.relay), hasLength(2));
+    expect(loaded.pick(DirectoryPeerKind.storage), hasLength(2));
+    expect(
+      loaded.pick(DirectoryPeerKind.bootstrap).map((p) => p.id),
+      ['bootstrap-1', 'bootstrap-2', 'bootstrap-3'],
+    );
+    expect(
+      loaded.pick(DirectoryPeerKind.relay).map((p) => p.id),
+      ['relay-1', 'relay-2'],
+    );
+    expect(
+      loaded.pick(DirectoryPeerKind.storage).map((p) => p.id),
+      ['storage-1', 'storage-2'],
+    );
+
+    final withUnsound = await issueRelayDirectory(
+      issuedAt: unsigned.issuedAt,
+      expiresAt: unsigned.expiresAt,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+      peers: [
+        ...unsigned.peers,
+        const DirectoryPeer(
+          id: 'relay-unsound',
+          kind: DirectoryPeerKind.relay,
+          host: '127.0.0.1',
+          port: 9,
+          region: 'lab',
+          rttMs: 0,
+          unsound: true,
+          protocol: 'http',
+        ),
+      ],
+    );
+    expect(await verifyRelayDirectory(withUnsound), isTrue);
+    expect(
+      withUnsound.pick(DirectoryPeerKind.relay).map((p) => p.id),
+      ['relay-1', 'relay-2'],
+    );
+    expect(withUnsound.meetsFleetMinimum, isTrue);
+    expect(kLiveSignedRelayDirectory, isFalse);
+
+    final emptySigFile = File('${dir.path}/empty_signature.json');
+    await emptySigFile.writeAsString(
+      jsonEncode({
+        ...raw,
+        'signature': '',
+        'identityPublicKey': base64Encode(spki),
+        'live': false,
+      }),
+    );
+    final emptyLoaded = await loadRelayDirectoryFile(emptySigFile.path);
+    expect(emptyLoaded, isNotNull);
+    expect(relayDirectoryIsUnsignedLab(emptyLoaded!), isTrue);
+    expect(await verifyRelayDirectory(emptyLoaded), isFalse);
+    expect(kLiveSignedRelayDirectory, isFalse);
+
+    final tampered = _signedLabDirectoryJson(
+      unsignedBody: raw,
+      signed: signed,
+    );
+    ((tampered['peers'] as List).first as Map)['host'] = 'hyperdht.org';
+    final tamperedFile = File('${dir.path}/tampered.json');
+    await tamperedFile.writeAsString(jsonEncode(tampered));
+    expect(await loadRelayDirectoryFile(tamperedFile.path), isNull);
+    expect(kLiveSignedRelayDirectory, isFalse);
+  });
+
   test('unsigned lab directory file loads; URLs are refused', () async {
     final dir = await Directory.systemTemp.createTemp('orbits-relay-dir');
     addTearDown(() => dir.delete(recursive: true));
@@ -400,6 +536,24 @@ void main() {
 
 String utf8Payload(RelayDirectory directory) =>
     String.fromCharCodes(directory.signedPayload());
+
+/// Overlay a test identity-signing-v1 signature on the committed lab
+/// JSON body. Always `live: false`. The public key is ephemeral and
+/// not production.
+Map<String, Object?> _signedLabDirectoryJson({
+  required Map<String, Object?> unsignedBody,
+  required RelayDirectory signed,
+}) {
+  return <String, Object?>{
+    ...unsignedBody,
+    'signature': base64Encode(signed.signature),
+    'identityPublicKey': base64Encode(signed.identityPublicKey),
+    'live': false,
+    'note':
+        'Identity-signed loopback lab directory from tool/fleet/lab_directory.json. '
+        'Test identity key only — not production. kLiveSignedRelayDirectory stays false.',
+  };
+}
 
 List<DirectoryPeer> _fleetPeers() => const [
       DirectoryPeer(

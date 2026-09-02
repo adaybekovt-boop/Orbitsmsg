@@ -2,6 +2,8 @@
   "filed": false,
   "note": "Engineering packet only. Not submitted to App Store Connect or Play Data Safety until counsel replaces [TEXT PENDING LEGAL REVIEW].",
   "defaultLivePath": "PeerJS",
+  "pwaOfficialMode": "compatibility-client-on-PeerJS",
+  "pwaFinalFateChosen": false,
   "kCompletedMigrationPhase": 0,
   "kRoomsApplicationE2eImplemented": false,
   "kLiveApnsGateway": false,

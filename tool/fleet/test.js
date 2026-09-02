@@ -6,7 +6,7 @@ const fs = require('node:fs')
 const http = require('node:http')
 const path = require('node:path')
 const { startLocalFleet } = require('./local_fleet.js')
-const { labFleet, labDirectoryDocument } = require('./lab_fleet.js')
+const { labFleet, labDirectoryDocument, labSignedDirectoryDocument } = require('./lab_fleet.js')
 const { peersToDirectoryRows, meetsFleetMinimum } = require('./directory.js')
 
 function get(port, path) {
@@ -20,6 +20,32 @@ function get(port, path) {
     }).on('error', reject)
   })
 }
+
+test('signed lab document is the unsigned body plus test identity fields and is not live', () => {
+  const unsigned = labDirectoryDocument()
+  // Placeholder base64 — Dart tests issue a real identity-signing-v1 signature.
+  const signed = labSignedDirectoryDocument({
+    signature: 'dGVzdC1vbmx5LXNpZ25hdHVyZQ==',
+    identityPublicKey: 'dGVzdC1vbmx5LXB1YmtleQ==',
+  })
+  assert.equal(signed.live, false)
+  assert.equal(unsigned.live, false)
+  assert.equal(unsigned.signature, '')
+  assert.notEqual(signed.signature, '')
+  assert.notEqual(signed.identityPublicKey, '')
+  assert.equal(signed.issuedAt, unsigned.issuedAt)
+  assert.equal(signed.expiresAt, unsigned.expiresAt)
+  assert.deepEqual(signed.peers, unsigned.peers)
+  assert.equal(meetsFleetMinimum(signed.peers), true)
+  assert.equal(signed.peers.filter((r) => r.kind === 'bootstrap').length, 3)
+  assert.equal(signed.peers.filter((r) => r.kind === 'relay').length, 2)
+  assert.equal(signed.peers.filter((r) => r.kind === 'storage').length, 2)
+  for (const row of signed.peers) {
+    assert.equal(row.live, false)
+    assert.equal(row.host, '127.0.0.1')
+    assert.equal(row.protocol, 'http')
+  }
+})
 
 test('lab_directory.json matches peersToDirectoryRows(labFleet) and is not live', () => {
   const fixturePath = path.join(__dirname, 'lab_directory.json')

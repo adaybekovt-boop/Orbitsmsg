@@ -1058,6 +1058,15 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     _boundPeer = current;
     if (current == null) return;
 
+    // Phase 14 isolation: fail closed *before* attaching PeerJS listeners.
+    // Isolation already closes inbound connections inside the listener,
+    // but bind must not subscribe onConnection / onOpen / onCall — or
+    // flush pending PeerJS dials — when native isolation disallows
+    // PeerJS. Product [kPeerjsIsolationMode] stays default-live.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      return;
+    }
+
     _peerSubs.add(current.onConnection.listen((conn) {
       if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
         unawaited(conn.close());

@@ -76,4 +76,31 @@ function labDirectoryDocument() {
   }
 }
 
-module.exports = { labFleet, labDirectoryDocument }
+/**
+ * Same JSON shape as lab_directory.json after Dart identity-signing-v1
+ * (issueRelayDirectory / signedPayload). `signature` and
+ * `identityPublicKey` are base64. The public key is a test key, never
+ * production. A non-empty signature does not make the directory live.
+ */
+function labSignedDirectoryDocument({ signature, identityPublicKey }) {
+  if (typeof signature !== 'string' || signature.length === 0) {
+    throw new Error('signed lab document needs a test identity signature')
+  }
+  if (typeof identityPublicKey !== 'string' || identityPublicKey.length === 0) {
+    throw new Error('signed lab document needs a test identity public key')
+  }
+  const unsigned = labDirectoryDocument()
+  return {
+    issuedAt: unsigned.issuedAt,
+    expiresAt: unsigned.expiresAt,
+    signature,
+    identityPublicKey,
+    live: false,
+    note:
+      'Identity-signed loopback lab directory from tool/fleet/lab_directory.json. ' +
+      'Test identity key only — not production. kLiveSignedRelayDirectory stays false.',
+    peers: unsigned.peers,
+  }
+}
+
+module.exports = { labFleet, labDirectoryDocument, labSignedDirectoryDocument }

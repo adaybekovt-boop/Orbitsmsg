@@ -2,8 +2,8 @@
 
 /**
  * Map a local loopback fleet to unsigned directory rows.
- * Signing is Dart identity-signing-v1 (see RelayDirectory). This is not
- * a live public directory.
+ * Signing is Dart identity-signing-v1 (see RelayDirectory /
+ * issueRelayDirectory). An identity signature does not make this live.
  *
  * Bootstrap `port` is HyperDHT when protocol is `hyperdht`. HTTP health
  * lives on `healthPort` and must not be used as a DHT address.
