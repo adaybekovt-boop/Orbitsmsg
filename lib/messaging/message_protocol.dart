@@ -215,6 +215,7 @@ void dispatchEphemeralInbound(
   EphemeralInboundCtx ctx,
 ) {
   if (data is! Map) return;
+  if (!replicationValueIsSafe(data)) return;
   final type = data['type'];
   if (type == 'typing') {
     ctx.applyTyping(data['isTyping'] == true);

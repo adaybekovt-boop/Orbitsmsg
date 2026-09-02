@@ -1099,6 +1099,34 @@ void main() {
     await b.detach();
   });
 
+  test('inbound Drop map with nested fileKey never reaches onDrop', () async {
+    final (a, b, _) = await linked();
+    final dropped = <Object>[];
+    b.onDrop = (peer, packet) => dropped.add(packet);
+    final transport = b.transport as LoopbackOrbitsTransport;
+    transport.emitEvent(
+      TransportFrame(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        TransportChannel.attachment,
+        jsonPayload({
+          'type': 'file-start',
+          'fileId': 'f-inbound-secret',
+          'name': 'a.bin',
+          'size': 3,
+          'extra': {'fileKey': 'x'},
+        }),
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(dropped, isEmpty);
+    expect(
+      dropped.whereType<Map>().any((m) => jsonEncode(m).contains('fileKey')),
+      isFalse,
+    );
+    await a.detach();
+    await b.detach();
+  });
+
   test('sendFileFromPath refuses remote URL paths', () async {
     final (a, b, _) = await linked();
     final dropped = <Object>[];

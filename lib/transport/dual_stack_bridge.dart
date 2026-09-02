@@ -1308,6 +1308,7 @@ class DualStackBridge {
           _ingestAttachPath(norm, decoded);
           return;
         }
+        if (!replicationValueIsSafe(decoded)) return;
         onDrop?.call(norm, decoded);
       } catch (_) {}
       return;
