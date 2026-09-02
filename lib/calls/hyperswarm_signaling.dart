@@ -13,6 +13,67 @@ enum CallSignalType {
   mediaState,
 }
 
+/// Real SDP: a `v=0` line plus at least one `o=` / `s=` / `m=` line.
+/// Empty, bare `v=0`, and missing `v=` are not sendable.
+bool isSendableCallSdp(String? sdp) {
+  if (sdp == null) return false;
+  final text = sdp.replaceAll('\r\n', '\n').trim();
+  if (text.isEmpty || text == 'v=0') return false;
+  var hasVersion = false;
+  var hasSession = false;
+  for (final raw in text.split('\n')) {
+    final line = raw.trim();
+    if (line.isEmpty) continue;
+    if (line == 'v=0') hasVersion = true;
+    if (line.startsWith('o=') ||
+        line.startsWith('s=') ||
+        line.startsWith('m=')) {
+      hasSession = true;
+    }
+  }
+  return hasVersion && hasSession;
+}
+
+/// Bind inbound call signals to the active 1:1 session. A new offer is
+/// allowed while idle. Foreign [from] or a stale [callId] is dropped.
+bool acceptInboundCallSignal({
+  required String from,
+  required CallSignal signal,
+  required String? activeRemotePeerId,
+  required String? sessionCallId,
+  required bool sessionActive,
+}) {
+  if (from.isEmpty || from.contains('://')) return false;
+  if (signal.isRoomVoice) return false;
+  final newOfferWhileIdle =
+      signal.type == CallSignalType.offer && !sessionActive;
+  if (newOfferWhileIdle) return true;
+  if (activeRemotePeerId != null &&
+      activeRemotePeerId.isNotEmpty &&
+      from != activeRemotePeerId) {
+    return false;
+  }
+  if (sessionCallId != null &&
+      sessionCallId.isNotEmpty &&
+      signal.callId != sessionCallId) {
+    return false;
+  }
+  return true;
+}
+
+/// Leftover PeerJS media is closed only when this device can use native
+/// *and* the remote advertised call-v1 *and* a native session exists.
+/// A cached call-v1 with no native carrier keeps the PeerJS path.
+bool shouldCloseLeftoverPeerJsCall({
+  required bool canUseNative,
+  required bool remoteUnderstandsNativeCall,
+  required bool nativeSessionExists,
+}) {
+  return nativeSessionExists &&
+      canUseNative &&
+      remoteUnderstandsNativeCall;
+}
+
 class CallSignal {
   const CallSignal({
     required this.type,
@@ -20,6 +81,7 @@ class CallSignal {
     this.sdp,
     this.candidate,
     this.media,
+    this.from,
   });
 
   final CallSignalType type;
@@ -28,12 +90,17 @@ class CallSignal {
   final Map<String, Object?>? candidate;
   final Map<String, Object?>? media;
 
+  /// Optional authenticated sender. DualStack passes this as [from]
+  /// on the handler; the wire may omit it.
+  final String? from;
+
   Map<String, Object?> toJson() => <String, Object?>{
         'type': type.name,
         'callId': callId,
         if (sdp != null) 'sdp': sdp,
         if (candidate != null) 'candidate': candidate,
         if (media != null) 'media': media,
+        if (from != null && from!.isNotEmpty) 'from': from,
       };
 
   /// Room-voice mesh signals ride the Hyperswarm `call` channel with
@@ -60,12 +127,17 @@ class CallSignal {
     if (callId.isEmpty || callId.contains('://')) {
       throw FormatException('call signal contains forbidden fields');
     }
+    final from = json['from'] as String?;
+    if (from != null && (from.isEmpty || from.contains('://'))) {
+      throw FormatException('call signal contains forbidden fields');
+    }
     return CallSignal(
       type: type,
       callId: callId,
       sdp: json['sdp'] as String?,
       candidate: candidate,
       media: media,
+      from: from,
     );
   }
 }
@@ -100,6 +172,17 @@ class NativeCallSession {
     );
   }
 
+  /// Send an offer only when [sdp] is a real session description.
+  Future<bool> startOutgoingIfValid({
+    required String callId,
+    required String sdp,
+    Map<String, Object?>? media,
+  }) async {
+    if (!isSendableCallSdp(sdp)) return false;
+    await startOutgoing(callId: callId, sdp: sdp, media: media);
+    return true;
+  }
+
   Future<void> accept({required String sdp}) {
     final id = callId ?? '';
     return send(
@@ -110,6 +193,12 @@ class NativeCallSession {
         media: defaultMedia,
       ),
     );
+  }
+
+  Future<bool> acceptIfValid({required String sdp}) async {
+    if (!isSendableCallSdp(sdp)) return false;
+    await accept(sdp: sdp);
+    return true;
   }
 
   Future<void> addIce(Map<String, Object?> candidate) {

@@ -107,20 +107,35 @@ class NativeCallMedia {
 
   Future<String> createOfferSdp() async {
     final pc = peerConnection;
-    if (pc == null) return 'v=0';
+    if (pc == null) {
+      throw StateError('native call peer connection missing');
+    }
     final offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    return offer.sdp ?? 'v=0';
+    final sdp = offer.sdp;
+    if (!isSendableCallSdp(sdp)) {
+      throw StateError('native call offer SDP invalid');
+    }
+    return sdp!;
   }
 
   Future<String> createAnswerSdp(String remoteOffer) async {
     final pc = peerConnection;
-    if (pc == null) return 'v=0';
+    if (pc == null) {
+      throw StateError('native call peer connection missing');
+    }
+    if (!isSendableCallSdp(remoteOffer)) {
+      throw StateError('native call remote offer SDP invalid');
+    }
     await pc.setRemoteDescription(RTCSessionDescription(remoteOffer, 'offer'));
     await _flushIce();
     final answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
-    return answer.sdp ?? 'v=0';
+    final sdp = answer.sdp;
+    if (!isSendableCallSdp(sdp)) {
+      throw StateError('native call answer SDP invalid');
+    }
+    return sdp!;
   }
 
   Future<void> setRemoteAnswer(String sdp) async {

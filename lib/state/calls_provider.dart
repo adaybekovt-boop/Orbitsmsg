@@ -261,16 +261,26 @@ class CallsNotifier extends StateNotifier<CallState> {
         session: _nativeSession!,
         onRemoteStream: _onNativeRemoteStream,
       );
-      String sdp = 'v=0';
+      String? sdp;
       try {
         await _nativeMedia!.attachLocal(local);
         sdp = await _nativeMedia!.createOfferSdp();
-      } catch (_) {}
-      await _nativeSession!.startOutgoing(
-        callId: remotePeerId,
-        sdp: sdp,
-        media: {'video': video},
-      );
+      } catch (_) {
+        sdp = null;
+      }
+      final sent = sdp != null &&
+          await _nativeSession!.startOutgoingIfValid(
+            callId: remotePeerId,
+            sdp: sdp,
+            media: {'video': video},
+          );
+      if (!sent) {
+        try {
+          local.getTracks().forEach((t) => t.stop());
+        } catch (_) {}
+        await _failNativeSdp('Не удалось создать SDP');
+        return;
+      }
       // Native-only when the remote advertised call-v1. Do not also
       // open a PeerJS media dial — that double-rings new DualStack pairs.
       return;
@@ -349,7 +359,7 @@ class CallsNotifier extends StateNotifier<CallState> {
     }
     state = state.copyWith(localStream: local);
     if (_nativeSession != null) {
-      String sdp = 'v=0';
+      String? sdp;
       try {
         _nativeMedia ??= NativeCallMedia(
           session: _nativeSession!,
@@ -361,8 +371,17 @@ class CallsNotifier extends StateNotifier<CallState> {
         }
         final offer = _nativeSession!.remoteSdp ?? '';
         sdp = await _nativeMedia!.createAnswerSdp(offer);
-      } catch (_) {}
-      await _nativeSession!.accept(sdp: sdp);
+      } catch (_) {
+        sdp = null;
+      }
+      final sent = sdp != null && await _nativeSession!.acceptIfValid(sdp: sdp);
+      if (!sent) {
+        try {
+          local.getTracks().forEach((t) => t.stop());
+        } catch (_) {}
+        await _failNativeSdp('Не удалось создать SDP');
+        return;
+      }
       if (conn != null) {
         _conn = null;
         unawaited(conn.close().catchError((_) {}));
@@ -631,6 +650,18 @@ class CallsNotifier extends StateNotifier<CallState> {
     state = const CallState.idle().copyWith(lastError: message);
   }
 
+  Future<void> _failNativeSdp(String message) async {
+    final media = _nativeMedia;
+    _nativeMedia = null;
+    _nativeSession = null;
+    if (media != null) {
+      try {
+        await media.close();
+      } catch (_) {}
+    }
+    _resetIdleWithError(message);
+  }
+
   void _onNativeRemoteStream(MediaStream remote) {
     if (!mounted) return;
     state = state.copyWith(
@@ -653,6 +684,16 @@ class CallsNotifier extends StateNotifier<CallState> {
 
   void _onNativeCallSignal(String from, CallSignal signal) {
     if (signal.isRoomVoice) return;
+    final boundFrom = signal.from ?? from;
+    if (!acceptInboundCallSignal(
+          from: boundFrom,
+          signal: signal,
+          activeRemotePeerId: state.remotePeerId,
+          sessionCallId: _nativeSession?.callId,
+          sessionActive: state.isActive,
+        )) {
+      return;
+    }
     _nativeSession ??= NativeCallSession(
       send: (next) =>
           _ref.read(connectionsNotifierProvider.notifier).sendCallSignal(from, next),
@@ -716,9 +757,11 @@ class CallsNotifier extends StateNotifier<CallState> {
       // no such tag and continue exactly as before.
       if (conn.metadata['channel'] == 'room-voice') return;
       final conns = _ref.read(connectionsNotifierProvider.notifier);
-      if (_nativeSession != null ||
-          _nativeMedia != null ||
-          conns.remoteUnderstandsNativeCall(conn.peer)) {
+      if (shouldCloseLeftoverPeerJsCall(
+        canUseNative: conns.canUseNative(conn.peer),
+        remoteUnderstandsNativeCall: conns.remoteUnderstandsNativeCall(conn.peer),
+        nativeSessionExists: _nativeSession != null || _nativeMedia != null,
+      )) {
         unawaited(conn.close().catchError((_) {}));
         return;
       }
