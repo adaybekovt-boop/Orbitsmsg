@@ -62,6 +62,50 @@ class DeviceBinding {
     out.addAll(_u64(expiresAt));
     return out;
   }
+
+  /// Public fields only. Never plaintext, KEK, Noise scalars, or fileKey.
+  Map<String, Object?> toWire() => <String, Object?>{
+        'version': version,
+        'identityPublicKey': base64Encode(identityPublicKey),
+        'deviceId': deviceId,
+        'transportPublicKey': base64Encode(transportPublicKey),
+        'hypercorePublicKey': base64Encode(hypercorePublicKey),
+        'capabilities': List<String>.from(capabilities),
+        'createdAt': createdAt,
+        'expiresAt': expiresAt,
+        'signatureByIdentityKey': base64Encode(signatureByIdentityKey),
+      };
+
+  static DeviceBinding fromWire(Map<String, Object?> json) {
+    for (final key in json.keys) {
+      if (kForbiddenReplicationFields.contains(key) ||
+          key == 'opaqueWakeToken' ||
+          key.contains('://')) {
+        throw ArgumentError('device binding: refusing secret field');
+      }
+    }
+    return DeviceBinding(
+      version: json['version'] as int? ?? 0,
+      identityPublicKey: Uint8List.fromList(
+        base64Decode(json['identityPublicKey'] as String? ?? ''),
+      ),
+      deviceId: json['deviceId'] as String? ?? '',
+      transportPublicKey: Uint8List.fromList(
+        base64Decode(json['transportPublicKey'] as String? ?? ''),
+      ),
+      hypercorePublicKey: Uint8List.fromList(
+        base64Decode(json['hypercorePublicKey'] as String? ?? ''),
+      ),
+      capabilities: (json['capabilities'] as List? ?? const [])
+          .whereType<String>()
+          .toList(),
+      createdAt: json['createdAt'] as int? ?? 0,
+      expiresAt: json['expiresAt'] as int? ?? 0,
+      signatureByIdentityKey: Uint8List.fromList(
+        base64Decode(json['signatureByIdentityKey'] as String? ?? ''),
+      ),
+    );
+  }
 }
 
 /// Connect-time checklist. Crypto verify is Phase 10; Phase 0 locks order.

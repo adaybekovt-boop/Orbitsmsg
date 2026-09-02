@@ -2,9 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/calls/hyperswarm_signaling.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
+import 'package:orbits_flutter/core/peer_pins.dart';
+import 'package:orbits_flutter/core/spki_codec.dart';
 import 'package:orbits_flutter/devices/device_registry.dart';
 import 'package:orbits_flutter/mailbox/blind_store.dart';
 import 'package:orbits_flutter/mailbox/storage_peer_client.dart';
@@ -15,27 +18,81 @@ import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/rooms/autobase_log.dart';
 import 'package:orbits_flutter/core/path_byte_stream.dart';
+import 'package:orbits_flutter/transport/connect_binding.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
 import 'package:orbits_flutter/transport/native_rollback.dart';
 import 'package:orbits_flutter/transport/relay_directory.dart';
+import 'package:orbits_flutter/transport/signed_capabilities.dart';
 import 'package:orbits_flutter/transport/transport_api.dart';
 
-DeviceBinding _bind(String id) => DeviceBinding(
+import '../helpers/pointycastle_ecdh.dart';
+
+late EcKeyPairData _idA;
+late EcKeyPairData _idB;
+late Uint8List _spkiA;
+late Uint8List _spkiB;
+
+Future<DeviceBinding> _bind(
+  String id, {
+  List<int>? transportPublicKey,
+  List<int>? signature,
+}) async {
+  final alice = id == 'a' || id == 'dev-a';
+  final pair = alice ? _idA : _idB;
+  final spki = alice ? _spkiA : _spkiB;
+  final transport = Uint8List.fromList(
+    transportPublicKey ?? List<int>.generate(32, (i) => i + 1),
+  );
+  if (signature != null) {
+    return DeviceBinding(
       version: kDeviceBindingVersion,
-      identityPublicKey: Uint8List.fromList(const [1]),
+      identityPublicKey: spki,
       deviceId: id,
-      transportPublicKey: Uint8List.fromList(List<int>.generate(32, (i) => i + 1)),
-      hypercorePublicKey: Uint8List.fromList(List<int>.generate(32, (i) => i + 2)),
-      capabilities: const ['hyperswarm-v1'],
+      transportPublicKey: transport,
+      hypercorePublicKey:
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 2)),
+      capabilities: const ['hyperswarm-v1', 'peerjs-v4'],
       createdAt: 1,
-      expiresAt: 2,
-      signatureByIdentityKey: Uint8List.fromList(const [3]),
+      expiresAt: 10,
+      signatureByIdentityKey: Uint8List.fromList(signature),
     );
+  }
+  return issueDeviceBinding(
+    identityPublicKey: spki,
+    deviceId: id,
+    transportPublicKey: transport,
+    hypercorePublicKey: Uint8List.fromList(List<int>.generate(32, (i) => i + 2)),
+    capabilities: const ['hyperswarm-v1', 'peerjs-v4'],
+    createdAt: 1,
+    expiresAt: 10,
+    sign: (payload) async => signP256Ecdsa(pair, payload),
+  );
+}
+
+Future<PinCheck> _allowTofu(String _, List<int> __) async =>
+    const PinCheck(status: PinStatus.newPin, fingerprint: 'test');
+
+Future<void> _awaitAuth(DualStackBridge a, DualStackBridge b) async {
+  for (var i = 0; i < 80; i++) {
+    if (a.authenticated.contains('ORBIT-BBBBBBBBBBBBBBBB') &&
+        b.authenticated.contains('ORBIT-AAAAAAAAAAAAAAAA')) {
+      return;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 15));
+  }
+}
 
 void main() {
+  setUpAll(() async {
+    _idA = await generateP256EcdsaKey();
+    _idB = await generateP256EcdsaKey();
+    _spkiA = buildP256Spki(x: _idA.x, y: _idA.y);
+    _spkiB = buildP256Spki(x: _idB.x, y: _idB.y);
+  });
+
   setUp(resetFlagsForTests);
   tearDown(resetFlagsForTests);
 
@@ -44,6 +101,10 @@ void main() {
   Future<(DualStackBridge, DualStackBridge, List<Object?>)> linked({
     Set<String> blocked = const {},
     BlindMailboxStore? mailbox,
+    DeviceRegistry? devices,
+    List<int>? Function(String peerId)? connectionNoiseFor,
+    Future<PinCheck> Function(String peerId, List<int> identitySpki)? tofuCheck,
+    bool awaitAuth = true,
   }) async {
     setHyperswarmRollout(HyperswarmRollout.internal);
     final pair = loopbackPair();
@@ -62,6 +123,9 @@ void main() {
         mailbox: mailbox,
         mailboxToken: mailbox == null ? null : 'cap-1',
         mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+        devices: devices,
+        connectionNoiseFor: connectionNoiseFor,
+        tofuCheck: tofuCheck ?? _allowTofu,
         onPacket: (peer, data) async {
           packets.add(data);
         },
@@ -80,14 +144,18 @@ void main() {
         discoverySecret: secret,
       ),
     );
-    await pair.$1.publish(_bind('a'));
-    await pair.$2.publish(_bind('b'));
+    await pair.$1.publish(await _bind('a'));
+    await pair.$2.publish(await _bind('b'));
     final a = make(pair.$1, 'ORBIT-AAAAAAAAAAAAAAAA', 'dev-a');
     final b = make(pair.$2, 'ORBIT-BBBBBBBBBBBBBBBB', 'dev-b');
     await pair.$1.connect(
       const PeerDescriptor(peerId: 'ORBIT-BBBBBBBBBBBBBBBB'),
     );
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    if (awaitAuth) {
+      await _awaitAuth(a, b);
+    } else {
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+    }
     return (a, b, packets);
   }
 
@@ -116,8 +184,8 @@ void main() {
         discoverySecret: secret,
       ),
     );
-    await pair.$1.publish(_bind('a'));
-    await pair.$2.publish(_bind('b'));
+    await pair.$1.publish(await _bind('a'));
+    await pair.$2.publish(await _bind('b'));
     DualStackBridge(
       transport: pair.$2,
       journal: MemoryJournal('b'),
@@ -125,17 +193,20 @@ void main() {
       selfDeviceId: 'b',
       secrets: secrets,
       isBlocked: (id) => id == 'ORBIT-AAAAAAAAAAAAAAAA',
+      tofuCheck: _allowTofu,
       onPacket: (peer, data) async => seen.add(data),
     ).attach();
     await pair.$1.connect(
       const PeerDescriptor(peerId: 'ORBIT-BBBBBBBBBBBBBBBB'),
     );
-    await pair.$1.send(
-      'ORBIT-BBBBBBBBBBBBBBBB',
-      TransportChannel.message,
-      utf8.encode('v2:hdr:iv:ct'),
-    );
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    try {
+      await pair.$1.send(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        TransportChannel.message,
+        utf8.encode('v2:hdr:iv:ct'),
+      );
+    } catch (_) {}
+    await Future<void>.delayed(const Duration(milliseconds: 40));
     expect(seen, isEmpty);
   });
 
@@ -547,8 +618,8 @@ void main() {
         discoverySecret: secret,
       ),
     );
-    await pair.$1.publish(_bind('a'));
-    await pair.$2.publish(_bind('b'));
+    await pair.$1.publish(await _bind('a'));
+    await pair.$2.publish(await _bind('b'));
     final a = DualStackBridge(
       transport: pair.$1,
       journal: MemoryJournal('a'),
@@ -559,6 +630,7 @@ void main() {
       mailbox: store,
       mailboxToken: 'cap-1',
       mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      tofuCheck: _allowTofu,
       onPacket: (peer, data) async {},
     )..attach();
     final b = DualStackBridge(
@@ -571,6 +643,7 @@ void main() {
       mailbox: store,
       mailboxToken: 'cap-1',
       mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      tofuCheck: _allowTofu,
       onPacket: (peer, data) async => seen.add(data),
     )..attach();
     expect(
@@ -684,6 +757,7 @@ void main() {
         selfDeviceId: device,
         secrets: secrets,
         isBlocked: (_) => false,
+        tofuCheck: _allowTofu,
         onPacket: (_, __) async {},
       )..attach();
     }
@@ -700,14 +774,14 @@ void main() {
         discoverySecret: secret,
       ),
     );
-    await pair.$1.publish(_bind('a'));
-    await pair.$2.publish(_bind('b'));
+    await pair.$1.publish(await _bind('a'));
+    await pair.$2.publish(await _bind('b'));
     final a = make(pair.$1, 'ORBIT-AAAAAAAAAAAAAAAA', 'dev-a');
     final b = make(pair.$2, 'ORBIT-BBBBBBBBBBBBBBBB', 'dev-b');
     await pair.$1.connect(
       const PeerDescriptor(peerId: 'ORBIT-BBBBBBBBBBBBBBBB'),
     );
-    await Future<void>.delayed(const Duration(milliseconds: 20));
+    await _awaitAuth(a, b);
     final dropped = <Object>[];
     b.onDrop = (peer, packet) => dropped.add(packet);
     final dir = await Directory.systemTemp.createTemp('orbits-survive-');
@@ -846,8 +920,8 @@ void main() {
         discoverySecret: secret,
       ),
     );
-    await pair.$1.publish(_bind('a'));
-    await pair.$2.publish(_bind('b'));
+    await pair.$1.publish(await _bind('a'));
+    await pair.$2.publish(await _bind('b'));
     final a = DualStackBridge(
       transport: pair.$1,
       journal: MemoryJournal('a'),
@@ -858,6 +932,7 @@ void main() {
       storagePeer: client,
       mailboxToken: 'cap-http',
       mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      tofuCheck: _allowTofu,
       onPacket: (peer, data) async {},
     )..attach();
     final b = DualStackBridge(
@@ -870,6 +945,7 @@ void main() {
       storagePeer: client,
       mailboxToken: 'cap-http',
       mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      tofuCheck: _allowTofu,
       onPacket: (peer, data) async => seen.add(data),
     )..attach();
     expect(a.hasMailbox, isTrue);
@@ -1215,8 +1291,8 @@ void main() {
         discoverySecret: secret,
       ),
     );
-    await pair.$1.publish(_bind('a'));
-    await pair.$2.publish(_bind('b'));
+    await pair.$1.publish(await _bind('a'));
+    await pair.$2.publish(await _bind('b'));
     final noise = List<int>.generate(32, (i) => 11);
     final devices = DeviceRegistry()
       ..authorize(
@@ -1243,6 +1319,7 @@ void main() {
       secrets: secrets,
       devices: devices,
       isBlocked: (_) => false,
+      tofuCheck: _allowTofu,
       onPacket: (_, __) async {},
     )..attach();
     await a.dial('ORBIT-BBBBBBBBBBBBBBBB');
@@ -1310,5 +1387,168 @@ void main() {
     expect(nativeRollbackLog.last.reason, NativeRollbackReason.relayBlowUp);
     expect(nativeRollbackLog.last.detail, 'rtt exploded');
     await a.detach();
+  });
+
+  test('signed device binding authenticates; unsigned is disconnected', () async {
+    final (a, b, _) = await linked();
+    expect(a.authenticated.contains('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    expect(b.authenticated.contains('ORBIT-AAAAAAAAAAAAAAAA'), isTrue);
+    expect(a.canUseNative('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    expect(a.remoteBindings['ORBIT-BBBBBBBBBBBBBBBB']?.deviceId, 'b');
+    await a.detach();
+    await b.detach();
+
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(await _bind('a', signature: const [9]));
+    await pair.$2.publish(await _bind('b'));
+    final left = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: secrets,
+      isBlocked: (_) => false,
+      tofuCheck: _allowTofu,
+      onPacket: (_, __) async {},
+    )..attach();
+    final right = DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'b',
+      secrets: secrets,
+      isBlocked: (_) => false,
+      tofuCheck: _allowTofu,
+      onPacket: (_, __) async {},
+    )..attach();
+    await pair.$1.connect(
+      const PeerDescriptor(peerId: 'ORBIT-BBBBBBBBBBBBBBBB'),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect(right.authenticated, isEmpty);
+    expect(
+      right.bindingFailures['ORBIT-AAAAAAAAAAAAAAAA'],
+      'signedByKnownIdentity',
+    );
+    expect(right.canUseNative('ORBIT-AAAAAAAAAAAAAAAA'), isFalse);
+    await left.detach();
+    await right.detach();
+  });
+
+  test('revoked device and TOFU mismatch fail connect checks', () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final devices = DeviceRegistry()
+      ..authorize(
+        AuthorizedDevice(
+          deviceId: 'a',
+          transportPublicKey: List<int>.generate(32, (i) => i + 1),
+          hypercorePublicKey: List<int>.generate(32, (i) => i + 2),
+          name: 'a',
+          kind: 'phone',
+          createdAt: 1,
+          status: DeviceStatus.revoked,
+        ),
+      );
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(await _bind('a'));
+    await pair.$2.publish(await _bind('b'));
+    final right = DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'b',
+      secrets: secrets,
+      isBlocked: (_) => false,
+      devices: devices,
+      tofuCheck: _allowTofu,
+      onPacket: (_, __) async {},
+    )..attach();
+    await pair.$1.connect(
+      const PeerDescriptor(peerId: 'ORBIT-BBBBBBBBBBBBBBBB'),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect(right.canUseNative('ORBIT-AAAAAAAAAAAAAAAA'), isFalse);
+    expect(
+      right.bindingFailures['ORBIT-AAAAAAAAAAAAAAAA'],
+      'deviceNotRevoked',
+    );
+    await right.detach();
+    await pair.$1.stop();
+    await pair.$2.stop();
+
+    final (c, d, _) = await linked(
+      awaitAuth: false,
+      tofuCheck: (peer, spki) async => const PinCheck(
+        status: PinStatus.mismatch,
+        fingerprint: 'new',
+        expected: 'old',
+      ),
+    );
+    expect(c.canUseNative('ORBIT-BBBBBBBBBBBBBBBB'), isFalse);
+    expect(
+      c.bindingFailures['ORBIT-BBBBBBBBBBBBBBBB'],
+      'tofuDoesNotConflict',
+    );
+    await c.detach();
+    await d.detach();
+  });
+
+  test('noise mismatch fails before signature when a connection key is set',
+      () async {
+    final wrong = List<int>.generate(32, (i) => 99);
+    final (a, b, _) = await linked(
+      awaitAuth: false,
+      connectionNoiseFor: (_) => wrong,
+    );
+    expect(a.canUseNative('ORBIT-BBBBBBBBBBBBBBBB'), isFalse);
+    expect(
+      a.bindingFailures['ORBIT-BBBBBBBBBBBBBBBB'],
+      'noiseMatchesBinding',
+    );
+    await a.detach();
+    await b.detach();
+  });
+
+  test('inbound device binding is verified and remembered', () async {
+    final (a, b, _) = await linked();
+    expect(a.authenticated.contains('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    expect(a.remoteBindings['ORBIT-BBBBBBBBBBBBBBBB']?.deviceId, 'b');
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains(kDeviceBindingWireType),
+    );
+    await a.detach();
+    await b.detach();
   });
 }

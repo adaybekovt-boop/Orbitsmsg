@@ -158,6 +158,30 @@ void main() {
       contains('journalRecordToWorklet'),
     );
     expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('evaluateConnectBindingChecks'),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('TransportAuthenticated'),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('kDeviceBindingWireType'),
+    );
+    expect(
+      File('lib/transport/native_transport_host.dart').readAsStringSync(),
+      contains('localBinding: issuedBinding'),
+    );
+    expect(
+      File('lib/state/connections_notifier.dart').readAsStringSync(),
+      contains('localBinding: localBinding'),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains('binding.toWire()'),
+    );
+    expect(
       File('lib/transport/native_transport_host.dart').readAsStringSync(),
       contains('relayThroughKeysFromDirectory'),
     );

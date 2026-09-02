@@ -124,6 +124,7 @@ class NativeTransportHost {
         workletPk ?? derivedTransportPublicPlaceholder(seed);
     final hypercorePublicKey = derivedHypercorePublicPlaceholder(seed);
     transportNoiseSeedStore.rememberPublished(transportPublicKey);
+    DeviceBinding? issuedBinding;
     try {
       final capNames = advertisedLocalCapabilityWireNames();
       final now = DateTime.now().millisecondsSinceEpoch;
@@ -150,6 +151,7 @@ class NativeTransportHost {
           signatureByIdentityKey: Uint8List(0),
         );
       }
+      issuedBinding = binding;
       await transport!.publish(binding);
     } catch (_) {}
 
@@ -182,6 +184,7 @@ class NativeTransportHost {
           mailboxToken: 'local-mailbox',
           mailboxWriterKey: auth.user.peerId,
           localCapabilities: caps,
+          localBinding: issuedBinding,
           devices: deviceRegistry,
         );
     await _ref

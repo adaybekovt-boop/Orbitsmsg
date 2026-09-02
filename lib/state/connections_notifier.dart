@@ -61,6 +61,7 @@ import '../replication/memory_journal.dart';
 import '../replication/drift_projector.dart';
 import '../rooms/autobase_log.dart';
 import '../storage/db.dart' as db;
+import '../transport/device_binding.dart';
 import '../transport/dual_stack_bridge.dart';
 import '../transport/signed_capabilities.dart';
 import '../transport/transport_api.dart';
@@ -245,6 +246,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     String? mailboxToken,
     String? mailboxWriterKey,
     CapabilityRecord? localCapabilities,
+    DeviceBinding? localBinding,
     DeviceRegistry? devices,
   }) {
     _nativeJournal = journal ?? MemoryJournal(deviceId);
@@ -259,6 +261,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       mailboxToken: mailboxToken,
       mailboxWriterKey: mailboxWriterKey,
       localCapabilities: localCapabilities,
+      localBinding: localBinding,
       devices: devices ?? deviceRegistry,
       onPacket: _dispatchNativeInbound,
       isBlocked: (rid) => _messaging.isPeerBlocked(rid),

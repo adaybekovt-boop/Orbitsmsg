@@ -216,10 +216,7 @@ class WorkletOrbitsTransport implements OrbitsTransport {
   @override
   Future<void> publish(DeviceBinding binding) async {
     await _client.request('publish', {
-      'binding': {
-        'deviceId': binding.deviceId,
-        'capabilities': binding.capabilities,
-      },
+      'binding': binding.toWire(),
     });
   }
 

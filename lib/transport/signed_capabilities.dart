@@ -173,6 +173,7 @@ Future<DeviceBinding> issueDeviceBinding({
 }) async {
   final names = [...capabilities]..sort();
   if (deviceId.isEmpty ||
+      !_deviceIdIsSafe(deviceId) ||
       identityPublicKey.isEmpty ||
       transportPublicKey.isEmpty ||
       hypercorePublicKey.isEmpty ||
@@ -225,6 +226,17 @@ Future<DeviceBinding> issueLocalDeviceBinding({
   );
 }
 
+bool _deviceIdIsSafe(String deviceId) {
+  if (deviceId.isEmpty || deviceId.length > 128) return false;
+  if (deviceId.contains('://') ||
+      deviceId.contains('fileKey') ||
+      deviceId.contains('rootKey') ||
+      deviceId.contains('opaqueWakeToken')) {
+    return false;
+  }
+  return true;
+}
+
 Future<bool> verifyDeviceBinding(DeviceBinding binding) async {
   if (binding.expiresAt <= binding.createdAt) return false;
   if (binding.identityPublicKey.isEmpty ||
@@ -233,6 +245,7 @@ Future<bool> verifyDeviceBinding(DeviceBinding binding) async {
       binding.signatureByIdentityKey.isEmpty) {
     return false;
   }
+  if (!_deviceIdIsSafe(binding.deviceId)) return false;
   if (binding.capabilities.any((n) => !_capabilityNameIsSafe(n))) {
     return false;
   }

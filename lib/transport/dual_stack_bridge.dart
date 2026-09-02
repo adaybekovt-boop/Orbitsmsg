@@ -10,6 +10,7 @@ import '../attachments/resumable_blob.dart';
 import '../calls/hyperswarm_signaling.dart';
 import '../core/path_byte_stream.dart';
 import '../core/feature_flags.dart';
+import '../core/peer_pins.dart';
 import '../core/wire_crypto.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
@@ -22,6 +23,8 @@ import '../replication/hypercore_store.dart';
 import '../replication/memory_journal.dart';
 import '../rooms/autobase_log.dart';
 import '../transport/replication_schema.dart';
+import 'connect_binding.dart';
+import 'device_binding.dart';
 import 'discovery_secret_store.dart';
 import 'hello_capabilities.dart';
 import 'mux_frames.dart';
@@ -48,7 +51,10 @@ class DualStackBridge {
     this.mailboxToken,
     this.mailboxWriterKey,
     this.localCapabilities,
+    this.localBinding,
     this.devices,
+    this.connectionNoiseFor,
+    this.tofuCheck,
     HypercoreLocalStore? hypercore,
   })  : secrets = secrets ?? discoverySecretStore,
         hypercore = hypercore ?? HypercoreLocalStore(selfDeviceId);
@@ -66,7 +72,11 @@ class DualStackBridge {
   final String? mailboxToken;
   final String? mailboxWriterKey;
   final CapabilityRecord? localCapabilities;
+  final DeviceBinding? localBinding;
   final DeviceRegistry? devices;
+  final List<int>? Function(String peerId)? connectionNoiseFor;
+  final Future<PinCheck> Function(String peerId, List<int> identitySpki)?
+      tofuCheck;
   final HypercoreLocalStore hypercore;
   final MailboxPump _mailboxPump = MailboxPump();
   void Function(String peerId, Object packet)? onDrop;
@@ -82,6 +92,9 @@ class DualStackBridge {
   int _roomSeq = 0;
 
   final Set<String> connected = <String>{};
+  final Set<String> authenticated = <String>{};
+  final Map<String, DeviceBinding> remoteBindings = <String, DeviceBinding>{};
+  final Map<String, String> bindingFailures = <String, String>{};
   final List<CapabilityRecord> remoteCapabilities = <CapabilityRecord>[];
   StreamSubscription<TransportEvent>? _sub;
   void Function(CallSignal signal, String from)? onCallSignal;
@@ -98,6 +111,9 @@ class DualStackBridge {
     await _sub?.cancel();
     _sub = null;
     connected.clear();
+    authenticated.clear();
+    remoteBindings.clear();
+    bindingFailures.clear();
   }
 
   bool get nativeEnabled => isHyperswarmTransportEnabled();
@@ -110,7 +126,8 @@ class DualStackBridge {
   bool canUseNative(String peerId) {
     if (!nativeEnabled) return false;
     if (secrets.get(peerId) == null) return false;
-    return isNativeConnected(peerId);
+    final norm = normalizePeerId(peerId);
+    return connected.contains(norm) && authenticated.contains(norm);
   }
 
   Future<void> dial(String peerId) async {
@@ -794,6 +811,50 @@ class DualStackBridge {
     }
   }
 
+  Future<void> _acceptRemoteBinding(
+    String peerId,
+    DeviceBinding binding,
+  ) async {
+    final norm = normalizePeerId(peerId);
+    PinCheck? tofu;
+    try {
+      tofu = tofuCheck != null
+          ? await tofuCheck!(norm, binding.identityPublicKey)
+          : await checkPin(norm, binding.identityPublicKey);
+    } catch (_) {
+      tofu = null;
+    }
+    final noise =
+        connectionNoiseFor?.call(norm) ?? devices?.noisePublicKeyFor(norm);
+    final result = await evaluateConnectBindingChecks(
+      binding: binding,
+      connectionNoisePublicKey: noise,
+      deviceRevoked: devices?.isRevoked(binding.deviceId) == true,
+      contactBlocked: isBlocked(norm),
+      tofu: tofu,
+    );
+    if (!result.ok) {
+      bindingFailures[norm] = result.failedCheck ?? 'unknown';
+      authenticated.remove(norm);
+      remoteBindings.remove(norm);
+      connected.remove(norm);
+      try {
+        await transport.disconnect(norm);
+      } catch (_) {}
+      return;
+    }
+    authenticated.add(norm);
+    remoteBindings[norm] = binding;
+    bindingFailures.remove(norm);
+    if (tofuCheck == null &&
+        tofu?.status == PinStatus.newPin &&
+        binding.identityPublicKey.isNotEmpty) {
+      try {
+        await setPin(norm, binding.identityPublicKey);
+      } catch (_) {}
+    }
+  }
+
   void _onEvent(TransportEvent event) {
     switch (event) {
       case TransportConnected(:final peerId):
@@ -812,6 +873,19 @@ class DualStackBridge {
             ),
           );
         }
+        final binding = localBinding;
+        if (binding != null) {
+          unawaited(
+            transport.send(
+              normalizePeerId(peerId),
+              TransportChannel.control,
+              jsonPayload({
+                'type': kDeviceBindingWireType,
+                ...binding.toWire(),
+              }),
+            ),
+          );
+        }
         for (final record in hypercore.blocks) {
           unawaited(
             transport.send(
@@ -821,8 +895,13 @@ class DualStackBridge {
             ),
           );
         }
+      case TransportAuthenticated(:final peerId, :final binding):
+        unawaited(_acceptRemoteBinding(peerId, binding));
       case TransportDisconnected(:final peerId):
-        connected.remove(normalizePeerId(peerId));
+        final norm = normalizePeerId(peerId);
+        connected.remove(norm);
+        authenticated.remove(norm);
+        remoteBindings.remove(norm);
         onPresence?.call(peerId, false);
       case TransportFrame(:final peerId, :final channel, :final bytes):
         _onFrame(peerId, channel, bytes);
@@ -892,6 +971,14 @@ class DualStackBridge {
           fallbackWriter: norm,
         );
         if (roomEvent != null) _applyRoom(roomEvent);
+        if (decoded['type'] == kDeviceBindingWireType) {
+          try {
+            unawaited(
+              _acceptRemoteBinding(norm, DeviceBinding.fromWire(decoded)),
+            );
+          } catch (_) {}
+          return;
+        }
         if (decoded['type'] == 'capabilities' || decoded['type'] == 'wireHello') {
           try {
             if (decoded['type'] == 'capabilities') {

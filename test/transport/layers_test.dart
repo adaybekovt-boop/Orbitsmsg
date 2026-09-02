@@ -196,5 +196,8 @@ void main() {
     expect(payload, binding.signedPayload());
     expect(payload.take(4), [0, 0, 0, 1]);
     expect(payload, isNot(equals(binding.signatureByIdentityKey)));
+    final wire = binding.toWire();
+    expect(DeviceBinding.fromWire(wire).deviceId, 'dev-1');
+    expect(wire.containsKey('plaintext'), isFalse);
   });
 }
