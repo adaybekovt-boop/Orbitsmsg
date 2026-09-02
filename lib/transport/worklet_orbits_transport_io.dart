@@ -348,6 +348,12 @@ class WorkletOrbitsTransport implements OrbitsTransport {
     ];
   }
 
+  @override
+  Future<Map<String, Object?>> listAutobase() async {
+    final result = await _client.request('autobase.state');
+    return Map<String, Object?>.from(result);
+  }
+
   void _onIpcEvent(Map<String, Object?> event) {
     final name = event['name'] as String? ?? '';
     final payload = (event['payload'] as Map?)?.cast<String, Object?>() ??

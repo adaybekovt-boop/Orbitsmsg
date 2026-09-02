@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/vault_kek.dart';
 import 'package:orbits_flutter/peer/peerjs_client.dart' show PeerJsClient;
 import 'package:orbits_flutter/peer/room_manager.dart';
+import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
 import 'package:orbits_flutter/state/auth_notifier.dart' show AuthedUser;
 import 'package:orbits_flutter/state/connections_notifier.dart' show RoomBridge;
 import 'package:orbits_flutter/state/local_profile_provider.dart';
@@ -76,6 +77,8 @@ void main() {
     final sentBeforeOffline = transport.sent.length;
     transport.online = false; // host link dropped after join
 
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    addTearDown(kRoomPlaintextSessionAck.reset);
     await rooms.sendRoomMessage(hostId, channelId, 'offline hello');
 
     // The message must exist exactly once and be retryable вЂ” NOT 'sent'.

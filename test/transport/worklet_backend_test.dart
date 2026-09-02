@@ -291,6 +291,14 @@ void main() {
     );
     expect(
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains('listAutobase'),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'autobase.state'"),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
       isNot(contains('http://')),
     );
     expect(
@@ -304,6 +312,10 @@ void main() {
     expect(
       File('lib/transport/worklet_orbits_transport_stub.dart').readAsStringSync(),
       contains('listJournal'),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_stub.dart').readAsStringSync(),
+      contains('listAutobase'),
     );
     expect(
       File('lib/transport/worklet_orbits_transport_stub.dart').readAsStringSync(),

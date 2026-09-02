@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -42,6 +43,13 @@ void main() {
         .request('journal.list')
         .timeout(const Duration(seconds: 8));
     expect((listed['blocks'] as List).length, 1);
+    final auto = await client
+        .request('autobase.state')
+        .timeout(const Duration(seconds: 8));
+    expect(auto['members'], isEmpty);
+    expect(auto['attachments'], isEmpty);
+    expect(auto.containsKey('b64'), isFalse);
+    expect(jsonEncode(auto), isNot(contains('fileKey')));
     await client.request('stop').timeout(const Duration(seconds: 8));
     expect(kOrbitsBareIpcInfo, 'orbits-bare-ipc-v1');
   });

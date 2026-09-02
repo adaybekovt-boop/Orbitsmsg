@@ -224,4 +224,9 @@ abstract class OrbitsTransport {
 
   Future<List<Map<String, Object?>>> listJournal() async =>
       const <Map<String, Object?>>[];
+
+  /// Worklet Autobase snapshot (membership/channel/attachment metadata).
+  /// Empty on carriers without a worklet. Never file bytes or fileKey.
+  Future<Map<String, Object?>> listAutobase() async =>
+      const <String, Object?>{};
 }

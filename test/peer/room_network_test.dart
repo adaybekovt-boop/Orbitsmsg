@@ -18,6 +18,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/vault_kek.dart';
 import 'package:orbits_flutter/peer/peerjs_client.dart' show PeerJsClient;
 import 'package:orbits_flutter/peer/room_manager.dart';
+import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
 import 'package:orbits_flutter/state/auth_notifier.dart' show AuthedUser;
 import 'package:orbits_flutter/state/connections_notifier.dart' show RoomBridge;
 import 'package:orbits_flutter/state/local_profile_provider.dart';
@@ -107,9 +108,11 @@ void main() {
     guestDb = OrbitsDatabase.forTesting(NativeDatabase.memory());
     // Messages persist through the vault-KEK encrypt/decrypt path.
     await setVaultKek(List<int>.generate(32, (i) => (i * 3 + 7) & 0xff));
+    kRoomPlaintextSessionAck.setAcknowledged(true);
   });
 
   tearDown(() async {
+    kRoomPlaintextSessionAck.reset();
     // 1. Dispose every Riverpod container first, while the DBs are still alive.
     for (final c in containers) {
       try {

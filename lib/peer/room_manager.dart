@@ -1175,6 +1175,7 @@ class RoomManager extends StateNotifier<RoomState> {
   ///   • guest role → whatever sendRoomPacket(host) reports, so a dead host
   ///     link leaves the message queued instead of silently dropped.
   bool _dispatchRoomPacket(Map<String, Object?> packet) {
+    if (!kRoomPlaintextSessionAck.allowsPacket(packet)) return false;
     if (state.role == RoomRole.host) {
       _broadcastToGuests(packet);
       return true;

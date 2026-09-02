@@ -16,6 +16,7 @@ import 'package:orbits_flutter/peer/peerjs_client.dart' show PeerJsClient;
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_file_store.dart';
 import 'package:orbits_flutter/peer/room_manager.dart';
+import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
 import 'package:orbits_flutter/state/auth_notifier.dart' show AuthedUser;
 import 'package:orbits_flutter/state/connections_notifier.dart' show RoomBridge;
 import 'package:orbits_flutter/state/local_profile_provider.dart';
@@ -172,6 +173,8 @@ void main() {
 
     test('host sendRoomSticker saves own copy + broadcasts kind:sticker',
         () async {
+      kRoomPlaintextSessionAck.setAcknowledged(true);
+      addTearDown(kRoomPlaintextSessionAck.reset);
       final h = await makeHost();
       await h.tx.bridge.handleInbound('g1', {
         'type': 'room_join',
@@ -313,6 +316,8 @@ void main() {
 
     test('host sendRoomFile saves blob + own copy + broadcasts kind:file',
         () async {
+      kRoomPlaintextSessionAck.setAcknowledged(true);
+      addTearDown(kRoomPlaintextSessionAck.reset);
       final h = await makeHost();
       await h.tx.bridge.handleInbound('g1', {
         'type': 'room_join',
@@ -343,8 +348,36 @@ void main() {
       expect(relay['b64'], b64);
     });
 
+    test('sendRoomFileFromPath without plaintext ack sends no chunks', () async {
+      kRoomPlaintextSessionAck.reset();
+      final h = await makeHost();
+      await h.tx.bridge.handleInbound('g1', {
+        'type': 'room_join',
+        'roomId': hostId,
+        'guestName': 'G',
+        'guestPeerId': 'g1',
+      });
+      h.tx.sent.clear();
+      final dir = await Directory.systemTemp.createTemp('orbits-room-file-nack');
+      addTearDown(() => dir.delete(recursive: true));
+      final file = File('${dir.path}/note.bin');
+      await file.writeAsBytes(List<int>.filled(32, 7));
+      await h.mgr.sendRoomFileFromPath(
+        hostId,
+        h.generalId,
+        file.path,
+        name: 'note.bin',
+        mime: 'application/octet-stream',
+        kind: 'file',
+      );
+      expect(h.tx.ofType('room_file_chunk'), isEmpty);
+      expect(h.tx.ofType('room_msg'), isEmpty);
+    });
+
     test('sendRoomFileFromPath streams host-plaintext chunks, not one b64 frame',
         () async {
+      kRoomPlaintextSessionAck.setAcknowledged(true);
+      addTearDown(kRoomPlaintextSessionAck.reset);
       final h = await makeHost();
       await h.tx.bridge.handleInbound('g1', {
         'type': 'room_join',
