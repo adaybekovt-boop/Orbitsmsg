@@ -651,6 +651,146 @@ void main() {
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
 
+  test('fromWire refuses URL-shaped payload identifier values', () {
+    expect(
+      RoomEvent.fromWire({
+        'type': 'autobase-event',
+        'writerId': 'a',
+        'seq': 0,
+        'kind': 'membership',
+        'payload': {
+          'peerId': 'https://evil',
+          'action': 'join',
+        },
+      }),
+      isNull,
+    );
+    expect(
+      RoomEvent.fromWire({
+        'type': 'autobase-event',
+        'writerId': 'a',
+        'seq': 1,
+        'kind': 'message',
+        'payload': {
+          'roomId': 'https://x',
+          'id': 'm1',
+          'text': 'hello',
+        },
+      }),
+      isNull,
+    );
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test(
+      'roomEventFromNativePacket refuses URL-shaped guest/peer/id; legit still works',
+      () {
+    expect(
+      roomEventFromNativePacket(
+        {
+          'type': 'room_join',
+          'roomId': 'room-1',
+          'abWriter': 'a',
+          'abSeq': 0,
+          'guestPeerId': 'https://evil',
+          'guestName': 'Eve',
+        },
+        fallbackWriter: 'x',
+      ),
+      isNull,
+    );
+    expect(
+      roomEventFromNativePacket(
+        {
+          'type': 'room_join',
+          'roomId': 'room-1',
+          'abWriter': 'a',
+          'abSeq': 0,
+          'peerId': 'https://evil',
+          'guestName': 'Eve',
+        },
+        fallbackWriter: 'x',
+      ),
+      isNull,
+    );
+    final join = roomEventFromNativePacket(
+      {
+        'type': 'room_join',
+        'roomId': 'room-1',
+        'abWriter': 'a',
+        'abSeq': 0,
+        'guestPeerId': 'p1',
+        'guestName': 'Pat',
+      },
+      fallbackWriter: 'x',
+    );
+    expect(join?.kind, 'membership');
+    expect(join?.payload['peerId'], 'p1');
+
+    expect(
+      roomEventFromNativePacket(
+        {
+          'type': 'room_msg',
+          'id': 'https://evil',
+          'text': 'hello',
+          'abWriter': 'a',
+          'abSeq': 1,
+        },
+        fallbackWriter: 'x',
+      ),
+      isNull,
+    );
+    final msg = roomEventFromNativePacket(
+      {
+        'type': 'room_msg',
+        'id': 'm1',
+        'text': 'hello host-plaintext',
+        'abWriter': 'a',
+        'abSeq': 1,
+      },
+      fallbackWriter: 'x',
+    );
+    expect(msg?.kind, 'message');
+    expect(msg?.payload['id'], 'm1');
+    expect(msg?.payload['text'], 'hello host-plaintext');
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('apply refuses URL-shaped membership peerId and does not mark applied',
+      () {
+    final proj = AutobaseProjection()
+      ..apply(
+        const RoomEvent(
+          writerId: 'a',
+          seq: 0,
+          kind: 'membership',
+          payload: {
+            'peerId': 'https://evil',
+            'action': 'join',
+            'displayName': 'Eve',
+          },
+        ),
+      );
+    expect(proj.state.members, isEmpty);
+    expect(proj.state.applied, isEmpty);
+
+    final honest = AutobaseProjection()
+      ..apply(
+        const RoomEvent(
+          writerId: 'a',
+          seq: 1,
+          kind: 'message',
+          payload: {
+            'id': 'm1',
+            'text': 'see https://example.com/docs',
+          },
+        ),
+      );
+    expect(honest.state.messages.single['text'], 'see https://example.com/docs');
+    expect(honest.state.applied, contains('a:1'));
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
   test('worklet autobase.js projects kForbiddenReplicationFields', () {
     final js =
         File('tool/connectivity_harness/src/autobase.js').readAsStringSync();

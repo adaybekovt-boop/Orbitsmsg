@@ -7,6 +7,21 @@ import '../transport/layers.dart';
 import '../transport/replication_schema.dart';
 import 'memory_journal.dart';
 
+const _kReplicationIdentifierKeys = {
+  'eventId', 'conversationId', 'roomId', 'peerId', 'deviceId', 'fileId',
+};
+
+bool _replicationIdentifierValuesSafe(Map<String, Object?> fields) {
+  for (final key in _kReplicationIdentifierKeys) {
+    if (!fields.containsKey(key)) continue;
+    final value = fields[key];
+    if (value is! String || value.isEmpty || value.contains('://')) {
+      return false;
+    }
+  }
+  return true;
+}
+
 class HypercoreLocalStore {
   HypercoreLocalStore(this.writerDeviceId);
 
@@ -15,7 +30,8 @@ class HypercoreLocalStore {
 
   JournalRecord append(JournalRecord record) {
     if (!replicationValueIsSafe(record.fields) ||
-        record.writerDeviceId.contains('://')) {
+        record.writerDeviceId.contains('://') ||
+        !_replicationIdentifierValuesSafe(record.fields)) {
       throw ArgumentError('refusing secret field in hypercore');
     }
     if (_alreadyHas(record)) return record;
@@ -46,7 +62,8 @@ class HypercoreLocalStore {
 
   Map<String, Object?> toReplicationFrame(JournalRecord record) {
     if (!replicationValueIsSafe(record.fields) ||
-        record.writerDeviceId.contains('://')) {
+        record.writerDeviceId.contains('://') ||
+        !_replicationIdentifierValuesSafe(record.fields)) {
       throw ArgumentError('refusing secret field in hypercore');
     }
     return <String, Object?>{
@@ -83,6 +100,7 @@ class HypercoreLocalStore {
       }
     });
     if (!replicationValueIsSafe(fields)) return null;
+    if (!_replicationIdentifierValuesSafe(fields)) return null;
     final record = JournalRecord(
       seq: frame['seq'] as int? ?? blocks.length,
       writerDeviceId: frame['writerDeviceId'] as String? ?? '',

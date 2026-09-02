@@ -77,7 +77,13 @@ function parseStored(raw) {
   const fields = rec.fields
   if (!fields || typeof fields !== 'object') return null
   if (!fieldsAreSafe(fields)) return null
+  if (typeof rec.writerDeviceId === 'string' && isRemoteUrl(rec.writerDeviceId)) {
+    return null
+  }
   const kind = rec.kind || 'messageEnvelopeCreated'
+  if (typeof kind === 'string' && (isRemoteUrl(kind) || kind.includes('://'))) {
+    return null
+  }
   if (ENVELOPE_KINDS.has(kind) && !fields.encryptedEnvelope) return null
   return rec
 }
@@ -293,9 +299,16 @@ class CorestoreJournal {
     if (ENVELOPE_KINDS.has(kind) && !fields.encryptedEnvelope) {
       throw new Error('journal requires encryptedEnvelope')
     }
+    const writer = record.writerDeviceId || this.writerDeviceId
+    if (isRemoteUrl(writer) || !writer) {
+      throw new Error('refusing secret field in corestore journal')
+    }
+    if (typeof kind === 'string' && (isRemoteUrl(kind) || kind.includes('://'))) {
+      throw new Error('refusing secret field in corestore journal')
+    }
     const stored = {
       seq: record.seq == null ? this.blocks.length + 1 : record.seq,
-      writerDeviceId: record.writerDeviceId || this.writerDeviceId,
+      writerDeviceId: writer,
       kind,
       fields,
     }

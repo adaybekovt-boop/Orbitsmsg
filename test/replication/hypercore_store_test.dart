@@ -135,6 +135,75 @@ void main() {
     expect(store.blocks, isEmpty);
   });
 
+  test('applyRemote returns null when fields.eventId is URL-shaped', () {
+    final store = HypercoreLocalStore('dev-b');
+    expect(
+      store.applyRemote(<String, Object?>{
+        'type': 'repl-event',
+        'info': kReplicationEventInfo,
+        'kind': ReplicationEventKind.messageEnvelopeCreated.name,
+        'seq': 0,
+        'writerDeviceId': 'dev-a',
+        'fields': <String, Object?>{
+          'eventId': 'https://evil',
+          'encryptedEnvelope': <int>[1, 2, 3],
+        },
+      }),
+      isNull,
+    );
+    expect(store.blocks, isEmpty);
+  });
+
+  test('applyRemote returns null when conversationId is URL-shaped', () {
+    final store = HypercoreLocalStore('dev-b');
+    expect(
+      store.applyRemote(<String, Object?>{
+        'type': 'repl-event',
+        'info': kReplicationEventInfo,
+        'kind': ReplicationEventKind.messageEnvelopeCreated.name,
+        'seq': 0,
+        'writerDeviceId': 'dev-a',
+        'fields': <String, Object?>{
+          'eventId': 'e1',
+          'conversationId': 'https://evil',
+          'encryptedEnvelope': <int>[1, 2, 3],
+        },
+      }),
+      isNull,
+    );
+    expect(store.blocks, isEmpty);
+  });
+
+  test('append throws when eventId is URL-shaped', () {
+    final store = HypercoreLocalStore('dev-a');
+    const rec = JournalRecord(
+      seq: 0,
+      writerDeviceId: 'dev-a',
+      kind: ReplicationEventKind.messageEnvelopeCreated,
+      fields: <String, Object?>{
+        'eventId': 'https://evil',
+        'encryptedEnvelope': <int>[1, 2, 3],
+      },
+    );
+    expect(() => store.append(rec), throwsArgumentError);
+    expect(store.blocks, isEmpty);
+  });
+
+  test('toReplicationFrame throws when eventId is URL-shaped', () {
+    final store = HypercoreLocalStore('dev-a');
+    const rec = JournalRecord(
+      seq: 0,
+      writerDeviceId: 'dev-a',
+      kind: ReplicationEventKind.messageEnvelopeCreated,
+      fields: <String, Object?>{
+        'eventId': 'https://evil',
+        'encryptedEnvelope': <int>[1, 2, 3],
+      },
+    );
+    expect(() => store.toReplicationFrame(rec), throwsArgumentError);
+    expect(store.blocks, isEmpty);
+  });
+
   test('applyRemote returns null when frame has top-level fileKey', () {
     final store = HypercoreLocalStore('dev-b');
     expect(

@@ -406,6 +406,35 @@ void main() {
     await b.detach();
   });
 
+  test('journalAttachmentExpired refuses URL-shaped eventId or conversationId',
+      () async {
+    final (a, b, _) = await linked();
+    final before = a.journal.length;
+    a.journalAttachmentExpired(
+      eventId: 'https://evil',
+      conversationId: 'ORBIT-BBBBBBBBBBBBBBBB',
+    );
+    a.journalAttachmentExpired(
+      eventId: 'att-ok',
+      conversationId: 'https://evil',
+    );
+    expect(a.journal.length, before);
+    a.journalAttachmentExpired(
+      eventId: 'att-ok',
+      conversationId: 'ORBIT-BBBBBBBBBBBBBBBB',
+    );
+    expect(
+      a.journal.records.any(
+        (r) =>
+            r.kind == ReplicationEventKind.attachmentExpired &&
+            r.fields['eventId'] == 'att-ok',
+      ),
+      isTrue,
+    );
+    await a.detach();
+    await b.detach();
+  });
+
   test('attachment chunks journal ciphertext and never the fileKey', () async {
     final (a, b, _) = await linked();
     final key = List<int>.generate(32, (i) => i + 3);
@@ -2389,9 +2418,23 @@ void main() {
         .split('RoomEvent? _membershipEventFromJournal')[1]
         .split('Future<void> rememberKnownPeers')[0];
     expect(membership, contains("writer.contains('://')"));
+    expect(membership, contains("peerId.contains('://')"));
+    expect(membership, contains("roomId.contains('://')"));
     expect(
       membership.indexOf("writer.contains('://')"),
       lessThan(membership.indexOf('return RoomEvent')),
+    );
+    expect(
+      membership.indexOf("peerId.contains('://')"),
+      lessThan(membership.indexOf('return RoomEvent')),
+    );
+    final expired = src
+        .split('void journalAttachmentExpired')[1]
+        .split('Future<int> drainMailbox')[0];
+    expect(expired, contains("eventId.contains('://')"));
+    expect(
+      expired.indexOf("eventId.contains('://')"),
+      lessThan(expired.indexOf('journal.append')),
     );
   });
 

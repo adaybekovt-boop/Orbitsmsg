@@ -317,3 +317,58 @@ test('append refuses nested secrets; list skips them on hydrate', async () => {
   assert.equal(hydrated.list().length, 0)
   await hydrated.close()
 })
+
+test('append refuses URL-shaped writerDeviceId; list stays empty', async () => {
+  const journal = new CorestoreJournal('dev-a')
+  await assert.rejects(
+    () =>
+      journal.append({
+        writerDeviceId: 'https://evil',
+        fields: { encryptedEnvelope: 'x' },
+      }),
+    /secret field/,
+  )
+  assert.equal(journal.list().length, 0)
+  await journal.close()
+})
+
+test('parseStored refuses URL-shaped writerDeviceId', () => {
+  assert.equal(
+    parseStored(
+      JSON.stringify({
+        writerDeviceId: 'https://evil',
+        kind: 'messageEnvelopeCreated',
+        fields: { encryptedEnvelope: 'x' },
+      }),
+    ),
+    null,
+  )
+})
+
+test('append with honest writerDeviceId still lists', async () => {
+  const journal = new CorestoreJournal()
+  await journal.append({
+    writerDeviceId: 'dev-a',
+    fields: { encryptedEnvelope: 'cipher-ok' },
+  })
+  const blocks = journal.list()
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].writerDeviceId, 'dev-a')
+  assert.equal(blocks[0].fields.encryptedEnvelope, 'cipher-ok')
+  await journal.close()
+})
+
+test('parseStored of a legit ciphertext row still works', () => {
+  const rec = {
+    writerDeviceId: 'dev-a',
+    kind: 'messageEnvelopeCreated',
+    fields: { encryptedEnvelope: 'v2:https://looks-like-url-but-is-ciphertext' },
+  }
+  const parsed = parseStored(JSON.stringify(rec))
+  assert.ok(parsed)
+  assert.equal(parsed.writerDeviceId, 'dev-a')
+  assert.equal(
+    parsed.fields.encryptedEnvelope,
+    'v2:https://looks-like-url-but-is-ciphertext',
+  )
+})

@@ -308,4 +308,105 @@ void main() {
       isFalse,
     );
   });
+
+  test('harnessFilePacketIsSafe rejects URL-shaped id on harness-file-start',
+      () {
+    expect(
+      harnessFilePacketIsSafe({
+        'type': 'harness-file-start',
+        'id': 'https://evil',
+        'name': 'ok.jpg',
+        'size': 1,
+      }),
+      isFalse,
+    );
+  });
+
+  test('harnessFilePacketIsSafe rejects empty or missing id on harness-file-start',
+      () {
+    expect(
+      harnessFilePacketIsSafe({
+        'type': 'harness-file-start',
+        'id': '',
+        'name': 'ok.jpg',
+        'size': 1,
+      }),
+      isFalse,
+    );
+    expect(
+      harnessFilePacketIsSafe({
+        'type': 'harness-file-start',
+        'name': 'ok.jpg',
+        'size': 1,
+      }),
+      isFalse,
+    );
+  });
+
+  test('harnessFilePacketIsSafe rejects URL-shaped id on chunk, received, end',
+      () {
+    expect(
+      harnessFilePacketIsSafe({
+        'type': 'harness-file-chunk',
+        'id': 'https://evil',
+        'offset': 0,
+      }),
+      isFalse,
+    );
+    expect(
+      harnessFilePacketIsSafe({
+        'type': 'harness-file-received',
+        'id': 'https://evil',
+        'path': '/tmp/ok.bin',
+      }),
+      isFalse,
+    );
+    expect(
+      harnessFilePacketIsSafe({
+        'type': 'harness-file-end',
+        'id': 'https://evil',
+      }),
+      isFalse,
+    );
+  });
+
+  test('harnessFilePacketIsSafe accepts honest id on start and received', () {
+    expect(
+      harnessFilePacketIsSafe({
+        'type': 'harness-file-start',
+        'id': 'x',
+        'name': 'ok.jpg',
+        'size': 1,
+      }),
+      isTrue,
+    );
+    expect(
+      harnessFilePacketIsSafe({
+        'type': 'harness-file-received',
+        'id': 'x',
+        'path': '/tmp/ok.bin',
+      }),
+      isTrue,
+    );
+  });
+
+  test(
+      'harnessFilePacketIsSafe source-scan: helper id :// before type dispatch',
+      () {
+    final src = File('lib/state/drop_provider.dart').readAsStringSync();
+    final helper = src
+        .split('bool harnessFilePacketIsSafe')[1]
+        .split('class DropNotifier')[0];
+    expect(helper, contains("packet['id']"));
+    expect(helper, contains("contains('://')"));
+
+    final handler = src
+        .split('bool _handleNativePathPacket')[1]
+        .split('Future<bool> _persistIncoming')[0];
+    expect(handler, contains('harnessFilePacketIsSafe'));
+    final safetyIdx = handler.indexOf('harnessFilePacketIsSafe');
+    final typeIdx = handler.indexOf("packet['type']");
+    expect(safetyIdx, greaterThanOrEqualTo(0));
+    expect(typeIdx, greaterThan(safetyIdx));
+  });
 }

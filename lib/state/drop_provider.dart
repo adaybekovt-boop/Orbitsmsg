@@ -98,6 +98,9 @@ class DropState {
 /// Walks nested maps with [replicationValueIsSafe] ([kForbiddenReplicationFields]).
 /// For `harness-file-received`, also refuses a remote URL / scheme and path
 /// strings that embed `fileKey` or `opaqueWakeToken`.
+/// For `harness-file-start`, `harness-file-chunk`, `harness-file-received`,
+/// `harness-file-end`, and `harness-file-resume`, refuses a missing/empty `id`
+/// or a String `id` that contains `://`. Non-harness types skip the `id` gate.
 bool harnessFilePacketIsSafe(Map packet) {
   if (!replicationValueIsSafe(packet)) return false;
   if (packet['type'] == 'harness-file-received') {
@@ -108,6 +111,15 @@ bool harnessFilePacketIsSafe(Map packet) {
             path.contains('opaqueWakeToken'))) {
       return false;
     }
+  }
+  switch (packet['type']) {
+    case 'harness-file-start':
+    case 'harness-file-chunk':
+    case 'harness-file-received':
+    case 'harness-file-end':
+    case 'harness-file-resume':
+      final id = packet['id'];
+      if (id is! String || id.isEmpty || id.contains('://')) return false;
   }
   return true;
 }
@@ -478,7 +490,7 @@ class DropNotifier extends StateNotifier<DropState> {
     final type = packet['type'];
     if (type == 'harness-file-start') {
       final id = packet['id'] as String? ?? '';
-      if (id.isEmpty) return true;
+      if (id.isEmpty || id.contains('://')) return true;
       _upsert(DropTransfer(
         id: id,
         name: sanitizeDropFileName(packet['name'] as String?),
@@ -491,10 +503,9 @@ class DropNotifier extends StateNotifier<DropState> {
     }
     if (type == 'harness-file-chunk') {
       final id = packet['id'] as String? ?? '';
+      if (id.isEmpty || id.contains('://')) return true;
       final offset = (packet['offset'] as num?)?.toInt() ?? 0;
-      if (id.isNotEmpty) {
-        _patch(id, (t) => t.copyWith(transferred: offset));
-      }
+      _patch(id, (t) => t.copyWith(transferred: offset));
       return true;
     }
     if (type == 'harness-file-end' || type == 'harness-file-resume') {
@@ -504,7 +515,7 @@ class DropNotifier extends StateNotifier<DropState> {
       final id = packet['id'] as String? ?? '';
       final localPath = packet['path'] as String? ?? '';
       final size = (packet['size'] as num?)?.toInt() ?? 0;
-      if (id.isEmpty) return true;
+      if (id.isEmpty || id.contains('://')) return true;
       final existing = state.transfers.where((t) => t.id == id);
       if (existing.isEmpty) {
         _upsert(DropTransfer(

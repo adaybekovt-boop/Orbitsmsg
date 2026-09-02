@@ -121,6 +121,30 @@ function objectHasLiveForbiddenKeys(value, seen) {
   return objectHasKeysFrom(value, LIVE_FORBIDDEN, seen)
 }
 
+const IDENTIFIER_KEYS = [
+  'roomId',
+  'peerId',
+  'guestPeerId',
+  'id',
+  'channelId',
+  'messageId',
+]
+
+function identifierValueSafe(value) {
+  if (value == null) return true
+  if (typeof value !== 'string') return false
+  return value.length > 0 && !value.includes('://')
+}
+
+function payloadIdentifiersSafe(payload) {
+  if (!payload || typeof payload !== 'object') return true
+  for (const key of IDENTIFIER_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(payload, key)) continue
+    if (!identifierValueSafe(payload[key])) return false
+  }
+  return true
+}
+
 function isJournalMembershipKind(kind) {
   return typeof kind === 'string' && JOURNAL_MEMBERSHIP_KINDS.has(kind)
 }
@@ -157,6 +181,7 @@ function membershipEventFromJournalRow(row) {
     payload[key] = value
   }
   if (!payload.peerId) return null
+  if (!payloadIdentifiersSafe(payload)) return null
   if (!payload.action) payload.action = 'join'
   const writer =
     (typeof fields.writerId === 'string' && fields.writerId) ||
@@ -191,16 +216,22 @@ function hydrateFromJournal(projection, rows) {
 
 function fromWire(packet) {
   if (!packet || packet.type !== 'autobase-event') return null
+  if (objectHasLiveForbiddenKeys(packet)) return null
   const writer = packet.writerId
   const kind = packet.kind
   if (typeof writer !== 'string' || typeof kind !== 'string') return null
   if (writer.includes('://') || kind.includes('://')) return null
   const raw = packet.payload
+  if (raw && typeof raw === 'object' && !payloadIdentifiersSafe(raw)) {
+    return null
+  }
+  const payload = raw && typeof raw === 'object' ? sanitize(raw) : {}
+  if (!payloadIdentifiersSafe(payload)) return null
   return {
     writerId: writer,
     seq: Number(packet.seq) || 0,
     kind,
-    payload: raw && typeof raw === 'object' ? sanitize(raw) : {},
+    payload,
   }
 }
 
@@ -219,7 +250,10 @@ function roomEventFromNativePacket(packet, fallbackWriter) {
   switch (packet.type) {
     case 'room_join': {
       const peer = packet.guestPeerId || packet.peerId
-      if (!peer) return null
+      if (!peer || !identifierValueSafe(peer)) return null
+      if (packet.roomId != null && !identifierValueSafe(packet.roomId)) {
+        return null
+      }
       return {
         writerId: writer,
         seq,
@@ -235,7 +269,10 @@ function roomEventFromNativePacket(packet, fallbackWriter) {
     case 'room_leave':
     case 'room_destroy': {
       const peer = packet.guestPeerId || packet.peerId
-      if (!peer) return null
+      if (!peer || !identifierValueSafe(peer)) return null
+      if (packet.roomId != null && !identifierValueSafe(packet.roomId)) {
+        return null
+      }
       return {
         writerId: writer,
         seq,
@@ -253,6 +290,7 @@ function roomEventFromNativePacket(packet, fallbackWriter) {
       const id = channel.id
       const name = channel.name
       if (id == null || name == null) return null
+      if (!identifierValueSafe(id)) return null
       return {
         writerId: writer,
         seq,
@@ -261,6 +299,7 @@ function roomEventFromNativePacket(packet, fallbackWriter) {
       }
     }
     case 'room_msg':
+      if (packet.id != null && !identifierValueSafe(packet.id)) return null
       return {
         writerId: writer,
         seq,
@@ -270,7 +309,13 @@ function roomEventFromNativePacket(packet, fallbackWriter) {
     case 'room_file_chunk': {
       const offset = Number(packet.offset) || 0
       if (offset !== 0) return null
-      if (packet.id == null) return null
+      if (packet.id == null || !identifierValueSafe(packet.id)) return null
+      if (packet.roomId != null && !identifierValueSafe(packet.roomId)) {
+        return null
+      }
+      if (packet.channelId != null && !identifierValueSafe(packet.channelId)) {
+        return null
+      }
       const att =
         packet.attachment && typeof packet.attachment === 'object'
           ? packet.attachment
@@ -329,6 +374,7 @@ class AutobaseProjection {
     ) {
       return
     }
+    if (!payloadIdentifiersSafe(event.payload)) return
     const key = this.keyOf(event)
     if (this.state.applied.has(key)) return
     this.state.applied.add(key)

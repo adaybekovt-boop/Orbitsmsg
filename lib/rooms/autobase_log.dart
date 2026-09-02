@@ -56,6 +56,32 @@ Object? _stripForbiddenAutobaseNested(Object? value) {
   return value;
 }
 
+/// Identifier keys copied as ids. Do not treat `peerId` as a forbidden
+/// *key* — only refuse empty / URL-shaped *values* when present.
+const Set<String> _kRoomIdentifierKeys = <String>{
+  'roomId',
+  'peerId',
+  'guestPeerId',
+  'id',
+  'channelId',
+  'messageId',
+};
+
+bool _roomIdentifierValueSafe(Object? value) {
+  if (value == null) return true; // optional absent
+  if (value is! String) return false;
+  return value.isNotEmpty && !value.contains('://');
+}
+
+bool _roomPayloadIdentifiersSafe(Object? payload) {
+  if (payload is! Map) return true;
+  for (final key in _kRoomIdentifierKeys) {
+    if (!payload.containsKey(key)) continue;
+    if (!_roomIdentifierValueSafe(payload[key])) return false;
+  }
+  return true;
+}
+
 class RoomEvent {
   const RoomEvent({
     required this.writerId,
@@ -86,6 +112,7 @@ class RoomEvent {
     if (writer == null || kind == null) return null;
     if (writer.contains('://') || kind.contains('://')) return null;
     final raw = packet['payload'];
+    if (raw is Map && !_roomPayloadIdentifiersSafe(raw)) return null;
     return RoomEvent(
       writerId: writer,
       seq: (packet['seq'] as num?)?.toInt() ?? 0,
@@ -114,7 +141,11 @@ RoomEvent? roomEventFromNativePacket(
     case 'room_join':
       final peer =
           packet['guestPeerId'] as String? ?? packet['peerId'] as String?;
-      if (peer == null) return null;
+      if (peer == null || !_roomIdentifierValueSafe(peer)) return null;
+      if (packet['roomId'] != null &&
+          !_roomIdentifierValueSafe(packet['roomId'])) {
+        return null;
+      }
       return RoomEvent(
         writerId: writer,
         seq: seq,
@@ -130,7 +161,11 @@ RoomEvent? roomEventFromNativePacket(
     case 'room_destroy':
       final peer =
           packet['guestPeerId'] as String? ?? packet['peerId'] as String?;
-      if (peer == null) return null;
+      if (peer == null || !_roomIdentifierValueSafe(peer)) return null;
+      if (packet['roomId'] != null &&
+          !_roomIdentifierValueSafe(packet['roomId'])) {
+        return null;
+      }
       return RoomEvent(
         writerId: writer,
         seq: seq,
@@ -147,6 +182,7 @@ RoomEvent? roomEventFromNativePacket(
       final id = channel['id'] as String?;
       final name = channel['name'] as String?;
       if (id == null || name == null) return null;
+      if (!_roomIdentifierValueSafe(id)) return null;
       return RoomEvent(
         writerId: writer,
         seq: seq,
@@ -154,6 +190,9 @@ RoomEvent? roomEventFromNativePacket(
         payload: {'id': id, 'name': name},
       );
     case 'room_msg':
+      if (packet['id'] != null && !_roomIdentifierValueSafe(packet['id'])) {
+        return null;
+      }
       return RoomEvent(
         writerId: writer,
         seq: seq,
@@ -167,7 +206,15 @@ RoomEvent? roomEventFromNativePacket(
       final offset = (packet['offset'] as num?)?.toInt() ?? 0;
       if (offset != 0) return null;
       final id = packet['id'];
-      if (id == null) return null;
+      if (id == null || !_roomIdentifierValueSafe(id)) return null;
+      if (packet['roomId'] != null &&
+          !_roomIdentifierValueSafe(packet['roomId'])) {
+        return null;
+      }
+      if (packet['channelId'] != null &&
+          !_roomIdentifierValueSafe(packet['channelId'])) {
+        return null;
+      }
       final rawAtt = packet['attachment'];
       final att = rawAtt is Map
           ? Map<String, Object?>.from(rawAtt)
@@ -228,6 +275,7 @@ class AutobaseProjection {
       return;
     }
     if (event.writerId.contains('://') || event.kind.contains('://')) return;
+    if (!_roomPayloadIdentifiersSafe(event.payload)) return;
     state.applied.add(key);
     final payload = stripForbiddenAutobasePayload(event.payload);
     switch (event.kind) {

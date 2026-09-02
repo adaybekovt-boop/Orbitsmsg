@@ -436,22 +436,19 @@ test('apply and fromWire sanitize nested array chunks: keep text/name, drop file
     chunks: [{ fileKey: 'x', b64: 'AQID', name: 'n' }],
     text: 'hello',
   }
-  const event = roomEventFromNativePacket(
-    {
-      type: 'autobase-event',
-      writerId: 'a',
-      seq: 5,
-      kind: 'message',
-      payload,
-    },
-    'fallback',
+  assert.equal(
+    roomEventFromNativePacket(
+      {
+        type: 'autobase-event',
+        writerId: 'a',
+        seq: 5,
+        kind: 'message',
+        payload,
+      },
+      'fallback',
+    ),
+    null,
   )
-  assert.equal(event.kind, 'message')
-  assert.equal(event.payload.text, 'hello')
-  assert.equal(event.payload.chunks.length, 1)
-  assert.equal(event.payload.chunks[0].name, 'n')
-  assert.equal(event.payload.chunks[0].fileKey, undefined)
-  assert.equal(event.payload.chunks[0].b64, undefined)
   assert.equal(STRIP.has('text'), false)
 
   const proj = new AutobaseProjection()
@@ -495,22 +492,26 @@ test('sanitize is cycle-safe when arrays and objects repeat a seen value', () =>
 })
 
 test('message event with text and fileKey keeps text and drops fileKey', () => {
-  const event = roomEventFromNativePacket(
-    {
-      type: 'autobase-event',
-      writerId: 'a',
-      seq: 4,
-      kind: 'message',
-      payload: { id: 'm1', text: 'hello', fileKey: 'smuggle-file' },
-    },
-    'fallback',
+  assert.equal(
+    roomEventFromNativePacket(
+      {
+        type: 'autobase-event',
+        writerId: 'a',
+        seq: 4,
+        kind: 'message',
+        payload: { id: 'm1', text: 'hello', fileKey: 'smuggle-file' },
+      },
+      'fallback',
+    ),
+    null,
   )
-  assert.equal(event.kind, 'message')
-  assert.equal(event.payload.text, 'hello')
-  assert.equal(event.payload.id, 'm1')
-  assert.equal(event.payload.fileKey, undefined)
   const proj = new AutobaseProjection()
-  proj.apply(event)
+  proj.apply({
+    writerId: 'a',
+    seq: 4,
+    kind: 'message',
+    payload: { id: 'm1', text: 'hello', fileKey: 'smuggle-file' },
+  })
   const stored = proj.state.messages[0]
   assert.equal(stored.text, 'hello')
   assert.equal(stored.fileKey, undefined)
@@ -753,4 +754,69 @@ test('fromWire and apply refuse URL-shaped writerId and do not mark applied', ()
   assert.equal(join.writerId, 'a')
   proj.apply(join)
   assert.equal(proj.state.members.p1, 'Pat')
+})
+
+test('fromWire and native packets refuse URL-shaped payload identifiers', () => {
+  assert.equal(
+    roomEventFromNativePacket(
+      {
+        type: 'autobase-event',
+        writerId: 'a',
+        seq: 0,
+        kind: 'membership',
+        payload: { peerId: 'https://evil', action: 'join' },
+      },
+      'a',
+    ),
+    null,
+  )
+  assert.equal(
+    roomEventFromNativePacket(
+      {
+        type: 'room_join',
+        roomId: 'https://evil',
+        guestPeerId: 'p1',
+        guestName: 'Pat',
+        abWriter: 'a',
+        abSeq: 0,
+      },
+      'x',
+    ),
+    null,
+  )
+  assert.equal(
+    roomEventFromNativePacket(
+      {
+        type: 'room_msg',
+        id: 'https://evil',
+        text: 'hello host-plaintext',
+        abWriter: 'a',
+        abSeq: 1,
+      },
+      'x',
+    ),
+    null,
+  )
+  const proj = new AutobaseProjection()
+  proj.apply({
+    writerId: 'a',
+    seq: 0,
+    kind: 'membership',
+    payload: { peerId: 'https://evil', action: 'join', displayName: 'Eve' },
+  })
+  assert.deepEqual(proj.state.members, {})
+  assert.equal(proj.state.applied.size, 0)
+  const msg = roomEventFromNativePacket(
+    {
+      type: 'room_msg',
+      id: 'm1',
+      text: 'hello host-plaintext',
+      abWriter: 'a',
+      abSeq: 1,
+    },
+    'x',
+  )
+  assert.equal(msg.payload.text, 'hello host-plaintext')
+  proj.apply(msg)
+  assert.equal(proj.state.messages[0].text, 'hello host-plaintext')
 })

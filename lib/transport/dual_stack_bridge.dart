@@ -258,10 +258,16 @@ class DualStackBridge {
     if (rec.kind != ReplicationEventKind.roomMembershipChanged) return null;
     if (!_journalMembershipFieldsSafe(rec.fields)) return null;
     final peerId = rec.fields['peerId'] as String?;
-    if (peerId == null || peerId.isEmpty) return null;
+    if (peerId == null || peerId.isEmpty || peerId.contains('://')) {
+      return null;
+    }
     final seq = (rec.fields['seq'] as num?)?.toInt() ?? rec.seq;
     final writer = rec.fields['writerId'] as String? ?? rec.writerDeviceId;
     if (writer.contains('://')) return null;
+    final roomId = rec.fields['roomId'];
+    if (roomId is String && (roomId.isEmpty || roomId.contains('://'))) {
+      return null;
+    }
     return RoomEvent(
       writerId: writer.isEmpty ? selfDeviceId : writer,
       seq: seq,
@@ -529,7 +535,11 @@ class DualStackBridge {
     required String eventId,
     String? conversationId,
   }) {
-    if (eventId.isEmpty) return;
+    if (eventId.isEmpty || eventId.contains('://')) return;
+    if (conversationId != null &&
+        (conversationId.isEmpty || conversationId.contains('://'))) {
+      return;
+    }
     final record = journal.append(
       ReplicationEventKind.attachmentExpired,
       <String, Object?>{

@@ -57,13 +57,13 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "1fb71e242938c31328174d9a93eb7608bc1b80ef53f41d6fb4983521dc1aba4b"
+          "content": "3bd3ca649e58a3997f81227d6a04384aedf7f8726198854ff604917906a3ef7a"
         }
       ],
       "properties": [
         {
           "name": "pinnedSourceSha256",
-          "value": "1fb71e242938c31328174d9a93eb7608bc1b80ef53f41d6fb4983521dc1aba4b"
+          "value": "3bd3ca649e58a3997f81227d6a04384aedf7f8726198854ff604917906a3ef7a"
         },
         {
           "name": "remoteJs",
@@ -77,13 +77,13 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "016b8952ab134af8dfb3289e961322ef12b8575a5b6e35c13cc6716cb1bd0f11"
+          "content": "da7a26f568995ee1d7163dca07829ef656823284058060053fb21d4449563cd7"
         }
       ],
       "properties": [
         {
           "name": "pinnedSourceSha256",
-          "value": "016b8952ab134af8dfb3289e961322ef12b8575a5b6e35c13cc6716cb1bd0f11"
+          "value": "da7a26f568995ee1d7163dca07829ef656823284058060053fb21d4449563cd7"
         },
         {
           "name": "remoteJs",
