@@ -14,13 +14,17 @@ Future<String?> localAttachmentStoreDir() => impl.localAttachmentStoreDir();
 Future<String> persistLocalAttachmentPath(
   String path, {
   String fileName = 'plain.bin',
+  String? storeDir,
 }) async {
-  final store = await localAttachmentStoreDir();
+  final store = storeDir ?? await localAttachmentStoreDir();
   if (store == null || store.contains('://')) return path;
   final copied = await copyLocalPathToStableFile(
     path,
     store,
     fileName: fileName,
   );
+  if (copied != null && copied != path) {
+    await deleteOrbitsAttPlaintextSource(path);
+  }
   return copied ?? path;
 }

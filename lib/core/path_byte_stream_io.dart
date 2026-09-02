@@ -359,3 +359,18 @@ Future<String?> copyLocalPathToStableFile(
     return null;
   }
 }
+
+Future<void> deleteOrbitsAttPlaintextSource(String path) async {
+  final p = path.trim();
+  if (p.isEmpty || p.contains('://')) return;
+  final file = File(p);
+  final dir = file.existsSync() ? file.parent : Directory(p);
+  final parts = dir.path.split(Platform.pathSeparator)
+      .where((s) => s.isNotEmpty)
+      .toList();
+  final base = parts.isEmpty ? dir.path : parts.last;
+  if (!base.startsWith('orbits-att-pt-')) return;
+  try {
+    if (dir.existsSync()) dir.deleteSync(recursive: true);
+  } catch (_) {}
+}

@@ -34,3 +34,5 @@ Future<String?> copyLocalPathToStableFile(
   String destDirectory, {
   String fileName = 'plain.bin',
 }) async => null;
+
+Future<void> deleteOrbitsAttPlaintextSource(String path) async {}

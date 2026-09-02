@@ -1899,7 +1899,15 @@ class DualStackBridge {
           ? await tofuCheck!(norm, binding.identityPublicKey)
           : await checkPin(norm, binding.identityPublicKey);
     } catch (_) {
-      tofu = null;
+      bindingFailures[norm] = 'tofuDoesNotConflict';
+      authenticated.remove(norm);
+      remoteBindings.remove(norm);
+      connected.remove(norm);
+      _pendingInbound.remove(norm);
+      try {
+        await transport.disconnect(norm);
+      } catch (_) {}
+      return;
     }
     final noise =
         connectionNoiseFor?.call(norm) ?? devices?.noisePublicKeyFor(norm);

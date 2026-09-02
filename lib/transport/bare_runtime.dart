@@ -1,8 +1,11 @@
 // Prefer a local Bare binary. Never download a runtime.
 // Node is a development fallback only.
 
+import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+
+import 'package:crypto/crypto.dart' show sha256;
 
 /// False until a per-OS Bare binary is committed/linked into the app.
 const bool kBareBinaryShipped = false;
@@ -135,14 +138,16 @@ BareRuntimeLaunch resolveBareRuntime(
   }
   if (kBareWorkletRunsOnBareRuntime && bareWorkletGraphPresent(worklet)) {
     if (bundledBare != null && isLocalBarePath(bundledBare.path)) {
-      return BareRuntimeLaunch(
-        executable: File(bundledBare.path).absolute.path,
-        arguments: [workletPath],
-        kind: 'bare',
-      );
+      if (bareBinaryAcceptedForSpawn(File(bundledBare.path))) {
+        return BareRuntimeLaunch(
+          executable: File(bundledBare.path).absolute.path,
+          arguments: [workletPath],
+          kind: 'bare',
+        );
+      }
     }
     final local = _localBareBinary();
-    if (local != null) {
+    if (local != null && bareBinaryAcceptedForSpawn(local)) {
       return BareRuntimeLaunch(
         executable: local.absolute.path,
         arguments: [workletPath],
@@ -220,6 +225,90 @@ bool bareManifestHasOsSlots(Map<String, Object?> manifest) {
     if (!binaries.containsKey(key)) return false;
   }
   return true;
+}
+
+/// Hex SHA-256 of [file]. Empty if the file cannot be read.
+String sha256HexOfFile(File file) {
+  try {
+    return sha256.convert(file.readAsBytesSync()).toString();
+  } catch (_) {
+    return '';
+  }
+}
+
+/// True when [file] exists and its SHA-256 matches [expectedHex].
+bool bareArtifactMatchesPin(File file, String? expectedHex) {
+  if (!file.existsSync()) return false;
+  final pin = (expectedHex ?? '').trim().toLowerCase();
+  if (pin.length != 64) return false;
+  final got = sha256HexOfFile(file).toLowerCase();
+  return got == pin;
+}
+
+/// Pin for a shipped Bare binary slot. Looks at `binarySha256` or a
+/// `binaries[os].sha256` object. Vendor tarball hashes are not used.
+String? bareBinaryPinFromManifest(
+  Map<String, Object?> manifest, {
+  String? osArch,
+}) {
+  final key = osArch ?? currentBareOsArch();
+  final pinned = manifest['binarySha256'];
+  if (pinned is Map) {
+    final hash = pinned[key];
+    if (hash is String && hash.length == 64) return hash;
+  }
+  final binaries = manifest['binaries'];
+  if (binaries is Map) {
+    final slot = binaries[key];
+    if (slot is Map) {
+      final hash = slot['sha256'];
+      if (hash is String && hash.length == 64) return hash;
+    }
+  }
+  return null;
+}
+
+String? bareStdlibZipPinFromManifest(Map<String, Object?> manifest) {
+  for (final key in const ['sha256', 'zipSha256']) {
+    final hash = manifest[key];
+    if (hash is String && hash.length == 64) return hash;
+  }
+  final zip = manifest['zip'];
+  if (zip is Map) {
+    final hash = zip['sha256'];
+    if (hash is String && hash.length == 64) return hash;
+  }
+  return null;
+}
+
+Map<String, Object?>? loadBareManifestFile(File file) {
+  if (!file.existsSync()) return null;
+  try {
+    final decoded = jsonDecode(file.readAsStringSync());
+    if (decoded is Map) return Map<String, Object?>.from(decoded);
+  } catch (_) {}
+  return null;
+}
+
+/// Present local Bare binary is accepted only when its hash matches a pin.
+/// Missing file → false (caller keeps the `kBareBinaryShipped = false` path).
+/// Wrong or missing pin → false (do not spawn that binary).
+bool bareBinaryAcceptedForSpawn(
+  File binary, {
+  String? expectedSha256,
+  Map<String, Object?>? manifest,
+  String? osArch,
+}) {
+  if (!binary.existsSync()) return false;
+  var pin = expectedSha256;
+  if (pin == null || pin.isEmpty) {
+    final loaded = manifest ??
+        loadBareManifestFile(File('tool/bare/BARE.manifest'));
+    pin = loaded == null
+        ? null
+        : bareBinaryPinFromManifest(loaded, osArch: osArch);
+  }
+  return bareArtifactMatchesPin(binary, pin);
 }
 
 /// Every vendor tarball must have a sha256 pin. Dart still never fetches.

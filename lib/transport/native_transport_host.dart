@@ -39,6 +39,24 @@ import 'transport_noise_seed.dart';
 import 'worklet_backend.dart';
 import 'worklet_orbits_transport.dart';
 
+/// Second caller awaits the same in-flight future. Used by
+/// [NativeTransportHost.ensureStarted] so two attach paths cannot
+/// double-open the carrier.
+class ExclusiveAsync {
+  Future<void>? _op;
+
+  Future<void> run(Future<void> Function() body) {
+    final existing = _op;
+    if (existing != null) return existing;
+    late final Future<void> started;
+    started = body().whenComplete(() {
+      if (identical(_op, started)) _op = null;
+    });
+    _op = started;
+    return started;
+  }
+}
+
 class NativeTransportHost {
   NativeTransportHost(this._ref);
 
@@ -52,9 +70,17 @@ class NativeTransportHost {
   StoragePeerHttp? storageHttp;
   RelayDirectory? directory;
   final PushRegistration pushRegistration = PushRegistration();
+  final ExclusiveAsync _startGate = ExclusiveAsync();
 
-  Future<void> ensureStarted() async {
-    if (attached) return;
+  Future<void> ensureStarted() {
+    if (attached) return Future<void>.value();
+    return _startGate.run(() async {
+      if (attached) return;
+      await _ensureStartedBody();
+    });
+  }
+
+  Future<void> _ensureStartedBody() async {
     directory = await loadRelayDirectoryFromEnv();
     if (!isHyperswarmTransportEnabled()) return;
     final auth = _ref.read(authNotifierProvider);

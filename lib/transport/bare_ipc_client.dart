@@ -46,9 +46,12 @@ class BareIpcClient {
     }
   }
 
+  static const Duration requestTimeout = Duration(seconds: 15);
+
   Future<Map<String, Object?>> request(
     String method, [
     Map<String, Object?> params = const {},
+    Duration? timeout,
   ]) {
     final id = _nextId++;
     final completer = Completer<Map<String, Object?>>();
@@ -65,7 +68,13 @@ class BareIpcClient {
         ),
       ),
     );
-    return completer.future;
+    return completer.future.timeout(
+      timeout ?? requestTimeout,
+      onTimeout: () {
+        _pending.remove(id);
+        throw TimeoutException('ipc request timed out: $method');
+      },
+    );
   }
 
   Future<void> close() async {

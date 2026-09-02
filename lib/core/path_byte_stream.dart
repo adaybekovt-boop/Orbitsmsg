@@ -95,3 +95,8 @@ Future<String?> copyLocalPathToStableFile(
   String fileName = 'plain.bin',
 }) =>
     impl.copyLocalPathToStableFile(srcPath, destDirectory, fileName: fileName);
+
+/// Delete an `orbits-att-pt-*` temp directory after a successful persist.
+/// No-op on web or when [path] is not under that prefix.
+Future<void> deleteOrbitsAttPlaintextSource(String path) =>
+    impl.deleteOrbitsAttPlaintextSource(path);

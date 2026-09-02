@@ -61,7 +61,28 @@ Future<void> ensureLocalBareStdlib(
   if (bareWorkletGraphPresent(worklet)) return;
   final zip = findLocalBareStdlibZip(bundledBare: bundledBare);
   if (zip == null) return;
+  if (!bareStdlibZipAcceptedForExtract(zip)) {
+    throw StateError('bare_stdlib.zip hash mismatch or missing pin');
+  }
   extractBareStdlibZip(zip, worklet.parent);
+}
+
+/// Present zip is extracted only when it matches the modules manifest pin.
+bool bareStdlibZipAcceptedForExtract(
+  File zip, {
+  String? expectedSha256,
+  Map<String, Object?>? manifest,
+}) {
+  if (!zip.existsSync()) return false;
+  var pin = expectedSha256;
+  if (pin == null || pin.isEmpty) {
+    final loaded = manifest ??
+        loadBareManifestFile(
+          File('tool/connectivity_harness/BARE_MODULES.manifest'),
+        );
+    pin = loaded == null ? null : bareStdlibZipPinFromManifest(loaded);
+  }
+  return bareArtifactMatchesPin(zip, pin);
 }
 
 void extractBareStdlibZip(File zip, Directory dest) {

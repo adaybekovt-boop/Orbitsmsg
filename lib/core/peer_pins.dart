@@ -108,7 +108,15 @@ class PinCheck {
 }
 
 /// Verify a remote pubkey against the existing pin.
+///
+/// A missing or throwing pin store is an error, not `newPin`. Callers
+/// must fail closed — do not treat a store failure as first contact.
 Future<PinCheck> checkPin(String peerId, List<int> remoteSpkiBytes) async {
+  try {
+    await keyStore().get(_keysTable, '__pin-store-probe__');
+  } catch (_) {
+    throw StateError('pin store unavailable');
+  }
   final incoming = await identity_key.computeFingerprint(remoteSpkiBytes);
   final pin = await getPin(peerId);
   if (pin == null || pin.fingerprint.isEmpty) {
