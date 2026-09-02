@@ -1581,6 +1581,8 @@ void main() {
     await pair.$1.connect(
       const PeerDescriptor(peerId: 'ORBIT-BBBBBBBBBBBBBBBB'),
     );
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(a.isNativeConnected('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
     expect(a.authenticated.contains('ORBIT-BBBBBBBBBBBBBBBB'), isFalse);
     expect(
       await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
