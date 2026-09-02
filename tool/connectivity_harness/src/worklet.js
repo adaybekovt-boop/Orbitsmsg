@@ -497,6 +497,18 @@ class Worklet {
   _handleIncomingFile(peerId, body) {
     const type = body && body.type
     const id = body && body.id
+    // Fail-close before fs.openSync / received. Same walk as
+    // `_ingestAttachChunk`. Do not add `b64` or `text` to ATTACH_FORBIDDEN.
+    if (attachBodyHasForbiddenKey(body)) return true
+    if (typeof id === 'string' && id.includes('://')) return true
+    if (
+      type === 'harness-file-start' &&
+      body &&
+      typeof body.path === 'string' &&
+      body.path.includes('://')
+    ) {
+      return true
+    }
     if (type === 'attach-chunk') {
       this._ingestAttachChunk(peerId, body)
       return true

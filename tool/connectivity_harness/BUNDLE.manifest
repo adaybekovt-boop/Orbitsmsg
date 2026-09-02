@@ -3,11 +3,11 @@
   "ipc": "orbits-bare-ipc-v1",
   "transportFrame": "orbits-transport-v1",
   "remoteJs": false,
-  "workletSha256": "e85901d4d087c47d5d979751be1465f258c394c9a3b22a1ac171d4a69806254a",
+  "workletSha256": "3c7213ee65e9a0baae3a9292c92eccbcf9594318284763e57411c9bd22c80ad3",
   "packageJsonSha256": "340fa7323037854f5b210b1373857e876a264e27bbdaca2fa11dc45588ab05f6",
   "note": "Production Bare must ship this tree hashed with the app. Do not fetch executable JS. package.json import maps send node: builtins to bare-* on Bare. sources pins every file extractBundledWorklet copies.",
   "sources": {
-    "worklet.js": "e85901d4d087c47d5d979751be1465f258c394c9a3b22a1ac171d4a69806254a",
+    "worklet.js": "3c7213ee65e9a0baae3a9292c92eccbcf9594318284763e57411c9bd22c80ad3",
     "mux.js": "3c43488c57c23913c4fc980ad81eda25645db70280cf8c74d7acc2461132afb6",
     "discovery.js": "3cce3f021c9ff2118ab0e53a1f84d00ee535208c7f838f9061a0533da41ff66f",
     "loopback.js": "ee150635af14113a8ec8bd835d486953012390f88f2640ea5a625cd24783e230",

@@ -49,6 +49,43 @@ void main() {
     );
     expect(store.blocks, isEmpty);
   });
+
+  test('toReplicationFrame throws when fields nest fileKey', () {
+    final store = HypercoreLocalStore('dev-a');
+    // Bypass append: JournalRecord does not validate fields.
+    const rec = JournalRecord(
+      seq: 0,
+      writerDeviceId: 'dev-a',
+      kind: ReplicationEventKind.messageEnvelopeCreated,
+      fields: <String, Object?>{
+        'eventId': 'e1',
+        'encryptedEnvelope': <int>[1, 2, 3],
+        'extra': <String, Object?>{'fileKey': 'x'},
+      },
+    );
+    expect(() => store.toReplicationFrame(rec), throwsArgumentError);
+    expect(store.blocks, isEmpty);
+  });
+
+  test('applyRemote returns null when frame has top-level fileKey', () {
+    final store = HypercoreLocalStore('dev-b');
+    expect(
+      store.applyRemote(<String, Object?>{
+        'type': 'repl-event',
+        'info': kReplicationEventInfo,
+        'kind': ReplicationEventKind.messageEnvelopeCreated.name,
+        'seq': 0,
+        'writerDeviceId': 'dev-a',
+        'fileKey': 'smuggle',
+        'fields': <String, Object?>{
+          'eventId': 'e1',
+          'encryptedEnvelope': <int>[1, 2, 3],
+        },
+      }),
+      isNull,
+    );
+    expect(store.blocks, isEmpty);
+  });
 }
 
 bool jsonFieldsHavePlaintext(Map<String, Object?> frame) {

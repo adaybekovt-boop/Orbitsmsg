@@ -242,6 +242,25 @@ void main() {
     expect(hasReliable, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
     expect(hasReliable, contains("getConn(remoteId, 'reliable')"));
 
+    final sendChatAttachmentFromPath = slice(
+      'Future<bool> sendChatAttachmentFromPath',
+      'bool sendDrop',
+    );
+    expect(sendChatAttachmentFromPath, contains("path.contains('://')"));
+    expect(sendChatAttachmentFromPath, contains("fileId.contains('://')"));
+    expect(sendChatAttachmentFromPath, contains('return false'));
+    expect(sendChatAttachmentFromPath, contains('_nativeCarrierFor'));
+    final attachScheme = sendChatAttachmentFromPath.indexOf("contains('://')");
+    final xorIdx = sendChatAttachmentFromPath.indexOf(
+      'xorPlaintextPathToCipherFile',
+    );
+    final attachDual = sendChatAttachmentFromPath.indexOf(
+      'dual.sendAttachmentCipherPath',
+    );
+    expect(attachScheme, greaterThanOrEqualTo(0));
+    expect(xorIdx, greaterThan(attachScheme));
+    expect(attachDual, greaterThan(attachScheme));
+
     final sendDrop = slice('bool sendDrop', 'Future<bool> sendFileFromPath');
     expect(sendDrop, contains('_nativeCarrierFor'));
     expect(sendDrop, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
@@ -279,6 +298,22 @@ void main() {
       sendAutobaseEvent.indexOf('replicationValueIsSafe'),
       lessThan(sendAutobaseEvent.indexOf('dual.sendAutobaseEvent')),
     );
+
+    final sendCallSignal = slice(
+      'Future<void> sendCallSignal',
+      'Future<void> waitForDropDrain',
+    );
+    expect(sendCallSignal, contains('replicationValueIsSafe'));
+    expect(sendCallSignal, contains('signal.toJson()'));
+    expect(
+      sendCallSignal.indexOf('replicationValueIsSafe'),
+      lessThan(sendCallSignal.indexOf('dual.sendCallSignal')),
+    );
+    expect(
+      sendCallSignal.indexOf('signal.toJson()'),
+      lessThan(sendCallSignal.indexOf('dual.sendCallSignal')),
+    );
+
     expect(src, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
     expect(src, isNot(contains('peerjsAllowedOnNative()')));
 

@@ -44,6 +44,9 @@ class HypercoreLocalStore {
   }
 
   Map<String, Object?> toReplicationFrame(JournalRecord record) {
+    if (!replicationValueIsSafe(record.fields)) {
+      throw ArgumentError('refusing secret field in hypercore');
+    }
     return <String, Object?>{
       'type': 'repl-event',
       'info': kReplicationEventInfo,
@@ -60,6 +63,7 @@ class HypercoreLocalStore {
   JournalRecord? applyRemote(Map<String, Object?> frame) {
     if (frame['type'] != 'repl-event') return null;
     if (frame['info'] != kReplicationEventInfo) return null;
+    if (!replicationValueIsSafe(frame)) return null;
     final kindName = frame['kind'] as String?;
     if (kindName == null) return null;
     final kind = ReplicationEventKind.values.where((k) => k.name == kindName);

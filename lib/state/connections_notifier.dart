@@ -504,9 +504,15 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     required List<int> fileKey,
     required String fileId,
   }) async {
+    if (path.isEmpty ||
+        path.contains('://') ||
+        fileId.contains('://') ||
+        fileId.isEmpty ||
+        fileKey.isEmpty) {
+      return false;
+    }
     final dual = _dual;
     if (dual == null || !_nativeCarrierFor(remoteId)) return false;
-    if (fileKey.isEmpty || fileId.isEmpty) return false;
     final cipher = await xorPlaintextPathToCipherFile(path, fileKey);
     if (cipher == null) return false;
     try {
@@ -589,6 +595,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   }
 
   Future<void> sendCallSignal(String remoteId, CallSignal signal) async {
+    if (!replicationValueIsSafe(signal.toJson())) return;
     final dual = _dual;
     if (dual != null && _nativeCarrierFor(remoteId)) {
       await dual.sendCallSignal(remoteId, signal);

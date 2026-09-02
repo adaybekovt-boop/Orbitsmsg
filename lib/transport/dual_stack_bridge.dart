@@ -780,7 +780,7 @@ class DualStackBridge {
       throw StateError('sendAttachmentCipherPath needs attach-chunk');
     }
     final fileId = file.fileId ?? '';
-    if (fileId.isEmpty) {
+    if (fileId.isEmpty || fileId.contains('://')) {
       throw StateError('sendAttachmentCipherPath needs fileId');
     }
     if (firstCipher.isEmpty || chunkCount <= 0) return false;
@@ -804,6 +804,7 @@ class DualStackBridge {
     final id = fileId.isEmpty
         ? 'att-${DateTime.now().millisecondsSinceEpoch}'
         : fileId;
+    if (id.isEmpty || id.contains('://')) return;
     for (final chunk in chunks) {
       await _sendOneAttachChunk(norm, chunk, fileId: id);
     }
@@ -825,17 +826,20 @@ class DualStackBridge {
     AttachmentChunk chunk, {
     required String fileId,
   }) {
+    if (fileId.contains('://')) return Future<void>.value();
+    final body = <String, Object?>{
+      'type': 'attach-chunk',
+      'fileId': fileId,
+      'index': chunk.index,
+      'offset': chunk.offset,
+      'hash': chunk.hash,
+      'b64': base64Encode(chunk.ciphertext),
+    };
+    if (!replicationValueIsSafe(body)) return Future<void>.value();
     return transport.send(
       norm,
       TransportChannel.attachment,
-      jsonPayload({
-        'type': 'attach-chunk',
-        'fileId': fileId,
-        'index': chunk.index,
-        'offset': chunk.offset,
-        'hash': chunk.hash,
-        'b64': base64Encode(chunk.ciphertext),
-      }),
+      jsonPayload(body),
     );
   }
 
@@ -1124,11 +1128,13 @@ class DualStackBridge {
     final norm = normalizePeerId(peerId);
     if (!authenticated.contains(norm) || !connected.contains(norm)) return;
     if (isBlocked(norm)) return;
+    final frame = hypercore.toReplicationFrame(record);
+    if (!replicationValueIsSafe(frame)) return;
     unawaited(
       transport.send(
         norm,
         TransportChannel.replication,
-        jsonPayload(hypercore.toReplicationFrame(record)),
+        jsonPayload(frame),
       ),
     );
   }
@@ -1138,11 +1144,13 @@ class DualStackBridge {
     if (!authenticated.contains(norm) || !connected.contains(norm)) return;
     if (isBlocked(norm)) return;
     for (final record in hypercore.blocks) {
+      final frame = hypercore.toReplicationFrame(record);
+      if (!replicationValueIsSafe(frame)) continue;
       unawaited(
         transport.send(
           norm,
           TransportChannel.replication,
-          jsonPayload(hypercore.toReplicationFrame(record)),
+          jsonPayload(frame),
         ),
       );
     }
@@ -1202,29 +1210,35 @@ class DualStackBridge {
         onPresence?.call(peerId, true);
         final caps = localCapabilities;
         if (caps != null) {
-          unawaited(
-            transport.send(
-              normalizePeerId(peerId),
-              TransportChannel.control,
-              jsonPayload({
-                'type': 'capabilities',
-                ...caps.toWire(),
-              }),
-            ),
-          );
+          final payload = <String, Object?>{
+            'type': 'capabilities',
+            ...caps.toWire(),
+          };
+          if (helloEnvelopeIsSafe(payload)) {
+            unawaited(
+              transport.send(
+                normalizePeerId(peerId),
+                TransportChannel.control,
+                jsonPayload(payload),
+              ),
+            );
+          }
         }
         final binding = localBinding;
         if (binding != null) {
-          unawaited(
-            transport.send(
-              normalizePeerId(peerId),
-              TransportChannel.control,
-              jsonPayload({
-                'type': kDeviceBindingWireType,
-                ...binding.toWire(),
-              }),
-            ),
-          );
+          final payload = <String, Object?>{
+            'type': kDeviceBindingWireType,
+            ...binding.toWire(),
+          };
+          if (helloEnvelopeIsSafe(payload)) {
+            unawaited(
+              transport.send(
+                normalizePeerId(peerId),
+                TransportChannel.control,
+                jsonPayload(payload),
+              ),
+            );
+          }
         }
       case TransportAuthenticated(:final peerId, :final binding):
         unawaited(_acceptRemoteBinding(peerId, binding));

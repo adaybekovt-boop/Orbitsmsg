@@ -772,6 +772,57 @@ void main() {
         isNot(contains('fileKey')));
   });
 
+  test('sendAttachmentCipherPath with URL fileId throws and delivers no attach-chunk',
+      () async {
+    final (a, b, _) = await linked();
+    final drop = <Object>[];
+    b.onDrop = (peer, packet) => drop.add(packet);
+    final dir = Directory.systemTemp.createTempSync('orbits-att-evil-id-');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final src = File('${dir.path}${Platform.pathSeparator}cipher.bin')
+      ..writeAsBytesSync(List<int>.generate(16, (i) => i));
+    Object? error;
+    bool? ok;
+    try {
+      ok = await a.sendAttachmentCipherPath(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        TransportFileDescriptor(
+          path: src.path,
+          sizeBytes: src.lengthSync(),
+          protocol: 'attach-chunk',
+          fileId: 'https://evil',
+        ),
+        firstCipher: const [1, 2, 3],
+        chunkCount: 1,
+      );
+    } catch (e) {
+      error = e;
+    }
+    expect(
+      error is StateError || ok == false,
+      isTrue,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(
+      await b.decryptInboundAttachment(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        'https://evil',
+        List<int>.generate(32, (i) => i + 1),
+      ),
+      isNull,
+    );
+    expect(drop, isEmpty);
+    expect(
+      a.journal.records
+          .any((r) => r.kind == ReplicationEventKind.attachmentPublished),
+      isFalse,
+    );
+    await a.detach();
+    await b.detach();
+  });
+
   test('recipient reads mailbox after the sender is gone', () async {
     final store = BlindMailboxStore()
       ..grant(
@@ -2167,6 +2218,84 @@ void main() {
     expect(
       sendAutobase.indexOf('replicationValueIsSafe(event.toWire())'),
       lessThan(sendAutobase.indexOf('_applyRoom')),
+    );
+  });
+
+  test(
+      '_sendOneAttachChunk source-scan has :// and replicationValueIsSafe before send',
+      () {
+    final src = File('lib/transport/dual_stack_bridge.dart').readAsStringSync();
+    expect(src, isNot(contains("import 'dart:io'")));
+    final sendOne = src
+        .split('Future<void> _sendOneAttachChunk')[1]
+        .split('void _journalAttachmentPublished')[0];
+    expect(sendOne, contains('://'));
+    expect(sendOne, contains('replicationValueIsSafe'));
+    expect(
+      sendOne.indexOf('://'),
+      lessThan(sendOne.indexOf('transport.send')),
+    );
+    expect(
+      sendOne.indexOf('replicationValueIsSafe'),
+      lessThan(sendOne.indexOf('transport.send')),
+    );
+  });
+
+  test(
+      '_replicateRecord and _flushReplication source-scan replicationValueIsSafe before send',
+      () {
+    final src = File('lib/transport/dual_stack_bridge.dart').readAsStringSync();
+    expect(src, isNot(contains("import 'dart:io'")));
+    final replicate = src
+        .split('void _replicateRecord')[1]
+        .split('void _flushReplication')[0];
+    expect(replicate, contains('replicationValueIsSafe'));
+    expect(replicate, contains('toReplicationFrame'));
+    expect(
+      replicate.indexOf('toReplicationFrame'),
+      lessThan(replicate.indexOf('replicationValueIsSafe')),
+    );
+    expect(
+      replicate.indexOf('replicationValueIsSafe'),
+      lessThan(replicate.indexOf('transport.send')),
+    );
+    final flush = src
+        .split('void _flushReplication')[1]
+        .split('Future<void> _acceptRemoteBinding')[0];
+    expect(flush, contains('replicationValueIsSafe'));
+    expect(flush, contains('toReplicationFrame'));
+    expect(
+      flush.indexOf('toReplicationFrame'),
+      lessThan(flush.indexOf('replicationValueIsSafe')),
+    );
+    expect(
+      flush.indexOf('replicationValueIsSafe'),
+      lessThan(flush.indexOf('transport.send')),
+    );
+  });
+
+  test(
+      '_onEvent capabilities and device-binding payloads use helloEnvelopeIsSafe before send',
+      () {
+    final src = File('lib/transport/dual_stack_bridge.dart').readAsStringSync();
+    expect(src, isNot(contains("import 'dart:io'")));
+    final onEvent = src
+        .split('void _onEvent')[1]
+        .split('bool _isConnectHandshakeFrame')[0];
+    expect(onEvent, contains('helloEnvelopeIsSafe'));
+    final capsSend = onEvent.split('final caps')[1].split('final binding')[0];
+    expect(capsSend, contains('helloEnvelopeIsSafe'));
+    expect(capsSend, contains("'type': 'capabilities'"));
+    expect(
+      capsSend.indexOf('helloEnvelopeIsSafe'),
+      lessThan(capsSend.indexOf('transport.send')),
+    );
+    final bindSend = onEvent.split('final binding')[1];
+    expect(bindSend, contains('helloEnvelopeIsSafe'));
+    expect(bindSend, contains('kDeviceBindingWireType'));
+    expect(
+      bindSend.indexOf('helloEnvelopeIsSafe'),
+      lessThan(bindSend.indexOf('transport.send')),
     );
   });
 
