@@ -8,6 +8,7 @@ const path = require('node:path')
 const {
   CorestoreJournal,
   fieldsAreSafe,
+  identifierValuesSafe,
   parseStored,
   safeJournalDir,
 } = require('../src/corestore_journal')
@@ -370,5 +371,66 @@ test('parseStored of a legit ciphertext row still works', () => {
   assert.equal(
     parsed.fields.encryptedEnvelope,
     'v2:https://looks-like-url-but-is-ciphertext',
+  )
+})
+
+test('append refuses URL-shaped eventId; list stays empty', async () => {
+  const journal = new CorestoreJournal('dev-a')
+  await assert.rejects(
+    () =>
+      journal.append({
+        fields: { eventId: 'https://evil', encryptedEnvelope: 'x' },
+      }),
+    /secret field/,
+  )
+  assert.equal(journal.list().length, 0)
+  await journal.close()
+})
+
+test('parseStored refuses URL-shaped conversationId', () => {
+  assert.equal(
+    parseStored(
+      JSON.stringify({
+        writerDeviceId: 'dev-a',
+        kind: 'messageEnvelopeCreated',
+        fields: { conversationId: 'https://evil', encryptedEnvelope: 'x' },
+      }),
+    ),
+    null,
+  )
+})
+
+test('append with honest eventId still lists', async () => {
+  const journal = new CorestoreJournal('dev-a')
+  await journal.append({
+    fields: { eventId: 'evt-honest', encryptedEnvelope: 'cipher-ok' },
+  })
+  const blocks = journal.list()
+  assert.equal(blocks.length, 1)
+  assert.equal(blocks[0].fields.eventId, 'evt-honest')
+  assert.equal(blocks[0].fields.encryptedEnvelope, 'cipher-ok')
+  await journal.close()
+})
+
+test('identifierValuesSafe refuses empty or URL identifiers; text/b64 stay free', () => {
+  assert.equal(
+    identifierValuesSafe({ eventId: 'e', encryptedEnvelope: 'x' }),
+    true,
+  )
+  assert.equal(
+    identifierValuesSafe({ eventId: '', encryptedEnvelope: 'x' }),
+    false,
+  )
+  assert.equal(
+    identifierValuesSafe({ eventId: 'https://evil', encryptedEnvelope: 'x' }),
+    false,
+  )
+  assert.equal(
+    identifierValuesSafe({
+      text: 'see https://example.com/docs',
+      b64: 'https://looks-like-url',
+      encryptedEnvelope: 'x',
+    }),
+    true,
   )
 })

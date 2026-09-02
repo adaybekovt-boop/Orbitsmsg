@@ -5,6 +5,8 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' show sha256;
+
 import '../transport/layers.dart';
 import '../transport/signed_capabilities.dart';
 
@@ -111,6 +113,22 @@ Future<bool> verifyDeviceLink(DeviceLinkPayload link) {
     link.signedPayload(),
     link.signature,
   );
+}
+
+/// Local-only transport ORBIT id. Not part of the QR signed payload.
+/// First 8 bytes of SHA-256([transportPublicKey]) → `ORBIT-` + 16 hex.
+String transportPeerIdFromPublicKey(List<int> transportPublicKey) {
+  if (transportPublicKey.isEmpty) {
+    throw ArgumentError('device link: refusing secret field');
+  }
+  final hex = sha256
+      .convert(transportPublicKey)
+      .bytes
+      .take(8)
+      .map((v) => v.toRadixString(16).padLeft(2, '0'))
+      .join()
+      .toUpperCase();
+  return 'ORBIT-$hex';
 }
 
 /// Empty or URL-shaped (`://`) [DeviceLinkPayload.deviceId] *values* fail

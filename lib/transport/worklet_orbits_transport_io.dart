@@ -417,6 +417,11 @@ class WorkletOrbitsTransport implements OrbitsTransport {
           }
         }
         _events.add(TransportFrame(peerId, channel, bytes));
+      case 'error':
+        _events.add(TransportError(
+          payload['code'] as String? ?? 'worklet',
+          payload['message'] as String? ?? '',
+        ));
       default:
         if (kDebugMode && name.isNotEmpty) {
           debugPrint('[worklet] $name');

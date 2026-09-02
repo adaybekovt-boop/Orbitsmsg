@@ -188,6 +188,7 @@ Future<Map<String, Uint8List>> _deserializeSkipped(Object? raw) async {
 }
 
 Future<void> _saveRatchetSnapshot(_Session session) async {
+  if (session.peerId.contains('://')) return;
   final state = session.state;
   if (state == null) return;
 

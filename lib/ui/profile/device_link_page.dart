@@ -58,19 +58,19 @@ class _DeviceLinkPageState extends ConsumerState<DeviceLinkPage> {
         identityPublicKey: pub,
         sign: signBytes,
       );
-      deviceRegistry.authorize(
-        AuthorizedDevice(
-          deviceId: link.deviceId,
-          transportPublicKey: link.transportPublicKey,
-          hypercorePublicKey: link.hypercorePublicKey,
-          name: widget.peerId,
-          kind: 'this',
-          createdAt: link.createdAt,
-          status: DeviceStatus.active,
-          ownerPeerId: widget.peerId,
-          transportPeerId: widget.peerId,
-        ),
-      );
+      ref.read(connectionsNotifierProvider.notifier).authorizeLinkedDevice(
+            AuthorizedDevice(
+              deviceId: link.deviceId,
+              transportPublicKey: link.transportPublicKey,
+              hypercorePublicKey: link.hypercorePublicKey,
+              name: widget.peerId,
+              kind: 'this',
+              createdAt: link.createdAt,
+              status: DeviceStatus.active,
+              ownerPeerId: widget.peerId,
+              transportPeerId: widget.peerId,
+            ),
+          );
       if (!mounted) return;
       setState(() => _payload = jsonEncode(link.toQrJson()));
     } catch (e) {
@@ -86,18 +86,18 @@ class _DeviceLinkPageState extends ConsumerState<DeviceLinkPage> {
       if (!await verifyDeviceLink(link)) {
         throw StateError('device-link signature failed');
       }
-      deviceRegistry.authorize(
-        AuthorizedDevice(
-          deviceId: link.deviceId,
-          transportPublicKey: link.transportPublicKey,
-          hypercorePublicKey: link.hypercorePublicKey,
-          name: link.deviceId,
-          kind: 'linked',
-          createdAt: link.createdAt,
-          status: DeviceStatus.active,
-          ownerPeerId: widget.peerId,
-        ),
-      );
+      ref.read(connectionsNotifierProvider.notifier).authorizeLinkedDevice(
+            AuthorizedDevice(
+              deviceId: link.deviceId,
+              transportPublicKey: link.transportPublicKey,
+              hypercorePublicKey: link.hypercorePublicKey,
+              name: link.deviceId,
+              kind: 'linked',
+              createdAt: link.createdAt,
+              status: DeviceStatus.active,
+              ownerPeerId: widget.peerId,
+            ),
+          );
       if (!mounted) return;
       setState(() {
         _error = null;

@@ -221,6 +221,78 @@ void main() {
     );
   });
 
+  test('append refuses URL identifier values without writing', () async {
+    final durable = FileJournal.memory('dev-a');
+    expect(
+      () => durable.append(
+        const JournalRecord(
+          seq: 0,
+          writerDeviceId: 'dev-a',
+          kind: ReplicationEventKind.messageEnvelopeCreated,
+          fields: <String, Object?>{
+            'eventId': 'https://evil',
+            'conversationId': 'c1',
+            'encryptedEnvelope': <int>[1],
+          },
+        ),
+      ),
+      throwsArgumentError,
+    );
+    expect(
+      () => durable.append(
+        const JournalRecord(
+          seq: 0,
+          writerDeviceId: 'dev-a',
+          kind: ReplicationEventKind.deviceRevoked,
+          fields: <String, Object?>{'deviceId': 'https://evil'},
+        ),
+      ),
+      throwsArgumentError,
+    );
+    final replayed = await durable.replay();
+    expect(replayed.length, 0);
+  });
+
+  test('replay skips URL conversationId and keeps a later honest line',
+      () async {
+    final lines = <String>[
+      jsonEncode(<String, Object?>{
+        'seq': 1,
+        'writerDeviceId': 'dev-a',
+        'kind': ReplicationEventKind.messageEnvelopeCreated.name,
+        'fields': <String, Object?>{
+          'eventId': 'e-leak',
+          'conversationId': 'https://evil',
+          'encryptedEnvelope': base64Encode(const <int>[1, 2, 3]),
+        },
+      }),
+      jsonEncode(<String, Object?>{
+        'seq': 2,
+        'writerDeviceId': 'dev-a',
+        'kind': ReplicationEventKind.messageEnvelopeCreated.name,
+        'fields': <String, Object?>{
+          'eventId': 'e-ok',
+          'conversationId': 'c1',
+          'encryptedEnvelope': base64Encode(const <int>[4, 5, 6]),
+        },
+      }),
+    ];
+    final journal = FileJournal(
+      writerDeviceId: 'dev-a',
+      writeLine: (line) async => lines.add(line),
+      readLines: () async => List<String>.from(lines),
+    );
+    final replayed = await journal.replay();
+    expect(replayed.length, 1);
+    expect(replayed.records.single.seq, 2);
+    expect(replayed.records.single.fields['eventId'], 'e-ok');
+    expect(replayed.records.single.fields['conversationId'], 'c1');
+    expect(
+      replayed.records.any((r) => r.fields['eventId'] == 'e-leak'),
+      isFalse,
+    );
+  });
+
   test('append refuses URL writerDeviceId without writing', () async {
     final durable = FileJournal.memory('dev-a');
     expect(

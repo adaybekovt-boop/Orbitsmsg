@@ -56,6 +56,28 @@ function isRemoteUrl(p) {
   return t.startsWith('http://') || t.startsWith('https://') || t.includes('://')
 }
 
+// Same keys as Dart `_kReplicationIdentifierKeys`. Present key + empty
+// or `://` is unsafe. Do not put these on FORBIDDEN — that set is
+// secret *names*. `text` / `b64` stay allowed even when URL-shaped.
+const IDENTIFIER_KEYS = new Set([
+  'eventId',
+  'conversationId',
+  'roomId',
+  'peerId',
+  'deviceId',
+  'fileId',
+])
+
+function identifierValuesSafe(fields) {
+  if (!fields || typeof fields !== 'object') return false
+  for (const key of IDENTIFIER_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(fields, key)) continue
+    const value = fields[key]
+    if (typeof value !== 'string' || !value || isRemoteUrl(value)) return false
+  }
+  return true
+}
+
 function safeJournalDir(dir) {
   if (typeof dir !== 'string') return ''
   const t = dir.trim()
@@ -77,6 +99,7 @@ function parseStored(raw) {
   const fields = rec.fields
   if (!fields || typeof fields !== 'object') return null
   if (!fieldsAreSafe(fields)) return null
+  if (!identifierValuesSafe(fields)) return null
   if (typeof rec.writerDeviceId === 'string' && isRemoteUrl(rec.writerDeviceId)) {
     return null
   }
@@ -295,6 +318,9 @@ class CorestoreJournal {
     if (!fieldsAreSafe(fields)) {
       throw new Error('refusing secret field in corestore journal')
     }
+    if (!identifierValuesSafe(fields)) {
+      throw new Error('refusing secret field in corestore journal')
+    }
     const kind = record.kind || 'messageEnvelopeCreated'
     if (ENVELOPE_KINDS.has(kind) && !fields.encryptedEnvelope) {
       throw new Error('journal requires encryptedEnvelope')
@@ -338,6 +364,8 @@ module.exports = {
   CorestoreJournal,
   corestoreCtorFromAddon,
   fieldsAreSafe,
+  identifierValuesSafe,
+  IDENTIFIER_KEYS,
   FORBIDDEN,
   ENVELOPE_KINDS,
   isLocalAddonFile,

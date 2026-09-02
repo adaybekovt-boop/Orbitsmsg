@@ -21,6 +21,28 @@ class JournalRecord {
   final Map<String, Object?> fields;
 }
 
+const kJournalIdentifierKeys = {
+  'eventId',
+  'conversationId',
+  'roomId',
+  'peerId',
+  'deviceId',
+  'fileId',
+};
+
+/// Identifier VALUES for locator keys must be non-empty strings without `://`.
+/// Missing keys are ignored. Do not scan `text` / `b64` or other fields.
+bool journalIdentifierValuesSafe(Map<String, Object?> fields) {
+  for (final key in kJournalIdentifierKeys) {
+    if (!fields.containsKey(key)) continue;
+    final value = fields[key];
+    if (value is! String || value.isEmpty || value.contains('://')) {
+      return false;
+    }
+  }
+  return true;
+}
+
 class MemoryJournal {
   MemoryJournal(this.writerDeviceId);
 
@@ -35,7 +57,9 @@ class MemoryJournal {
     ReplicationEventKind kind,
     Map<String, Object?> fields,
   ) {
-    if (!replicationValueIsSafe(fields) || writerDeviceId.contains('://')) {
+    if (!replicationValueIsSafe(fields) ||
+        writerDeviceId.contains('://') ||
+        !journalIdentifierValuesSafe(fields)) {
       throw ArgumentError('refusing secret field in journal');
     }
     final record = JournalRecord(
@@ -60,7 +84,8 @@ class MemoryJournal {
   /// past the adopted writer seq so the next local write continues it.
   JournalRecord? adopt(JournalRecord record) {
     if (!replicationValueIsSafe(record.fields) ||
-        record.writerDeviceId.contains('://')) {
+        record.writerDeviceId.contains('://') ||
+        !journalIdentifierValuesSafe(record.fields)) {
       throw ArgumentError('refusing secret field in journal');
     }
     if (_isDuplicate(record)) return null;
@@ -81,7 +106,8 @@ class MemoryJournal {
   /// Local seq is assigned here; use [adopt] to keep a Hypercore writer seq.
   JournalRecord? ingest(JournalRecord record) {
     if (!replicationValueIsSafe(record.fields) ||
-        record.writerDeviceId.contains('://')) {
+        record.writerDeviceId.contains('://') ||
+        !journalIdentifierValuesSafe(record.fields)) {
       throw ArgumentError('refusing secret field in journal');
     }
     if (_isDuplicate(record)) return null;
@@ -173,6 +199,7 @@ JournalRecord? journalRecordFromWorklet(Map<String, Object?> row) {
     }
   });
   if (!replicationValueIsSafe(fields)) return null;
+  if (!journalIdentifierValuesSafe(fields)) return null;
   if (journalKindRequiresEnvelope(kindName) &&
       fields['encryptedEnvelope'] is! List<int>) {
     return null;

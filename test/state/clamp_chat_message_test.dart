@@ -76,6 +76,8 @@ void main() {
         push.indexOf('://'),
         lessThan(push.indexOf('db.saveMessage')),
       );
+      expect(push, contains('noteMessagesLost'));
+      expect(push, contains('nativeEnabled'));
     });
 
     test('patchMessage source-scan refuses :// id before db.updateMessage', () {

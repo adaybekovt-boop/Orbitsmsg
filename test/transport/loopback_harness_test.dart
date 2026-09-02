@@ -387,4 +387,27 @@ void main() {
     await a.stop();
     await b.stop();
   });
+
+  test('appendJournal refuses URL-shaped identifier values', () async {
+    final pair = loopbackPair();
+    await pair.$1.start(
+      const TransportLocalConfiguration(peerId: 'ORBIT-AAAAAAAAAAAAAAAA'),
+    );
+    await expectLater(
+      pair.$1.appendJournal({
+        'kind': 'deviceRevoked',
+        'writerDeviceId': 'dev-a',
+        'fields': {'deviceId': 'https://evil'},
+      }),
+      throwsArgumentError,
+    );
+    expect(await pair.$1.listJournal(), isEmpty);
+    await pair.$1.appendJournal({
+      'kind': 'deviceRevoked',
+      'writerDeviceId': 'dev-a',
+      'fields': {'deviceId': 'phone'},
+    });
+    expect(await pair.$1.listJournal(), hasLength(1));
+    await pair.$1.stop();
+  });
 }

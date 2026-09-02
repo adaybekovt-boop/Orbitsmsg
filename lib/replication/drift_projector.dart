@@ -153,6 +153,7 @@ class JournalProjector {
       roomId.isEmpty ? peerId : '$roomId\x1f$peerId';
 
   Future<void> apply(JournalRecord record) async {
+    if (!journalIdentifierValuesSafe(record.fields)) return;
     switch (record.kind) {
       case ReplicationEventKind.messageEnvelopeCreated:
         final id = record.fields['eventId'] as String?;

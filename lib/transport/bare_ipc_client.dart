@@ -88,6 +88,15 @@ class InProcessBareWorklet {
   bool published = false;
   String? peerId;
   final List<String> methods = <String>[];
+  final List<Map<String, Object?>> rememberedPeers = <Map<String, Object?>>[];
+  final List<Map<String, Object?>> journal = <Map<String, Object?>>[];
+  Map<String, Object?> autobase = <String, Object?>{};
+
+  Map<String, Object?> _params(Map<String, Object?> body) {
+    final raw = body['params'];
+    if (raw is Map) return Map<String, Object?>.from(raw);
+    return <String, Object?>{};
+  }
 
   Map<String, Object?> handle(Map<String, Object?> body) {
     final method = body['method'] as String? ?? '';
@@ -123,6 +132,33 @@ class InProcessBareWorklet {
       case 'resume':
         suspended = false;
         return {'ok': true, 'result': <String, Object?>{}};
+      case 'rememberPeer':
+        rememberedPeers.add(_params(body));
+        return {'ok': true, 'result': <String, Object?>{}};
+      case 'journal.append':
+        final record = _params(body);
+        journal.add(record);
+        return {'ok': true, 'result': record};
+      case 'journal.list':
+        return {
+          'ok': true,
+          'result': <String, Object?>{
+            'blocks': List<Map<String, Object?>>.from(journal),
+          },
+        };
+      case 'autobase.hydrate':
+        autobase = <String, Object?>{
+          'hydrated': true,
+          'members': <String, Object?>{},
+          'roles': <String, Object?>{},
+          'channels': <String, Object?>{},
+          'messages': <Object?>[],
+          'attachments': <String, Object?>{},
+          'applied': <Object?>[],
+        };
+        return {'ok': true, 'result': Map<String, Object?>.from(autobase)};
+      case 'autobase.state':
+        return {'ok': true, 'result': Map<String, Object?>.from(autobase)};
       default:
         throw StateError('unknown method $method');
     }

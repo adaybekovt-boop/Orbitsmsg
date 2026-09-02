@@ -109,42 +109,107 @@ void main() {
     expect(ratchetKeysForRevokedDevice(dev('a1')), isEmpty);
   });
 
-  test('authorize, revoke, and hydrate refuse URL-shaped deviceId', () async {
+  test('authorize refuses URL-shaped deviceId without storing', () {
+    var persisted = false;
     final reg = DeviceRegistry(
-      writeSnapshot: (_) async {},
-      readSnapshot: () async => null,
+      writeSnapshot: (_) async {
+        persisted = true;
+      },
     );
     expect(
       () => reg.authorize(dev('https://evil')),
-      throwsArgumentError,
-    );
-    expect(reg.all, isEmpty);
-    expect(reg.revoke('https://evil'), isNull);
-    expect(
-      () => AuthorizedDevice.fromJson(dev('https://evil').toJson()),
-      throwsArgumentError,
-    );
-
-    final mixed = DeviceRegistry(
-      writeSnapshot: (_) async {},
-      readSnapshot: () async => Uint8List.fromList(
-        utf8.encode(
-          jsonEncode({
-            'devices': [
-              dev('https://evil').toJson(),
-              dev('phone').toJson(),
-            ],
-          }),
+      throwsA(
+        isA<ArgumentError>().having(
+          (e) => e.message,
+          'message',
+          'refusing secret field in device registry',
         ),
       ),
     );
-    await mixed.hydrate();
-    expect(mixed.acceptsWriter('https://evil'), isFalse);
-    expect(mixed.acceptsWriter('phone'), isTrue);
+    expect(reg.all, isEmpty);
+    expect(reg.acceptsWriter('https://evil'), isFalse);
+    expect(persisted, isFalse);
+  });
 
-    reg.authorize(dev('a1'));
-    expect(reg.acceptsWriter('a1'), isTrue);
-    expect(reg.revoke('a1')?.status, DeviceStatus.revoked);
-    expect(reg.acceptsWriter('a1'), isFalse);
+  test('revoke of URL-shaped deviceId is a no-op', () {
+    var persisted = false;
+    final reg = DeviceRegistry(
+      writeSnapshot: (_) async {
+        persisted = true;
+      },
+    );
+    expect(reg.revoke('https://evil'), isNull);
+    expect(persisted, isFalse);
+  });
+
+  test('fromJson refuses URL-shaped deviceId', () {
+    expect(
+      () => AuthorizedDevice.fromJson(<String, Object?>{
+        'deviceId': 'https://evil',
+        'transportPublicKey': '',
+        'hypercorePublicKey': '',
+        'name': 'x',
+        'kind': 'phone',
+        'createdAt': 1,
+        'status': 'active',
+      }),
+      throwsA(
+        isA<ArgumentError>().having(
+          (e) => e.message,
+          'message',
+          'refusing secret field in device registry',
+        ),
+      ),
+    );
+  });
+
+  test('hydrate skips URL-shaped deviceId and keeps honest phone', () async {
+    final saved = <int>[];
+    final alice = DeviceRegistry(
+      writeSnapshot: (bytes) async {
+        saved
+          ..clear()
+          ..addAll(bytes);
+      },
+      readSnapshot: () async => Uint8List.fromList(saved),
+    );
+    alice.authorize(
+      AuthorizedDevice(
+        deviceId: 'phone',
+        transportPublicKey: List<int>.filled(32, 1),
+        hypercorePublicKey: List<int>.filled(32, 2),
+        name: 'phone',
+        kind: 'phone',
+        createdAt: 1,
+        status: DeviceStatus.active,
+        ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        transportPeerId: 'ORBIT-B1B1B1B1B1B1B1B1',
+      ),
+    );
+    await alice.persist();
+    final decoded = jsonDecode(utf8.decode(saved)) as Map<String, dynamic>;
+    final devices = List<Object?>.from(decoded['devices'] as List);
+    devices.add(dev('https://evil').toJson());
+    decoded['devices'] = devices;
+    final snapshot = Uint8List.fromList(utf8.encode(jsonEncode(decoded)));
+
+    final again = DeviceRegistry(
+      writeSnapshot: (bytes) async {},
+      readSnapshot: () async => snapshot,
+    );
+    await again.hydrate();
+    expect(again.acceptsWriter('phone'), isTrue);
+    expect(again.acceptsWriter('https://evil'), isFalse);
+    expect(again.getDevice('https://evil'), isNull);
+    expect(again.all.map((d) => d.deviceId), ['phone']);
+  });
+
+  test('honest authorize and revoke still work', () {
+    final alice = DeviceRegistry();
+    alice.authorize(dev('a1'));
+    expect(alice.acceptsWriter('a1'), isTrue);
+    expect(alice.revoke('a1')?.status, DeviceStatus.revoked);
+    expect(alice.acceptsWriter('a1'), isFalse);
+    expect(alice.isRevoked('a1'), isTrue);
   });
 }

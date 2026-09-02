@@ -268,6 +268,58 @@ void main() {
     expect(meta, [ReplicationEventKind.contactBlocked]);
   });
 
+  test('apply does not decrypt or persist URL conversationId or eventId',
+      () async {
+    var decryptCalls = 0;
+    final persisted = <String>[];
+    final nonMessage = <ReplicationEventKind>[];
+    final projector = JournalProjector(
+      decrypt: (enc, conv) async {
+        decryptCalls++;
+        return {'text': 'LEAK'};
+      },
+      persist: (msg) async => persisted.add(msg.eventId),
+      persistNonMessage: (event) async => nonMessage.add(event.kind),
+    );
+    await projector.apply(
+      const JournalRecord(
+        seq: 0,
+        writerDeviceId: 'dev-a',
+        kind: ReplicationEventKind.messageEnvelopeCreated,
+        fields: <String, Object?>{
+          'eventId': 'e1',
+          'conversationId': 'https://evil',
+          'encryptedEnvelope': <int>[1, 2, 3],
+        },
+      ),
+    );
+    await projector.apply(
+      const JournalRecord(
+        seq: 1,
+        writerDeviceId: 'dev-a',
+        kind: ReplicationEventKind.messageEnvelopeCreated,
+        fields: <String, Object?>{
+          'eventId': 'https://evil',
+          'conversationId': 'c1',
+          'encryptedEnvelope': <int>[1, 2, 3],
+        },
+      ),
+    );
+    await projector.apply(
+      const JournalRecord(
+        seq: 2,
+        writerDeviceId: 'dev-a',
+        kind: ReplicationEventKind.deviceAuthorized,
+        fields: <String, Object?>{'deviceId': 'https://evil'},
+      ),
+    );
+    expect(decryptCalls, 0);
+    expect(persisted, isEmpty);
+    expect(nonMessage, isEmpty);
+    expect(projector.messages, isEmpty);
+    expect(projector.devices, isEmpty);
+  });
+
   test('device revoke is terminal and membership round-trips', () async {
     final journal = MemoryJournal('dev-a');
     journal.append(ReplicationEventKind.deviceAuthorized, {

@@ -3,18 +3,18 @@
   "ipc": "orbits-bare-ipc-v1",
   "transportFrame": "orbits-transport-v1",
   "remoteJs": false,
-  "workletSha256": "3c7213ee65e9a0baae3a9292c92eccbcf9594318284763e57411c9bd22c80ad3",
+  "workletSha256": "589475160d3f123c00b9dd2ea322dae504fe96d9a91c7f7552b6d9b64ec95276",
   "packageJsonSha256": "340fa7323037854f5b210b1373857e876a264e27bbdaca2fa11dc45588ab05f6",
   "note": "Production Bare must ship this tree hashed with the app. Do not fetch executable JS. package.json import maps send node: builtins to bare-* on Bare. sources pins every file extractBundledWorklet copies.",
   "sources": {
-    "worklet.js": "3c7213ee65e9a0baae3a9292c92eccbcf9594318284763e57411c9bd22c80ad3",
+    "worklet.js": "589475160d3f123c00b9dd2ea322dae504fe96d9a91c7f7552b6d9b64ec95276",
     "mux.js": "3c43488c57c23913c4fc980ad81eda25645db70280cf8c74d7acc2461132afb6",
     "discovery.js": "3cce3f021c9ff2118ab0e53a1f84d00ee535208c7f838f9061a0533da41ff66f",
     "loopback.js": "ee150635af14113a8ec8bd835d486953012390f88f2640ea5a625cd24783e230",
     "ipc.js": "cf983e1ac28d0f8187edcf589708658d9209510ecd968801ba94e41b1d336aa9",
     "swarm.js": "4d836eb862e892b58f4139f4ee1ce744a1370a59aaf41960de4af95c57d96d65",
     "stand.js": "d22402a34b2b80a59fc62a887ef8af748fdcdafb8ea6dde43b2c35236eb5af20",
-    "corestore_journal.js": "da7a26f568995ee1d7163dca07829ef656823284058060053fb21d4449563cd7",
+    "corestore_journal.js": "840c071bb9e8810ff5e80b15f21176b0f11cd65c06cce242d5553853829edcb5",
     "autobase.js": "3bd3ca649e58a3997f81227d6a04384aedf7f8726198854ff604917906a3ef7a"
   }
 }

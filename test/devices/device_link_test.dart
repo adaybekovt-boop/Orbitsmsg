@@ -166,6 +166,27 @@ void main() {
     expect(signed, isFalse);
   });
 
+  test('transportPeerIdFromPublicKey is stable, distinct, and ORBIT-shaped',
+      () {
+    final keyA = List<int>.filled(32, 7);
+    final keyB = List<int>.filled(32, 8);
+    final idA = transportPeerIdFromPublicKey(keyA);
+    final idB = transportPeerIdFromPublicKey(keyB);
+    expect(idA, transportPeerIdFromPublicKey(List<int>.filled(32, 7)));
+    expect(idA, isNot(idB));
+    expect(idA, matches(RegExp(r'^ORBIT-[0-9A-F]{16}$')));
+    expect(idB, matches(RegExp(r'^ORBIT-[0-9A-F]{16}$')));
+    expect(idA.contains('://'), isFalse);
+    expect(idB.contains('://'), isFalse);
+  });
+
+  test('transportPeerIdFromPublicKey refuses an empty key', () {
+    expect(
+      () => transportPeerIdFromPublicKey(const <int>[]),
+      throwsArgumentError,
+    );
+  });
+
   test('verifyDeviceLink is false for constructed :// deviceId', () async {
     final pair = await generateP256EcdsaKey();
     final spki = buildP256Spki(x: pair.x, y: pair.y);

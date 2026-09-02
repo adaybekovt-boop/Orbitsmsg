@@ -499,6 +499,9 @@ class DualStackBridge {
 
   void authorizeDevice(AuthorizedDevice device) {
     if (device.deviceId.isEmpty || device.deviceId.contains('://')) return;
+    if (device.ownerPeerId.contains('://')) return;
+    final tid = device.transportPeerId;
+    if (tid != null && tid.contains('://')) return;
     devices?.authorize(device);
     final record = journal.append(
       ReplicationEventKind.deviceAuthorized,
@@ -1311,6 +1314,8 @@ class DualStackBridge {
     }
     if (queue.length >= _maxPendingInboundFrames ||
         total + bytes.length > _maxPendingInboundBytes) {
+      _pendingInbound.remove(peerId);
+      noteMessagesLost('inbound auth queue overflow');
       return;
     }
     queue.add(_QueuedInbound(channel, List<int>.from(bytes)));

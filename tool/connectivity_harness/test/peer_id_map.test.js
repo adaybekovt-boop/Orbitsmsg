@@ -9,7 +9,7 @@
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const { createHash } = require('node:crypto')
-const { Worklet } = require('../src/worklet')
+const { Worklet, handleIpcRequest } = require('../src/worklet')
 
 test('connect maps Noise public key to ORBIT peerId, never HASH(peerId)', () => {
   const w = new Worklet({ backend: 'loopback' })
@@ -57,4 +57,43 @@ test('rememberPeer maps Noise to ORBIT without joinPeer', () => {
   )
   assert.equal(w._swarm, null)
   assert.equal(w._topic, null)
+})
+
+test('IPC disconnect removes peer and emits disconnected once', async () => {
+  const worklet = new Worklet({ backend: 'loopback' })
+  let destroyed = 0
+  worklet._peers.set('ORBIT-AA', {
+    peerId: 'ORBIT-AA',
+    socket: {
+      destroy() {
+        destroyed += 1
+      },
+      end() {
+        destroyed += 1
+      },
+    },
+  })
+
+  const urlResult = await handleIpcRequest(worklet, {
+    method: 'disconnect',
+    params: { peerId: 'https://evil' },
+  })
+  assert.deepEqual(urlResult, {})
+  assert.equal(worklet._peers.has('ORBIT-AA'), true)
+  assert.equal(
+    worklet.events.filter((e) => e.name === 'disconnected').length,
+    0,
+  )
+  assert.equal(destroyed, 0)
+
+  const result = await handleIpcRequest(worklet, {
+    method: 'disconnect',
+    params: { peerId: 'ORBIT-AA' },
+  })
+  assert.deepEqual(result, {})
+  assert.equal(worklet._peers.has('ORBIT-AA'), false)
+  const disconnected = worklet.events.filter((e) => e.name === 'disconnected')
+  assert.equal(disconnected.length, 1)
+  assert.deepEqual(disconnected[0].payload, { peerId: 'ORBIT-AA' })
+  assert.equal(destroyed, 1)
 })

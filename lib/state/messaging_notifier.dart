@@ -36,6 +36,7 @@ import '../messaging/sent_ack_guard.dart';
 import '../peer/helpers.dart';
 import '../storage/db.dart' as db;
 import '../transport/layers.dart';
+import '../transport/dual_stack_bridge.dart';
 import 'auth_notifier.dart';
 import 'connections_notifier.dart';
 import 'local_profile_provider.dart';
@@ -374,6 +375,11 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       });
     } catch (e) {
       _lostInbound.recordDrop(msgId: msgId, fromPeer: normalized, error: e);
+      final DualStackBridge? dual =
+          _ref.read(connectionsNotifierProvider.notifier).nativeBridge;
+      if (dual != null && dual.nativeEnabled) {
+        dual.noteMessagesLost('inbound persist failed');
+      }
       if (mounted) {
         state = state.copyWith(
           lostInboundCount: state.lostInboundCount + 1,

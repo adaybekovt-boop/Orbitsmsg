@@ -53,6 +53,7 @@ import '../peer/peerjs_client.dart';
 import '../calls/hyperswarm_signaling.dart';
 import '../core/feature_flags.dart';
 import '../peer/wire_transport.dart';
+import '../devices/device_link.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
 import '../mailbox/storage_peer_client.dart';
@@ -300,6 +301,44 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     }
   }
 
+  /// Phase 10: authorize a linked device and journal `deviceAuthorized`
+  /// on the native carrier when bound. Derives a distinct transport
+  /// ORBIT id from the Noise public key when [AuthorizedDevice.transportPeerId]
+  /// is omitted. Does not invent keys or rebuild devices from journal events.
+  void authorizeLinkedDevice(AuthorizedDevice device) {
+    if (device.deviceId.isEmpty || device.deviceId.contains('://')) return;
+    if (device.ownerPeerId.isEmpty || device.ownerPeerId.contains('://')) {
+      return;
+    }
+    final existingTransport = device.transportPeerId ?? '';
+    if (existingTransport.contains('://')) return;
+
+    var resolved = device;
+    if (existingTransport.isEmpty && device.transportPublicKey.isNotEmpty) {
+      resolved = AuthorizedDevice(
+        deviceId: device.deviceId,
+        transportPublicKey: device.transportPublicKey,
+        hypercorePublicKey: device.hypercorePublicKey,
+        name: device.name,
+        kind: device.kind,
+        createdAt: device.createdAt,
+        status: device.status,
+        ownerPeerId: device.ownerPeerId,
+        transportPeerId:
+            transportPeerIdFromPublicKey(device.transportPublicKey),
+      );
+    }
+    final transportPeerId = resolved.transportPeerId ?? '';
+    if (transportPeerId.isEmpty || transportPeerId.contains('://')) return;
+
+    final bridge = _dual;
+    if (bridge != null) {
+      bridge.authorizeDevice(resolved);
+      return;
+    }
+    deviceRegistry.authorize(resolved);
+  }
+
   /// Replay the native journal into Drift after decrypt. Block list runs
   /// first. Drift is not the sync source of truth. Non-message kinds
   /// (devices, block, attachment metadata, membership) never carry
@@ -342,7 +381,8 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     switch (event.kind) {
       case ReplicationEventKind.deviceRevoked:
         final id = event.fields['deviceId'] as String?;
-        if (id != null && id.isNotEmpty) deviceRegistry.revoke(id);
+        if (id == null || id.isEmpty || id.contains('://')) return;
+        deviceRegistry.revoke(id);
       case ReplicationEventKind.deviceAuthorized:
         // Journal has deviceId only — never reconstruct transport keys.
         break;
@@ -350,18 +390,24 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         final peerId = (event.fields['peerId'] as String?) ??
             (event.fields['conversationId'] as String?) ??
             '';
-        if (peerId.isEmpty) return;
+        if (peerId.isEmpty || peerId.contains('://')) return;
         await db.setPeerBlocked(peerId, event.fields['blocked'] != false);
       case ReplicationEventKind.attachmentPublished:
         // Metadata only. Ciphertext is not a Drift chat row.
         break;
       case ReplicationEventKind.attachmentExpired:
         final id = event.fields['eventId'] as String?;
-        if (id != null && id.isNotEmpty) await db.deleteFileBlob(id);
+        if (id == null || id.isEmpty || id.contains('://')) return;
+        await db.deleteFileBlob(id);
       case ReplicationEventKind.roomMembershipChanged:
         final roomId = event.fields['roomId'] as String? ?? '';
         final peerId = event.fields['peerId'] as String? ?? '';
-        if (roomId.isEmpty || peerId.isEmpty) return;
+        if (roomId.isEmpty ||
+            peerId.isEmpty ||
+            roomId.contains('://') ||
+            peerId.contains('://')) {
+          return;
+        }
         final action = event.fields['action'] as String? ?? 'join';
         final online = action != 'leave' && action != 'kick';
         await db.saveRoomMember({

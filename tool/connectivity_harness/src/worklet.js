@@ -261,6 +261,18 @@ class Worklet {
     this._rememberOrbitPeer(orbitId, noise)
   }
 
+  async disconnect(peerId) {
+    if (typeof peerId !== 'string' || !peerId || peerId.includes('://')) return
+    const peer = this._peers.get(peerId)
+    if (!peer) return
+    this._peers.delete(peerId)
+    if (peer.socket) {
+      if (typeof peer.socket.destroy === 'function') peer.socket.destroy()
+      else if (typeof peer.socket.end === 'function') peer.socket.end()
+    }
+    this._emit('disconnected', { peerId })
+  }
+
   async send(peerId, channel, frame) {
     if (this._suspended) throw new Error('suspended')
     const peer = this._peers.get(peerId)
@@ -434,7 +446,7 @@ class Worklet {
     })
     socket.on('error', () => {})
     socket.on('close', () => {
-      this._peers.delete(peer.peerId)
+      if (!this._peers.delete(peer.peerId)) return
       this._emit('disconnected', { peerId: peer.peerId })
     })
   }
@@ -670,6 +682,9 @@ async function handleIpcRequest(worklet, body) {
       return {}
     case 'connect':
       await worklet.connect(params)
+      return {}
+    case 'disconnect':
+      await worklet.disconnect(params.peerId)
       return {}
     case 'rememberPeer':
       worklet.rememberPeer(params)

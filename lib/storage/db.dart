@@ -100,7 +100,9 @@ String _ratchetRowKey(String peerId) => '$_ratchetIdPrefix$peerId';
 /// string; everything else is serialised verbatim via `row_codec.dart`.
 Future<bool> saveRatchetState(Map<String, Object?> snapshot) async {
   final peerId = snapshot['peerId'];
-  if (peerId is! String || peerId.isEmpty) return false;
+  if (peerId is! String || peerId.isEmpty || peerId.contains('://')) {
+    return false;
+  }
   final row = <String, Object?>{
     'id': _ratchetRowKey(peerId),
     ...snapshot,
@@ -119,7 +121,7 @@ Future<bool> saveRatchetState(Map<String, Object?> snapshot) async {
 }
 
 Future<Map<String, Object?>?> loadRatchetState(String peerId) async {
-  if (peerId.isEmpty) return null;
+  if (peerId.isEmpty || peerId.contains('://')) return null;
   final db = orbitsDb();
   final row = await (db.select(db.ratchetsTable)
         ..where((t) => t.id.equals(_ratchetRowKey(peerId))))
@@ -128,7 +130,7 @@ Future<Map<String, Object?>?> loadRatchetState(String peerId) async {
 }
 
 Future<bool> deleteRatchetState(String peerId) async {
-  if (peerId.isEmpty) return false;
+  if (peerId.isEmpty || peerId.contains('://')) return false;
   final db = orbitsDb();
   await (db.delete(db.ratchetsTable)
         ..where((t) => t.id.equals(_ratchetRowKey(peerId))))
@@ -232,7 +234,7 @@ Future<bool> saveVoiceBlob(
   int duration = 0,
   List<double>? waveform,
 }) async {
-  if (id.isEmpty) return false;
+  if (id.isEmpty || id.contains('://')) return false;
   // Defense-in-depth byte cap (audit finding 4): mirror the send-side raw cap
   // `_maxVoiceRawBytes` (6 MiB). A blob larger than any legitimate voice
   // message is a hostile/buggy peer — refuse rather than bloat the DB / risk
@@ -474,7 +476,7 @@ Future<Map<String, Object?>?> getKeyPair() async {
 String _sessionRowId(String peerId) => 'session-$peerId';
 
 Future<bool> saveSessionKey(String peerId, String symmetricKeyB64) async {
-  if (peerId.isEmpty) return false;
+  if (peerId.isEmpty || peerId.contains('://')) return false;
   final now = _now();
   final row = <String, Object?>{
     'id': _sessionRowId(peerId),
@@ -516,7 +518,7 @@ Future<Map<String, Object?>?> getSessionKeyRecord(String peerId) async {
 
 Future<bool> savePeer(Map<String, Object?> peer) async {
   final id = (peer['id'] as String?) ?? '';
-  if (id.isEmpty) return false;
+  if (id.isEmpty || id.contains('://')) return false;
 
   final db = orbitsDb();
   // Merge semantics — partial updates must not wipe existing displayName /
@@ -1064,7 +1066,7 @@ Future<int> clearPendingMessages({String? peerId}) async {
 // ─── Avatars ────────────────────────────────────────────────────────
 
 Future<bool> saveAvatar(String peerId, String avatarDataUrl) async {
-  if (peerId.isEmpty) return false;
+  if (peerId.isEmpty || peerId.contains('://')) return false;
   // Storage-layer gate (audit M3): an avatar is otherwise unbounded (unlike
   // name/bio, which are clamped) and a peer could push a multi-MB blob to
   // exhaust storage, or a non-image / SVG payload. Reuse the same allowlist +
@@ -1084,7 +1086,7 @@ Future<bool> saveAvatar(String peerId, String avatarDataUrl) async {
 }
 
 Future<String?> getAvatar(String peerId) async {
-  if (peerId.isEmpty) return null;
+  if (peerId.isEmpty || peerId.contains('://')) return null;
   final db = orbitsDb();
   final row = await (db.select(db.avatarsTable)
         ..where((t) => t.peerId.equals(peerId)))
@@ -1171,7 +1173,13 @@ Stream<List<Map<String, Object?>>> watchMessagesForPeer(
 /// (e.g. a status flip) never duplicates channels.
 Future<void> saveRoom(Map<String, Object?> room) async {
   final id = (room['id'] as String?) ?? '';
-  if (id.isEmpty) return;
+  if (id.isEmpty || id.contains('://')) return;
+  final hostPeerId = room['hostPeerId'];
+  if (hostPeerId is String &&
+      hostPeerId.isNotEmpty &&
+      hostPeerId.contains('://')) {
+    return;
+  }
   final db = orbitsDb();
   final isHost = room['isHost'] == true ||
       (room['isHost'] is num && (room['isHost'] as num).toInt() != 0);
@@ -1205,7 +1213,9 @@ Future<void> saveRoom(Map<String, Object?> room) async {
 /// fields) so the host can broadcast a `room_channel_create` to guests.
 Future<Map<String, Object?>> createChannel(
     String roomId, String name, String type) async {
-  if (roomId.isEmpty) return const <String, Object?>{};
+  if (roomId.isEmpty || roomId.contains('://')) {
+    return const <String, Object?>{};
+  }
   final db = orbitsDb();
   final existing = await (db.select(db.roomChannelsTable)
         ..where((t) => t.roomId.equals(roomId)))
@@ -1256,6 +1266,7 @@ Future<void> saveRoomMember(Map<String, Object?> member) async {
   final roomId = (member['roomId'] as String?) ?? '';
   final peerId = (member['peerId'] as String?) ?? '';
   if (roomId.isEmpty || peerId.isEmpty) return;
+  if (roomId.contains('://') || peerId.contains('://')) return;
   final db = orbitsDb();
   final isOnline = member['isOnline'] == true ||
       (member['isOnline'] is num && (member['isOnline'] as num).toInt() != 0);
@@ -1321,6 +1332,7 @@ Future<void> upsertRoomChannel(Map<String, Object?> channel) async {
   final id = (channel['id'] as String?) ?? '';
   final roomId = (channel['roomId'] as String?) ?? '';
   if (id.isEmpty || roomId.isEmpty) return;
+  if (id.contains('://') || roomId.contains('://')) return;
   final db = orbitsDb();
   await db.into(db.roomChannelsTable).insertOnConflictUpdate(
         RoomChannelsTableCompanion.insert(
@@ -1361,14 +1373,14 @@ Future<void> replaceRoomMembers(
   String roomId,
   List<Map<String, Object?>> members,
 ) async {
-  if (roomId.isEmpty) return;
+  if (roomId.isEmpty || roomId.contains('://')) return;
   final db = orbitsDb();
   await db.transaction(() async {
     await (db.delete(db.roomMembersTable)..where((t) => t.roomId.equals(roomId)))
         .go();
     for (final m in members) {
       final peerId = (m['peerId'] as String?) ?? '';
-      if (peerId.isEmpty) continue;
+      if (peerId.isEmpty || peerId.contains('://')) continue;
       final name =
           (m['displayName'] as String?) ?? (m['name'] as String?) ?? '';
       final isOnline = m['isOnline'] == true ||

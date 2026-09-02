@@ -193,15 +193,13 @@ class NativeTransportHost {
     lifecycle = TransportLifecycle(
       transport: transport!,
       onResumeDrain: () async {
-        final n = await _ref
-                .read(connectionsNotifierProvider.notifier)
-                .nativeBridge
-                ?.drainMailbox() ??
-            0;
-        await _ref
-            .read(connectionsNotifierProvider.notifier)
-            .nativeBridge
-            ?.verifyLiveMatchesReplay();
+        directory = await loadRelayDirectoryFromEnv();
+        final bridge = _ref.read(connectionsNotifierProvider.notifier).nativeBridge;
+        if (directory != null) {
+          bridge?.checkRelayDirectory(directory!);
+        }
+        final n = await bridge?.drainMailbox() ?? 0;
+        await bridge?.verifyLiveMatchesReplay();
         return n;
       },
     );

@@ -452,6 +452,37 @@ void main() {
     );
     a.authorizeDevice(
       AuthorizedDevice(
+        deviceId: 'phone-url-owner',
+        transportPublicKey: List<int>.filled(32, 1),
+        hypercorePublicKey: List<int>.filled(32, 2),
+        name: 'evil-owner',
+        kind: 'phone',
+        createdAt: 1,
+        status: DeviceStatus.active,
+        ownerPeerId: 'https://evil',
+      ),
+    );
+    a.authorizeDevice(
+      AuthorizedDevice(
+        deviceId: 'phone-url-transport',
+        transportPublicKey: List<int>.filled(32, 1),
+        hypercorePublicKey: List<int>.filled(32, 2),
+        name: 'evil-transport',
+        kind: 'phone',
+        createdAt: 1,
+        status: DeviceStatus.active,
+        ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        transportPeerId: 'https://evil',
+      ),
+    );
+    expect(
+      a.journal.records.any(
+        (r) => r.kind == ReplicationEventKind.deviceAuthorized,
+      ),
+      isFalse,
+    );
+    a.authorizeDevice(
+      AuthorizedDevice(
         deviceId: 'phone-2',
         transportPublicKey: List<int>.filled(32, 1),
         hypercorePublicKey: List<int>.filled(32, 2),
@@ -3506,6 +3537,76 @@ void main() {
       File('lib/state/connections_notifier.dart').readAsStringSync(),
       contains('_nativeCarrierFor'),
     );
+    await a.detach();
+    await b.detach();
+  });
+
+  test('pre-auth inbound queue overflow notes messages lost', () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    clearNativeRollbackLogForTests();
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(await _bind('a'));
+    await pair.$2.publish(await _bind('b'));
+    DualStackBridge make(LoopbackOrbitsTransport t, String self, String device) {
+      return DualStackBridge(
+        transport: t,
+        journal: MemoryJournal(device),
+        selfPeerId: () => self,
+        selfDeviceId: device,
+        secrets: secrets,
+        isBlocked: (_) => false,
+        tofuCheck: (peer, spki) async {
+          await Future<void>.delayed(const Duration(seconds: 30));
+          return _allowTofu(peer, spki);
+        },
+        onPacket: (peer, data) async {},
+      )..attach();
+    }
+
+    final a = make(pair.$1, 'ORBIT-AAAAAAAAAAAAAAAA', 'dev-a');
+    final b = make(pair.$2, 'ORBIT-BBBBBBBBBBBBBBBB', 'dev-b');
+    await pair.$1.connect(
+      const PeerDescriptor(peerId: 'ORBIT-BBBBBBBBBBBBBBBB'),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(b.authenticated.contains('ORBIT-AAAAAAAAAAAAAAAA'), isFalse);
+    for (var i = 0; i < 1025; i++) {
+      await a.transport.send(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        TransportChannel.message,
+        utf8.encode('q$i'),
+      );
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(hyperswarmRollout(), HyperswarmRollout.off);
+    expect(
+      nativeRollbackLog.any(
+        (e) =>
+            e.reason == NativeRollbackReason.messagesLost &&
+            e.detail.contains('overflow'),
+      ),
+      isTrue,
+    );
+    final queued = File('lib/transport/dual_stack_bridge.dart')
+        .readAsStringSync()
+        .split('void _queueInbound')[1]
+        .split('void _flushPendingInbound')[0];
+    expect(queued, contains("noteMessagesLost('inbound auth queue overflow')"));
     await a.detach();
     await b.detach();
   });

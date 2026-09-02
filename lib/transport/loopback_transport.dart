@@ -331,7 +331,9 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   Future<void> appendJournal(Map<String, Object?> record) async {
     final fields = record['fields'];
     if (fields is Map) {
-      if (!replicationValueIsSafe(fields)) {
+      final typed = Map<String, Object?>.from(fields);
+      if (!replicationValueIsSafe(typed) ||
+          !journalIdentifierValuesSafe(typed)) {
         throw ArgumentError('refusing secret field in journal');
       }
       final kind = record['kind'] as String? ?? 'messageEnvelopeCreated';

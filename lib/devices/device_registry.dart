@@ -211,14 +211,20 @@ class DeviceRegistry {
       if (list is! List) return;
       for (final item in list) {
         if (item is! Map) continue;
+        final rawId = item['deviceId'] as String? ?? '';
+        if (!_deviceIdSafe(rawId)) continue;
+        final owner = item['ownerPeerId'];
+        if (owner is String && !_optionalPeerSafe(owner)) continue;
+        final transport = item['transportPeerId'];
+        if (transport is String && !_optionalPeerSafe(transport)) continue;
         final AuthorizedDevice device;
         try {
           device = AuthorizedDevice.fromJson(Map<String, Object?>.from(item));
         } catch (_) {
           continue;
         }
-        if (!_deviceIdSafe(device.deviceId) ||
-            !_optionalPeerSafe(device.ownerPeerId) ||
+        if (!_deviceIdSafe(device.deviceId)) continue;
+        if (!_optionalPeerSafe(device.ownerPeerId) ||
             !_optionalPeerSafe(device.transportPeerId)) {
           continue;
         }

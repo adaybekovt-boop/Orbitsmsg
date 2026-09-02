@@ -335,6 +335,135 @@ void main() {
     expect(journal.length, 0);
   });
 
+  test('append, adopt, ingest refuse URL identifier values without persisting',
+      () {
+    final journal = MemoryJournal('dev-a');
+    expect(
+      () => journal.append(
+        ReplicationEventKind.messageEnvelopeCreated,
+        {
+          'eventId': 'https://evil',
+          'encryptedEnvelope': <int>[1],
+        },
+      ),
+      throwsArgumentError,
+    );
+    expect(
+      () => journal.append(
+        ReplicationEventKind.deviceRevoked,
+        {'deviceId': 'https://evil'},
+      ),
+      throwsArgumentError,
+    );
+    expect(
+      () => journal.append(
+        ReplicationEventKind.messageEnvelopeCreated,
+        {
+          'eventId': 'e1',
+          'conversationId': 'https://evil',
+          'encryptedEnvelope': <int>[1],
+        },
+      ),
+      throwsArgumentError,
+    );
+    expect(journal.length, 0);
+
+    expect(
+      () => journal.adopt(
+        const JournalRecord(
+          seq: 1,
+          writerDeviceId: 'dev-a',
+          kind: ReplicationEventKind.messageEnvelopeCreated,
+          fields: <String, Object?>{
+            'eventId': 'https://evil',
+            'encryptedEnvelope': <int>[1],
+          },
+        ),
+      ),
+      throwsArgumentError,
+    );
+    expect(
+      () => journal.ingest(
+        const JournalRecord(
+          seq: 2,
+          writerDeviceId: 'dev-a',
+          kind: ReplicationEventKind.deviceRevoked,
+          fields: <String, Object?>{'deviceId': 'https://evil'},
+        ),
+      ),
+      throwsArgumentError,
+    );
+    expect(
+      () => journal.ingest(
+        const JournalRecord(
+          seq: 3,
+          writerDeviceId: 'dev-a',
+          kind: ReplicationEventKind.messageEnvelopeCreated,
+          fields: <String, Object?>{
+            'eventId': 'e1',
+            'conversationId': 'https://evil',
+            'encryptedEnvelope': <int>[1],
+          },
+        ),
+      ),
+      throwsArgumentError,
+    );
+    expect(journal.length, 0);
+  });
+
+  test('journalRecordFromWorklet returns null for URL eventId', () {
+    expect(
+      journalRecordFromWorklet({
+        'kind': 'messageEnvelopeCreated',
+        'writerDeviceId': 'dev-a',
+        'fields': {
+          'eventId': 'https://evil',
+          'encryptedEnvelope': base64Encode(const <int>[1]),
+        },
+      }),
+      isNull,
+    );
+    expect(
+      journalRecordFromWorklet({
+        'kind': 'deviceRevoked',
+        'writerDeviceId': 'dev-a',
+        'fields': {'deviceId': 'https://evil'},
+      }),
+      isNull,
+    );
+  });
+
+  test('identifier gate does not scan text or b64; honest eventId still works',
+      () {
+    final journal = MemoryJournal('dev-a');
+    final rec = journal.append(
+      ReplicationEventKind.deviceRevoked,
+      {
+        'deviceId': 'gone',
+        'text': 'see https://example.com',
+        'b64': 'https://not-an-id',
+      },
+    );
+    expect(rec.fields['deviceId'], 'gone');
+    expect(rec.fields['text'], 'see https://example.com');
+    expect(journal.length, 1);
+
+    final honest = journalRecordFromWorklet({
+      'kind': 'messageEnvelopeCreated',
+      'writerDeviceId': 'dev-a',
+      'fields': {
+        'eventId': 'e1',
+        'conversationId': 'c1',
+        'encryptedEnvelope': base64Encode(const <int>[1]),
+      },
+    });
+    expect(honest, isNotNull);
+    expect(honest!.fields['eventId'], 'e1');
+    expect(honest.fields['conversationId'], 'c1');
+    expect(journal.ingest(honest), isNotNull);
+    expect(journal.length, 2);
+  });
+
   test('honest fromWorklet plus ingest keeps ciphertext envelope', () {
     final rec = journalRecordFromWorklet({
       'kind': 'messageEnvelopeCreated',

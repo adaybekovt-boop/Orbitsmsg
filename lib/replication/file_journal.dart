@@ -31,7 +31,8 @@ class FileJournal {
 
   Future<void> append(JournalRecord record) async {
     if (!replicationValueIsSafe(record.fields) ||
-        record.writerDeviceId.contains('://')) {
+        record.writerDeviceId.contains('://') ||
+        !journalIdentifierValuesSafe(record.fields)) {
       throw ArgumentError('refusing secret field in journal');
     }
     final line = jsonEncode({
@@ -70,6 +71,7 @@ class FileJournal {
       if (rawFields is! Map) continue;
       final fields = _decodeFields(rawFields);
       if (!replicationValueIsSafe(fields)) continue;
+      if (!journalIdentifierValuesSafe(fields)) continue;
       final seqRaw = row['seq'];
       final seq = seqRaw is int
           ? seqRaw
