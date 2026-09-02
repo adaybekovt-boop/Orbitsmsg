@@ -61,6 +61,10 @@ void main() {
       contains('saveFileBlobFromPath'),
     );
     expect(
+      File('lib/state/messaging_notifier.dart').readAsStringSync(),
+      contains('nativeAttachFileKeyFromPayload'),
+    );
+    expect(
       File('lib/storage/db.dart').readAsStringSync(),
       contains('saveFileBlobFromPath'),
     );

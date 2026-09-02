@@ -170,6 +170,10 @@ void main() {
       contains('kDeviceBindingWireType'),
     );
     expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('_waitAuthenticated'),
+    );
+    expect(
       File('lib/transport/native_transport_host.dart').readAsStringSync(),
       contains('localBinding: issuedBinding'),
     );

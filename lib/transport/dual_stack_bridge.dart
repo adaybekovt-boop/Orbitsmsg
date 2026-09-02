@@ -160,7 +160,10 @@ class DualStackBridge {
   Future<bool> _sendEncryptedOne(String peerId, Object? msg) async {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return false;
-    if (!isNativeConnected(norm)) {
+    if (isNativeConnected(norm) && !authenticated.contains(norm)) {
+      await _waitAuthenticated(norm);
+    }
+    if (!isNativeConnected(norm) || !authenticated.contains(norm)) {
       if (msg is Map &&
           (msg['type'] == 'wireHello' || msg['type'] == 'wireRekey')) {
         return await depositMailbox(jsonPayload(Map<String, Object?>.from(msg)));
@@ -191,6 +194,17 @@ class DualStackBridge {
     );
     _appendEnvelope(norm, utf8.encode(wire));
     return true;
+  }
+
+  Future<bool> _waitAuthenticated(String peerId) async {
+    final norm = normalizePeerId(peerId);
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(deadline)) {
+      if (authenticated.contains(norm)) return true;
+      if (!connected.contains(norm)) return false;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    return authenticated.contains(norm);
   }
 
   /// Offline deposit: encrypted bytes only. Used when the recipient is not

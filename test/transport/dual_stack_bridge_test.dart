@@ -1539,6 +1539,66 @@ void main() {
     await b.detach();
   });
 
+  test('sendEncrypted waits for DeviceBinding auth before native chat', () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(await _bind('a'));
+    await pair.$2.publish(await _bind('b'));
+    final seen = <Object?>[];
+    DualStackBridge make(LoopbackOrbitsTransport t, String self, String device) {
+      return DualStackBridge(
+        transport: t,
+        journal: MemoryJournal(device),
+        selfPeerId: () => self,
+        selfDeviceId: device,
+        secrets: secrets,
+        isBlocked: (_) => false,
+        tofuCheck: (peer, spki) async {
+          await Future<void>.delayed(const Duration(milliseconds: 80));
+          return _allowTofu(peer, spki);
+        },
+        onPacket: (peer, data) async => seen.add(data),
+      )..attach();
+    }
+
+    final a = make(pair.$1, 'ORBIT-AAAAAAAAAAAAAAAA', 'dev-a');
+    final b = make(pair.$2, 'ORBIT-BBBBBBBBBBBBBBBB', 'dev-b');
+    await pair.$1.connect(
+      const PeerDescriptor(peerId: 'ORBIT-BBBBBBBBBBBBBBBB'),
+    );
+    expect(a.authenticated.contains('ORBIT-BBBBBBBBBBBBBBBB'), isFalse);
+    expect(
+      await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'wireHello',
+        'v': 4,
+      }),
+      isTrue,
+    );
+    expect(a.authenticated.contains('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(
+      seen.whereType<Map>().any((m) => m['type'] == 'wireHello'),
+      isTrue,
+    );
+    await a.detach();
+    await b.detach();
+  });
+
   test('inbound device binding is verified and remembered', () async {
     final (a, b, _) = await linked();
     expect(a.authenticated.contains('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);

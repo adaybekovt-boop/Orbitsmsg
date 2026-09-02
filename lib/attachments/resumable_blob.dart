@@ -2,6 +2,7 @@
 // the mailbox/journal only store ciphertext + hashes.
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show sha256;
@@ -15,6 +16,24 @@ const int kMaxPeerJsFileRawBytes = 12 * 1024 * 1024;
 /// Native `attach-chunk` / path-streamed chat. Matches DualStackBridge
 /// inbound cipher cap. Not the PeerJS live path.
 const int kMaxNativeAttachBytes = 50 * 1024 * 1024;
+
+const int kNativeAttachFileKeyBytes = 32;
+
+/// XOR key from a local pending attachment map (Drift outbox). Null if
+/// missing or not 32 bytes. Hypercore / mailbox must still not store this.
+List<int>? nativeAttachFileKeyFromPayload(Map<String, Object?>? attachment) {
+  if (attachment == null) return null;
+  final b64 = attachment['fileKeyB64'];
+  if (b64 is! String || b64.isEmpty) return null;
+  if (b64.contains('://')) return null;
+  try {
+    final key = base64.decode(b64);
+    if (key.length != kNativeAttachFileKeyBytes) return null;
+    return key;
+  } catch (_) {
+    return null;
+  }
+}
 
 class AttachmentChunk {
   const AttachmentChunk({

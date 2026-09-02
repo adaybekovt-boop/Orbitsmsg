@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -135,6 +136,33 @@ void main() {
     expect(
       File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
       isNot(contains('chunkFromByteStream(plaintext, fileKey)')),
+    );
+  });
+
+  test('native attach fileKey is reused from the pending payload', () {
+    final key = List<int>.generate(32, (i) => i + 4);
+    final b64 = base64Encode(key);
+    expect(
+      nativeAttachFileKeyFromPayload({'fileKeyB64': b64}),
+      key,
+    );
+    expect(
+      nativeAttachFileKeyFromPayload({'fileKeyB64': b64}),
+      nativeAttachFileKeyFromPayload({'fileKeyB64': b64}),
+    );
+    expect(nativeAttachFileKeyFromPayload(null), isNull);
+    expect(nativeAttachFileKeyFromPayload({'fileKeyB64': 'short'}), isNull);
+    expect(
+      nativeAttachFileKeyFromPayload({'fileKeyB64': 'https://evil.example/k'}),
+      isNull,
+    );
+    expect(
+      File('lib/state/messaging_notifier.dart').readAsStringSync(),
+      contains('nativeAttachFileKeyFromPayload'),
+    );
+    expect(
+      File('lib/state/messaging_notifier.dart').readAsStringSync(),
+      contains("unawaited(db.updateMessage(msgId, {'payload': payload}))"),
     );
   });
 }

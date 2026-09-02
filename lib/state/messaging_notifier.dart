@@ -677,7 +677,17 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final path = att['localPath'];
     if (path is! String || path.isEmpty) return false;
     final fileId = (att['fileId'] as String?) ?? msgId;
-    final fileKey = _freshFileKey();
+    final attMap = Map<String, Object?>.from(att);
+    final existing = nativeAttachFileKeyFromPayload(attMap);
+    final List<int> fileKey;
+    if (existing == null) {
+      fileKey = _freshFileKey();
+      attMap['fileKeyB64'] = base64Encode(fileKey);
+      payload['attachment'] = attMap;
+      unawaited(db.updateMessage(msgId, {'payload': payload}));
+    } else {
+      fileKey = existing;
+    }
     final streamed = await conns.sendChatAttachmentFromPath(
       peerId,
       path,
@@ -1249,6 +1259,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       'chunked': true,
       'fileId': fileId,
       'localPath': persistPath,
+      'fileKeyB64': base64Encode(fileKey),
     };
     final payload = <String, Object?>{
       'id': msgId,
