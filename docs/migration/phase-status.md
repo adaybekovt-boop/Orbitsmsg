@@ -20,7 +20,7 @@ still PeerJS.
 | 10 | Device-link QR + revoke journal events + per-identity fan-out + three-device RatchetState isolation test; QR keys from Noise seed (not dummy bytes); native `dial` passes Noise public key; revoke drops that device's transport ratchet only | No live multi-device ratchet sessions on hardware |
 | 11–12 | Room maps on native carrier; live `room_join` / `room_msg` project into Autobase; Autobase writers converge over DualStackBridge (`autobase-event`); membership is journaled without message plaintext | Live rooms still PeerJS host-plaintext |
 | 13 | Sender-key epoch tests + [phase13-group-e2e-review.md](phase13-group-e2e-review.md) | Flag false; no independent audit |
-| 14 | Isolation helpers wired into `decideDualStack` (tests may pass a mode); `_openChannel` skips PeerJS when `peerjsAllowedOnNative` is false; `PeerConnectionManager` / `buildRoomScopedClient` do not construct PeerJS in those modes; `CallsNotifier` skips PeerJS dial/answer/`onCall` in those modes; product mode stays `default-live`; support window [peerjs-support-window.md](peerjs-support-window.md) | Support window not started |
+| 14 | Isolation helpers wired into `decideDualStack` (tests may pass a mode); `_openChannel` skips PeerJS when `peerjsAllowedOnNative` is false; `PeerConnectionManager` / `buildRoomScopedClient` do not construct PeerJS in those modes; `CallsNotifier` skips PeerJS dial/answer/`onCall` in those modes; room voice mesh skips PeerJS dial/`onCall` in those modes; product mode stays `default-live`; support window [peerjs-support-window.md](peerjs-support-window.md) | Support window not started |
 
 PWA official mode today: **compatibility client on PeerJS**.
 

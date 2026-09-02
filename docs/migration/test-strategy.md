@@ -30,7 +30,7 @@ independent room-E2E audit stay **blocked** until the user is free.
 | 10 | Three-device fan-out + QR + revoke journal + RatchetState isolation; revoke drops that device's transport ratchet only | Live hardware sessions |
 | 11–12 | Rooms on native carrier + Autobase converge over `autobase-event` | Live rooms on Hyperswarm |
 | 13 | Epoch revoke/rejoin; E2E flag stays false | Independent audit |
-| 14 | Isolation table wired through `decideDualStack`; `_openChannel` / inbound PeerJS skip when `peerjsAllowedOnNative` is false; PeerJS client construction gated in `PeerConnectionManager` / `buildRoomScopedClient`; `CallsNotifier` skips PeerJS dial/answer/`onCall` in those modes; product mode `default-live` | Support window + removal |
+| 14 | Isolation table wired through `decideDualStack`; `_openChannel` / inbound PeerJS skip when `peerjsAllowedOnNative` is false; PeerJS client construction gated in `PeerConnectionManager` / `buildRoomScopedClient`; `CallsNotifier` skips PeerJS dial/answer/`onCall` in those modes; room voice mesh skips PeerJS in those modes; product mode `default-live` | Support window + removal |
 
 ## Chaos / security (local)
 

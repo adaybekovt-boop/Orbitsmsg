@@ -165,6 +165,10 @@ void main() {
       contains('peerjsAllowedOnNative(isWeb: kIsWeb)'),
     );
     expect(
+      File('lib/peer/room_manager.dart').readAsStringSync(),
+      contains('peerjsAllowedOnNative(isWeb: kIsWeb)'),
+    );
+    expect(
       File('lib/state/calls_provider.dart').readAsStringSync(),
       contains('peerjsAllowedOnNative(isWeb: kIsWeb)'),
     );

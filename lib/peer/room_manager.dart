@@ -33,11 +33,12 @@ import 'dart:math';
 import 'dart:typed_data' show Uint8List;
 import 'dart:ui' show Offset;
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../state/connections_notifier.dart';
+import '../transport/peerjs_window.dart';
 import '../state/local_profile_provider.dart';
 import '../state/peer_connection_provider.dart';
 import '../storage/db.dart' as db;
@@ -1793,6 +1794,11 @@ class RoomManager extends StateNotifier<RoomState> {
     }
     final targets = peers.take(maxOthers).toList();
 
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      debugPrint('[room] voice: PeerJS isolation disallows native PeerJS');
+      return;
+    }
+
     final peer = _rawPeer;
     if (peer == null) {
       debugPrint('[room] voice: no PeerJS client available');
@@ -1839,6 +1845,10 @@ class RoomManager extends StateNotifier<RoomState> {
   /// room-voice call we can't accept is closed; non-room calls fall through to
   /// CallsNotifier untouched.
   Future<void> _handleIncomingRoomCall(PeerMediaConnection call) async {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      unawaited(call.close().catchError((_) {}));
+      return;
+    }
     final members = <String>{
       ...state.guestPeerIds,
       if (state.hostPeerId != null) state.hostPeerId!,
