@@ -35,6 +35,7 @@ import '../messaging/message_protocol.dart' show InboundPersistResult;
 import '../messaging/sent_ack_guard.dart';
 import '../peer/helpers.dart';
 import '../storage/db.dart' as db;
+import '../transport/layers.dart';
 import 'auth_notifier.dart';
 import 'connections_notifier.dart';
 import 'local_profile_provider.dart';
@@ -75,6 +76,29 @@ const int _maxFileRawBytes = kMaxPeerJsFileRawBytes; // JS UI gate (Chats.jsx:82
 const int _maxFileB64Len = 16 * 1024 * 1024;
 const int _maxFileThumbLen = 48 * 1024;
 const int _maxFileNameLen = 200; // JS: messageProtocol.js:347
+
+const List<String> _nestedChatMapKeys = <String>[
+  'sticker',
+  'replyTo',
+  'voice',
+  'attachment',
+];
+
+/// Drops inbound UI nested maps that nest [kForbiddenReplicationFields].
+///
+/// Defense-in-depth after the dispatcher already nulls unsafe `sticker` /
+/// `replyTo` / `voice`. Does not copy `fileKey` / `fileKeyB64` onto the
+/// message — an `attachment` that carries them (assembly-only on the
+/// dispatcher) is dropped because those keys are forbidden.
+Map<String, Object?> clampChatMessageMaps(Map<String, Object?> msg) {
+  for (final key in _nestedChatMapKeys) {
+    final value = msg[key];
+    if (value is Map && !replicationValueIsSafe(value)) {
+      msg[key] = null;
+    }
+  }
+  return msg;
+}
 
 // в”Ђв”Ђв”Ђ State в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
@@ -1390,6 +1414,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
   /// hostile peer could otherwise send a 1 GB text or voice blob and
   /// exhaust device memory (the chat view can hold 500 entries per peer).
   Map<String, Object?> _clampChatMessage(Map<String, Object?> msg) {
+    clampChatMessageMaps(msg);
     final text = msg['text'];
     if (text is String && text.length > _maxTextLen) {
       msg['text'] = '${text.substring(0, _maxTextLen)}вЂ¦';

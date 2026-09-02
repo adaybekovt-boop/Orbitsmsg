@@ -979,6 +979,102 @@ void main() {
     await b.detach();
   });
 
+  test(
+      'inbound raw room_msg with nested fileKey is refused before Autobase and onPacket',
+      () async {
+    final (a, b, packets) = await linked();
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    final rooms = <Map<String, Object?>>[];
+    b.onPacket = (peer, data) async {
+      if (data is Map) rooms.add(Map<String, Object?>.from(data));
+      packets.add(data);
+    };
+
+    await a.transport.send(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      TransportChannel.control,
+      jsonPayload({
+        'type': 'room_msg',
+        'id': 'm-secret',
+        'text': 'hello',
+        'meta': {'fileKey': 'x'},
+      }),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(
+      b.rooms.state.messages.any(
+        (m) => m['id'] == 'm-secret' || m['text'] == 'hello',
+      ),
+      isFalse,
+    );
+    expect(
+      rooms.any((r) => r['id'] == 'm-secret' || jsonEncode(r).contains('fileKey')),
+      isFalse,
+    );
+    expect(
+      packets.whereType<Map>().any((m) => jsonEncode(m).contains('fileKey')),
+      isFalse,
+    );
+    kRoomPlaintextSessionAck.reset();
+    await a.detach();
+    await b.detach();
+  });
+
+  test(
+      'sendRoomPacket host-plaintext room_msg still applies after inbound nested fileKey refuse',
+      () async {
+    final (a, b, packets) = await linked();
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    final rooms = <Map<String, Object?>>[];
+    b.onPacket = (peer, data) async {
+      if (data is Map) rooms.add(Map<String, Object?>.from(data));
+      packets.add(data);
+    };
+
+    await a.transport.send(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      TransportChannel.control,
+      jsonPayload({
+        'type': 'room_msg',
+        'id': 'm-secret',
+        'text': 'hello',
+        'meta': {'fileKey': 'x'},
+      }),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(
+      b.rooms.state.messages.any(
+        (m) => m['id'] == 'm-secret' || m['text'] == 'hello',
+      ),
+      isFalse,
+    );
+
+    expect(
+      a.sendRoomPacket('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'room_msg',
+        'id': 'm-ok',
+        'text': 'hello',
+      }),
+      isTrue,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(
+      rooms.any((r) => r['type'] == 'room_msg' && r['id'] == 'm-ok' && r['text'] == 'hello'),
+      isTrue,
+    );
+    expect(
+      b.rooms.state.messages.any((m) => m['id'] == 'm-ok' && m['text'] == 'hello'),
+      isTrue,
+    );
+    expect(
+      packets.whereType<Map>().any((m) => jsonEncode(m).contains('fileKey')),
+      isFalse,
+    );
+    kRoomPlaintextSessionAck.reset();
+    await a.detach();
+    await b.detach();
+  });
+
   test('sendDrop refuses nested fileKey on Map packets', () async {
     final (a, b, _) = await linked();
     final dropped = <Object>[];

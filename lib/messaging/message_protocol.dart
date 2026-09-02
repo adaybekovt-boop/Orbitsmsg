@@ -449,14 +449,26 @@ Future<bool> dispatchReliablePlaintext(
 
   // в”Ђв”Ђв”Ђ game вЂ” mini-game piggyback on the reliable channel в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
   if (type == 'game') {
+    final payload = data['payload'];
+    // Nested secret in a Map payload: consume without handing it to the
+    // game observer. Non-Map payloads keep current behavior unless the
+    // envelope itself nests a forbidden key.
+    if (payload is Map) {
+      if (!replicationValueIsSafe(payload)) return true;
+    } else if (!replicationValueIsSafe(data)) {
+      return true;
+    }
     try {
-      ctx.onGameMessage?.call(remoteId, data['payload']);
+      ctx.onGameMessage?.call(remoteId, payload);
     } catch (_) {}
     return true;
   }
 
   // в”Ђв”Ђв”Ђ edit вЂ” remote edited an earlier message в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
   if (type == 'edit') {
+    // `text` is a legitimate leaf (not in [kForbiddenReplicationFields]);
+    // a nested secret on the envelope must not reach updateMessage / Drift.
+    if (!replicationValueIsSafe(data)) return true;
     final id = data['id'];
     if (id is! String || id.isEmpty) return true;
     final existing = await db.getMessageById(id);
@@ -490,6 +502,8 @@ Future<bool> dispatchReliablePlaintext(
 
   // в”Ђв”Ђв”Ђ delete вЂ” remote tombstones an earlier message в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
   if (type == 'delete') {
+    // Hostile envelope with a nested secret must not tombstone.
+    if (!replicationValueIsSafe(data)) return true;
     final id = data['id'];
     if (id is! String || id.isEmpty) return true;
     final existing = await db.getMessageById(id);

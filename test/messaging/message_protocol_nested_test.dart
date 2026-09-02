@@ -4,6 +4,8 @@
 // `attachment.fileKeyB64` is assembly-only and must not appear on metaOut.
 // `profile_res.profile` with a nested forbidden key is consumed without
 // upsertPeer / setProfilesByPeer / avatar persist.
+// `game` / `edit` / `delete` envelopes that nest a forbidden key are
+// consumed without onGameMessage / updateMessage / tombstone.
 
 import 'dart:io';
 
@@ -21,6 +23,8 @@ ReliableInboundCtx _ctx({
   JsonMap? Function()? localProfile,
   List<(String, JsonMap)>? upserts,
   JsonMap? profilesByPeer,
+  void Function(String remoteId, Object? payload)? onGameMessage,
+  void Function(String remoteId, String id, JsonMap patch)? updateMessage,
 }) {
   return ReliableInboundCtx(
     selfPeerId: 'ORBIT-SELF',
@@ -30,7 +34,8 @@ ReliableInboundCtx _ctx({
     persistInbound: persist,
     pushMessage: persist,
     isPeerBlocked: isBlocked,
-    updateMessage: (_, __, ___) {},
+    updateMessage: updateMessage ?? (_, __, ___) {},
+    onGameMessage: onGameMessage,
     setProfilesByPeer: (updater) {
       if (profilesByPeer == null) return;
       final next = updater(Map<String, Object?>.from(profilesByPeer));
@@ -360,6 +365,169 @@ void main() {
 
       expect(consumed, isTrue);
       expect(sent, isEmpty);
+    });
+  });
+
+  group('game / edit nested secrets', () {
+    test('game with nested fileKey in payload does not call onGameMessage',
+        () async {
+      final games = <(String, Object?)>[];
+      final ctx = _ctx(
+        seen: <String>{},
+        processing: <String>{},
+        persisted: <JsonMap>[],
+        acks: <JsonMap>[],
+        persist: (_, msg) async => InboundPersistResult.committed,
+        onGameMessage: (id, payload) => games.add((id, payload)),
+      );
+      final consumed = await dispatchReliablePlaintext(
+        <String, Object?>{
+          'type': 'game',
+          'payload': <String, Object?>{
+            'move': 1,
+            'extra': <String, Object?>{'fileKey': 'x'},
+          },
+        },
+        (_) {},
+        'ORBIT-PEER',
+        ctx,
+      );
+
+      expect(consumed, isTrue);
+      expect(games, isEmpty);
+    });
+
+    test('game with safe payload calls onGameMessage', () async {
+      final games = <(String, Object?)>[];
+      final ctx = _ctx(
+        seen: <String>{},
+        processing: <String>{},
+        persisted: <JsonMap>[],
+        acks: <JsonMap>[],
+        persist: (_, msg) async => InboundPersistResult.committed,
+        onGameMessage: (id, payload) => games.add((id, payload)),
+      );
+      final payload = <String, Object?>{'move': 1};
+      final consumed = await dispatchReliablePlaintext(
+        <String, Object?>{'type': 'game', 'payload': payload},
+        (_) {},
+        'ORBIT-PEER',
+        ctx,
+      );
+
+      expect(consumed, isTrue);
+      expect(games, hasLength(1));
+      expect(games.single.$1, 'ORBIT-PEER');
+      expect(games.single.$2, payload);
+    });
+
+    test('game non-Map payload still calls onGameMessage', () async {
+      final games = <(String, Object?)>[];
+      final ctx = _ctx(
+        seen: <String>{},
+        processing: <String>{},
+        persisted: <JsonMap>[],
+        acks: <JsonMap>[],
+        persist: (_, msg) async => InboundPersistResult.committed,
+        onGameMessage: (id, payload) => games.add((id, payload)),
+      );
+      final consumed = await dispatchReliablePlaintext(
+        <String, Object?>{'type': 'game', 'payload': 7},
+        (_) {},
+        'ORBIT-PEER',
+        ctx,
+      );
+
+      expect(consumed, isTrue);
+      expect(games, hasLength(1));
+      expect(games.single.$2, 7);
+    });
+
+    test('game non-Map payload skips when envelope nests a secret', () async {
+      final games = <(String, Object?)>[];
+      final ctx = _ctx(
+        seen: <String>{},
+        processing: <String>{},
+        persisted: <JsonMap>[],
+        acks: <JsonMap>[],
+        persist: (_, msg) async => InboundPersistResult.committed,
+        onGameMessage: (id, payload) => games.add((id, payload)),
+      );
+      final consumed = await dispatchReliablePlaintext(
+        <String, Object?>{
+          'type': 'game',
+          'payload': 7,
+          'extra': <String, Object?>{'fileKey': 'x'},
+        },
+        (_) {},
+        'ORBIT-PEER',
+        ctx,
+      );
+
+      expect(consumed, isTrue);
+      expect(games, isEmpty);
+    });
+
+    test('edit with nested kek does not call updateMessage', () async {
+      // `text` is allowed; the refuse is the nested forbidden key.
+      expect(kForbiddenReplicationFields.contains('text'), isFalse);
+      expect(
+        replicationValueIsSafe(<String, Object?>{
+          'type': 'edit',
+          'id': 'm1',
+          'text': 'pwn',
+        }),
+        isTrue,
+      );
+      final edits = <(String, String, JsonMap)>[];
+      final ctx = _ctx(
+        seen: <String>{},
+        processing: <String>{},
+        persisted: <JsonMap>[],
+        acks: <JsonMap>[],
+        persist: (_, msg) async => InboundPersistResult.committed,
+        updateMessage: (remoteId, id, patch) =>
+            edits.add((remoteId, id, patch)),
+      );
+      final consumed = await dispatchReliablePlaintext(
+        <String, Object?>{
+          'type': 'edit',
+          'id': 'm1',
+          'text': 'pwn',
+          'extra': <String, Object?>{'kek': 'x'},
+        },
+        (_) {},
+        'ORBIT-PEER',
+        ctx,
+      );
+
+      expect(consumed, isTrue);
+      expect(edits, isEmpty);
+    });
+
+    test('hostile delete envelope is consumed without tombstone work', () async {
+      // Safety check runs before getMessageById; a nested kek must not
+      // reach Drift. Consumed + no throw is the observable here.
+      final ctx = _ctx(
+        seen: <String>{},
+        processing: <String>{},
+        persisted: <JsonMap>[],
+        acks: <JsonMap>[],
+        persist: (_, msg) async => InboundPersistResult.committed,
+      );
+      final consumed = await dispatchReliablePlaintext(
+        <String, Object?>{
+          'type': 'delete',
+          'id': 'm1',
+          'forEveryone': true,
+          'extra': <String, Object?>{'kek': 'x'},
+        },
+        (_) {},
+        'ORBIT-PEER',
+        ctx,
+      );
+
+      expect(consumed, isTrue);
     });
   });
 }

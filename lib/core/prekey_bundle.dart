@@ -21,6 +21,7 @@
 
 import 'dart:typed_data';
 
+import '../transport/layers.dart';
 import 'base64_helpers.dart';
 import 'identity_key.dart' as identity_key;
 import 'prekey_store.dart';
@@ -142,6 +143,9 @@ Uint8List _requireB64Bytes(Object? v, String field) {
 /// any structural problem — callers should catch and treat as a malformed
 /// bundle.
 PrekeyBundle parseBundle(Map<String, Object?> wire) {
+  if (!replicationValueIsSafe(wire)) {
+    throw const FormatException('bundle: forbidden fields');
+  }
   final v = wire['v'];
   final vNum = v is num ? v.toInt() : int.tryParse('$v');
   if (vNum != bundleVersion) {

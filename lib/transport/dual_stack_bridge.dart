@@ -1339,6 +1339,8 @@ class DualStackBridge {
         _appendEnvelope(norm, bytes);
       } else {
         final decoded = decodeJsonPayload(bytes);
+        // Nested kForbiddenReplicationFields: refuse before Autobase / onPacket.
+        if (!replicationValueIsSafe(decoded)) return;
         data = decoded;
         final roomEvent = roomEventFromNativePacket(
           decoded,
