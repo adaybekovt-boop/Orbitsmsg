@@ -85,8 +85,8 @@ class ConnectionsState {
   });
 
   const ConnectionsState.empty()
-      : connectedPeerIds = const <String>{},
-        lastConnectError = null;
+    : connectedPeerIds = const <String>{},
+      lastConnectError = null;
 
   final Set<String> connectedPeerIds;
 
@@ -100,13 +100,12 @@ class ConnectionsState {
   ConnectionsState copyWith({
     Set<String>? connectedPeerIds,
     Object? lastConnectError = _unset,
-  }) =>
-      ConnectionsState(
-        connectedPeerIds: connectedPeerIds ?? this.connectedPeerIds,
-        lastConnectError: identical(lastConnectError, _unset)
-            ? this.lastConnectError
-            : lastConnectError as ConnectError?,
-      );
+  }) => ConnectionsState(
+    connectedPeerIds: connectedPeerIds ?? this.connectedPeerIds,
+    lastConnectError: identical(lastConnectError, _unset)
+        ? this.lastConnectError
+        : lastConnectError as ConnectError?,
+  );
 }
 
 const Object _unset = Object();
@@ -173,14 +172,11 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
     // Sign-out: close everything. We don't touch the peer manager here;
     // it already transitioned to idle via its own auth listener.
-    _ref.listen<AuthState>(
-      authNotifierProvider,
-      (prev, next) {
-        if (prev is AuthAuthed && next is! AuthAuthed) {
-          _teardownAll();
-        }
-      },
-    );
+    _ref.listen<AuthState>(authNotifierProvider, (prev, next) {
+      if (prev is AuthAuthed && next is! AuthAuthed) {
+        _teardownAll();
+      }
+    });
   }
 
   final Ref _ref;
@@ -255,39 +251,40 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     DeviceRegistry? devices,
   }) {
     _nativeJournal = journal ?? MemoryJournal(deviceId);
-    _dual = DualStackBridge(
-      transport: transport,
-      journal: _nativeJournal!,
-      selfPeerId: _selfPeerId,
-      selfDeviceId: deviceId,
-      durableJournal: durableJournal,
-      mailbox: mailbox,
-      storagePeer: storagePeer,
-      mailboxToken: mailboxToken,
-      mailboxWriterKey: mailboxWriterKey,
-      localCapabilities: localCapabilities,
-      localBinding: localBinding,
-      devices: devices ?? deviceRegistry,
-      onPacket: _dispatchNativeInbound,
-      isBlocked: (rid) => _messaging.isPeerBlocked(rid),
-    )
-      ..onPresence = (peerId, up) {
-        if (!mounted) return;
-        _refreshConnectedIds();
-        if (up) unawaited(_postNativeOpen(peerId));
-      }
-      ..onCallSignal = (signal, from) {
-        _lastCallSignal = (from: from, signal: signal);
-        if (signal.isRoomVoice) {
-          _roomVoiceHandler?.call(from, signal);
-          return;
-        }
-        _callHandler?.call(from, signal);
-      }
-      ..onDrop = (peerId, packet) {
-        _drop.handleInbound(peerId, packet);
-      }
-      ..attach();
+    _dual =
+        DualStackBridge(
+            transport: transport,
+            journal: _nativeJournal!,
+            selfPeerId: _selfPeerId,
+            selfDeviceId: deviceId,
+            durableJournal: durableJournal,
+            mailbox: mailbox,
+            storagePeer: storagePeer,
+            mailboxToken: mailboxToken,
+            mailboxWriterKey: mailboxWriterKey,
+            localCapabilities: localCapabilities,
+            localBinding: localBinding,
+            devices: devices ?? deviceRegistry,
+            onPacket: _dispatchNativeInbound,
+            isBlocked: (rid) => _messaging.isPeerBlocked(rid),
+          )
+          ..onPresence = (peerId, up) {
+            if (!mounted) return;
+            _refreshConnectedIds();
+            if (up) unawaited(_postNativeOpen(peerId));
+          }
+          ..onCallSignal = (signal, from) {
+            _lastCallSignal = (from: from, signal: signal);
+            if (signal.isRoomVoice) {
+              _roomVoiceHandler?.call(from, signal);
+              return;
+            }
+            _callHandler?.call(from, signal);
+          }
+          ..onDrop = (peerId, packet) {
+            _drop.handleInbound(peerId, packet);
+          }
+          ..attach();
   }
 
   /// Phase 10: revoke a linked device, journal it on the native carrier
@@ -329,8 +326,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         createdAt: device.createdAt,
         status: device.status,
         ownerPeerId: device.ownerPeerId,
-        transportPeerId:
-            transportPeerIdFromPublicKey(device.transportPublicKey),
+        transportPeerId: transportPeerIdFromPublicKey(
+          device.transportPublicKey,
+        ),
       );
     }
     final transportPeerId = resolved.transportPeerId ?? '';
@@ -373,8 +371,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
           'peerId': msg.conversationId,
           'timestamp': msg.createdAt,
           'payload': {'type': 'chat', 'text': msg.plaintext},
-          'direction':
-              msg.senderIdentity == _selfPeerId() ? 'out' : 'in',
+          'direction': msg.senderIdentity == _selfPeerId() ? 'out' : 'in',
           'status': msg.status,
         });
       },
@@ -392,7 +389,8 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         // Journal has deviceId only — never reconstruct transport keys.
         break;
       case ReplicationEventKind.contactBlocked:
-        final peerId = (event.fields['peerId'] as String?) ??
+        final peerId =
+            (event.fields['peerId'] as String?) ??
             (event.fields['conversationId'] as String?) ??
             '';
         if (peerId.isEmpty || peerId.contains('://')) return;
@@ -562,7 +560,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     return dual.hasMailbox;
   }
 
-  /// Native chat attachment path. XOR happens in Dart; Bare/loopback
+  /// Native chat attachment path. AEAD sealing happens in Dart; Bare/loopback
   /// `sendFile` reads the ciphertext path. PeerJS chat still uses base64
   /// in [MessagingNotifier.sendFile]. Rooms stay host-plaintext bytes.
   Future<bool> sendChatAttachmentFromPath(
@@ -580,7 +578,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     }
     final dual = _dual;
     if (dual == null || !_nativeCarrierFor(remoteId)) return false;
-    final cipher = await xorPlaintextPathToCipherFile(path, fileKey);
+    final cipher = await sealPlaintextPathToCipherFile(
+      path,
+      fileKey,
+      scope: dual.attachmentScopeFor(remoteId),
+      fileId: fileId,
+    );
     if (cipher == null) return false;
     try {
       return await dual.sendAttachmentCipherPath(
@@ -590,6 +593,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
           sizeBytes: cipher.sizeBytes,
           protocol: 'attach-chunk',
           fileId: fileId,
+          plaintextBytes: cipher.plaintextBytes,
         ),
         firstCipher: cipher.firstCipher,
         chunkCount: cipher.chunkCount,
@@ -856,46 +860,54 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     });
 
     // Wire events.
-    binding.subscriptions.add(conn.onOpen.listen((_) {
-      binding.connectTimer?.cancel();
-      binding.connectTimer = null;
-      if (ch == 'reliable') {
-        _markPeerOnline(remoteId);
-        _refreshConnectedIds();
-        unawaited(_postReliableOpen(conn, remoteId));
-      } else {
-        // Ephemeral open — no handshake, just note the latency channel is up.
-      }
-    }));
+    binding.subscriptions.add(
+      conn.onOpen.listen((_) {
+        binding.connectTimer?.cancel();
+        binding.connectTimer = null;
+        if (ch == 'reliable') {
+          _markPeerOnline(remoteId);
+          _refreshConnectedIds();
+          unawaited(_postReliableOpen(conn, remoteId));
+        } else {
+          // Ephemeral open — no handshake, just note the latency channel is up.
+        }
+      }),
+    );
 
-    binding.subscriptions.add(conn.onClose.listen((_) {
-      binding.connectTimer?.cancel();
-      binding.connectTimer = null;
-      final cur = _bindings[key];
-      if (cur != null && cur.conn == conn) {
-        _bindings.remove(key);
-      }
-      if (ch == 'reliable') {
-        _markPeerOffline(remoteId);
-        _refreshConnectedIds();
-        try {
-          _drop.resetPeer?.call(remoteId);
-        } catch (_) {}
-      }
-    }));
+    binding.subscriptions.add(
+      conn.onClose.listen((_) {
+        binding.connectTimer?.cancel();
+        binding.connectTimer = null;
+        final cur = _bindings[key];
+        if (cur != null && cur.conn == conn) {
+          _bindings.remove(key);
+        }
+        if (ch == 'reliable') {
+          _markPeerOffline(remoteId);
+          _refreshConnectedIds();
+          try {
+            _drop.resetPeer?.call(remoteId);
+          } catch (_) {}
+        }
+      }),
+    );
 
-    binding.subscriptions.add(conn.onError.listen((_) {
-      binding.connectTimer?.cancel();
-      binding.connectTimer = null;
-      if (ch == 'reliable') _markPeerOffline(remoteId);
-    }));
+    binding.subscriptions.add(
+      conn.onError.listen((_) {
+        binding.connectTimer?.cancel();
+        binding.connectTimer = null;
+        if (ch == 'reliable') _markPeerOffline(remoteId);
+      }),
+    );
 
-    binding.subscriptions.add(conn.onData.listen((data) {
-      // Errors inside the router bubble up here as async exceptions on the
-      // stream — we swallow them so a single malformed packet doesn't kill
-      // the subscription and freeze the channel.
-      unawaited(Future.sync(() => onData(data)).catchError((_) {}));
-    }));
+    binding.subscriptions.add(
+      conn.onData.listen((data) {
+        // Errors inside the router bubble up here as async exceptions on the
+        // stream — we swallow them so a single malformed packet doesn't kill
+        // the subscription and freeze the channel.
+        unawaited(Future.sync(() => onData(data)).catchError((_) {}));
+      }),
+    );
   }
 
   // ─── Glare resolver ───────────────────────────────────────────
@@ -964,73 +976,69 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   ReliableInboundCtx _reliableCtx(String remoteId) {
     return ReliableInboundCtx(
-        selfPeerId: _selfPeerId(),
-        localProfile: () => _localProfileJson(),
-        seenMsgIds: _seenMsgIds,
-        isPeerBlocked: (rid) => _messaging.isPeerBlocked(rid),
-        persistInbound: (rid, uiMsg) => _messaging.pushInbound(rid, uiMsg),
-        pushMessage: (rid, uiMsg) => _messaging.pushInbound(rid, uiMsg),
-        updateMessage: (rid, id, patch) =>
-            _messaging.patchMessage(rid, id, patch),
-        setProfilesByPeer: (_) {
-          // Profile state isn't modelled in this slice — profiles are
-          // persisted in Drift via `upsertPeer`, and the chat list reads
-          // them from there. Safe to no-op.
-        },
-        setMessagesByPeer: (_) {
-          // Same — messages live in Drift, the stream provider handles
-          // reactive rebuilds.
-        },
-        upsertPeer: (rid, patch) async {
-          // Mirror the JS flow: peer row lives in Drift, one write per
-          // upsert. Failure is non-fatal (usually a closed DB during
-          // teardown) so we swallow.
-          try {
-            await db.savePeer({'id': rid, ...patch});
-          } catch (_) {}
-        },
-        queueAckStatus: (id, status) =>
-            _messaging.queueAckStatus(id, status),
-        onDeliveryAcked: (rid, id) {
-          _dual?.journalDeliveryAcknowledged(
-            eventId: id,
-            conversationId: rid,
-          );
-        },
-        // The ReliableInboundCtx field fixes `remoteId` up-front via closure
-        // (it's a per-peer ctx), so the dispatched callback takes just the
-        // payload map. Our local `sendEncrypted` helper still takes both
-        // since it has to route to the right connection — bridge the shapes
-        // here rather than changing either contract.
-        sendEncrypted: (msg) => unawaited(sendEncrypted(remoteId, msg)),
-        notifyNewMessage: ({
-          required String from,
-          required String text,
-          required String tag,
-        }) {
-          // Push notifications land in a later slice.
-        },
-        hapticMessage: () {
-          // Haptics helper already exists in core/haptics.dart; wired in
-          // the messaging UX slice.
-        },
-        playReceiveSound: () {
-          // Same — sound cue hooks live in a future audio slice.
-        },
-        isAppInForeground: () => true,
-        assembleNativeAttachment: (rid, fileId, key) async {
-          final dual = _dual;
-          if (dual == null) return null;
-          return dual.decryptInboundAttachment(rid, fileId, key);
-        },
-        assembleNativeAttachmentPath: (rid, fileId, key) async {
-          final dual = _dual;
-          if (dual == null) return null;
-          final decrypted =
-              await dual.decryptInboundAttachmentPath(rid, fileId, key);
-          if (decrypted == null || decrypted.isEmpty) return null;
-          return persistLocalAttachmentPath(decrypted);
-        },
+      selfPeerId: _selfPeerId(),
+      localProfile: () => _localProfileJson(),
+      seenMsgIds: _seenMsgIds,
+      isPeerBlocked: (rid) => _messaging.isPeerBlocked(rid),
+      persistInbound: (rid, uiMsg) => _messaging.pushInbound(rid, uiMsg),
+      pushMessage: (rid, uiMsg) => _messaging.pushInbound(rid, uiMsg),
+      updateMessage: (rid, id, patch) =>
+          _messaging.patchMessage(rid, id, patch),
+      setProfilesByPeer: (_) {
+        // Profile state isn't modelled in this slice — profiles are
+        // persisted in Drift via `upsertPeer`, and the chat list reads
+        // them from there. Safe to no-op.
+      },
+      setMessagesByPeer: (_) {
+        // Same — messages live in Drift, the stream provider handles
+        // reactive rebuilds.
+      },
+      upsertPeer: (rid, patch) async {
+        // Mirror the JS flow: peer row lives in Drift, one write per
+        // upsert. Failure is non-fatal (usually a closed DB during
+        // teardown) so we swallow.
+        try {
+          await db.savePeer({'id': rid, ...patch});
+        } catch (_) {}
+      },
+      queueAckStatus: (id, status) => _messaging.queueAckStatus(id, status),
+      onDeliveryAcked: (rid, id) {
+        _dual?.journalDeliveryAcknowledged(eventId: id, conversationId: rid);
+      },
+      // The ReliableInboundCtx field fixes `remoteId` up-front via closure
+      // (it's a per-peer ctx), so the dispatched callback takes just the
+      // payload map. Our local `sendEncrypted` helper still takes both
+      // since it has to route to the right connection — bridge the shapes
+      // here rather than changing either contract.
+      sendEncrypted: (msg) => unawaited(sendEncrypted(remoteId, msg)),
+      notifyNewMessage:
+          ({required String from, required String text, required String tag}) {
+            // Push notifications land in a later slice.
+          },
+      hapticMessage: () {
+        // Haptics helper already exists in core/haptics.dart; wired in
+        // the messaging UX slice.
+      },
+      playReceiveSound: () {
+        // Same — sound cue hooks live in a future audio slice.
+      },
+      isAppInForeground: () => true,
+      assembleNativeAttachment: (rid, fileId, key) async {
+        final dual = _dual;
+        if (dual == null) return null;
+        return dual.decryptInboundAttachment(rid, fileId, key);
+      },
+      assembleNativeAttachmentPath: (rid, fileId, key) async {
+        final dual = _dual;
+        if (dual == null) return null;
+        final decrypted = await dual.decryptInboundAttachmentPath(
+          rid,
+          fileId,
+          key,
+        );
+        if (decrypted == null || decrypted.isEmpty) return null;
+        return persistLocalAttachmentPath(decrypted);
+      },
     );
   }
 
@@ -1040,8 +1048,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       flushOutbox: () => _messaging.flushOutboxForPeer(remoteId),
       reliable: _reliableCtx(remoteId),
       ephemeral: EphemeralInboundCtx(
-        applyTyping: (isTyping) =>
-            _messaging.applyTyping(remoteId, isTyping),
+        applyTyping: (isTyping) => _messaging.applyTyping(remoteId, isTyping),
         onHeartbeat: () {
           if (_messaging.isPeerBlocked(remoteId)) return;
           unawaited(db.savePeer({'id': remoteId, 'lastSeenAt': now()}));
@@ -1069,17 +1076,13 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     final bridge = _messaging;
     unawaited(bridge.loadPendingForPeer(remoteId));
     unawaited(bridge.flushOutboxForPeer(remoteId));
-    unawaited(sendEncrypted(
-      remoteId,
-      {'type': 'profile_req', 'nonce': now()},
-    ));
+    unawaited(sendEncrypted(remoteId, {'type': 'profile_req', 'nonce': now()}));
     try {
       final cached = await getCachedBundle(remoteId);
       if (cached == null) {
-        unawaited(sendEncrypted(
-          remoteId,
-          {'type': 'bundle_req', 'nonce': now()},
-        ));
+        unawaited(
+          sendEncrypted(remoteId, {'type': 'bundle_req', 'nonce': now()}),
+        );
       }
     } catch (_) {
       // Bundle cache is a read-through cache — missing row is fine.
@@ -1089,17 +1092,11 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   // ─── Peer-row status writes ───────────────────────────────────
 
   void _markPeerOnline(String remoteId) {
-    unawaited(db.savePeer({
-      'id': remoteId,
-      'lastSeenAt': now(),
-    }));
+    unawaited(db.savePeer({'id': remoteId, 'lastSeenAt': now()}));
   }
 
   void _markPeerOffline(String remoteId) {
-    unawaited(db.savePeer({
-      'id': remoteId,
-      'lastSeenAt': now(),
-    }));
+    unawaited(db.savePeer({'id': remoteId, 'lastSeenAt': now()}));
     _refreshConnectedIds();
   }
 
@@ -1178,16 +1175,18 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       return;
     }
 
-    _peerSubs.add(current.onConnection.listen((conn) {
-      if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
-        unawaited(conn.close());
-        return;
-      }
-      final ch = (conn.metadata['channel'] as String?) == 'ephemeral'
-          ? 'ephemeral'
-          : 'reliable';
-      unawaited(attachConn(conn, ch));
-    }));
+    _peerSubs.add(
+      current.onConnection.listen((conn) {
+        if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+          unawaited(conn.close());
+          return;
+        }
+        final ch = (conn.metadata['channel'] as String?) == 'ephemeral'
+            ? 'ephemeral'
+            : 'reliable';
+        unawaited(attachConn(conn, ch));
+      }),
+    );
 
     // Flush any reliable dials that were queued while PeerJS was still
     // coming up. If the client is already open (host rotation landing on
@@ -1280,8 +1279,8 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
 final connectionsNotifierProvider =
     StateNotifierProvider<ConnectionsNotifier, ConnectionsState>((ref) {
-  return ConnectionsNotifier(ref);
-});
+      return ConnectionsNotifier(ref);
+    });
 
 /// Just the set of peers we have a live reliable channel to. Used by the
 /// chat list's `isOnline` check.
@@ -1313,9 +1312,10 @@ class MessagingBridge {
   final Future<InboundPersistResult> Function(
     String remoteId,
     Map<String, Object?> uiMsg,
-  ) pushInbound;
+  )
+  pushInbound;
   final void Function(String remoteId, String id, Map<String, Object?> patch)
-      patchMessage;
+  patchMessage;
   final void Function(String msgId, String status) queueAckStatus;
   final Future<void> Function(String remoteId) flushOutboxForPeer;
   final Future<void> Function(String remoteId) loadPendingForPeer;
@@ -1325,13 +1325,13 @@ class MessagingBridge {
   static bool _notBlocked(String _) => false;
 
   static MessagingBridge get empty => MessagingBridge(
-        pushInbound: (_, __) async => InboundPersistResult.failed,
-        patchMessage: (_, __, ___) {},
-        queueAckStatus: (_, __) {},
-        flushOutboxForPeer: (_) async {},
-        loadPendingForPeer: (_) async {},
-        applyTyping: (_, __) {},
-      );
+    pushInbound: (_, __) async => InboundPersistResult.failed,
+    patchMessage: (_, __, ___) {},
+    queueAckStatus: (_, __) {},
+    flushOutboxForPeer: (_) async {},
+    loadPendingForPeer: (_) async {},
+    applyTyping: (_, __) {},
+  );
 }
 
 // ─── Drop bridge ────────────────────────────────────────────────
@@ -1340,10 +1340,7 @@ class MessagingBridge {
 /// connection registry can forward inbound file-transfer frames without a
 /// provider cycle. No-ops until [ConnectionsNotifier.bindDrop] is called.
 class DropBridge {
-  const DropBridge({
-    required this.handleInbound,
-    this.resetPeer,
-  });
+  const DropBridge({required this.handleInbound, this.resetPeer});
 
   /// Receives a control [Map] (`file-start`/`file-end`/`file-abort`) or a
   /// binary chunk [Uint8List] for [remoteId].
@@ -1368,7 +1365,7 @@ class RoomBridge {
   /// Future so callers can await full settlement (production fires it
   /// forget-style; the router's `roomInbound` is a `void` hook).
   final Future<void> Function(String remoteId, Map<String, Object?> packet)
-      handleInbound;
+  handleInbound;
 
   static RoomBridge get empty => const RoomBridge(handleInbound: _noop);
   static Future<void> _noop(String _, Map<String, Object?> __) async {}

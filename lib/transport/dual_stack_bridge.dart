@@ -7,6 +7,7 @@ import 'dart:collection';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import '../attachments/attachment_aead.dart';
 import '../attachments/resumable_blob.dart';
 import '../calls/hyperswarm_signaling.dart';
 import '../core/path_byte_stream.dart';
@@ -119,11 +120,7 @@ bool _attachFrameHasForbiddenKey(
   if (value is Iterable) {
     if (!walk.add(value)) return false;
     for (final item in value) {
-      if (_attachFrameHasForbiddenKey(
-        item,
-        rejectB64: rejectB64,
-        seen: walk,
-      )) {
+      if (_attachFrameHasForbiddenKey(item, rejectB64: rejectB64, seen: walk)) {
         return true;
       }
     }
@@ -152,8 +149,8 @@ class DualStackBridge {
     this.connectionNoiseFor,
     this.tofuCheck,
     HypercoreLocalStore? hypercore,
-  })  : secrets = secrets ?? discoverySecretStore,
-        hypercore = hypercore ?? HypercoreLocalStore(selfDeviceId);
+  }) : secrets = secrets ?? discoverySecretStore,
+       hypercore = hypercore ?? HypercoreLocalStore(selfDeviceId);
 
   final OrbitsTransport transport;
   final MemoryJournal journal;
@@ -172,7 +169,7 @@ class DualStackBridge {
   final DeviceRegistry? devices;
   final List<int>? Function(String peerId)? connectionNoiseFor;
   final Future<PinCheck> Function(String peerId, List<int> identitySpki)?
-      tofuCheck;
+  tofuCheck;
   final HypercoreLocalStore hypercore;
   final MailboxPump _mailboxPump = MailboxPump();
   void Function(String peerId, Object packet)? onDrop;
@@ -181,6 +178,9 @@ class DualStackBridge {
   final Map<String, List<AttachmentChunk>> _inboundAttach =
       <String, List<AttachmentChunk>>{};
   final Map<String, String> _inboundAttachPaths = <String, String>{};
+  final Map<String, int> _inboundAttachTotals = <String, int>{};
+  final Map<String, AttachmentNonceTracker> _inboundAttachNonces =
+      <String, AttachmentNonceTracker>{};
   var _inboundAttachBytes = 0;
   static const int _maxInboundAttachBytes = kMaxNativeAttachBytes;
   final AutobaseProjection rooms = AutobaseProjection();
@@ -303,10 +303,7 @@ class DualStackBridge {
       if (!seen.add(norm)) return;
       try {
         await transport.rememberPeer(
-          PeerDescriptor(
-            peerId: norm,
-            noisePublicKey: List<int>.from(noise),
-          ),
+          PeerDescriptor(peerId: norm, noisePublicKey: List<int>.from(noise)),
         );
       } catch (_) {}
     }
@@ -434,8 +431,8 @@ class DualStackBridge {
       remoteAdvertisesCapability(peerId, TransportCapability.callV1);
 
   Future<void> dial(String peerId) async {
-    final targets = devices?.transportTargets(peerId) ??
-        <String>{normalizePeerId(peerId)};
+    final targets =
+        devices?.transportTargets(peerId) ?? <String>{normalizePeerId(peerId)};
     if (targets.length <= 1) {
       await _dialOne(targets.isEmpty ? peerId : targets.first);
       return;
@@ -522,11 +519,7 @@ class DualStackBridge {
     final channel = msg is Map && msg['type'] == 'ack'
         ? TransportChannel.receipt
         : TransportChannel.message;
-    await transport.send(
-      norm,
-      channel,
-      utf8.encode(wire),
-    );
+    await transport.send(norm, channel, utf8.encode(wire));
     _appendEnvelope(norm, utf8.encode(wire));
     return true;
   }
@@ -835,9 +828,7 @@ class DualStackBridge {
 
   bool checkRelayDirectory(RelayDirectory directory) {
     if (!directory.relayBlownUp) return false;
-    return noteRelayBlowUp(
-      detail: 'relay directory unsound or RTT blown up',
-    );
+    return noteRelayBlowUp(detail: 'relay directory unsound or RTT blown up');
   }
 
   Future<void> _persistDurable(JournalRecord record) {
@@ -866,8 +857,9 @@ class DualStackBridge {
 
     final live = JournalProjector(decrypt: hook);
     await live.applyAll(journal);
-    final replaySource =
-        durableJournal != null ? await durableJournal!.replay() : journal;
+    final replaySource = durableJournal != null
+        ? await durableJournal!.replay()
+        : journal;
     final replay = JournalProjector(decrypt: hook);
     await replay.applyAll(replaySource);
     if (!live.matches(replay)) {
@@ -924,43 +916,67 @@ class DualStackBridge {
     }
   }
 
+  String attachmentScopeFor(String peerId) =>
+      attachmentConversationScope(selfPeerId(), peerId);
+
   Future<void> sendAttachmentChunks(
     String peerId,
     List<int> plaintext,
     List<int> fileKey, {
     String fileId = '',
+    String? scope,
   }) async {
+    final id = fileId.isEmpty
+        ? 'att-${DateTime.now().millisecondsSinceEpoch}'
+        : fileId;
+    if (id.contains('://')) return;
+    final sc = scope ?? attachmentScopeFor(peerId);
     return _sendAttachmentChunks(
       peerId,
-      ResumableAttachment.chunk(plaintext, fileKey),
-      fileId: fileId,
+      ResumableAttachment.chunk(plaintext, fileKey, scope: sc, fileId: id),
+      fileId: id,
+      totalBytes: plaintext.length,
     );
   }
 
   /// Chunk plaintext from a stream (path `openRead`) so a large file
   /// never becomes one Dart `Uint8List`. [fileKey] stays local — it is
   /// not journaled and must travel in the ratcheted chat envelope, not
-  /// on this channel.
+  /// on this channel. [totalBytes] is required for AEAD associated data.
   Future<void> sendAttachmentStream(
     String peerId,
     Stream<List<int>> plaintext,
     List<int> fileKey, {
     String fileId = '',
+    String? scope,
+    required int totalBytes,
   }) async {
     final id = fileId.isEmpty
         ? 'att-${DateTime.now().millisecondsSinceEpoch}'
         : fileId;
     if (id.contains('://')) return;
+    if (totalBytes < 0 || totalBytes > kMaxNativeAttachBytes) return;
+    final sc = scope ?? attachmentScopeFor(peerId);
     final targets = _sendPeerIds(peerId);
     List<int>? firstCipher;
     var count = 0;
     var total = 0;
     var any = false;
-    await for (final chunk
-        in ResumableAttachment.chunkStream(plaintext, fileKey)) {
+    await for (final chunk in ResumableAttachment.chunkStream(
+      plaintext,
+      fileKey,
+      scope: sc,
+      fileId: id,
+      totalBytes: totalBytes,
+    )) {
       for (final target in targets) {
         if (!await _ensureNativeSendReady(target)) continue;
-        await _sendOneAttachChunk(target, chunk, fileId: id);
+        await _sendOneAttachChunk(
+          target,
+          chunk,
+          fileId: id,
+          totalBytes: totalBytes,
+        );
         any = true;
       }
       firstCipher ??= List<int>.from(chunk.ciphertext);
@@ -1017,6 +1033,7 @@ class DualStackBridge {
     String peerId,
     List<AttachmentChunk> chunks, {
     String fileId = '',
+    required int totalBytes,
   }) async {
     final id = fileId.isEmpty
         ? 'att-${DateTime.now().millisecondsSinceEpoch}'
@@ -1026,7 +1043,12 @@ class DualStackBridge {
     for (final target in _sendPeerIds(peerId)) {
       if (!await _ensureNativeSendReady(target)) continue;
       for (final chunk in chunks) {
-        await _sendOneAttachChunk(target, chunk, fileId: id);
+        await _sendOneAttachChunk(
+          target,
+          chunk,
+          fileId: id,
+          totalBytes: totalBytes,
+        );
       }
       any = true;
     }
@@ -1047,6 +1069,7 @@ class DualStackBridge {
     String norm,
     AttachmentChunk chunk, {
     required String fileId,
+    required int totalBytes,
   }) {
     if (fileId.contains('://')) return Future<void>.value();
     final body = <String, Object?>{
@@ -1055,14 +1078,11 @@ class DualStackBridge {
       'index': chunk.index,
       'offset': chunk.offset,
       'hash': chunk.hash,
+      'totalBytes': totalBytes,
       'b64': base64Encode(chunk.ciphertext),
     };
     if (!replicationValueIsSafe(body)) return Future<void>.value();
-    return transport.send(
-      norm,
-      TransportChannel.attachment,
-      jsonPayload(body),
-    );
+    return transport.send(norm, TransportChannel.attachment, jsonPayload(body));
   }
 
   void _journalAttachmentPublished(
@@ -1097,10 +1117,22 @@ class DualStackBridge {
     if (fileId.isEmpty || fileKey.isEmpty) return null;
     if (fileId.contains('://')) return null;
     final key = '${normalizePeerId(fromPeerId)}\x1f$fileId';
-    final path = _inboundAttachPaths.remove(key);
+    final scope = attachmentScopeFor(fromPeerId);
+    final path = _inboundAttachPaths[key];
     if (path != null) {
-      final plain = await xorCipherPathToPlaintext(path, fileKey);
-      if (plain == null || plain.isEmpty) return null;
+      final total = _inboundAttachTotals[key];
+      final plain = await openCipherPathToPlaintext(
+        path,
+        fileKey,
+        scope: scope,
+        fileId: fileId,
+        totalBytes: total,
+      );
+      if (plain == null) return null;
+      if (plain.isEmpty && total != null && total != 0) return null;
+      _inboundAttachPaths.remove(key);
+      _inboundAttachTotals.remove(key);
+      _inboundAttachNonces.remove(key);
       return Uint8List.fromList(plain);
     }
     final chunks = _inboundAttach.remove(key);
@@ -1109,14 +1141,28 @@ class DualStackBridge {
       _inboundAttachBytes -= chunk.ciphertext.length;
     }
     if (_inboundAttachBytes < 0) _inboundAttachBytes = 0;
+    final total =
+        _inboundAttachTotals.remove(key) ??
+        chunks.fold<int>(
+          0,
+          (n, c) =>
+              n + attachmentPlaintextLengthOfEnvelope(c.ciphertext.length),
+        );
+    _inboundAttachNonces.remove(key);
     try {
-      return ResumableAttachment.decrypt(chunks, fileKey);
+      return ResumableAttachment.decrypt(
+        chunks,
+        fileKey,
+        scope: scope,
+        fileId: fileId,
+        totalBytes: total,
+      );
     } catch (_) {
       return null;
     }
   }
 
-  /// XOR inbound ciphertext **to a plaintext path**. Never journals the
+  /// Open inbound ciphertext **to a plaintext path**. Never journals the
   /// fileKey. Null if only the in-memory chunk fallback is present.
   Future<String?> decryptInboundAttachmentPath(
     String fromPeerId,
@@ -1128,9 +1174,17 @@ class DualStackBridge {
     final key = '${normalizePeerId(fromPeerId)}\x1f$fileId';
     final path = _inboundAttachPaths[key];
     if (path == null || path.isEmpty) return null;
-    final dest = await xorCipherPathToPlaintextFile(path, fileKey);
+    final dest = await openCipherPathToPlaintextFile(
+      path,
+      fileKey,
+      scope: attachmentScopeFor(fromPeerId),
+      fileId: fileId,
+      totalBytes: _inboundAttachTotals[key],
+    );
     if (dest == null || dest.isEmpty) return null;
     _inboundAttachPaths.remove(key);
+    _inboundAttachTotals.remove(key);
+    _inboundAttachNonces.remove(key);
     return dest;
   }
 
@@ -1153,8 +1207,20 @@ class DualStackBridge {
       return;
     }
     if (cipher.isEmpty) return;
-    if (_inboundAttachBytes + cipher.length > _maxInboundAttachBytes) return;
+    final cap = attachmentCipherCapBytes(plaintextCap: _maxInboundAttachBytes);
+    if (_inboundAttachBytes + cipher.length > cap) return;
+    final nonce = attachmentEnvelopeNonce(cipher);
+    if (nonce == null) return;
     final key = '$fromPeerId\x1f$fileId';
+    final tracker = _inboundAttachNonces.putIfAbsent(
+      key,
+      AttachmentNonceTracker.new,
+    );
+    if (!tracker.remember(nonce)) return;
+    final total = frame['totalBytes'];
+    if (total is num && total.toInt() >= 0) {
+      _inboundAttachTotals[key] = total.toInt();
+    }
     final list = _inboundAttach.putIfAbsent(key, () => <AttachmentChunk>[]);
     list.add(
       AttachmentChunk(
@@ -1175,7 +1241,12 @@ class DualStackBridge {
     final path = frame['path'] as String? ?? '';
     if (fileId.isEmpty || path.isEmpty) return;
     if (path.contains('://') || fileId.contains('://')) return;
-    _inboundAttachPaths['$fromPeerId\x1f$fileId'] = path;
+    final key = '$fromPeerId\x1f$fileId';
+    _inboundAttachPaths[key] = path;
+    final total = frame['totalBytes'];
+    if (total is num && total.toInt() >= 0) {
+      _inboundAttachTotals[key] = total.toInt();
+    }
   }
 
   Future<bool> sendEphemeral(String peerId, Object? msg) async {
@@ -1186,7 +1257,11 @@ class DualStackBridge {
         continue;
       }
       final wire = await encryptWirePayload(target, msg);
-      await transport.send(target, TransportChannel.presence, utf8.encode(wire));
+      await transport.send(
+        target,
+        TransportChannel.presence,
+        utf8.encode(wire),
+      );
       any = true;
     }
     return any;
@@ -1390,11 +1465,7 @@ class DualStackBridge {
     final frame = hypercore.toReplicationFrame(record);
     if (!replicationValueIsSafe(frame)) return;
     unawaited(
-      transport.send(
-        norm,
-        TransportChannel.replication,
-        jsonPayload(frame),
-      ),
+      transport.send(norm, TransportChannel.replication, jsonPayload(frame)),
     );
   }
 
@@ -1406,11 +1477,7 @@ class DualStackBridge {
       final frame = hypercore.toReplicationFrame(record);
       if (!replicationValueIsSafe(frame)) continue;
       unawaited(
-        transport.send(
-          norm,
-          TransportChannel.replication,
-          jsonPayload(frame),
-        ),
+        transport.send(norm, TransportChannel.replication, jsonPayload(frame)),
       );
     }
   }
@@ -1543,11 +1610,7 @@ class DualStackBridge {
     }
   }
 
-  void _queueInbound(
-    String peerId,
-    TransportChannel channel,
-    List<int> bytes,
-  ) {
+  void _queueInbound(String peerId, TransportChannel channel, List<int> bytes) {
     final queue = _pendingInbound.putIfAbsent(peerId, () => <_QueuedInbound>[]);
     var total = 0;
     for (final item in queue) {
@@ -1581,7 +1644,11 @@ class DualStackBridge {
     _dispatchFrame(norm, channel, bytes);
   }
 
-  void _dispatchFrame(String peerId, TransportChannel channel, List<int> bytes) {
+  void _dispatchFrame(
+    String peerId,
+    TransportChannel channel,
+    List<int> bytes,
+  ) {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return;
     if (channel == TransportChannel.call) {
@@ -1653,7 +1720,8 @@ class DualStackBridge {
           } catch (_) {}
           return;
         }
-        if (decoded['type'] == 'capabilities' || decoded['type'] == 'wireHello') {
+        if (decoded['type'] == 'capabilities' ||
+            decoded['type'] == 'wireHello') {
           try {
             if (decoded['type'] == 'capabilities') {
               remoteCapabilities.add(CapabilityRecord.fromWire(decoded));

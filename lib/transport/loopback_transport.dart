@@ -8,7 +8,9 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show sha256;
 
+import '../attachments/attachment_aead.dart';
 import '../attachments/path_attachment.dart';
+import '../attachments/resumable_blob.dart';
 import '../replication/memory_journal.dart';
 import '../rooms/autobase_log.dart';
 import 'device_binding.dart';
@@ -72,6 +74,8 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   TransportChannel? lastSendChannel;
   final List<String> sentPeerIds = <String>[];
   final List<PeerDescriptor> rememberedPeers = <PeerDescriptor>[];
+  final List<Map<String, Object?>> sentAttachmentFrames =
+      <Map<String, Object?>>[];
 
   /// Shared in-process hub. Own-device sync copies join a second topic.
   LoopbackHub get hub => _hub;
@@ -187,6 +191,11 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
     }
     lastSendChannel = channel;
     sentPeerIds.add(peerId);
+    if (channel == TransportChannel.attachment) {
+      try {
+        sentAttachmentFrames.add(decodeJsonPayload(frame));
+      } catch (_) {}
+    }
     remote._deliver(this.peerId, channel, Uint8List.fromList(frame));
   }
 
@@ -291,6 +300,7 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
       offset = (offset ~/ kFileChunkSize) * kFileChunkSize;
       final startOffset = offset;
       final chunk = Uint8List(kFileChunkSize);
+      final plaintextBytes = file.plaintextBytes;
       while (offset < size) {
         final sent = offset - startOffset;
         if (debugFileSendBudget != null && sent >= debugFileSendBudget!) {
@@ -312,6 +322,7 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
             'offset': offset,
             'hash': sha256.convert(ct).toString(),
             'b64': base64Encode(ct),
+            if (plaintextBytes != null) 'totalBytes': plaintextBytes,
           }),
         );
         offset += n;
@@ -580,8 +591,10 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
       return;
     }
     if (cipher.isEmpty) return;
+    final index = (body['index'] as num?)?.toInt() ?? 0;
     final offset = (body['offset'] as num?)?.toInt() ?? 0;
-    if (offset < 0 || offset + cipher.length > 50 * 1024 * 1024) return;
+    final cap = attachmentCipherCapBytes(plaintextCap: kMaxNativeAttachBytes);
+    if (offset < 0 || index < 0) return;
     final hash = body['hash'] as String? ?? '';
     if (hash.isNotEmpty && sha256.convert(cipher).toString() != hash) {
       return;
@@ -592,13 +605,31 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
       incoming = await IncomingPathAttachment.open(
         id: fileId,
         name: 'cipher.bin',
-        totalBytes: 50 * 1024 * 1024,
+        totalBytes: cap,
         sha256hex: '',
       );
       _attachCiphers[fileId] = incoming;
       first = true;
     }
-    await incoming.writeChunk(offset, cipher);
+    final totalBytes = (body['totalBytes'] as num?)?.toInt();
+    var writeOffset = offset;
+    if (totalBytes != null && totalBytes >= 0) {
+      final n = totalBytes == 0
+          ? 1
+          : (totalBytes + kAttachmentChunkSize - 1) ~/ kAttachmentChunkSize;
+      final lastIndex = n - 1;
+      final expectedPt = index == lastIndex
+          ? (totalBytes == 0
+                ? 0
+                : totalBytes - lastIndex * kAttachmentChunkSize)
+          : kAttachmentChunkSize;
+      if (cipher.length == kAttachmentAeadOverhead + expectedPt &&
+          attachmentEnvelopeNonce(cipher) != null) {
+        writeOffset = index * (kAttachmentChunkSize + kAttachmentAeadOverhead);
+      }
+    }
+    if (writeOffset + cipher.length > cap) return;
+    await incoming.writeChunk(writeOffset, cipher);
     if (!first) return;
     _events.add(
       TransportFrame(
@@ -608,6 +639,7 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
           'type': 'attach-chunk-path',
           'fileId': fileId,
           'path': incoming.path,
+          if (totalBytes != null && totalBytes >= 0) 'totalBytes': totalBytes,
         }),
       ),
     );
@@ -634,8 +666,5 @@ String hexOf(List<int> bytes) {
 /// Two transports that share a hub and the same discovery secret.
 (LoopbackOrbitsTransport, LoopbackOrbitsTransport) loopbackPair() {
   final hub = LoopbackHub();
-  return (
-    LoopbackOrbitsTransport(hub: hub),
-    LoopbackOrbitsTransport(hub: hub),
-  );
+  return (LoopbackOrbitsTransport(hub: hub), LoopbackOrbitsTransport(hub: hub));
 }

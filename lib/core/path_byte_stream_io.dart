@@ -3,6 +3,7 @@
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../attachments/attachment_aead.dart';
 import '../attachments/resumable_blob.dart';
 import 'path_byte_stream.dart';
 
@@ -32,14 +33,30 @@ Stream<List<int>>? openLocalPathByteStream(String path) {
   }
 }
 
-Future<CipherPathWrite?> xorPlaintextPathToCipherFile(
+Future<CipherPathWrite?> sealPlaintextPathToCipherFile(
   String plaintextPath,
-  List<int> fileKey,
-) async {
+  List<int> fileKey, {
+  required String scope,
+  required String fileId,
+}) async {
   final p = plaintextPath.trim();
-  if (p.isEmpty || p.contains('://') || fileKey.isEmpty) return null;
+  if (p.isEmpty ||
+      p.contains('://') ||
+      fileKey.length != kNativeAttachFileKeyBytes ||
+      scope.contains('://') ||
+      fileId.contains('://') ||
+      fileId.isEmpty) {
+    return null;
+  }
   final src = File(p);
   if (!src.existsSync()) return null;
+  final int totalBytes;
+  try {
+    totalBytes = src.lengthSync();
+  } catch (_) {
+    return null;
+  }
+  if (totalBytes < 0 || totalBytes > kMaxNativeAttachBytes) return null;
   Directory? dir;
   IOSink? sink;
   try {
@@ -49,8 +66,13 @@ Future<CipherPathWrite?> xorPlaintextPathToCipherFile(
     List<int>? first;
     var count = 0;
     var total = 0;
-    await for (final chunk
-        in ResumableAttachment.chunkStream(src.openRead(), fileKey)) {
+    await for (final chunk in ResumableAttachment.chunkStream(
+      src.openRead(),
+      fileKey,
+      scope: scope,
+      fileId: fileId,
+      totalBytes: totalBytes,
+    )) {
       sink.add(chunk.ciphertext);
       first ??= List<int>.from(chunk.ciphertext);
       count++;
@@ -58,7 +80,7 @@ Future<CipherPathWrite?> xorPlaintextPathToCipherFile(
     }
     await sink.close();
     sink = null;
-    if (first == null || total <= 0) {
+    if (first == null || count <= 0) {
       dir.deleteSync(recursive: true);
       return null;
     }
@@ -66,6 +88,7 @@ Future<CipherPathWrite?> xorPlaintextPathToCipherFile(
     return CipherPathWrite(
       path: dest.path,
       sizeBytes: total,
+      plaintextBytes: totalBytes,
       firstCipher: first,
       chunkCount: count,
       dispose: () {
@@ -85,52 +108,85 @@ Future<CipherPathWrite?> xorPlaintextPathToCipherFile(
   }
 }
 
-Future<List<int>?> xorCipherPathToPlaintext(
+Future<List<int>?> openCipherPathToPlaintext(
   String cipherPath,
-  List<int> fileKey,
-) async {
+  List<int> fileKey, {
+  required String scope,
+  required String fileId,
+  int? totalBytes,
+}) async {
   final p = cipherPath.trim();
-  if (p.isEmpty || p.contains('://') || fileKey.isEmpty) return null;
+  if (p.isEmpty ||
+      p.contains('://') ||
+      fileKey.length != kNativeAttachFileKeyBytes ||
+      scope.contains('://') ||
+      fileId.contains('://') ||
+      fileId.isEmpty) {
+    return null;
+  }
   final src = File(p);
   if (!src.existsSync()) return null;
-  const maxBytes = kMaxNativeAttachBytes;
+  final cap = attachmentCipherCapBytes(plaintextCap: kMaxNativeAttachBytes);
+  final int len;
   try {
-    if (src.lengthSync() > maxBytes || src.lengthSync() <= 0) return null;
+    len = src.lengthSync();
+    if (len <= 0 || len > cap) return null;
   } catch (_) {
     return null;
   }
+  final resolved = totalBytes ?? inferAttachmentPlaintextBytes(len);
+  if (resolved == null || resolved < 0 || resolved > kMaxNativeAttachBytes) {
+    return null;
+  }
   final out = BytesBuilder(copy: true);
-  var i = 0;
   try {
-    await for (final piece in src.openRead()) {
-      if (piece.isEmpty) continue;
-      if (out.length + piece.length > maxBytes) return null;
-      final dst = Uint8List(piece.length);
-      for (var j = 0; j < piece.length; j++) {
-        dst[j] = piece[j] ^ fileKey[i % fileKey.length];
-        i++;
+    await for (final piece in _openEnvelopeStream(
+      src.openRead(),
+      fileKey: fileKey,
+      scope: scope,
+      fileId: fileId,
+      totalBytes: resolved,
+    )) {
+      if (out.length + piece.length > kMaxNativeAttachBytes) {
+        return null;
       }
-      out.add(dst);
+      out.add(piece);
     }
   } catch (_) {
     return null;
   }
-  if (out.isEmpty) return null;
+  if (out.length != resolved) return null;
   return out.takeBytes();
 }
 
-Future<String?> xorCipherPathToPlaintextFile(
+Future<String?> openCipherPathToPlaintextFile(
   String cipherPath,
-  List<int> fileKey,
-) async {
+  List<int> fileKey, {
+  required String scope,
+  required String fileId,
+  int? totalBytes,
+}) async {
   final p = cipherPath.trim();
-  if (p.isEmpty || p.contains('://') || fileKey.isEmpty) return null;
+  if (p.isEmpty ||
+      p.contains('://') ||
+      fileKey.length != kNativeAttachFileKeyBytes ||
+      scope.contains('://') ||
+      fileId.contains('://') ||
+      fileId.isEmpty) {
+    return null;
+  }
   final src = File(p);
   if (!src.existsSync()) return null;
-  const maxBytes = kMaxNativeAttachBytes;
+  final cap = attachmentCipherCapBytes(plaintextCap: kMaxNativeAttachBytes);
+  final int len;
   try {
-    if (src.lengthSync() > maxBytes || src.lengthSync() <= 0) return null;
+    len = src.lengthSync();
+    if (len <= 0 || len > cap) return null;
   } catch (_) {
+    return null;
+  }
+  final resolved = totalBytes ?? inferAttachmentPlaintextBytes(len);
+  if (resolved == null || resolved < 0 || resolved > kMaxNativeAttachBytes) {
     return null;
   }
   Directory? dir;
@@ -139,24 +195,23 @@ Future<String?> xorCipherPathToPlaintextFile(
     dir = Directory.systemTemp.createTempSync('orbits-att-pt-');
     final dest = File('${dir.path}${Platform.pathSeparator}plain.bin');
     sink = dest.openWrite();
-    var i = 0;
     var total = 0;
-    await for (final piece in src.openRead()) {
-      if (piece.isEmpty) continue;
-      if (total + piece.length > maxBytes) {
+    await for (final piece in _openEnvelopeStream(
+      src.openRead(),
+      fileKey: fileKey,
+      scope: scope,
+      fileId: fileId,
+      totalBytes: resolved,
+    )) {
+      if (total + piece.length > kMaxNativeAttachBytes) {
         throw StateError('cipher path exceeds cap');
       }
-      final dst = Uint8List(piece.length);
-      for (var j = 0; j < piece.length; j++) {
-        dst[j] = piece[j] ^ fileKey[i % fileKey.length];
-        i++;
-      }
-      sink.add(dst);
-      total += dst.length;
+      sink.add(piece);
+      total += piece.length;
     }
     await sink.close();
     sink = null;
-    if (total <= 0) {
+    if (total != resolved) {
       dir.deleteSync(recursive: true);
       return null;
     }
@@ -169,6 +224,76 @@ Future<String?> xorCipherPathToPlaintextFile(
       dir?.deleteSync(recursive: true);
     } catch (_) {}
     return null;
+  }
+}
+
+/// Parse concatenated `version||nonce||ct||tag` envelopes. Each chunk is
+/// 64 KiB plaintext except the last. Duplicate nonces fail closed.
+Stream<Uint8List> _openEnvelopeStream(
+  Stream<List<int>> incoming, {
+  required List<int> fileKey,
+  required String scope,
+  required String fileId,
+  required int totalBytes,
+}) async* {
+  final pending = BytesBuilder(copy: false);
+  final nonces = AttachmentNonceTracker();
+  var offset = 0;
+  var index = 0;
+  var emitted = 0;
+  await for (final piece in incoming) {
+    if (piece.isEmpty) continue;
+    pending.add(piece);
+    while (true) {
+      final remaining = totalBytes - offset;
+      final ptLen = totalBytes == 0
+          ? 0
+          : (remaining < kAttachmentChunkSize
+                ? remaining
+                : kAttachmentChunkSize);
+      if (totalBytes == 0 && emitted > 0) {
+        if (pending.length == 0) return;
+        throw AttachmentAeadError('trailing ciphertext');
+      }
+      if (totalBytes > 0 && offset >= totalBytes) {
+        if (pending.length == 0) return;
+        throw AttachmentAeadError('trailing ciphertext');
+      }
+      final need = kAttachmentAeadOverhead + ptLen;
+      if (pending.length < need) break;
+      final buf = pending.takeBytes();
+      final envelope = buf.sublist(0, need);
+      if (buf.length > need) pending.add(buf.sublist(need));
+      final nonce = attachmentEnvelopeNonce(envelope);
+      if (nonce == null || !nonces.remember(nonce)) {
+        throw AttachmentAeadError('replayed nonce');
+      }
+      final plain = decryptChunk(
+        envelope: envelope,
+        fileKey: fileKey,
+        scope: scope,
+        fileId: fileId,
+        index: index,
+        offset: offset,
+        totalBytes: totalBytes,
+      );
+      if (plain.length != ptLen) {
+        throw AttachmentAeadError('chunk length mismatch');
+      }
+      yield plain;
+      emitted++;
+      offset += ptLen;
+      index++;
+      if (totalBytes == 0) {
+        if (pending.length == 0) return;
+        throw AttachmentAeadError('trailing ciphertext');
+      }
+    }
+  }
+  if (emitted == 0 ||
+      (totalBytes > 0 && offset != totalBytes) ||
+      pending.length > 0) {
+    throw AttachmentAeadError('truncated ciphertext');
   }
 }
 

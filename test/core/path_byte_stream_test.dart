@@ -5,6 +5,9 @@ import 'package:orbits_flutter/attachments/resumable_blob.dart';
 import 'package:orbits_flutter/core/path_byte_stream.dart';
 import 'package:orbits_flutter/core/path_byte_stream_stub.dart' as stub;
 
+const _scope = 'path-scope';
+const _fileId = 'path-file';
+
 void main() {
   test('native path stream refuses URLs and yields file bytes', () async {
     expect(localPathLength('https://evil.example/x'), isNull);
@@ -28,92 +31,180 @@ void main() {
     expect(collected, const <int>[7, 8, 9]);
   });
 
-  test('xor plaintext path to ciphertext file never holds the fileKey', () async {
-    expect(
-      await xorPlaintextPathToCipherFile('https://evil.example/x', [1, 2, 3]),
-      isNull,
-    );
-    expect(await xorPlaintextPathToCipherFile('/nope', const <int>[1]), isNull);
+  test(
+    'seal plaintext path to ciphertext file never holds the fileKey',
+    () async {
+      expect(
+        await sealPlaintextPathToCipherFile(
+          'https://evil.example/x',
+          [1, 2, 3],
+          scope: _scope,
+          fileId: _fileId,
+        ),
+        isNull,
+      );
+      expect(
+        await sealPlaintextPathToCipherFile(
+          '/nope',
+          const <int>[1],
+          scope: _scope,
+          fileId: _fileId,
+        ),
+        isNull,
+      );
 
-    final dir = Directory.systemTemp.createTempSync('orbits-xor-path-');
-    addTearDown(() {
-      if (dir.existsSync()) dir.deleteSync(recursive: true);
-    });
-    final key = List<int>.generate(32, (i) => i + 1);
-    final plain = List<int>.generate(70 * 1024, (i) => i % 251);
-    final src = File('${dir.path}${Platform.pathSeparator}plain.bin')
-      ..writeAsBytesSync(plain);
-    final write = await xorPlaintextPathToCipherFile(src.path, key);
-    expect(write, isNotNull);
-    addTearDown(write!.dispose);
-    expect(write.sizeBytes, plain.length);
-    expect(write.chunkCount, 2);
-    expect(write.path.contains('://'), isFalse);
-    final cipher = File(write.path).readAsBytesSync();
-    expect(cipher, isNot(equals(plain)));
-    expect(write.firstCipher, cipher.sublist(0, kAttachmentChunkSize));
-    final chunks = ResumableAttachment.chunk(plain, key);
-    expect(chunks, hasLength(2));
-    expect(chunks.first.ciphertext, write.firstCipher);
-    expect(
-      File(write.path).readAsBytesSync().sublist(kAttachmentChunkSize),
-      chunks.last.ciphertext,
-    );
-    expect(ResumableAttachment.decrypt(chunks, key), plain);
-    final roundTrip = await xorCipherPathToPlaintext(write.path, key);
-    expect(roundTrip, plain);
-    expect(
-      File('lib/core/path_byte_stream_io.dart').readAsStringSync(),
-      isNot(contains('readAsBytes')),
-    );
-  });
+      final dir = Directory.systemTemp.createTempSync('orbits-aead-path-');
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
+      final key = List<int>.generate(32, (i) => i + 1);
+      final plain = List<int>.generate(70 * 1024, (i) => i % 251);
+      final src = File('${dir.path}${Platform.pathSeparator}plain.bin')
+        ..writeAsBytesSync(plain);
+      final write = await sealPlaintextPathToCipherFile(
+        src.path,
+        key,
+        scope: _scope,
+        fileId: _fileId,
+      );
+      expect(write, isNotNull);
+      addTearDown(write!.dispose);
+      expect(write.plaintextBytes, plain.length);
+      expect(write.chunkCount, 2);
+      expect(write.path.contains('://'), isFalse);
+      final cipher = File(write.path).readAsBytesSync();
+      expect(cipher, isNot(equals(plain)));
+      expect(write.firstCipher, cipher.sublist(0, write.firstCipher.length));
+      final chunks = ResumableAttachment.chunk(
+        plain,
+        key,
+        scope: _scope,
+        fileId: _fileId,
+      );
+      expect(chunks, hasLength(2));
+      expect(chunks.first.ciphertext, isNot(equals(write.firstCipher)));
+      expect(
+        ResumableAttachment.decrypt(
+          chunks,
+          key,
+          scope: _scope,
+          fileId: _fileId,
+          totalBytes: plain.length,
+        ),
+        plain,
+      );
+      final roundTrip = await openCipherPathToPlaintext(
+        write.path,
+        key,
+        scope: _scope,
+        fileId: _fileId,
+        totalBytes: plain.length,
+      );
+      expect(roundTrip, plain);
+      expect(
+        File('lib/core/path_byte_stream_io.dart').readAsStringSync(),
+        isNot(contains('readAsBytes')),
+      );
+    },
+  );
 
   test('web stub never opens a path', () async {
     expect(stub.localPathLength('/tmp/x'), isNull);
     expect(stub.openLocalPathByteStream('/tmp/x'), isNull);
-    expect(await stub.xorPlaintextPathToCipherFile('/tmp/x', [1]), isNull);
-    expect(await stub.xorCipherPathToPlaintext('/tmp/x', [1]), isNull);
-    expect(await stub.xorCipherPathToPlaintextFile('/tmp/x', [1]), isNull);
+    expect(
+      await stub.sealPlaintextPathToCipherFile(
+        '/tmp/x',
+        [1],
+        scope: _scope,
+        fileId: _fileId,
+      ),
+      isNull,
+    );
+    expect(
+      await stub.openCipherPathToPlaintext(
+        '/tmp/x',
+        [1],
+        scope: _scope,
+        fileId: _fileId,
+      ),
+      isNull,
+    );
+    expect(
+      await stub.openCipherPathToPlaintextFile(
+        '/tmp/x',
+        [1],
+        scope: _scope,
+        fileId: _fileId,
+      ),
+      isNull,
+    );
     expect(await stub.copyLocalPathToStableFile('/tmp/x', '/tmp/y'), isNull);
   });
 
-  test('xor ciphertext path to plaintext file never holds the fileKey', () async {
-    expect(
-      await xorCipherPathToPlaintextFile('https://evil.example/x', [1, 2, 3]),
-      isNull,
-    );
-    expect(await xorCipherPathToPlaintextFile('/nope', const <int>[1]), isNull);
+  test(
+    'open ciphertext path to plaintext file never holds the fileKey',
+    () async {
+      expect(
+        await openCipherPathToPlaintextFile(
+          'https://evil.example/x',
+          [1, 2, 3],
+          scope: _scope,
+          fileId: _fileId,
+        ),
+        isNull,
+      );
+      expect(
+        await openCipherPathToPlaintextFile(
+          '/nope',
+          const <int>[1],
+          scope: _scope,
+          fileId: _fileId,
+        ),
+        isNull,
+      );
 
-    final dir = Directory.systemTemp.createTempSync('orbits-xor-pt-file-');
-    addTearDown(() {
-      if (dir.existsSync()) dir.deleteSync(recursive: true);
-    });
-    final key = List<int>.generate(32, (i) => i + 3);
-    final plain = List<int>.generate(70 * 1024, (i) => i % 247);
-    final src = File('${dir.path}${Platform.pathSeparator}plain.bin')
-      ..writeAsBytesSync(plain);
-    final write = await xorPlaintextPathToCipherFile(src.path, key);
-    expect(write, isNotNull);
-    addTearDown(write!.dispose);
-    final dest = await xorCipherPathToPlaintextFile(write.path, key);
-    expect(dest, isNotNull);
-    expect(dest!.contains('://'), isFalse);
-    addTearDown(() {
-      try {
-        File(dest).parent.deleteSync(recursive: true);
-      } catch (_) {}
-    });
-    expect(File(dest).readAsBytesSync(), plain);
-    expect(File(write.path).readAsBytesSync(), isNot(equals(plain)));
-    expect(
-      File('lib/core/path_byte_stream_io.dart').readAsStringSync(),
-      isNot(contains('readAsBytes')),
-    );
-    expect(
-      File('lib/core/path_byte_stream_io.dart').readAsStringSync(),
-      contains('xorCipherPathToPlaintextFile'),
-    );
-  });
+      final dir = Directory.systemTemp.createTempSync('orbits-aead-pt-file-');
+      addTearDown(() {
+        if (dir.existsSync()) dir.deleteSync(recursive: true);
+      });
+      final key = List<int>.generate(32, (i) => i + 3);
+      final plain = List<int>.generate(70 * 1024, (i) => i % 247);
+      final src = File('${dir.path}${Platform.pathSeparator}plain.bin')
+        ..writeAsBytesSync(plain);
+      final write = await sealPlaintextPathToCipherFile(
+        src.path,
+        key,
+        scope: _scope,
+        fileId: _fileId,
+      );
+      expect(write, isNotNull);
+      addTearDown(write!.dispose);
+      final dest = await openCipherPathToPlaintextFile(
+        write.path,
+        key,
+        scope: _scope,
+        fileId: _fileId,
+        totalBytes: plain.length,
+      );
+      expect(dest, isNotNull);
+      expect(dest!.contains('://'), isFalse);
+      addTearDown(() {
+        try {
+          File(dest).parent.deleteSync(recursive: true);
+        } catch (_) {}
+      });
+      expect(File(dest).readAsBytesSync(), plain);
+      expect(File(write.path).readAsBytesSync(), isNot(equals(plain)));
+      expect(
+        File('lib/core/path_byte_stream_io.dart').readAsStringSync(),
+        isNot(contains('readAsBytes')),
+      );
+      expect(
+        File('lib/core/path_byte_stream_io.dart').readAsStringSync(),
+        contains('openCipherPathToPlaintextFile'),
+      );
+    },
+  );
 
   test('copyLocalPathToStableFile streams without readAsBytes', () async {
     expect(

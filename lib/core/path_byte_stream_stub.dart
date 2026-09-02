@@ -6,27 +6,31 @@ int? localPathLength(String path) => null;
 
 Stream<List<int>>? openLocalPathByteStream(String path) => null;
 
-Future<CipherPathWrite?> xorPlaintextPathToCipherFile(
+Future<CipherPathWrite?> sealPlaintextPathToCipherFile(
   String plaintextPath,
-  List<int> fileKey,
-) async =>
-    null;
+  List<int> fileKey, {
+  required String scope,
+  required String fileId,
+}) async => null;
 
-Future<List<int>?> xorCipherPathToPlaintext(
+Future<List<int>?> openCipherPathToPlaintext(
   String cipherPath,
-  List<int> fileKey,
-) async =>
-    null;
+  List<int> fileKey, {
+  required String scope,
+  required String fileId,
+  int? totalBytes,
+}) async => null;
 
-Future<String?> xorCipherPathToPlaintextFile(
+Future<String?> openCipherPathToPlaintextFile(
   String cipherPath,
-  List<int> fileKey,
-) async =>
-    null;
+  List<int> fileKey, {
+  required String scope,
+  required String fileId,
+  int? totalBytes,
+}) async => null;
 
 Future<String?> copyLocalPathToStableFile(
   String srcPath,
   String destDirectory, {
   String fileName = 'plain.bin',
-}) async =>
-    null;
+}) async => null;

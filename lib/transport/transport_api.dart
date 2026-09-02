@@ -26,6 +26,7 @@ class TransportFileDescriptor {
     this.resumeOffset = 0,
     this.protocol,
     this.fileId,
+    this.plaintextBytes,
   });
 
   /// Local filesystem path or platform handle. Not a byte array over IPC.
@@ -44,6 +45,9 @@ class TransportFileDescriptor {
   /// Chat `attach-chunk` id. Must travel without the fileKey.
   final String? fileId;
 
+  /// Plaintext size for AEAD associated data. Never a `fileKey`.
+  final int? plaintextBytes;
+
   TransportFileDescriptor copyWith({int? resumeOffset}) =>
       TransportFileDescriptor(
         path: path,
@@ -53,6 +57,7 @@ class TransportFileDescriptor {
         resumeOffset: resumeOffset ?? this.resumeOffset,
         protocol: protocol,
         fileId: fileId,
+        plaintextBytes: plaintextBytes,
       );
 }
 
@@ -84,9 +89,9 @@ class DhtBootstrapNode {
   final int port;
 
   Map<String, Object?> toJson() => <String, Object?>{
-        'host': host,
-        'port': port,
-      };
+    'host': host,
+    'port': port,
+  };
 
   @override
   bool operator ==(Object other) =>

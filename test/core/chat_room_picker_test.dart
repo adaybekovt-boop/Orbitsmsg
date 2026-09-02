@@ -80,7 +80,7 @@ void main() {
     );
     expect(
       File('lib/core/path_byte_stream.dart').readAsStringSync(),
-      contains('xorCipherPathToPlaintextFile'),
+      contains('openCipherPathToPlaintextFile'),
     );
     expect(
       File('lib/core/path_byte_stream.dart').readAsStringSync(),
@@ -108,7 +108,7 @@ void main() {
     );
     expect(
       File('lib/state/connections_notifier.dart').readAsStringSync(),
-      contains('xorPlaintextPathToCipherFile'),
+      contains('sealPlaintextPathToCipherFile'),
     );
     expect(
       File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
@@ -185,71 +185,72 @@ void main() {
     expect(refused.bytes, isNull);
   });
 
-  test('materializePickedLocalPath reuses a real path and writes bytes',
-      () async {
-    final existing = File(
-      '${Directory.systemTemp.path}${Platform.pathSeparator}orbits-pick-src.bin',
-    );
-    await existing.writeAsBytes(const [1, 2, 3, 4], flush: true);
-    addTearDown(() async {
-      try {
-        await existing.delete();
-      } catch (_) {}
-    });
-    final fromPath = await materializePickedLocalPath(
-      PlatformFile(name: 'src.bin', size: 4, path: existing.path),
-      maxBytes: 16,
-    );
-    expect(fromPath.tooLarge, isFalse);
-    expect(fromPath.path, existing.path);
-    expect(fromPath.sizeBytes, 4);
+  test(
+    'materializePickedLocalPath reuses a real path and writes bytes',
+    () async {
+      final existing = File(
+        '${Directory.systemTemp.path}${Platform.pathSeparator}orbits-pick-src.bin',
+      );
+      await existing.writeAsBytes(const [1, 2, 3, 4], flush: true);
+      addTearDown(() async {
+        try {
+          await existing.delete();
+        } catch (_) {}
+      });
+      final fromPath = await materializePickedLocalPath(
+        PlatformFile(name: 'src.bin', size: 4, path: existing.path),
+        maxBytes: 16,
+      );
+      expect(fromPath.tooLarge, isFalse);
+      expect(fromPath.path, existing.path);
+      expect(fromPath.sizeBytes, 4);
 
-    final fromBytes = await materializePickedLocalPath(
-      PlatformFile(
-        name: 'mem.bin',
-        size: 2,
-        bytes: Uint8List.fromList(const [9, 8]),
-      ),
-      maxBytes: 16,
-    );
-    expect(fromBytes.tooLarge, isFalse);
-    expect(fromBytes.path, isNotNull);
-    expect(fromBytes.path!.contains('://'), isFalse);
-    expect(File(fromBytes.path!).readAsBytesSync(), [9, 8]);
-
-    final over = await materializePickedLocalPath(
-      PlatformFile(
-        name: 'big.bin',
-        size: 8,
-        bytes: Uint8List.fromList(List<int>.filled(8, 1)),
-      ),
-      maxBytes: 4,
-    );
-    expect(over.tooLarge, isTrue);
-    expect(over.path, isNull);
-
-    expect(
-      await stub.materializePickedLocalPath(
+      final fromBytes = await materializePickedLocalPath(
         PlatformFile(
-          name: 'w.bin',
+          name: 'mem.bin',
           size: 2,
-          bytes: Uint8List.fromList(const [1, 2]),
+          bytes: Uint8List.fromList(const [9, 8]),
         ),
         maxBytes: 16,
-      ),
-      isA<MaterializedPick>(),
-    );
-    expect(
-      (await stub.materializePickedLocalPath(
+      );
+      expect(fromBytes.tooLarge, isFalse);
+      expect(fromBytes.path, isNotNull);
+      expect(fromBytes.path!.contains('://'), isFalse);
+      expect(File(fromBytes.path!).readAsBytesSync(), [9, 8]);
+
+      final over = await materializePickedLocalPath(
         PlatformFile(
-          name: 'w.bin',
-          size: 2,
-          bytes: Uint8List.fromList(const [1, 2]),
+          name: 'big.bin',
+          size: 8,
+          bytes: Uint8List.fromList(List<int>.filled(8, 1)),
         ),
-        maxBytes: 16,
-      ))
-          .path,
-      isNull,
-    );
-  });
+        maxBytes: 4,
+      );
+      expect(over.tooLarge, isTrue);
+      expect(over.path, isNull);
+
+      expect(
+        await stub.materializePickedLocalPath(
+          PlatformFile(
+            name: 'w.bin',
+            size: 2,
+            bytes: Uint8List.fromList(const [1, 2]),
+          ),
+          maxBytes: 16,
+        ),
+        isA<MaterializedPick>(),
+      );
+      expect(
+        (await stub.materializePickedLocalPath(
+          PlatformFile(
+            name: 'w.bin',
+            size: 2,
+            bytes: Uint8List.fromList(const [1, 2]),
+          ),
+          maxBytes: 16,
+        )).path,
+        isNull,
+      );
+    },
+  );
 }
