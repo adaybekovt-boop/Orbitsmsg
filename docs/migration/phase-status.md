@@ -46,13 +46,15 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
   stay false. iOS/Android hosts can register only after those flags flip.
   An ES256 provider JWT may be built from an Apple p8 scalar (not the
   identity key) and is still not sent. APNs requests set `apns-collapse-id`
-  from `OpaqueWake.collapseId` and are still not sent. An RS256 FCM
-  service-account JWT may be built from Google PKCS#8 PEM (not
+  from `OpaqueWake.collapseId`, `apns-expiration` (default 86400s), and a
+  deterministic `apns-id` from that collapse id, and are still not sent.
+  An RS256 FCM service-account JWT may be built from Google PKCS#8 PEM (not
   identity-signing-v1). The OAuth JWT-bearer POST to
   `oauth2.googleapis.com/token` may be built and is still not exchanged.
   An OAuth token JSON body may be parsed for `access_token` (never POSTed).
   FCM HTTP v1 send `Authorization` is that access_token, never the
-  assertion JWT. FCM send stays off.
+  assertion JWT. FCM send includes `android.priority=normal` and
+  `android.ttl=86400s` and stays off.
 - Bare: `tool/bare/vendor.sh` pins Holepunch `bare-runtime` 1.31.0 at
   **build time** (sha256 required for every OS slot in `BARE.manifest`).
   `embed.sh` copies a local slot into plugin native dirs.
@@ -85,7 +87,9 @@ Hardware / Kazakhstan checks: **blocked** until the user is free.
   not set `kBareBinaryShipped` — not every OS slot is in every app bundle.
 - Holepunch Corestore native addon: `kHolepunchCorestoreAddonLinked` is
   false. `tool/bare/addons/vendor-corestore.sh` copies a **local** `.node`
-  / `.bare` only (refuses http). JS `corestore` may load on Node when locally installed, else
+  / `.bare` only (refuses http). `embed-corestore.sh` copies that slot
+  next to the worklet and into plugin native dirs when present (also
+  refuses http). JS `corestore` may load on Node when locally installed, else
   JSONL when `journalDir` is set, else memory. Bare must not `require('corestore')` (Node's addon hangs Bare
   1.31). If a local `corestore.bare` exists, the worklet calls
   `Bare.Addon.load` (never a remote URL) and otherwise appends encrypted

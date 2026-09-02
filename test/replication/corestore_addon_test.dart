@@ -55,5 +55,12 @@ void main() {
     expect(vendor, isNot(contains('curl')));
     expect(vendor, isNot(contains('wget')));
     expect(vendor, contains('refusing remote Corestore addon URL'));
+    final embed = File('tool/bare/addons/embed-corestore.sh').readAsStringSync();
+    expect(embed, contains('NEVER downloads'));
+    expect(embed, contains('kHolepunchCorestoreAddonLinked stays false'));
+    expect(embed, isNot(contains('curl')));
+    expect(embed, isNot(contains('wget')));
+    expect(embed, contains('refusing remote Corestore addon URL'));
+    expect(embed, contains('packages/orbits_transport_linux'));
   });
 }

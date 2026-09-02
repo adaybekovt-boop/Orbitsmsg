@@ -122,9 +122,9 @@ void main() {
     store.put(
       token: 'cap-1',
       writerKey: 'w',
-      block: EncryptedBlock(
+      block: const EncryptedBlock(
         seq: 0,
-        bytes: const [1, 2, 3],
+        bytes: [1, 2, 3],
         storedAt: 1,
       ),
     );

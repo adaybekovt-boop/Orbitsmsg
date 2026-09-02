@@ -4,6 +4,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
+
 import 'opaque_wake.dart';
 import 'push_gateway.dart';
 import 'apns_provider_jwt.dart';
@@ -20,6 +22,10 @@ const String kApnsTopic = 'com.orbits.orbitsFlutter';
 const String kApnsProductionHost = 'api.push.apple.com';
 const String kApnsSandboxHost = 'api.sandbox.push.apple.com';
 const String kFcmSendHost = 'fcm.googleapis.com';
+
+/// Background wake TTL. Not a message lifetime SLA.
+const int kApnsDefaultTtlSeconds = 86400;
+const String kFcmAndroidTtl = '86400s';
 
 class PushSendResult {
   const PushSendResult({required this.sent, required this.reason});
@@ -150,6 +156,14 @@ class FcmOpaqueRequest {
   final Map<String, Object?> body;
 }
 
+/// Deterministic APNs `apns-id` from the collapse id. Never a Peer ID.
+String orbitsApnsId(String collapseId) {
+  final digest = sha256.convert(utf8.encode('orbits-apns-id-v1|$collapseId'));
+  final h = digest.toString();
+  return '${h.substring(0, 8)}-${h.substring(8, 12)}-${h.substring(12, 16)}-'
+      '${h.substring(16, 20)}-${h.substring(20, 32)}';
+}
+
 /// Build an APNs HTTP/2 body. Does not send. Null if the wake is unsafe
 /// or the token is empty.
 ApnsOpaqueRequest? buildApnsRequest({
@@ -158,13 +172,19 @@ ApnsOpaqueRequest? buildApnsRequest({
   bool sandbox = false,
   ApnsProviderKey? providerKey,
   int? iatSeconds,
+  int? nowUnix,
+  int? expirationUnix,
+  String? apnsId,
 }) {
   final payload = wake.toJson();
   if (deviceToken.isEmpty || !OpaqueWake.isSafe(payload)) return null;
+  final now = nowUnix ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
   final headers = <String, String>{
     'apns-push-type': 'background',
     'apns-priority': '5',
     'apns-topic': kApnsTopic,
+    'apns-expiration': '${expirationUnix ?? now + kApnsDefaultTtlSeconds}',
+    'apns-id': apnsId ?? orbitsApnsId(wake.collapseId),
   };
   if (wake.collapseId.isNotEmpty) {
     headers['apns-collapse-id'] = wake.collapseId;
@@ -220,6 +240,10 @@ FcmOpaqueRequest? buildFcmRequest({
     body: <String, Object?>{
       'message': <String, Object?>{
         'token': deviceToken,
+        'android': <String, Object?>{
+          'priority': 'normal',
+          'ttl': kFcmAndroidTtl,
+        },
         'data': <String, String>{
           for (final e in payload.entries) e.key: '${e.value}',
         },

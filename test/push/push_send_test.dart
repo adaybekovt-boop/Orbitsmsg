@@ -91,6 +91,10 @@ void main() {
     expect(apns.headers['apns-topic'], kApnsTopic);
     expect(apns.headers['apns-push-type'], 'background');
     expect(apns.headers['apns-collapse-id'], 'c1');
+    expect(apns.headers['apns-expiration'], isNotNull);
+    expect(int.parse(apns.headers['apns-expiration']!), greaterThan(0));
+    expect(apns.headers['apns-id'], orbitsApnsId('c1'));
+    expect(apns.headers['apns-id'], isNot(contains('peerId')));
     expect(OpaqueWake.isSafe(apns.body), isTrue);
     expect(apns.body.containsKey('peerId'), isFalse);
     expect(apns.body.containsKey('text'), isFalse);
@@ -104,6 +108,9 @@ void main() {
     final data = ((fcm.body['message'] as Map)['data'] as Map);
     expect(data['opaqueWakeToken'], 'tok');
     expect(data.containsKey('peerId'), isFalse);
+    final android = (fcm.body['message'] as Map)['android'] as Map;
+    expect(android['priority'], 'normal');
+    expect(android['ttl'], kFcmAndroidTtl);
 
     expect(
       buildApnsRequest(
