@@ -115,7 +115,9 @@ test(
     assert.equal(bPk.length, 64)
     assert.notEqual(aPk, bPk)
     const peerId = await aPeer
-    await bPeer
+    const bPeerId = await bPeer
+    a.markAuthenticated(peerId)
+    b.markAuthenticated(bPeerId)
 
     const got = new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('echo timeout')), 10000)
@@ -225,8 +227,10 @@ test(
     await b.publish({ deviceId: 'b' })
 
     const aInfo = await aPeer
-    await bPeer
+    const bInfo = await bPeer
     assert.ok(aInfo.peerId)
+    a.markAuthenticated(aInfo.peerId)
+    if (bInfo && bInfo.peerId) b.markAuthenticated(bInfo.peerId)
     // Loopback often still reports path: direct. This asserts wiring, not NAT.
 
     const got = new Promise((resolve, reject) => {

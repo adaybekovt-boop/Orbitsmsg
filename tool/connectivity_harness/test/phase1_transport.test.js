@@ -22,7 +22,7 @@ function waitEmit(worklet, name, pred, timeoutMs) {
 }
 
 async function pair(opts) {
-  const auth = (opts && opts.harnessAuth) || 'local'
+  const auth = (opts && opts.harnessAuth) || 'strict'
   const a = new Worklet({ backend: 'loopback', harnessAuth: auth })
   const b = new Worklet({ backend: 'loopback', harnessAuth: auth })
   const secret = Buffer.alloc(32, 9)
@@ -32,6 +32,12 @@ async function pair(opts) {
   await b.publish({ deviceId: 'b' })
   await a.connect({ port: b._loop.port })
   const peerId = Array.from(a._peers.keys())[0]
+  const mark = opts && opts.authenticate === false ? false : auth === 'strict'
+  if (mark) {
+    const bPeer = Array.from(b._peers.keys())[0]
+    a.markAuthenticated(peerId)
+    if (bPeer) b.markAuthenticated(bPeer)
+  }
   return { a, b, peerId }
 }
 
@@ -174,11 +180,18 @@ test('disconnect during handshake then no leftover peer', async () => {
 
 test('reconnect after disconnect and echo still works', async () => {
   const { a, b, peerId } = await pair()
+  const bDropped = waitEmit(b, 'disconnected')
   await a.disconnect(peerId)
+  await bDropped
   assert.equal(a._peers.size, 0)
+  const bJoined = waitEmit(b, 'connected')
   await a.connect({ port: b._loop.port })
+  const bPeer2 = (await bJoined).peerId
   const peerId2 = Array.from(a._peers.keys())[0]
   assert.ok(peerId2)
+  assert.ok(bPeer2)
+  a.markAuthenticated(peerId2)
+  b.markAuthenticated(bPeer2)
   const got = waitEmit(a, 'frame', (p) => p.body && p.body.type === 'harness-echo-reply')
   await a.send(peerId2, 'message', { type: 'harness-echo', id: 're', text: 'again' })
   assert.equal((await got).body.text, 'again')
@@ -201,7 +214,7 @@ test('connection timeout rejects with connect-timeout', async () => {
 })
 
 test('pre-auth application frame is dropped and counted', async () => {
-  const { a, b, peerId } = await pair({ harnessAuth: 'strict' })
+  const { a, b, peerId } = await pair({ harnessAuth: 'strict', authenticate: false })
   const bPeerId = Array.from(b._peers.keys())[0]
   assert.equal(b._peers.get(bPeerId).authenticated, false)
   await a.send(peerId, 'message', { type: 'harness-echo', id: 'nope', text: 'secret' })
@@ -224,6 +237,83 @@ test('pre-auth application frame is dropped and counted', async () => {
   assert.equal((await echo).body.text, 'after-auth')
   await a.stop()
   await b.stop()
+})
+
+test('strict mode: harness-hello does not authenticate and later messages are dropped', async () => {
+  const { a, b, peerId } = await pair({ harnessAuth: 'strict', authenticate: false })
+  const bPeerId = Array.from(b._peers.keys())[0]
+  assert.equal(a._harnessAuth, 'strict')
+  assert.equal(b._peers.get(bPeerId).authenticated, false)
+  const before = b.diagnostics().droppedPreAuth
+  await a.send(peerId, 'control', { type: 'harness-hello' })
+  const deadline = Date.now() + 500
+  while (Date.now() < deadline && b.diagnostics().droppedPreAuth <= before) {
+    await new Promise((r) => setTimeout(r, 10))
+  }
+  assert.equal(b._peers.get(bPeerId).authenticated, false)
+  assert.ok(b.diagnostics().droppedPreAuth > before)
+  assert.ok(!b.events.some((e) => e.name === 'authenticated'))
+  assert.ok(
+    !b.events.some(
+      (e) => e.name === 'frame' && e.payload && e.payload.body && e.payload.body.type === 'harness-hello',
+    ),
+  )
+  await a.send(peerId, 'message', { type: 'harness-echo', id: 'x', text: 'nope' })
+  const deadline2 = Date.now() + 400
+  while (Date.now() < deadline2) {
+    if (b.events.some((e) => e.name === 'frame')) break
+    await new Promise((r) => setTimeout(r, 10))
+  }
+  assert.ok(!b.events.some((e) => e.name === 'frame'))
+  await a.stop()
+  await b.stop()
+})
+
+test('strict mode: IPC markAuthenticated emits authenticated once and frames flow', async () => {
+  const { a, b, peerId } = await pair({ harnessAuth: 'strict', authenticate: false })
+  const bPeerId = Array.from(b._peers.keys())[0]
+  const authed = []
+  const prev = b._emit
+  b._emit = (name, payload) => {
+    prev(name, payload)
+    if (name === 'authenticated') authed.push(payload.peerId)
+  }
+  await handleIpcRequest(b, { method: 'markAuthenticated', params: { peerId: bPeerId } })
+  await handleIpcRequest(a, { method: 'markAuthenticated', params: { peerId } })
+  assert.deepEqual(authed, [bPeerId])
+  await handleIpcRequest(b, { method: 'markAuthenticated', params: { peerId: bPeerId } })
+  assert.deepEqual(authed, [bPeerId])
+  const echo = waitEmit(a, 'frame', (p) => p.body && p.body.type === 'harness-echo-reply')
+  await a.send(peerId, 'message', { type: 'harness-echo', id: 'm', text: 'marked' })
+  assert.equal((await echo).body.text, 'marked')
+  await a.stop()
+  await b.stop()
+})
+
+test('IPC start refuses harnessAuth local without allowLocalAuth', async () => {
+  const w = new Worklet({ backend: 'loopback' })
+  assert.equal(w._harnessAuth, 'strict')
+  await assert.rejects(
+    () =>
+      handleIpcRequest(w, {
+        method: 'start',
+        params: { peerId: 'A', harnessAuth: 'local' },
+      }),
+    (err) => err && /allowLocalAuth/.test(String(err.message || err)),
+  )
+  assert.equal(w._harnessAuth, 'strict')
+  assert.equal(w._lifecycle, 'idle')
+  await handleIpcRequest(w, {
+    method: 'start',
+    params: {
+      peerId: 'A',
+      discoverySecret: Buffer.alloc(32, 2),
+      harnessAuth: 'local',
+      allowLocalAuth: true,
+    },
+  })
+  assert.equal(w._harnessAuth, 'local')
+  await w.stop()
 })
 
 test('outbound queue cap rejects without exceeding byte cap', async () => {

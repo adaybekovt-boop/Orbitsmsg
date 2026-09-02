@@ -47,11 +47,20 @@ Oversized or malformed mux frames destroy that peer socket with
 
 ## Auth gating
 
-Until `markAuthenticated(peerId)` (IPC) or a `harness-hello` /
-`device-binding` control frame, only those two control types are
-processed. Other channels are dropped and counted as `droppedPreAuth`
-(not queued). Default `harnessAuth: 'local'` auto-authenticates on
-connect so isolated harness tests and the CLI do not need Dart.
+Default `harnessAuth` is **`strict`**. Peers start `authenticated:
+false`. Only IPC `markAuthenticated(peerId)` (Dart, after ADR-0001
+DeviceBinding checks) flips that flag. Production Dart never passes
+`harnessAuth: 'local'` or `allowLocalAuth`. IPC `start` with
+`harnessAuth: 'local'` is **refused** unless `allowLocalAuth === true`.
+
+In strict mode the only pre-auth pass-through is control
+`device-binding` (emitted to Dart, never auto-authenticates).
+`harness-hello` is dropped and counted in `droppedPreAuth`. Other
+channels/frames are dropped, not queued.
+
+`'local'` is only for the CLI (already passed explicitly), `stand.js`,
+and tests that opt in. In local mode a `harness-hello` exchange may
+mark the peer so the isolated CLI does not need Dart.
 
 ## CLI (same host, loopback)
 
