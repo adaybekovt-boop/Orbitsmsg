@@ -562,6 +562,88 @@ void main() {
     await b.detach();
   });
 
+  test('inbound attach-chunk with URL fileId does not decrypt or buffer',
+      () async {
+    final (a, b, _) = await linked();
+    final drop = <Object>[];
+    b.onDrop = (peer, packet) => drop.add(packet);
+    final key = List<int>.generate(32, (i) => i + 4);
+    final plain = List<int>.generate(90, (i) => i + 1);
+    final chunk = ResumableAttachment.chunk(plain, key).single;
+    final transport = b.transport as LoopbackOrbitsTransport;
+    transport.emitEvent(
+      TransportFrame(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        TransportChannel.attachment,
+        jsonPayload({
+          'type': 'attach-chunk',
+          'fileId': 'https://evil',
+          'hash': chunk.hash,
+          'b64': base64Encode(chunk.ciphertext),
+          'index': 0,
+          'offset': 0,
+        }),
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(
+      await b.decryptInboundAttachment(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        'https://evil',
+        key,
+      ),
+      isNull,
+    );
+    expect(
+      await b.decryptInboundAttachmentPath(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        'https://evil',
+        key,
+      ),
+      isNull,
+    );
+    expect(drop, isEmpty);
+    await a.detach();
+    await b.detach();
+  });
+
+  test(
+      '_ingestAttachChunk source-scan refuses :// fileId before base64Decode and buffer',
+      () {
+    final src = File('lib/transport/dual_stack_bridge.dart').readAsStringSync();
+    expect(src, isNot(contains("import 'dart:io'")));
+    final ingest = src
+        .split('void _ingestAttachChunk')[1]
+        .split('void _ingestAttachPath')[0];
+    expect(ingest, contains("fileId.contains('://')"));
+    expect(ingest, contains('base64Decode'));
+    expect(ingest, contains('_inboundAttach'));
+    expect(
+      ingest.indexOf("fileId.contains('://')"),
+      lessThan(ingest.indexOf('base64Decode')),
+    );
+    expect(
+      ingest.indexOf("fileId.contains('://')"),
+      lessThan(ingest.indexOf('_inboundAttach')),
+    );
+    final decrypt = src
+        .split('Future<Uint8List?> decryptInboundAttachment')[1]
+        .split('Future<String?> decryptInboundAttachmentPath')[0];
+    expect(decrypt, contains('://'));
+    expect(
+      decrypt.indexOf('://'),
+      lessThan(decrypt.indexOf('_inboundAttach')),
+    );
+    final decryptPath = src
+        .split('Future<String?> decryptInboundAttachmentPath')[1]
+        .split('void _ingestAttachChunk')[0];
+    expect(decryptPath, contains('://'));
+    expect(
+      decryptPath.indexOf('://'),
+      lessThan(decryptPath.indexOf('_inboundAttachPaths')),
+    );
+  });
+
   test('attach-chunk-path nested fileKey or b64 is refused', () async {
     final (a, b, _) = await linked();
     final dir = Directory.systemTemp.createTempSync('orbits-att-nested-path-');

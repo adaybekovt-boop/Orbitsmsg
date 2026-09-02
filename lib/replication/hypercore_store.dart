@@ -14,7 +14,8 @@ class HypercoreLocalStore {
   final List<JournalRecord> blocks = <JournalRecord>[];
 
   JournalRecord append(JournalRecord record) {
-    if (!replicationValueIsSafe(record.fields)) {
+    if (!replicationValueIsSafe(record.fields) ||
+        record.writerDeviceId.contains('://')) {
       throw ArgumentError('refusing secret field in hypercore');
     }
     if (_alreadyHas(record)) return record;
@@ -44,7 +45,8 @@ class HypercoreLocalStore {
   }
 
   Map<String, Object?> toReplicationFrame(JournalRecord record) {
-    if (!replicationValueIsSafe(record.fields)) {
+    if (!replicationValueIsSafe(record.fields) ||
+        record.writerDeviceId.contains('://')) {
       throw ArgumentError('refusing secret field in hypercore');
     }
     return <String, Object?>{
@@ -66,6 +68,8 @@ class HypercoreLocalStore {
     if (!replicationValueIsSafe(frame)) return null;
     final kindName = frame['kind'] as String?;
     if (kindName == null) return null;
+    final writerId = frame['writerDeviceId'] as String? ?? '';
+    if (writerId.contains('://') || kindName.contains('://')) return null;
     final kind = ReplicationEventKind.values.where((k) => k.name == kindName);
     if (kind.isEmpty) return null;
     final raw = frame['fields'];

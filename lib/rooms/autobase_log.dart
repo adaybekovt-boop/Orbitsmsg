@@ -84,6 +84,7 @@ class RoomEvent {
     final writer = packet['writerId'] as String?;
     final kind = packet['kind'] as String?;
     if (writer == null || kind == null) return null;
+    if (writer.contains('://') || kind.contains('://')) return null;
     final raw = packet['payload'];
     return RoomEvent(
       writerId: writer,
@@ -103,8 +104,11 @@ RoomEvent? roomEventFromNativePacket(
   required String fallbackWriter,
 }) {
   if (!autobaseLiveEnvelopeIsSafe(packet)) return null;
+  if (fallbackWriter.contains('://')) return null;
+  final abWriter = packet['abWriter'] as String?;
+  if (abWriter != null && abWriter.contains('://')) return null;
   if (packet['type'] == 'autobase-event') return RoomEvent.fromWire(packet);
-  final writer = packet['abWriter'] as String? ?? fallbackWriter;
+  final writer = abWriter ?? fallbackWriter;
   final seq = (packet['abSeq'] as num?)?.toInt() ?? 0;
   switch (packet['type']) {
     case 'room_join':
@@ -223,6 +227,7 @@ class AutobaseProjection {
         })) {
       return;
     }
+    if (event.writerId.contains('://') || event.kind.contains('://')) return;
     state.applied.add(key);
     final payload = stripForbiddenAutobasePayload(event.payload);
     switch (event.kind) {

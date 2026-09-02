@@ -49,9 +49,13 @@ class CallSignal {
         !replicationValueIsSafe(media)) {
       throw FormatException('call signal contains forbidden fields');
     }
+    final callId = json['callId'] as String? ?? '';
+    if (callId.isEmpty || callId.contains('://')) {
+      throw FormatException('call signal contains forbidden fields');
+    }
     return CallSignal(
       type: type,
-      callId: json['callId'] as String? ?? '',
+      callId: callId,
       sdp: json['sdp'] as String?,
       candidate: candidate,
       media: media,

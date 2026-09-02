@@ -564,6 +564,93 @@ void main() {
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
 
+  test('apply refuses writerId scheme and does not mark applied', () {
+    final proj = AutobaseProjection()
+      ..apply(
+        const RoomEvent(
+          writerId: 'https://evil',
+          seq: 0,
+          kind: 'membership',
+          payload: {
+            'peerId': 'eve',
+            'action': 'join',
+            'displayName': 'Eve',
+          },
+        ),
+      );
+    expect(proj.state.members, isEmpty);
+    expect(proj.state.applied, isEmpty);
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('fromWire refuses writerId scheme', () {
+    expect(
+      RoomEvent.fromWire({
+        'type': 'autobase-event',
+        'writerId': 'https://x',
+        'seq': 0,
+        'kind': 'membership',
+        'payload': {
+          'peerId': 'p1',
+          'action': 'join',
+        },
+      }),
+      isNull,
+    );
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('roomEventFromNativePacket refuses abWriter scheme; legit join/msg work',
+      () {
+    expect(
+      roomEventFromNativePacket(
+        {
+          'type': 'room_join',
+          'roomId': 'room-1',
+          'abWriter': 'https://x',
+          'abSeq': 0,
+          'guestPeerId': 'p1',
+          'guestName': 'Pat',
+        },
+        fallbackWriter: 'a',
+      ),
+      isNull,
+    );
+
+    final join = roomEventFromNativePacket(
+      {
+        'type': 'room_join',
+        'roomId': 'room-1',
+        'abWriter': 'a',
+        'abSeq': 0,
+        'guestPeerId': 'p1',
+        'guestName': 'Pat',
+      },
+      fallbackWriter: 'x',
+    );
+    expect(join?.kind, 'membership');
+    expect(join?.writerId, 'a');
+    expect(join?.payload['peerId'], 'p1');
+
+    final msg = roomEventFromNativePacket(
+      {
+        'type': 'room_msg',
+        'id': 'm1',
+        'text': 'hello host-plaintext',
+        'peerId': 'ORBIT-AA',
+        'abWriter': 'a',
+        'abSeq': 1,
+      },
+      fallbackWriter: 'x',
+    );
+    expect(msg?.kind, 'message');
+    expect(msg?.payload['text'], 'hello host-plaintext');
+
+    final proj = AutobaseProjection()..apply(msg!);
+    expect(proj.state.messages.single['text'], 'hello host-plaintext');
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
   test('worklet autobase.js projects kForbiddenReplicationFields', () {
     final js =
         File('tool/connectivity_harness/src/autobase.js').readAsStringSync();

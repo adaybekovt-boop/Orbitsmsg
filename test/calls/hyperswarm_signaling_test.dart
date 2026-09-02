@@ -49,6 +49,50 @@ void main() {
     );
   });
 
+  test('fromJson refuses callId with ://', () {
+    expect(
+      () => CallSignal.fromJson({
+        'type': CallSignalType.hangup.name,
+        'callId': 'https://evil',
+      }),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
+  test('fromJson refuses empty callId', () {
+    expect(
+      () => CallSignal.fromJson({
+        'type': CallSignalType.hangup.name,
+        'callId': '',
+      }),
+      throwsA(isA<FormatException>()),
+    );
+    expect(
+      () => CallSignal.fromJson({
+        'type': CallSignalType.offer.name,
+      }),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
+  test('fromJson accepts legit hangup and offer with callId c1', () {
+    final hangup = CallSignal.fromJson({
+      'type': CallSignalType.hangup.name,
+      'callId': 'c1',
+    });
+    expect(hangup.type, CallSignalType.hangup);
+    expect(hangup.callId, 'c1');
+
+    final offer = CallSignal.fromJson({
+      'type': CallSignalType.offer.name,
+      'callId': 'c1',
+      'sdp': 'v=0 https://example.invalid/ice',
+    });
+    expect(offer.type, CallSignalType.offer);
+    expect(offer.callId, 'c1');
+    expect(offer.sdp, 'v=0 https://example.invalid/ice');
+  });
+
   test('fromJson refuses kek in media', () {
     expect(
       () => CallSignal.fromJson({

@@ -873,6 +873,7 @@ class DualStackBridge {
     List<int> fileKey,
   ) async {
     if (fileId.isEmpty || fileKey.isEmpty) return null;
+    if (fileId.contains('://')) return null;
     final key = '${normalizePeerId(fromPeerId)}\x1f$fileId';
     final path = _inboundAttachPaths.remove(key);
     if (path != null) {
@@ -901,6 +902,7 @@ class DualStackBridge {
     List<int> fileKey,
   ) async {
     if (fileId.isEmpty || fileKey.isEmpty) return null;
+    if (fileId.contains('://')) return null;
     final key = '${normalizePeerId(fromPeerId)}\x1f$fileId';
     final path = _inboundAttachPaths[key];
     if (path == null || path.isEmpty) return null;
@@ -915,11 +917,12 @@ class DualStackBridge {
       return;
     }
     final fileId = frame['fileId'] as String? ?? '';
+    if (fileId.isEmpty || fileId.contains('://')) return;
     final hash = frame['hash'] as String? ?? '';
     final b64 = frame['b64'] as String? ?? '';
     final index = frame['index'];
     final offset = frame['offset'];
-    if (fileId.isEmpty || hash.isEmpty || b64.isEmpty) return;
+    if (hash.isEmpty || b64.isEmpty) return;
     if (index is! num || offset is! num) return;
     List<int> cipher;
     try {
