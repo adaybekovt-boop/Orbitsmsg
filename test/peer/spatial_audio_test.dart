@@ -39,6 +39,8 @@ class _RecordingTransport implements RoomTransport {
   @override
   void openReliable(String peerId) {}
   @override
+  bool canUseNative(String peerId) => false;
+  @override
   PeerJsClient? get rawPeer => null;
 
   List<Map<String, Object?>> get spatial =>

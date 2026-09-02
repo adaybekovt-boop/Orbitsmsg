@@ -645,7 +645,11 @@ class RoomManager extends StateNotifier<RoomState> {
           '[room] joinRoom: isolation forbids PeerJS guest client; '
           'joining host ${invite.roomId} on native/default transport',
         );
-        await _joinByHostPeerCode(invite.roomId, displayName);
+        await _joinByHostPeerCode(
+          invite.roomId,
+          displayName,
+          isolationMode: isolationMode,
+        );
         return;
       }
       await _joinSelfHosted(
@@ -656,7 +660,11 @@ class RoomManager extends StateNotifier<RoomState> {
       return;
     }
 
-    await _joinByHostPeerCode(roomCode, displayName);
+    await _joinByHostPeerCode(
+      roomCode,
+      displayName,
+      isolationMode: isolationMode,
+    );
   }
 
   /// Whether a room-scoped PeerJS client may be constructed for this
@@ -669,7 +677,15 @@ class RoomManager extends StateNotifier<RoomState> {
   /// Guest join by host peer code on the default/native [RoomTransport]
   /// (cloud PeerJS when isolation allows it, DualStack/native otherwise).
   /// Does not construct a room-scoped [PeerJsClient].
-  Future<void> _joinByHostPeerCode(String roomCode, String displayName) async {
+  ///
+  /// [isolationMode] is the same override [joinRoom] accepts. Null uses
+  /// product [kPeerjsIsolationMode] via [peerjsAllowedOnNative]
+  /// (must pass [kIsWeb]).
+  Future<void> _joinByHostPeerCode(
+    String roomCode,
+    String displayName, {
+    String? isolationMode,
+  }) async {
     final self = _ref.read(localProfileProvider);
     final selfId = self?.peerId ?? _selfPeerId();
     final hostPeerId = normalizePeerId(roomCode);
@@ -696,6 +712,22 @@ class RoomManager extends StateNotifier<RoomState> {
     );
 
     final conns = _connections;
+    // Fail closed before DualStack.dial / PeerJS. Product
+    // [kPeerjsIsolationMode] stays default-live (no-op on the live path).
+    // Use [kIsWeb], never the no-arg form.
+    final peerJsAllowed = isolationMode != null
+        ? peerjsAllowedOnNativeFor(isolationMode, isWeb: kIsWeb)
+        : peerjsAllowedOnNative(isWeb: kIsWeb);
+    if (!peerJsAllowed && !conns.canUseNative(hostPeerId)) {
+      debugPrint(
+        '[room] joinRoom: isolation forbids PeerJS and native cannot take host',
+      );
+      await db.setRoomStatus(roomId, 'offline');
+      state = const RoomState(
+        joinError: 'Не удалось подключиться к серверу (изоляция).',
+      );
+      return;
+    }
     conns.openReliable(hostPeerId);
     if (!await _waitReliable(hostPeerId)) {
       debugPrint('[room] joinRoom: no reliable channel to host $hostPeerId');
@@ -752,7 +784,11 @@ class RoomManager extends StateNotifier<RoomState> {
         '[room] _joinSelfHosted: isolation forbids PeerJS; '
         'joining by host peer code',
       );
-      await _joinByHostPeerCode(invite.roomId, displayName);
+      await _joinByHostPeerCode(
+        invite.roomId,
+        displayName,
+        isolationMode: isolationMode,
+      );
       return;
     }
 
@@ -795,7 +831,11 @@ class RoomManager extends StateNotifier<RoomState> {
     // Product [kPeerjsIsolationMode] is the live gate; [isolationMode]
     // was already checked at the top of this method.
     if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
-      await _joinByHostPeerCode(invite.roomId, displayName);
+      await _joinByHostPeerCode(
+        invite.roomId,
+        displayName,
+        isolationMode: isolationMode,
+      );
       return;
     }
 
@@ -2472,6 +2512,10 @@ abstract class RoomTransport {
   /// Proactively dial [peerId]'s reliable channel.
   void openReliable(String peerId);
 
+  /// DualStack can take [peerId]. Default false. Production
+  /// [_ConnRoomTransport] forwards to [ConnectionsNotifier.canUseNative].
+  bool canUseNative(String peerId) => false;
+
   /// The active PeerJS client (for voice-mesh media calls), or null.
   PeerJsClient? get rawPeer;
 }
@@ -2495,6 +2539,9 @@ class _ConnRoomTransport implements RoomTransport {
 
   @override
   void openReliable(String peerId) => _c.openReliable(peerId);
+
+  @override
+  bool canUseNative(String peerId) => _c.canUseNative(peerId);
 
   @override
   PeerJsClient? get rawPeer =>

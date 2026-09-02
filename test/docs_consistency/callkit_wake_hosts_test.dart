@@ -60,6 +60,67 @@ void main() {
     expect(ios, contains('opaqueWakeToken'));
     expect(ios, contains('didReceiveRemoteNotification'));
 
+    const forbiddenPins = <String>[
+      'plaintext',
+      'password',
+      'kek',
+      'vaultKek',
+      'rootKey',
+      'sendCk',
+      'recvCk',
+      'dhPriv',
+      'skipped',
+      'discoverySecret',
+      'sharedDiscoverySecret',
+      'attachmentBytes',
+      'fileKey',
+      'fileKeyB64',
+      'privBytes',
+      'text',
+      'body',
+      'title',
+      'senderName',
+      'displayName',
+      'peerId',
+      'conversationId',
+      'attachment',
+      'mime',
+      'fileName',
+    ];
+    for (final key in forbiddenPins) {
+      expect(ios, contains('"$key"'),
+          reason: 'iOS wake host missing forbidden key $key');
+      expect(wake, contains('"$key"'),
+          reason: 'Android wake host missing forbidden key $key');
+    }
+    expect(ios, contains('fileKey'));
+    expect(ios, contains('discoverySecret'));
+    expect(ios, contains('vaultKek'));
+    expect(ios, contains('nested'));
+    expect(ios, contains('NSDictionary'));
+    expect(ios, contains('ObjectIdentifier'));
+    expect(wake, contains('fileKey'));
+    expect(wake, contains('discoverySecret'));
+    expect(wake, contains('vaultKek'));
+    expect(wake, contains('nested'));
+    expect(wake, contains('Bundle'));
+    expect(wake, contains('identityHashCode'));
+    expect(ios, contains('OpaqueWake'));
+    expect(wake, contains('OpaqueWake'));
+    expect(ios, contains('kForbiddenReplicationFields'));
+    expect(wake, contains('kForbiddenReplicationFields'));
+
+    final iosWakeStart = ios.indexOf('didReceiveRemoteNotification');
+    expect(iosWakeStart, greaterThanOrEqualTo(0));
+    final iosWakeEnd =
+        ios.indexOf('@objc private func batteryDidChange', iosWakeStart);
+    expect(iosWakeEnd, greaterThan(iosWakeStart));
+    final iosWake = ios.substring(iosWakeStart, iosWakeEnd);
+    expect(iosWake, isNot(contains('http://')));
+    expect(iosWake, isNot(contains('https://')));
+    expect(wake, isNot(contains('http://')));
+    expect(wake, isNot(contains('https://')));
+
     final phase13 = File('docs/migration/phase13-group-e2e-review.md')
         .readAsStringSync();
     expect(phase13, contains('kRoomsApplicationE2eImplemented'));

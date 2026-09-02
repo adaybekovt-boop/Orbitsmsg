@@ -1562,6 +1562,81 @@ void main() {
   });
 
   test(
+      'Autobase membership hydrate skips journal rows with nested text or b64',
+      () async {
+    final (a, b, _) = await linked();
+    expect(
+      await a.sendAutobaseEvent(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        const RoomEvent(
+          writerId: 'a',
+          seq: 0,
+          kind: 'membership',
+          payload: {
+            'roomId': 'room-nested',
+            'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+            'action': 'join',
+            'displayName': 'B',
+          },
+        ),
+      ),
+      isTrue,
+    );
+    expect(a.rooms.state.members['ORBIT-BBBBBBBBBBBBBBBB'], 'B');
+
+    a.journal.append(
+      ReplicationEventKind.roomMembershipChanged,
+      {
+        'roomId': 'room-nested',
+        'peerId': 'ORBIT-CCCCCCCCCCCCCCCC',
+        'action': 'join',
+        'displayName': 'C',
+        'writerId': 'a',
+        'seq': 1,
+        'extra': {'text': 'hi'},
+      },
+    );
+    a.journal.append(
+      ReplicationEventKind.roomMembershipChanged,
+      {
+        'roomId': 'room-nested',
+        'peerId': 'ORBIT-DDDDDDDDDDDDDDDD',
+        'action': 'join',
+        'displayName': 'D',
+        'writerId': 'a',
+        'seq': 2,
+        'extra': {'b64': 'AQID'},
+      },
+    );
+
+    await a.detach();
+
+    final restored = DualStackBridge(
+      transport: a.transport,
+      journal: a.journal,
+      selfPeerId: a.selfPeerId,
+      selfDeviceId: a.selfDeviceId,
+      secrets: a.secrets,
+      isBlocked: a.isBlocked,
+      tofuCheck: _allowTofu,
+      onPacket: (_, __) async {},
+    )..attach();
+
+    expect(restored.rooms.state.members['ORBIT-BBBBBBBBBBBBBBBB'], 'B');
+    expect(
+      restored.rooms.state.members.containsKey('ORBIT-CCCCCCCCCCCCCCCC'),
+      isFalse,
+    );
+    expect(
+      restored.rooms.state.members.containsKey('ORBIT-DDDDDDDDDDDDDDDD'),
+      isFalse,
+    );
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+    await restored.detach();
+    await b.detach();
+  });
+
+  test(
       'FileJournal persist/replay restores Autobase membership and Hypercore envelopes without re-append',
       () async {
     final durable = FileJournal.memory('dev-a');

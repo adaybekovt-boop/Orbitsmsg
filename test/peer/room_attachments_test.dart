@@ -42,6 +42,8 @@ class _CaptureTransport implements RoomTransport {
   @override
   void openReliable(String peerId) {}
   @override
+  bool canUseNative(String peerId) => false;
+  @override
   PeerJsClient? get rawPeer => null;
 
   Iterable<Map<String, Object?>> ofType(String type) =>

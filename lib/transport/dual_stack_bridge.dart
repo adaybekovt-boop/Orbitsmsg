@@ -3,6 +3,7 @@
 // discovery secret — never HASH(peerId).
 
 import 'dart:async';
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -37,6 +38,43 @@ import 'transport_api.dart';
 
 typedef PacketSink = Future<void> Function(String peerId, Object? data);
 typedef BlockedCheck = bool Function(String peerId);
+
+/// Journal membership hydrate only — not live `room_msg` / Autobase strip.
+const _kJournalMembershipBanned = <String>{
+  'text',
+  'b64',
+  'fileKey',
+  'fileKeyB64',
+  'plaintext',
+};
+
+bool _journalMembershipFieldsSafe(Map<String, Object?> fields) {
+  if (!replicationValueIsSafe(fields)) return false;
+  return !_hasJournalMembershipBanned(fields, HashSet<Object>.identity());
+}
+
+bool _hasJournalMembershipBanned(Object? value, Set<Object> seen) {
+  if (value == null || value is bool || value is num || value is String) {
+    return false;
+  }
+  if (value is List<int>) return false; // ciphertext leaf
+  if (value is Map) {
+    if (!seen.add(value)) return false;
+    for (final e in value.entries) {
+      if (_kJournalMembershipBanned.contains('${e.key}')) return true;
+      if (_hasJournalMembershipBanned(e.value, seen)) return true;
+    }
+    return false;
+  }
+  if (value is Iterable) {
+    if (!seen.add(value)) return false;
+    for (final item in value) {
+      if (_hasJournalMembershipBanned(item, seen)) return true;
+    }
+    return false;
+  }
+  return false;
+}
 
 class DualStackBridge {
   DualStackBridge({
@@ -162,16 +200,7 @@ class DualStackBridge {
 
   RoomEvent? _membershipEventFromJournal(JournalRecord rec) {
     if (rec.kind != ReplicationEventKind.roomMembershipChanged) return null;
-    if (!replicationValueIsSafe(rec.fields)) return null;
-    for (final banned in const [
-      'text',
-      'b64',
-      'fileKey',
-      'fileKeyB64',
-      'plaintext',
-    ]) {
-      if (rec.fields.containsKey(banned)) return null;
-    }
+    if (!_journalMembershipFieldsSafe(rec.fields)) return null;
     final peerId = rec.fields['peerId'] as String?;
     if (peerId == null || peerId.isEmpty) return null;
     final seq = (rec.fields['seq'] as num?)?.toInt() ?? rec.seq;

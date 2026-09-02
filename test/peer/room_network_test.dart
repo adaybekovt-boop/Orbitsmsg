@@ -51,6 +51,9 @@ class _FakeTransport implements RoomTransport {
   void openReliable(String peerId) {/* already "connected" in the harness */}
 
   @override
+  bool canUseNative(String peerId) => false;
+
+  @override
   PeerJsClient? get rawPeer => null; // voice mesh not exercised here
 }
 

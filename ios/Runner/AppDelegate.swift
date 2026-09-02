@@ -96,20 +96,71 @@ import UIKit
     pushChannel?.invokeMethod("token", arguments: ["apns": hex])
   }
 
+  /// Aligned with OpaqueWake.forbiddenKeys / kForbiddenReplicationFields plus UX keys.
+  private static let forbiddenKeys: Set<String> = [
+    "plaintext", "password", "kek", "vaultKek", "rootKey", "sendCk", "recvCk",
+    "dhPriv", "skipped", "discoverySecret", "sharedDiscoverySecret",
+    "attachmentBytes", "fileKey", "fileKeyB64", "privBytes",
+    "text", "body", "title", "senderName", "displayName", "peerId",
+    "conversationId", "attachment", "mime", "fileName",
+  ]
+
+  /// nested walk of NSDictionary / NSArray (and [AnyHashable: Any] / arrays).
+  /// Cycle-safe via ObjectIdentifier on NSDictionary/NSArray class objects;
+  /// already-seen values are safe (not forbidden).
+  private static func hasForbiddenKey(
+    _ value: Any?,
+    seen: inout Set<ObjectIdentifier>
+  ) -> Bool {
+    guard let value = value else { return false }
+    if let dict = value as? NSDictionary {
+      let id = ObjectIdentifier(dict)
+      if seen.contains(id) { return false }
+      seen.insert(id)
+      for (key, child) in dict {
+        if let name = key as? String, forbiddenKeys.contains(name) {
+          return true
+        }
+        if hasForbiddenKey(child, seen: &seen) { return true }
+      }
+      return false
+    }
+    if let array = value as? NSArray {
+      let id = ObjectIdentifier(array)
+      if seen.contains(id) { return false }
+      seen.insert(id)
+      for item in array {
+        if hasForbiddenKey(item, seen: &seen) { return true }
+      }
+      return false
+    }
+    if let dict = value as? [AnyHashable: Any] {
+      for (key, child) in dict {
+        if let name = key as? String, forbiddenKeys.contains(name) {
+          return true
+        }
+        if hasForbiddenKey(child, seen: &seen) { return true }
+      }
+      return false
+    }
+    if let array = value as? [Any] {
+      for item in array {
+        if hasForbiddenKey(item, seen: &seen) { return true }
+      }
+      return false
+    }
+    return false
+  }
+
   override func application(
     _ application: UIApplication,
     didReceiveRemoteNotification userInfo: [AnyHashable: Any],
     fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
   ) {
-    let forbidden = [
-      "text", "body", "title", "senderName", "displayName",
-      "peerId", "conversationId", "attachment", "mime", "fileName",
-    ]
-    for key in forbidden {
-      if userInfo[key] != nil {
-        completionHandler(.noData)
-        return
-      }
+    var seen = Set<ObjectIdentifier>()
+    if Self.hasForbiddenKey(userInfo, seen: &seen) {
+      completionHandler(.noData)
+      return
     }
     guard userInfo["opaqueWakeToken"] != nil else {
       completionHandler(.noData)

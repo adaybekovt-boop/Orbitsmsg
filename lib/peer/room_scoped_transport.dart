@@ -48,12 +48,20 @@ class RoomScopedTransport implements RoomTransport {
   /// is constructed (before/after start() both fine — the stream is broadcast).
   void wire() {
     if (_wired || _disposed) return;
+    // Isolation already closes inbound leftovers in `_attach`, but wire
+    // must not subscribe `onConnection` when native isolation disallows
+    // PeerJS. Return before `_wired` so a later legal wire can still attach.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
     _wired = true;
     _clientSubs.add(_client.onConnection.listen(_attach));
   }
 
   void _attach(PeerDataConnection conn) {
     if (_disposed) return;
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      unawaited(conn.close());
+      return;
+    }
     final remoteId = normalizePeerId(conn.peer);
     if (remoteId.isEmpty) return;
 
@@ -108,6 +116,9 @@ class RoomScopedTransport implements RoomTransport {
       send: (p) => c!.send(p),
     );
   }
+
+  @override
+  bool canUseNative(String peerId) => false;
 
   @override
   void openReliable(String peerId) {

@@ -46,6 +46,7 @@ import 'package:orbits_flutter/storage/db.dart' as db;
 class _FakeTransport implements RoomTransport {
   RoomBridge bridge = RoomBridge.empty;
   final List<String> openReliableCalls = [];
+  bool nativeReady = true;
   @override
   void bindRoom(RoomBridge b) => bridge = b;
   @override
@@ -54,6 +55,8 @@ class _FakeTransport implements RoomTransport {
   bool hasReliable(String peerId) => true;
   @override
   void openReliable(String peerId) => openReliableCalls.add(peerId);
+  @override
+  bool canUseNative(String peerId) => nativeReady;
   @override
   PeerJsClient? get rawPeer => null;
 }
@@ -277,6 +280,77 @@ void main() {
     expect(st.hostPeerId, hostId);
     expect(st.joinError, isNull);
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+  });
+
+  test('_joinByHostPeerCode isolation gate sits before openReliable', () {
+    final src = File('lib/peer/room_manager.dart').readAsStringSync();
+    expect(src, isNot(contains('peerjsAllowedOnNative()')));
+
+    final joinByHost = src
+        .split('Future<void> _joinByHostPeerCode')[1]
+        .split('void clearJoinError')[0];
+    expect(joinByHost, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(joinByHost, contains('canUseNative'));
+    expect(joinByHost, contains('openReliable'));
+    expect(joinByHost, isNot(contains('peerjsAllowedOnNative()')));
+
+    final peerJsIdx =
+        joinByHost.indexOf('peerjsAllowedOnNative(isWeb: kIsWeb)');
+    final nativeIdx = joinByHost.indexOf('canUseNative');
+    final openIdx = joinByHost.indexOf('openReliable');
+    expect(peerJsIdx, greaterThanOrEqualTo(0));
+    expect(nativeIdx, greaterThanOrEqualTo(0));
+    expect(openIdx, greaterThan(peerJsIdx));
+    expect(openIdx, greaterThan(nativeIdx));
+
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(kPeerjsSupportWindowOpen, isTrue);
+  });
+
+  test(
+      'joinRoom under isolation without native fails closed before openReliable',
+      () async {
+    const guestId = 'ORBIT-BBBBBB';
+    const guestUser = AuthedUser(
+      peerId: guestId,
+      displayName: 'Guest',
+      bio: '',
+      avatarDataUrl: null,
+    );
+    final transport = _FakeTransport()..nativeReady = false;
+    final c = ProviderContainer(overrides: [
+      localProfileProvider.overrideWithValue(guestUser),
+      roomTransportProvider.overrideWithValue(transport),
+    ]);
+    containers.add(c);
+
+    final invite = RoomInvite(
+      roomId: hostId,
+      lanHosts: const ['192.0.2.55'],
+      port: 9,
+      key: 'isolation-test-key',
+    );
+
+    await c
+        .read(roomManagerProvider.notifier)
+        .joinRoom(
+          invite.encode(),
+          'Guest',
+          isolationMode: kPeerjsIsolationRemoved,
+        )
+        .timeout(const Duration(seconds: 3));
+
+    expect(
+      transport.openReliableCalls,
+      isEmpty,
+      reason: 'must not DualStack.dial / PeerJS when isolation forbids '
+          'PeerJS and native cannot take the host',
+    );
+    final st = c.read(roomManagerProvider);
+    expect(st.joinError, isNotNull);
+    expect(st.joinError, contains('изоляция'));
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(kPeerjsSupportWindowOpen, isTrue);
   });
 
   test('joinRoom isolation gate sits before buildRoomScopedClient', () {

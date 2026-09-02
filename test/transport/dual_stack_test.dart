@@ -324,10 +324,28 @@ void main() {
   });
 
   test('RoomScopedTransport skips PeerJS when isolation disallows it', () {
+    final src = File('lib/peer/room_scoped_transport.dart').readAsStringSync();
+    expect(src, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(src, isNot(contains('peerjsAllowedOnNative()')));
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
-    expect(
-      File('lib/peer/room_scoped_transport.dart').readAsStringSync(),
-      contains('peerjsAllowedOnNative(isWeb: kIsWeb)'),
-    );
+    expect(kPeerjsSupportWindowOpen, isTrue);
+
+    final wire = src.split('void wire()')[1].split('void _attach')[0];
+    expect(wire, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(wire, isNot(contains('peerjsAllowedOnNative()')));
+    final wireGate = wire.indexOf('peerjsAllowedOnNative(isWeb: kIsWeb)');
+    final wireListen = wire.indexOf('onConnection.listen');
+    expect(wireGate, greaterThanOrEqualTo(0));
+    expect(wireListen, greaterThan(wireGate));
+
+    final attach = src.split('void _attach')[1].split('void bindRoom')[0];
+    expect(attach, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(attach, isNot(contains('peerjsAllowedOnNative()')));
+    final attachGate = attach.indexOf('peerjsAllowedOnNative(isWeb: kIsWeb)');
+    final attachInbound = attach.indexOf('handleInbound');
+    final attachInsert = attach.indexOf('_reliable[');
+    expect(attachGate, greaterThanOrEqualTo(0));
+    expect(attachInbound, greaterThan(attachGate));
+    expect(attachInsert, greaterThan(attachGate));
   });
 }

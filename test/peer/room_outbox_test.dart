@@ -37,6 +37,9 @@ class _FlakyHostTransport implements RoomTransport {
   void openReliable(String peerId) {}
 
   @override
+  bool canUseNative(String peerId) => false;
+
+  @override
   PeerJsClient? get rawPeer => null;
 }
 void main() {
