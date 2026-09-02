@@ -57,13 +57,13 @@
       "hashes": [
         {
           "alg": "SHA-256",
-          "content": "74ed38e09d63dbc8ca7b17f5f796437da4623acf4b246219582fedeb59e958ef"
+          "content": "096ff26952856171a07bccd36c5348cc3bb3f619bf3b98fc9533dc00ec33c1e4"
         }
       ],
       "properties": [
         {
           "name": "pinnedSourceSha256",
-          "value": "74ed38e09d63dbc8ca7b17f5f796437da4623acf4b246219582fedeb59e958ef"
+          "value": "096ff26952856171a07bccd36c5348cc3bb3f619bf3b98fc9533dc00ec33c1e4"
         },
         {
           "name": "remoteJs",
