@@ -22,6 +22,7 @@ const String kBareErrorBundleMissing = 'BUNDLE_MISSING';
 const String kBareErrorBundleTampered = 'BUNDLE_TAMPERED';
 const String kBareErrorAbiMismatch = 'ABI_MISMATCH';
 const String kBareErrorMalformed = 'MALFORMED';
+const String kBareErrorRuntimeMissing = 'BARE_RUNTIME_MISSING';
 
 const int kBareMaxAttachmentBytes = 50 * 1024 * 1024;
 const int kBareIpcMaxFrameBytes = 256 * 1024;

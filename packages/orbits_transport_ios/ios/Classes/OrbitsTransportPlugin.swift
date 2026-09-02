@@ -102,9 +102,13 @@ public class OrbitsTransportPlugin: NSObject, FlutterPlugin {
       result(FlutterError(code: "BUNDLE_TAMPERED", message: "local bundle hash mismatch", details: nil))
       return
     }
-    started = true
-    suspended = false
-    result(nil)
+    result(
+      FlutterError(
+        code: "BARE_RUNTIME_MISSING",
+        message: "linked Bare runtime is not shipped",
+        details: nil
+      )
+    )
   }
 
   private func looksRemote(_ url: String) -> Bool {

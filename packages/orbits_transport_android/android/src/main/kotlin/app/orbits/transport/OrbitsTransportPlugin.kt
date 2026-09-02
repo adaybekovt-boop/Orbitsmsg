@@ -117,9 +117,13 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
       result.error("BUNDLE_TAMPERED", "local bundle hash mismatch", null)
       return
     }
-    started = true
-    suspended = false
-    result.success(null)
+    // A linked Bare binary is not shipped in this tree. Success would
+    // be a false send path. Fail closed until the artifact exists.
+    result.error(
+      "BARE_RUNTIME_MISSING",
+      "linked Bare runtime is not shipped",
+      null,
+    )
   }
 
   private fun looksRemote(url: String?): Boolean {

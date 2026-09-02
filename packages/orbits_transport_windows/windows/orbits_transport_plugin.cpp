@@ -19,6 +19,7 @@ enum OrbitsHostCode {
   kOrbitsHostBundleTampered = -8,
   kOrbitsHostAbiMismatch = -9,
   kOrbitsHostMalformed = -10,
+  kOrbitsHostBareMissing = -11,
 };
 
 struct OrbitsBareHost {
@@ -42,7 +43,7 @@ int orbits_transport_start(bool remote_js, const char* remote_js_url) {
   if (rejects_remote_js(remote_js, remote_js_url, nullptr, nullptr)) {
     return kOrbitsHostRemoteJs;  // production Bare must not fetch remote JS
   }
-  return kOrbitsHostOk;
+  return kOrbitsHostBareMissing;  // linked Bare runtime is not shipped
 }
 
 int orbits_bare_host_start(OrbitsBareHost* host, bool remote_js,
@@ -66,9 +67,7 @@ int orbits_bare_host_start(OrbitsBareHost* host, bool remote_js,
       strcmp(expected_sha, actual_sha) != 0) {
     return kOrbitsHostBundleTampered;
   }
-  host->started = true;
-  host->suspended = false;
-  return kOrbitsHostOk;
+  return kOrbitsHostBareMissing;  // linked Bare runtime is not shipped
 }
 
 int orbits_bare_host_stop(OrbitsBareHost* host) {
