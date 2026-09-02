@@ -272,7 +272,7 @@ class CallsNotifier extends StateNotifier<CallState> {
         media: {'video': video},
       );
       // Native-only when the remote advertised call-v1. Do not also
-      // callPeer — that double-rings / double-audios new DualStack pairs.
+      // open a PeerJS media dial — that double-rings new DualStack pairs.
       return;
     }
 

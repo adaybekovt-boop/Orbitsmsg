@@ -35,13 +35,13 @@ void main() {
     expect(early, contains('Нет активного P2P-соединения'));
 
     final startOutgoing = startFn.indexOf('startOutgoing');
-    final callPeer = startFn.indexOf('callPeer');
+    final callPeer = startFn.indexOf('.callPeer');
     expect(startOutgoing, greaterThan(startFn.indexOf('takeNative')));
     expect(callPeer, greaterThan(startOutgoing));
     expect(
       startFn.indexOf('return;', startOutgoing),
       lessThan(callPeer),
-      reason: 'native call-v1 path must return before PeerJS callPeer',
+      reason: 'native call-v1 path must return before PeerJS .callPeer',
     );
 
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
