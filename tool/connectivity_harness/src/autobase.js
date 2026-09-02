@@ -62,12 +62,18 @@ const JOURNAL_FORBIDDEN = new Set([
 
 const MEMBERSHIP_PAYLOAD_KEYS = ['peerId', 'action', 'displayName', 'roomId']
 
-function sanitize(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+function sanitize(value, seen) {
+  if (!value || typeof value !== 'object') return value
+  const walk = seen || new Set()
+  if (walk.has(value)) return Array.isArray(value) ? [] : {}
+  walk.add(value)
+  if (Array.isArray(value)) {
+    return value.map((item) => sanitize(item, walk))
+  }
   const out = {}
   for (const [k, v] of Object.entries(value)) {
     if (STRIP.has(k)) continue
-    out[k] = sanitize(v)
+    out[k] = sanitize(v, walk)
   }
   return out
 }

@@ -38,7 +38,10 @@ class StoragePeerHttp {
     _server = null;
   }
 
-  void grant(MailboxCapability cap) => store.grant(cap);
+  void grant(MailboxCapability cap) {
+    if (!storagePeerTokenIsSafe(cap.token)) return;
+    store.grant(cap);
+  }
 
   Future<void> _onRequest(HttpRequest req) async {
     try {
@@ -97,9 +100,14 @@ class StoragePeerHttp {
           return;
         }
         final token = map['token'] as String? ?? '';
+        if (!storagePeerTokenIsSafe(token)) {
+          req.response.statusCode = 400;
+          await req.response.close();
+          return;
+        }
         final writer = map['writerKey'] as String? ?? '';
         final seq = (map['seq'] as num?)?.toInt();
-        if (token.isEmpty || writer.isEmpty || seq == null) {
+        if (writer.isEmpty || seq == null) {
           req.response.statusCode = 400;
           await req.response.close();
           return;
@@ -110,8 +118,13 @@ class StoragePeerHttp {
       }
       if (req.method == 'GET' && req.uri.path == '/v1/stats') {
         final token = req.uri.queryParameters['token'] ?? '';
+        if (!storagePeerTokenIsSafe(token)) {
+          req.response.statusCode = 400;
+          await req.response.close();
+          return;
+        }
         final writer = req.uri.queryParameters['writerKey'] ?? '';
-        if (token.isEmpty || writer.isEmpty) {
+        if (writer.isEmpty) {
           req.response.statusCode = 400;
           await req.response.close();
           return;
@@ -131,9 +144,14 @@ class StoragePeerHttp {
       }
       if (req.method == 'GET' && req.uri.path == '/v1/blocks') {
         final token = req.uri.queryParameters['token'] ?? '';
+        if (!storagePeerTokenIsSafe(token)) {
+          req.response.statusCode = 400;
+          await req.response.close();
+          return;
+        }
         final writer = req.uri.queryParameters['writerKey'] ?? '';
         final from = int.tryParse(req.uri.queryParameters['fromSeq'] ?? '') ?? 0;
-        if (token.isEmpty || writer.isEmpty) {
+        if (writer.isEmpty) {
           req.response.statusCode = 400;
           await req.response.close();
           return;

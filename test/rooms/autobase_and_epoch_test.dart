@@ -250,6 +250,29 @@ void main() {
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
 
+  test('stripForbiddenAutobasePayload walks arrays of maps and keeps text', () {
+    final cleaned = stripForbiddenAutobasePayload({
+      'chunks': [
+        {
+          'fileKey': 'x',
+          'b64': 'AQID',
+          'name': 'n',
+        },
+      ],
+      'text': 'hello',
+    });
+    expect(cleaned['text'], 'hello');
+    expect(cleaned.containsKey('fileKey'), isFalse);
+    expect(cleaned.containsKey('b64'), isFalse);
+    final chunks = cleaned['chunks'] as List;
+    expect(chunks, hasLength(1));
+    final chunk = Map<String, Object?>.from(chunks.single as Map);
+    expect(chunk['name'], 'n');
+    expect(chunk.containsKey('fileKey'), isFalse);
+    expect(chunk.containsKey('b64'), isFalse);
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
   test('stripForbiddenAutobasePayload matches kForbiddenReplicationFields', () {
     expect(
       kForbiddenReplicationFields,

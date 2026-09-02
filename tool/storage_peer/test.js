@@ -3,7 +3,7 @@
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const http = require('node:http')
-const { createServer, hasForbiddenKey } = require('./server.js')
+const { createServer, hasForbiddenKey, tokenIsSafe } = require('./server.js')
 
 function request(port, { method, path, body }) {
   return new Promise((resolve, reject) => {
@@ -244,6 +244,105 @@ test('HTTP storage peer rejects nested fileKey/peerId/plaintext and keeps cipher
   assert.equal(got.status, 200)
   assert.equal(JSON.parse(got.body).blocks.length, 1)
   assert.equal(JSON.parse(got.body).blocks[0].b64, Buffer.from([1, 2, 3]).toString('base64'))
+})
+
+test('tokenIsSafe rejects empty, URL, peerId, and secret fragments', () => {
+  assert.equal(tokenIsSafe('cap'), true)
+  assert.equal(tokenIsSafe(''), false)
+  assert.equal(tokenIsSafe('https://evil/tok'), false)
+  assert.equal(tokenIsSafe('ftp://x'), false)
+  assert.equal(tokenIsSafe('tok-peerId'), false)
+  assert.equal(tokenIsSafe('x-fileKey'), false)
+  assert.equal(tokenIsSafe('x-rootKey'), false)
+  assert.equal(tokenIsSafe('x-discoverySecret'), false)
+})
+
+test('HTTP storage peer rejects unsafe tokens on grant/put/get/tombstone/stats', async (t) => {
+  const server = createServer({ token: 'cap-token-safe' })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const port = server.address().port
+
+  const health = await request(port, { method: 'GET', path: '/health' })
+  assert.equal(health.status, 200)
+  const healthJson = JSON.parse(health.body)
+  assert.equal(healthJson.ok, true)
+  assert.equal(healthJson.role, 'storage')
+  assert.equal(healthJson.plaintext, false)
+  assert.notEqual(healthJson.deployed, true)
+
+  const ciphertext = Buffer.from([1, 2, 3]).toString('base64')
+  const unsafe = ['https://evil/tok', 'tok-peerId', 'x-fileKey']
+  for (const token of unsafe) {
+    const granted = await request(port, {
+      method: 'POST',
+      path: '/v1/grant',
+      body: { token },
+    })
+    assert.equal(granted.status, 400)
+
+    const put = await request(port, {
+      method: 'POST',
+      path: '/v1/blocks',
+      body: { token, writerKey: 'w-unsafe', seq: 0, b64: ciphertext },
+    })
+    assert.equal(put.status, 400)
+
+    const q = encodeURIComponent(token)
+    const got = await request(port, {
+      method: 'GET',
+      path: `/v1/blocks?token=${q}&writerKey=w-unsafe&fromSeq=0`,
+    })
+    assert.equal(got.status, 400)
+
+    const st = await request(port, {
+      method: 'GET',
+      path: `/v1/stats?token=${q}&writerKey=w-unsafe`,
+    })
+    assert.equal(st.status, 400)
+
+    const tomb = await request(port, {
+      method: 'POST',
+      path: '/v1/tombstone',
+      body: { token, writerKey: 'w-unsafe', seq: 0 },
+    })
+    assert.equal(tomb.status, 400)
+  }
+
+  const emptyDefault = await request(port, {
+    method: 'GET',
+    path: '/v1/blocks?token=cap-token-safe&writerKey=w-unsafe&fromSeq=0',
+  })
+  assert.equal(emptyDefault.status, 200)
+  assert.equal(JSON.parse(emptyDefault.body).blocks.length, 0)
+
+  const grantOk = await request(port, {
+    method: 'POST',
+    path: '/v1/grant',
+    body: { token: 'cap-cipher' },
+  })
+  assert.equal(grantOk.status, 200)
+
+  const putOk = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-cipher',
+      writerKey: 'w-cipher',
+      seq: 0,
+      b64: ciphertext,
+    },
+  })
+  assert.equal(putOk.status, 200)
+
+  const getOk = await request(port, {
+    method: 'GET',
+    path: '/v1/blocks?token=cap-cipher&writerKey=w-cipher&fromSeq=0',
+  })
+  assert.equal(getOk.status, 200)
+  const gotJson = JSON.parse(getOk.body)
+  assert.equal(gotJson.blocks.length, 1)
+  assert.equal(gotJson.blocks[0].b64, ciphertext)
 })
 
 test('HTTP storage peer caps body size, rate-limits, and GCs expired ciphertext', async (t) => {

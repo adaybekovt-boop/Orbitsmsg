@@ -27,17 +27,25 @@ Map<String, Object?> stripForbiddenAutobasePayload(Map<String, Object?> raw) {
   return out;
 }
 
-/// Recurse into Map / Map-like nested maps. Arrays stay opaque, matching JS
-/// `sanitize` (it returns arrays unchanged).
+/// Recurse into Map / Map-like values and into List/Iterable elements
+/// (except String, which is also an Iterable). Ciphertext `List<int>` /
+/// `Uint8List` have no named keys and pass through unchanged.
 Object? _stripForbiddenAutobaseNested(Object? value) {
-  if (value is! Map) return value;
-  final asStringKeyed = value is Map<String, Object?>
-      ? value
-      : <String, Object?>{
-          for (final e in value.entries)
-            if (e.key is String) e.key as String: e.value,
-        };
-  return stripForbiddenAutobasePayload(asStringKeyed);
+  if (value is Map) {
+    final asStringKeyed = value is Map<String, Object?>
+        ? value
+        : <String, Object?>{
+            for (final e in value.entries)
+              if (e.key is String) e.key as String: e.value,
+          };
+    return stripForbiddenAutobasePayload(asStringKeyed);
+  }
+  if (value is Iterable && value is! String) {
+    return <Object?>[
+      for (final element in value) _stripForbiddenAutobaseNested(element),
+    ];
+  }
+  return value;
 }
 
 class RoomEvent {

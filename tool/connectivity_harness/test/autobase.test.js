@@ -430,6 +430,69 @@ test('apply strips sendCk, vaultKek, sharedDiscoverySecret, privBytes and keeps 
   assert.equal(dumped.includes('smuggle-'), false)
 })
 
+test('apply and fromWire sanitize nested array chunks: keep text/name, drop fileKey/b64', () => {
+  const payload = {
+    chunks: [{ fileKey: 'x', b64: 'AQID', name: 'n' }],
+    text: 'hello',
+  }
+  const event = roomEventFromNativePacket(
+    {
+      type: 'autobase-event',
+      writerId: 'a',
+      seq: 5,
+      kind: 'message',
+      payload,
+    },
+    'fallback',
+  )
+  assert.equal(event.kind, 'message')
+  assert.equal(event.payload.text, 'hello')
+  assert.equal(event.payload.chunks.length, 1)
+  assert.equal(event.payload.chunks[0].name, 'n')
+  assert.equal(event.payload.chunks[0].fileKey, undefined)
+  assert.equal(event.payload.chunks[0].b64, undefined)
+  assert.equal(STRIP.has('text'), false)
+
+  const proj = new AutobaseProjection()
+  proj.apply({
+    writerId: 'b',
+    seq: 1,
+    kind: 'message',
+    payload,
+  })
+  const stored = proj.state.messages[0]
+  assert.equal(stored.text, 'hello')
+  assert.equal(stored.chunks[0].name, 'n')
+  assert.equal(stored.chunks[0].fileKey, undefined)
+  assert.equal(stored.chunks[0].b64, undefined)
+  const dumped = JSON.stringify(proj.snapshot())
+  assert.equal(dumped.includes('fileKey'), false)
+  assert.equal(dumped.includes('AQID'), false)
+})
+
+test('sanitize is cycle-safe when arrays and objects repeat a seen value', () => {
+  const payload = { text: 'hello', name: 'n' }
+  payload.self = payload
+  payload.chunks = [payload, { fileKey: 'x', b64: 'AQID', name: 'inner' }]
+  const proj = new AutobaseProjection()
+  proj.apply({
+    writerId: 'a',
+    seq: 1,
+    kind: 'message',
+    payload,
+  })
+  const stored = proj.state.messages[0]
+  assert.equal(stored.text, 'hello')
+  assert.equal(stored.name, 'n')
+  assert.equal(stored.self.fileKey, undefined)
+  assert.equal(stored.chunks[1].name, 'inner')
+  assert.equal(stored.chunks[1].fileKey, undefined)
+  assert.equal(stored.chunks[1].b64, undefined)
+  const dumped = JSON.stringify(proj.snapshot())
+  assert.equal(dumped.includes('fileKey'), false)
+  assert.equal(dumped.includes('AQID'), false)
+})
+
 test('message event with text and fileKey keeps text and drops fileKey', () => {
   const event = roomEventFromNativePacket(
     {

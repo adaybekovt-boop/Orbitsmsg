@@ -52,6 +52,21 @@ function hasForbiddenKey(value, seen) {
   return false
 }
 
+/**
+ * Capability tokens are opaque. A URL or a secret-field fragment is
+ * not a mailbox grant. Keep in sync with storagePeerTokenIsSafe in
+ * lib/mailbox/storage_peer_client.dart.
+ */
+function tokenIsSafe(token) {
+  if (typeof token !== 'string' || token.length === 0) return false
+  if (token.includes('://')) return false
+  if (token.includes('peerId')) return false
+  if (token.includes('fileKey')) return false
+  if (token.includes('rootKey')) return false
+  if (token.includes('discoverySecret')) return false
+  return true
+}
+
 /** Keep in sync with kMailboxHttpMaxBodyBytes in lib/mailbox/blind_store.dart */
 const MAX_BODY_BYTES = 256 * 1024
 /** Keep in sync with kMailboxHttpRateLimit / kMailboxHttpRateWindowMs */
@@ -181,7 +196,7 @@ function createServer(opts = {}) {
           res.end()
           return
         }
-        if (!body.token) {
+        if (!tokenIsSafe(body.token)) {
           res.writeHead(400)
           res.end()
           return
@@ -203,7 +218,7 @@ function createServer(opts = {}) {
           res.end()
           return
         }
-        if (!body.token || !body.writerKey) {
+        if (!tokenIsSafe(body.token) || !body.writerKey) {
           res.writeHead(400)
           res.end()
           return
@@ -225,7 +240,7 @@ function createServer(opts = {}) {
           res.end()
           return
         }
-        if (!body.token || !body.writerKey || body.seq == null) {
+        if (!tokenIsSafe(body.token) || !body.writerKey || body.seq == null) {
           res.writeHead(400)
           res.end()
           return
@@ -238,7 +253,7 @@ function createServer(opts = {}) {
       if (req.method === 'GET' && url.pathname === '/v1/stats') {
         const token = url.searchParams.get('token') || ''
         const writerKey = url.searchParams.get('writerKey') || ''
-        if (!token || !writerKey) {
+        if (!tokenIsSafe(token) || !writerKey) {
           res.writeHead(400)
           res.end()
           return
@@ -251,7 +266,7 @@ function createServer(opts = {}) {
       if (req.method === 'GET' && url.pathname === '/v1/blocks') {
         const token = url.searchParams.get('token') || ''
         const writerKey = url.searchParams.get('writerKey') || ''
-        if (!token || !writerKey) {
+        if (!tokenIsSafe(token) || !writerKey) {
           res.writeHead(400)
           res.end()
           return
@@ -300,6 +315,7 @@ module.exports = {
   sweep,
   rateOk,
   hasForbiddenKey,
+  tokenIsSafe,
   FORBIDDEN,
   MAX_BODY_BYTES,
   RATE_LIMIT,

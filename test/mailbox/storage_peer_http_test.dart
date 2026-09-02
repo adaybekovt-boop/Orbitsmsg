@@ -125,6 +125,136 @@ void main() {
     expect(kLiveStorageFleet, isFalse);
   });
 
+  test(
+    'HTTP mailbox GET blocks/stats and tombstone refuse unsafe tokens',
+    () async {
+      expect(kLiveStorageFleet, isFalse);
+      final store = BlindMailboxStore();
+      final http = StoragePeerHttp(store);
+      final expiresAt = DateTime.now().millisecondsSinceEpoch + 60 * 1000;
+      MailboxCapability cap(String token) => MailboxCapability(
+            token: token,
+            quotaBytes: 1024,
+            retentionMs: 60 * 1000,
+            expiresAt: expiresAt,
+          );
+      http.grant(cap('https://evil/tok'));
+      expect(
+        () => store.get(token: 'https://evil/tok', writerKey: 'w'),
+        throwsA(isA<StateError>()),
+      );
+      http.grant(cap('cap-safe'));
+      await http.start();
+      addTearDown(http.stop);
+
+      const cipher = <int>[9, 8, 7];
+      final client = HttpClient();
+      addTearDown(() => client.close(force: true));
+
+      Future<int> putSafe() async {
+        final req = await client.postUrl(Uri.parse('${http.origin}/v1/blocks'));
+        req.headers.contentType = ContentType.json;
+        req.write(
+          jsonEncode({
+            'token': 'cap-safe',
+            'writerKey': 'w',
+            'seq': 0,
+            'b64': base64Encode(cipher),
+          }),
+        );
+        final res = await req.close();
+        await res.drain();
+        return res.statusCode;
+      }
+
+      Future<int> getBlocks(String token) async {
+        final uri = Uri.parse(
+          '${http.origin}/v1/blocks?token=${Uri.encodeQueryComponent(token)}'
+          '&writerKey=w',
+        );
+        final req = await client.getUrl(uri);
+        final res = await req.close();
+        await res.drain();
+        return res.statusCode;
+      }
+
+      Future<Map<String, Object?>> getBlocksJson(String token) async {
+        final uri = Uri.parse(
+          '${http.origin}/v1/blocks?token=${Uri.encodeQueryComponent(token)}'
+          '&writerKey=w',
+        );
+        final req = await client.getUrl(uri);
+        final res = await req.close();
+        expect(res.statusCode, 200);
+        return Map<String, Object?>.from(
+          jsonDecode(await utf8.decodeStream(res)) as Map,
+        );
+      }
+
+      Future<int> getStats(String token) async {
+        final uri = Uri.parse(
+          '${http.origin}/v1/stats?token=${Uri.encodeQueryComponent(token)}'
+          '&writerKey=w',
+        );
+        final req = await client.getUrl(uri);
+        final res = await req.close();
+        await res.drain();
+        return res.statusCode;
+      }
+
+      Future<Map<String, Object?>> getStatsJson(String token) async {
+        final uri = Uri.parse(
+          '${http.origin}/v1/stats?token=${Uri.encodeQueryComponent(token)}'
+          '&writerKey=w',
+        );
+        final req = await client.getUrl(uri);
+        final res = await req.close();
+        expect(res.statusCode, 200);
+        return Map<String, Object?>.from(
+          jsonDecode(await utf8.decodeStream(res)) as Map,
+        );
+      }
+
+      Future<int> tombstone(String token, {String writer = 'w', int? seq = 0}) async {
+        final req =
+            await client.postUrl(Uri.parse('${http.origin}/v1/tombstone'));
+        req.headers.contentType = ContentType.json;
+        final body = <String, Object?>{
+          'token': token,
+          'writerKey': writer,
+        };
+        if (seq != null) body['seq'] = seq;
+        req.write(jsonEncode(body));
+        final res = await req.close();
+        await res.drain();
+        return res.statusCode;
+      }
+
+      expect(await putSafe(), 200);
+      expect(store.pendingCount('w'), 1);
+
+      for (final token in <String>['https://evil/tok', 'ftp://x', 'tok-peerId']) {
+        expect(await getBlocks(token), 400);
+        expect(await getStats(token), 400);
+        expect(await tombstone(token), 400);
+        expect(store.pendingCount('w'), 1);
+      }
+
+      expect(await tombstone('cap-safe', writer: ''), 400);
+      expect(await tombstone('cap-safe', seq: null), 400);
+      expect(store.pendingCount('w'), 1);
+
+      final stats = await getStatsJson('cap-safe');
+      expect(stats['pendingCount'], 1);
+
+      final got = await getBlocksJson('cap-safe');
+      final blocks = got['blocks'] as List;
+      expect(blocks, hasLength(1));
+      expect((blocks.first as Map)['b64'], base64Encode(cipher));
+      expect(kLiveStorageFleet, isFalse);
+    },
+  );
+
   test('localStoragePeerOriginIsLoopback allows only loopback HTTP', () {
     expect(localStoragePeerOriginIsLoopback('http://127.0.0.1'), isTrue);
     expect(localStoragePeerOriginIsLoopback('http://127.0.0.1:8080'), isTrue);
