@@ -3,7 +3,7 @@
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const http = require('node:http')
-const { createPushGateway, hasForbiddenKey } = require('./server.js')
+const { createPushGateway, hasForbiddenKey, tokenIsSafe } = require('./server.js')
 
 function post(port, body) {
   return new Promise((resolve, reject) => {
@@ -132,6 +132,49 @@ test('opaque wake gateway rejects nested fileKey/text/discoverySecret', async (t
     extra: { discoverySecret: 'y' },
   })
   assert.equal(nestedDiscovery.status, 400)
+  assert.equal(server.accepted.length, 0)
+
+  const ok = await post(port, {
+    opaqueWakeToken: 'tok',
+    collapseId: 'c1',
+    protocolVersion: 1,
+  })
+  assert.equal(ok.status, 200)
+  const json = JSON.parse(ok.body)
+  assert.equal(json.deployed, false)
+  assert.equal(json.accepted, true)
+  assert.equal(server.accepted.length, 1)
+})
+
+test('tokenIsSafe rejects empty, URL, and secret-fragment tokens', () => {
+  assert.equal(tokenIsSafe(''), false)
+  assert.equal(tokenIsSafe('https://evil'), false)
+  assert.equal(tokenIsSafe('peerId'), false)
+  assert.equal(tokenIsSafe('fileKey'), false)
+  assert.equal(tokenIsSafe('rootKey'), false)
+  assert.equal(tokenIsSafe('discoverySecret'), false)
+  assert.equal(tokenIsSafe('tok'), true)
+})
+
+test('opaque wake gateway rejects URL and secret-fragment opaqueWakeToken', async (t) => {
+  const server = createPushGateway()
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const port = server.address().port
+
+  const urlToken = await post(port, {
+    opaqueWakeToken: 'https://evil',
+    collapseId: 'c1',
+    protocolVersion: 1,
+  })
+  assert.equal(urlToken.status, 400)
+
+  const fragmentToken = await post(port, {
+    opaqueWakeToken: 'has-fileKey',
+    collapseId: 'c1',
+    protocolVersion: 1,
+  })
+  assert.equal(fragmentToken.status, 400)
   assert.equal(server.accepted.length, 0)
 
   const ok = await post(port, {

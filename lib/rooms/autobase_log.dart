@@ -66,7 +66,7 @@ class RoomEvent {
         'writerId': writerId,
         'seq': seq,
         'kind': kind,
-        'payload': payload,
+        'payload': stripForbiddenAutobasePayload(payload),
       };
 
   static RoomEvent? fromWire(Map<String, Object?> packet) {

@@ -58,6 +58,17 @@ function hasForbiddenKey(value, seen) {
   return false
 }
 
+/** Keep in sync with OpaqueWake token fragment rules (mailbox / Dart). */
+function tokenIsSafe(token) {
+  if (typeof token !== 'string' || !token) return false
+  if (token.includes('://')) return false
+  if (token.includes('peerId')) return false
+  if (token.includes('fileKey')) return false
+  if (token.includes('rootKey')) return false
+  if (token.includes('discoverySecret')) return false
+  return true
+}
+
 function createPushGateway() {
   const accepted = []
   const server = http.createServer(async (req, res) => {
@@ -76,7 +87,7 @@ function createPushGateway() {
           res.end()
           return
         }
-        if (!body.opaqueWakeToken || !body.collapseId || !body.protocolVersion) {
+        if (!tokenIsSafe(body.opaqueWakeToken) || !body.collapseId || !body.protocolVersion) {
           res.writeHead(400)
           res.end()
           return
@@ -97,7 +108,7 @@ function createPushGateway() {
   return server
 }
 
-module.exports = { createPushGateway, FORBIDDEN, hasForbiddenKey }
+module.exports = { createPushGateway, FORBIDDEN, hasForbiddenKey, tokenIsSafe }
 
 if (require.main === module) {
   const port = Number(process.env.ORBITS_PUSH_PORT || 8788)

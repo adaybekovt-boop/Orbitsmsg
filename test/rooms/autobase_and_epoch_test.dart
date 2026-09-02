@@ -184,6 +184,34 @@ void main() {
     expect(stored.containsKey('fileKey'), isFalse);
   });
 
+  test('toWire strips nested forbidden payload keys and keeps text', () {
+    const event = RoomEvent(
+      writerId: 'a',
+      seq: 4,
+      kind: 'message',
+      payload: {
+        'id': 'm-wire',
+        'text': 'hello host-plaintext',
+        'fileKey': 'smuggle-file',
+        'b64': 'AQIDBA==',
+        'extra': {
+          'fileKey': 'x',
+        },
+      },
+    );
+    final wired = event.toWire();
+    expect(wired['type'], 'autobase-event');
+    final payload = Map<String, Object?>.from(wired['payload']! as Map);
+    expect(payload['text'], 'hello host-plaintext');
+    expect(payload['id'], 'm-wire');
+    expect(payload.containsKey('fileKey'), isFalse);
+    expect(payload.containsKey('b64'), isFalse);
+    final extra = Map<String, Object?>.from(payload['extra']! as Map);
+    expect(extra.containsKey('fileKey'), isFalse);
+    expect(event.payload.containsKey('fileKey'), isTrue);
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
   test('fromWire drops plaintext from autobase-event payload', () {
     final event = RoomEvent.fromWire({
       'type': 'autobase-event',

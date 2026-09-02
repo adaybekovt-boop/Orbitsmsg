@@ -103,6 +103,40 @@ void main() {
     );
   });
 
+  test('isSafe rejects URL and secret-fragment opaqueWakeToken values', () {
+    const wake = OpaqueWake(
+      opaqueWakeToken: 'tok',
+      collapseId: 'c1',
+      protocolVersion: 1,
+    );
+    final base = wake.toJson();
+    expect(OpaqueWake.isSafe(base), isTrue);
+    expect(
+      OpaqueWake.isSafe({...base, 'opaqueWakeToken': 'https://evil.example/x'}),
+      isFalse,
+    );
+    expect(
+      OpaqueWake.isSafe({...base, 'opaqueWakeToken': 'peerId-fragment'}),
+      isFalse,
+    );
+    expect(
+      OpaqueWake.isSafe({...base, 'opaqueWakeToken': 'has-fileKey'}),
+      isFalse,
+    );
+    expect(
+      OpaqueWake.isSafe({...base, 'opaqueWakeToken': 'rootKey'}),
+      isFalse,
+    );
+    expect(
+      OpaqueWake.isSafe({...base, 'opaqueWakeToken': 'discoverySecret-1'}),
+      isFalse,
+    );
+    expect(
+      OpaqueWake.isSafe({...base, 'opaqueWakeToken': ''}),
+      isFalse,
+    );
+  });
+
   test('live APNs and FCM gateways stay off', () {
     expect(kLiveApnsGateway, isFalse);
     expect(kLiveFcmGateway, isFalse);

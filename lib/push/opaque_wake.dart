@@ -36,13 +36,15 @@ class OpaqueWake {
     'fileName',
   };
 
-  /// True when [payload] has the three wake fields and no [forbiddenKeys]
-  /// at any depth. Walks [Map] and [Iterable] with identity-based cycle
-  /// detection. Ciphertext [List<int>] and scalars are allowed.
+  /// True when [payload] has the three wake fields, [opaqueWakeToken] is a
+  /// safe string, and no [forbiddenKeys] appear at any depth. Walks [Map]
+  /// and [Iterable] with identity-based cycle detection. Ciphertext
+  /// [List<int>] and scalars are allowed.
   static bool isSafe(Map<String, Object?> payload) {
     if (_hasForbiddenKey(payload, HashSet<Object>.identity())) return false;
-    return payload.containsKey('opaqueWakeToken') &&
-        payload.containsKey('collapseId') &&
+    final token = payload['opaqueWakeToken'];
+    if (token is! String || !opaqueWakeTokenIsSafe(token)) return false;
+    return payload.containsKey('collapseId') &&
         payload.containsKey('protocolVersion');
   }
 
@@ -69,6 +71,18 @@ class OpaqueWake {
     }
     return false;
   }
+}
+
+/// Same fragment rules as mailbox `storagePeerTokenIsSafe`, duplicated here
+/// so the push library does not import the mailbox client.
+bool opaqueWakeTokenIsSafe(String token) {
+  if (token.isEmpty) return false;
+  if (token.contains('://')) return false;
+  if (token.contains('peerId')) return false;
+  if (token.contains('fileKey')) return false;
+  if (token.contains('rootKey')) return false;
+  if (token.contains('discoverySecret')) return false;
+  return true;
 }
 
 /// APNs/FCM extras often arrive as strings. 0 means malformed.

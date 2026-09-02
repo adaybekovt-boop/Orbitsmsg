@@ -161,4 +161,47 @@ void main() {
       throwsArgumentError,
     );
   });
+
+  test('DeviceBinding.fromWire refuses nested secret fields', () {
+    final binding = DeviceBinding(
+      version: kDeviceBindingVersion,
+      identityPublicKey: Uint8List.fromList(List<int>.generate(32, (i) => i)),
+      deviceId: 'dev-nested',
+      transportPublicKey:
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 1)),
+      hypercorePublicKey:
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 2)),
+      capabilities: const ['peerjs-v4'],
+      createdAt: 1,
+      expiresAt: 10,
+      signatureByIdentityKey:
+          Uint8List.fromList(List<int>.generate(64, (i) => i)),
+    );
+    final wire = binding.toWire();
+    expect(wire.containsKey('fileKey'), isFalse);
+    expect(wire.containsKey('opaqueWakeToken'), isFalse);
+    expect(DeviceBinding.fromWire(wire).deviceId, binding.deviceId);
+
+    expect(
+      () => DeviceBinding.fromWire({
+        ...wire,
+        'extra': {'fileKey': 'nope'},
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => DeviceBinding.fromWire({
+        ...wire,
+        'extra': {'opaqueWakeToken': 'tok'},
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => DeviceBinding.fromWire({
+        ...wire,
+        'extra': {'https://evil': 'x'},
+      }),
+      throwsArgumentError,
+    );
+  });
 }
