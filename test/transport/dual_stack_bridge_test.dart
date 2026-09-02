@@ -63,7 +63,7 @@ Future<DeviceBinding> _bind(
       ),
       capabilities: const ['hyperswarm-v1', 'peerjs-v4'],
       createdAt: 1,
-      expiresAt: 10,
+      expiresAt: DateTime.now().millisecondsSinceEpoch + 86400000 * 30,
       signatureByIdentityKey: Uint8List.fromList(signature),
     );
   }
@@ -76,7 +76,7 @@ Future<DeviceBinding> _bind(
     ),
     capabilities: const ['hyperswarm-v1', 'peerjs-v4'],
     createdAt: 1,
-    expiresAt: 10,
+    expiresAt: DateTime.now().millisecondsSinceEpoch + 86400000 * 30,
     sign: (payload) async => signP256Ecdsa(pair, payload),
   );
 }

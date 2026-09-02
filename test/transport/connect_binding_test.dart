@@ -44,6 +44,7 @@ void main() {
 
     expect(
       (await evaluateConnectBindingChecks(
+        nowMs: () => 0,
         binding: DeviceBinding(
           version: binding.version,
           identityPublicKey: binding.identityPublicKey,
@@ -63,6 +64,7 @@ void main() {
 
     expect(
       (await evaluateConnectBindingChecks(
+        nowMs: () => 0,
         binding: binding,
         connectionNoisePublicKey: List<int>.generate(32, (i) => 9),
       ))
@@ -83,6 +85,7 @@ void main() {
     );
     expect(
       (await evaluateConnectBindingChecks(
+        nowMs: () => 0,
         binding: unsigned,
         deviceRevoked: true,
         contactBlocked: true,
@@ -93,6 +96,7 @@ void main() {
 
     expect(
       (await evaluateConnectBindingChecks(
+        nowMs: () => 0,
         binding: binding,
         deviceRevoked: true,
         contactBlocked: true,
@@ -103,6 +107,7 @@ void main() {
 
     expect(
       (await evaluateConnectBindingChecks(
+        nowMs: () => 0,
         binding: binding,
         protocolVersion: 99,
         contactBlocked: true,
@@ -113,6 +118,7 @@ void main() {
 
     expect(
       (await evaluateConnectBindingChecks(
+        nowMs: () => 0,
         binding: binding,
         contactBlocked: true,
         tofu: const PinCheck(
@@ -126,6 +132,7 @@ void main() {
 
     expect(
       (await evaluateConnectBindingChecks(
+        nowMs: () => 0,
         binding: binding,
         tofu: const PinCheck(
           status: PinStatus.mismatch,
@@ -139,6 +146,7 @@ void main() {
 
     expect(
       (await evaluateConnectBindingChecks(
+        nowMs: () => 0,
         binding: binding,
         connectionNoisePublicKey: transport,
         tofu: const PinCheck(status: PinStatus.newPin, fingerprint: 'ok'),
@@ -151,7 +159,7 @@ void main() {
     expect(wire.containsKey('fileKey'), isFalse);
     expect(wire.containsKey('rootKey'), isFalse);
     final roundTrip = DeviceBinding.fromWire(wire);
-    expect(await verifyDeviceBinding(roundTrip), isTrue);
+    expect(await verifyDeviceBinding(roundTrip, nowMs: () => 0), isTrue);
     expect(roundTrip.deviceId, binding.deviceId);
     expect(
       () => DeviceBinding.fromWire({
@@ -311,5 +319,86 @@ void main() {
     expect(parsed.transportPublicKey, binding.transportPublicKey);
     expect(parsed.hypercorePublicKey, binding.hypercorePublicKey);
     expect(parsed.signatureByIdentityKey, binding.signatureByIdentityKey);
+  });
+
+  test('DeviceBinding for identity X on Noise A is rejected on Noise B',
+      () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final noiseA = Uint8List.fromList(List<int>.generate(32, (i) => i + 3));
+    final noiseB = Uint8List.fromList(List<int>.generate(32, (i) => 200 - i));
+    final binding = await issueDeviceBinding(
+      identityPublicKey: spki,
+      deviceId: 'dev-x',
+      transportPublicKey: noiseA,
+      hypercorePublicKey:
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 4)),
+      capabilities: const ['hyperswarm-v1'],
+      createdAt: 1,
+      expiresAt: 10,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    expect(
+      (await evaluateConnectBindingChecks(
+        nowMs: () => 0,
+        binding: binding,
+        connectionNoisePublicKey: noiseB,
+        requireNoiseMatch: true,
+      ))
+          .failedCheck,
+      'noiseMatchesBinding',
+    );
+    expect(
+      (await evaluateConnectBindingChecks(
+        nowMs: () => 0,
+        binding: binding,
+        requireNoiseMatch: true,
+      ))
+          .failedCheck,
+      'noiseMatchesBinding',
+    );
+    expect(
+      (await evaluateConnectBindingChecks(
+        nowMs: () => 0,
+        binding: binding,
+        connectionNoisePublicKey: Uint8List(0),
+        requireNoiseMatch: true,
+      ))
+          .failedCheck,
+      'noiseMatchesBinding',
+    );
+    expect(
+      (await evaluateConnectBindingChecks(
+        nowMs: () => 0,
+        binding: binding,
+        connectionNoisePublicKey: noiseA,
+        requireNoiseMatch: true,
+      ))
+          .ok,
+      isTrue,
+    );
+  });
+
+  test('verifyDeviceBinding fails when expiresAt is in the past', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final binding = await issueDeviceBinding(
+      identityPublicKey: spki,
+      deviceId: 'dev-exp',
+      transportPublicKey:
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 1)),
+      hypercorePublicKey:
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 2)),
+      capabilities: const ['peerjs-v4'],
+      createdAt: now - 10_000,
+      expiresAt: now - 1,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    expect(await verifyDeviceBinding(binding), isFalse);
+    expect(
+      await verifyDeviceBinding(binding, nowMs: () => now - 5_000),
+      isTrue,
+    );
   });
 }

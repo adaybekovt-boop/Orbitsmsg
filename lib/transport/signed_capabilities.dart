@@ -184,8 +184,13 @@ Future<Uint8List> signCapabilityPayload(
   return Uint8List.fromList(sig.bytes);
 }
 
-Future<bool> verifyCapabilityRecord(CapabilityRecord record) async {
+Future<bool> verifyCapabilityRecord(
+  CapabilityRecord record, {
+  int Function()? nowMs,
+}) async {
   if (record.expiresAt <= record.issuedAt) return false;
+  final now = nowMs?.call() ?? DateTime.now().millisecondsSinceEpoch;
+  if (record.expiresAt <= now) return false;
   return verifyIdentitySignedBytes(
     record.identityPublicKey,
     record.signedPayload(),
@@ -283,8 +288,13 @@ bool _deviceIdIsSafe(String deviceId) {
   return true;
 }
 
-Future<bool> verifyDeviceBinding(DeviceBinding binding) async {
+Future<bool> verifyDeviceBinding(
+  DeviceBinding binding, {
+  int Function()? nowMs,
+}) async {
   if (binding.expiresAt <= binding.createdAt) return false;
+  final now = nowMs?.call() ?? DateTime.now().millisecondsSinceEpoch;
+  if (binding.expiresAt <= now) return false;
   if (binding.identityPublicKey.isEmpty ||
       binding.transportPublicKey.isEmpty ||
       binding.hypercorePublicKey.isEmpty ||

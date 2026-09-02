@@ -30,6 +30,8 @@ class DeviceBinding {
   final Uint8List hypercorePublicKey;
   final List<String> capabilities;
   final int createdAt;
+
+  /// Epoch-ms expiry. [verifyDeviceBinding] fails when this is `<= now`.
   final int expiresAt;
   final Uint8List signatureByIdentityKey;
 

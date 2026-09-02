@@ -32,8 +32,9 @@ final remoteCapabilityCache = RemoteCapabilityCache();
 /// refuses nested secrets inside `caps`; this walk covers the rest.
 Future<CapabilityRecord?> rememberHelloCapabilities(
   String peerId,
-  Map<String, Object?> hello,
-) async {
+  Map<String, Object?> hello, {
+  int Function()? nowMs,
+}) async {
   final raw = hello['caps'];
   if (raw is! Map) return null;
   try {
@@ -41,7 +42,7 @@ Future<CapabilityRecord?> rememberHelloCapabilities(
     if (!helloEnvelopeIsSafe(hello)) {
       return null;
     }
-    if (!await verifyCapabilityRecord(record)) return null;
+    if (!await verifyCapabilityRecord(record, nowMs: nowMs)) return null;
     if (record.peerId.isNotEmpty &&
         normalizePeerId(record.peerId) != normalizePeerId(peerId)) {
       return null;

@@ -49,7 +49,7 @@ Future<DeviceBinding> _bind(
   List<int>? transportPublicKey,
   List<String> capabilities = const ['hyperswarm-v1', 'peerjs-v4'],
   int createdAt = 1,
-  int expiresAt = 10,
+  int? expiresAt,
 }) {
   return issueDeviceBinding(
     identityPublicKey: spki,
@@ -62,7 +62,8 @@ Future<DeviceBinding> _bind(
     ),
     capabilities: capabilities,
     createdAt: createdAt,
-    expiresAt: expiresAt,
+    expiresAt: expiresAt ??
+        DateTime.now().millisecondsSinceEpoch + 86400000 * 30,
     sign: (payload) async => signP256Ecdsa(pair, payload),
   );
 }

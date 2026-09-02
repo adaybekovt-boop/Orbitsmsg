@@ -15,6 +15,9 @@ class WorkletOrbitsTransport implements OrbitsTransport {
   Stream<TransportEvent> get events => const Stream.empty();
 
   @override
+  bool get bindsNoisePublicKey => true;
+
+  @override
   Future<void> start(TransportLocalConfiguration config) async {}
 
   @override

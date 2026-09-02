@@ -91,6 +91,9 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   Stream<TransportEvent> get events => _events.stream;
 
   @override
+  bool get bindsNoisePublicKey => false;
+
+  @override
   Future<void> start(TransportLocalConfiguration config) async {
     _config = config;
     _started = true;

@@ -232,6 +232,9 @@ class WorkletOrbitsTransport implements OrbitsTransport {
   Stream<TransportEvent> get events => _events.stream;
 
   @override
+  bool get bindsNoisePublicKey => true;
+
+  @override
   Future<void> start(TransportLocalConfiguration config) async {
     final result = await _client.request('start', {
       'peerId': config.peerId,

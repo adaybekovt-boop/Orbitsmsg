@@ -201,6 +201,11 @@ class TransportError extends TransportEvent {
 abstract class OrbitsTransport {
   Stream<TransportEvent> get events;
 
+  /// True on Hyperswarm/worklet. Loopback stays false so connect
+  /// checks may skip Noise equality. A real Noise path must not skip
+  /// when the connection key is empty.
+  bool get bindsNoisePublicKey => false;
+
   Future<void> start(TransportLocalConfiguration config);
   Future<void> stop();
 

@@ -45,10 +45,10 @@ void main() {
       identityPublicKey: spki,
       sign: (payload) async => signP256Ecdsa(pair, payload),
     );
-    expect(await verifyCapabilityRecord(record), isTrue);
+    expect(await verifyCapabilityRecord(record, nowMs: () => 0), isTrue);
     expect(record.toWire()['capabilities'], ['hyperswarm-v1', 'peerjs-v4']);
     final again = CapabilityRecord.fromWire(record.toWire());
-    expect(await verifyCapabilityRecord(again), isTrue);
+    expect(await verifyCapabilityRecord(again, nowMs: () => 0), isTrue);
     expect(
       logDowngrade(
         selected: TransportRoute.peerjs,
@@ -297,7 +297,7 @@ void main() {
       expiresAt: 10,
       sign: (payload) async => signP256Ecdsa(pair, payload),
     );
-    expect(await verifyDeviceBinding(binding), isTrue);
+    expect(await verifyDeviceBinding(binding, nowMs: () => 0), isTrue);
     expect(binding.capabilities, names);
     expect(
       binding.signatureByIdentityKey,
@@ -329,7 +329,7 @@ void main() {
       expiresAt: binding.expiresAt,
       signatureByIdentityKey: binding.signatureByIdentityKey,
     );
-    expect(await verifyDeviceBinding(tampered), isFalse);
+    expect(await verifyDeviceBinding(tampered, nowMs: () => 0), isFalse);
     await expectLater(
       issueDeviceBinding(
         identityPublicKey: spki,
@@ -342,6 +342,26 @@ void main() {
         sign: (payload) async => signP256Ecdsa(pair, payload),
       ),
       throwsA(isA<ArgumentError>()),
+    );
+  });
+
+  test('verifyCapabilityRecord fails when expiresAt is in the past', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final record = await issueCapabilityRecord(
+      peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+      deviceId: 'dev-1',
+      capabilities: {TransportCapability.peerjsV4},
+      issuedAt: now - 10_000,
+      expiresAt: now - 1,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    expect(await verifyCapabilityRecord(record), isFalse);
+    expect(
+      await verifyCapabilityRecord(record, nowMs: () => now - 5_000),
+      isTrue,
     );
   });
 }

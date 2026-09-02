@@ -1903,9 +1903,12 @@ class DualStackBridge {
     }
     final noise =
         connectionNoiseFor?.call(norm) ?? devices?.noisePublicKeyFor(norm);
+    final requireNoise =
+        connectionNoiseFor != null || transport.bindsNoisePublicKey;
     final result = await evaluateConnectBindingChecks(
       binding: binding,
       connectionNoisePublicKey: noise,
+      requireNoiseMatch: requireNoise,
       deviceRevoked: devices?.isRevoked(binding.deviceId) == true,
       contactBlocked: isBlocked(norm),
       tofu: tofu,
@@ -1934,6 +1937,24 @@ class DualStackBridge {
     _flushReplication(norm);
     _flushPendingInbound(norm);
     unawaited(_offerMailboxGrant(norm));
+  }
+
+  Future<void> _acceptRemoteCapabilities(
+    String peerId,
+    Map<String, Object?> decoded,
+  ) async {
+    try {
+      if (decoded['type'] == 'capabilities') {
+        final rec = CapabilityRecord.fromWire(decoded);
+        if (await verifyCapabilityRecord(rec)) {
+          if (rec.peerId.isEmpty ||
+              normalizePeerId(rec.peerId) == peerId) {
+            remoteCapabilities.add(rec);
+          }
+        }
+      }
+      await rememberHelloCapabilities(peerId, decoded);
+    } catch (_) {}
   }
 
   void _onEvent(TransportEvent event) {
@@ -2118,12 +2139,7 @@ class DualStackBridge {
         }
         if (decoded['type'] == 'capabilities' ||
             decoded['type'] == 'wireHello') {
-          try {
-            if (decoded['type'] == 'capabilities') {
-              remoteCapabilities.add(CapabilityRecord.fromWire(decoded));
-            }
-            unawaited(rememberHelloCapabilities(norm, decoded));
-          } catch (_) {}
+          unawaited(_acceptRemoteCapabilities(norm, decoded));
         }
       }
     } catch (_) {

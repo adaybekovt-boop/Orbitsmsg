@@ -19,24 +19,33 @@ class ConnectBindingResult {
 /// Evaluate ADR-0001 connect checks in lock order. The first failure wins.
 ///
 /// [connectionNoisePublicKey] is the Hyperswarm Noise public key of this
-/// connection. Loopback has no Noise handshake — pass null to skip the
-/// equality check, but [binding.transportPublicKey] must still be non-empty.
+/// connection. Loopback has no Noise handshake — pass null and leave
+/// [requireNoiseMatch] false to skip the equality check, but
+/// [binding.transportPublicKey] must still be non-empty.
+///
+/// On a real Hyperswarm/worklet path set [requireNoiseMatch] so an empty
+/// connection key cannot skip the check. A different key than
+/// [DeviceBinding.transportPublicKey] fails `noiseMatchesBinding`.
 ///
 /// [tofu] is the identity pin check. `newPin` / `pinned` pass;
 /// `mismatch` / `crossBound` fail `tofuDoesNotConflict`.
 Future<ConnectBindingResult> evaluateConnectBindingChecks({
   required DeviceBinding binding,
   List<int>? connectionNoisePublicKey,
+  bool requireNoiseMatch = false,
   bool deviceRevoked = false,
   bool contactBlocked = false,
   PinCheck? tofu,
   int protocolVersion = kDeviceBindingVersion,
+  int Function()? nowMs,
 }) async {
+  final noise = connectionNoisePublicKey;
+  final noiseEmpty = noise == null || noise.isEmpty;
   if (binding.transportPublicKey.isEmpty ||
-      (connectionNoisePublicKey != null &&
-          connectionNoisePublicKey.isNotEmpty &&
+      (requireNoiseMatch && noiseEmpty) ||
+      (!noiseEmpty &&
           !noiseKeyMatchesBinding(
-            connectionNoisePublicKey: connectionNoisePublicKey,
+            connectionNoisePublicKey: noise,
             binding: binding,
           ))) {
     return const ConnectBindingResult(
@@ -45,7 +54,7 @@ Future<ConnectBindingResult> evaluateConnectBindingChecks({
     );
   }
 
-  if (!await verifyDeviceBinding(binding)) {
+  if (!await verifyDeviceBinding(binding, nowMs: nowMs)) {
     return const ConnectBindingResult(
       ok: false,
       failedCheck: 'signedByKnownIdentity',
