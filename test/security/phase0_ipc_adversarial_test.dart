@@ -43,14 +43,52 @@ void main() {
   test(
     'InProcessBareWorklet drops application frames before markAuthenticated',
     () async {
-      // Placeholder: InProcessBareWorklet has no markAuthenticated.
-      // DualStack loopback pre-auth is in phase0_adversarial_test.dart.
-      // The JS worklet gate is tool/connectivity_harness/test/phase1_*.js.
-      expect(InProcessBareWorklet, isNotNull);
+      final hub = InProcessWorkletHub();
+      final a = openInProcessIpc(hub: hub);
+      final b = openInProcessIpc(hub: hub);
+      final frames = <Map<String, Object?>>[];
+      final sub = b.client.events.listen(frames.add);
+      addTearDown(() async {
+        await sub.cancel();
+        await a.client.close();
+        await b.client.close();
+      });
+
+      await a.client.request('start', {'peerId': 'ORBIT-AAAAAAAAAAAAAAAA'});
+      await b.client.request('start', {'peerId': 'ORBIT-BBBBBBBBBBBBBBBB'});
+      await a.client.request('publish');
+      await b.client.request('publish');
+      await a.client.request('connect', {'peerId': 'ORBIT-BBBBBBBBBBBBBBBB'});
+
+      await a.client.request('send', {
+        'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+        'channel': 'message',
+        'frameB64': 'eyJ0eXBlIjoicHJlLWF1dGgifQ==',
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        frames.any((e) => e['name'] == 'frame'),
+        isFalse,
+        reason: 'application frame before markAuthenticated must not land',
+      );
+
+      await a.client.request('markAuthenticated', {
+        'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+      });
+      await b.client.request('markAuthenticated', {
+        'peerId': 'ORBIT-AAAAAAAAAAAAAAAA',
+      });
+      await a.client.request('send', {
+        'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+        'channel': 'message',
+        'frameB64': 'eyJ0eXBlIjoicGluZyJ9',
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(frames.any((e) => e['name'] == 'frame'), isTrue);
     },
     skip:
-        'InProcessBareWorklet has no markAuthenticated; '
-        'see DualStack pre-auth in phase0_adversarial_test.dart',
+        'InProcessBareWorklet.markAuthenticated is a no-op; send is not '
+        'gated. DualStack loopback + JS phase1 cover the Dart/worklet gate.',
   );
 
   test(
