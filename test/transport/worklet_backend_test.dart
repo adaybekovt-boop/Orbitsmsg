@@ -82,6 +82,10 @@ void main() {
       contains('teardownWireSession'),
     );
     expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('hydrateFromJournal'),
+    );
+    expect(
       File('lib/transport/transport_lifecycle.dart').readAsStringSync(),
       contains('dozing'),
     );

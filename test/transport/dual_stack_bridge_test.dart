@@ -1360,6 +1360,79 @@ void main() {
     await b.detach();
   });
 
+  test(
+      'Autobase membership and Hypercore envelopes hydrate from journal without re-append',
+      () async {
+    final (a, b, _) = await linked();
+    expect(
+      await a.sendAutobaseEvent(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        const RoomEvent(
+          writerId: 'a',
+          seq: 0,
+          kind: 'membership',
+          payload: {
+            'roomId': 'room-hydrate',
+            'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+            'action': 'join',
+            'displayName': 'B',
+          },
+        ),
+      ),
+      isTrue,
+    );
+    expect(a.rooms.state.members['ORBIT-BBBBBBBBBBBBBBBB'], 'B');
+    a.journal.append(
+      ReplicationEventKind.messageEnvelopeCreated,
+      {
+        'eventId': 'hydrate-env',
+        'conversationId': 'ORBIT-BBBBBBBBBBBBBBBB',
+        'senderIdentity': 'ORBIT-AAAAAAAAAAAAAAAA',
+        'senderDeviceId': 'dev-a',
+        'logicalSequence': 1,
+        'createdAt': 1,
+        'encryptedEnvelope': utf8.encode('v2:aaa:bbb:ccc'),
+      },
+    );
+    final journalLen = a.journal.length;
+    await a.detach();
+
+    final restored = DualStackBridge(
+      transport: a.transport,
+      journal: a.journal,
+      selfPeerId: a.selfPeerId,
+      selfDeviceId: a.selfDeviceId,
+      secrets: a.secrets,
+      isBlocked: a.isBlocked,
+      tofuCheck: _allowTofu,
+      onPacket: (_, __) async {},
+    )..attach();
+
+    expect(restored.rooms.state.members['ORBIT-BBBBBBBBBBBBBBBB'], 'B');
+    expect(restored.journal.length, journalLen);
+    expect(restored.hypercoreMatchesJournal(), isTrue);
+    expect(await restored.verifyLiveMatchesReplay(), isTrue);
+    expect(
+      restored.journal.records.every((r) => !r.fields.containsKey('text')),
+      isTrue,
+    );
+    expect(
+      restored.journal.records.every((r) => !r.fields.containsKey('b64')),
+      isTrue,
+    );
+    expect(
+      restored.journal.records.every((r) => !r.fields.containsKey('fileKey')),
+      isTrue,
+    );
+    expect(
+      restored.hypercore.blocks.every((r) => !r.fields.containsKey('plaintext')),
+      isTrue,
+    );
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+    await restored.detach();
+    await b.detach();
+  });
+
   test('room_file_chunk projects Autobase attachment metadata without b64',
       () async {
     final (a, b, _) = await linked();

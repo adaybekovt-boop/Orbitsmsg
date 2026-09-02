@@ -28,6 +28,7 @@ import 'connect_binding.dart';
 import 'device_binding.dart';
 import 'discovery_secret_store.dart';
 import 'hello_capabilities.dart';
+import 'layers.dart';
 import 'mux_frames.dart';
 import 'native_rollback.dart';
 import 'relay_directory.dart';
@@ -115,7 +116,63 @@ class DualStackBridge {
 
   void attach() {
     _sub ??= transport.events.listen(_onEvent);
+    hydrateFromJournal();
     unawaited(rememberKnownPeers());
+  }
+
+  /// Restart path: replay the local journal into Hypercore and Autobase.
+  /// Ciphertext and membership metadata only — never plaintext, b64, or
+  /// fileKey. Does not re-append the journal.
+  void hydrateFromJournal() {
+    hydrateHypercoreFromJournal();
+    hydrateAutobaseFromJournal();
+  }
+
+  void hydrateHypercoreFromJournal() {
+    for (final rec in journal.records) {
+      if (!replicationFieldsAreSafe(rec.fields.keys)) continue;
+      hypercore.append(rec);
+    }
+  }
+
+  /// Membership only. Message bodies stay out of Autobase's durable log.
+  void hydrateAutobaseFromJournal() {
+    for (final rec in journal.records) {
+      final event = _membershipEventFromJournal(rec);
+      if (event == null) continue;
+      _applyRoom(event, persist: false);
+      if (event.seq >= _roomSeq) _roomSeq = event.seq + 1;
+    }
+  }
+
+  RoomEvent? _membershipEventFromJournal(JournalRecord rec) {
+    if (rec.kind != ReplicationEventKind.roomMembershipChanged) return null;
+    if (!replicationFieldsAreSafe(rec.fields.keys)) return null;
+    for (final banned in const [
+      'text',
+      'b64',
+      'fileKey',
+      'fileKeyB64',
+      'plaintext',
+    ]) {
+      if (rec.fields.containsKey(banned)) return null;
+    }
+    final peerId = rec.fields['peerId'] as String?;
+    if (peerId == null || peerId.isEmpty) return null;
+    final seq = (rec.fields['seq'] as num?)?.toInt() ?? rec.seq;
+    final writer = rec.fields['writerId'] as String? ?? rec.writerDeviceId;
+    return RoomEvent(
+      writerId: writer.isEmpty ? selfDeviceId : writer,
+      seq: seq,
+      kind: 'membership',
+      payload: {
+        if (rec.fields['roomId'] != null) 'roomId': rec.fields['roomId'],
+        'peerId': peerId,
+        'action': rec.fields['action'] as String? ?? 'join',
+        if (rec.fields['displayName'] is String)
+          'displayName': rec.fields['displayName'],
+      },
+    );
   }
 
   /// Inbound Hyperswarm connections need the Noise→ORBIT map before
@@ -832,13 +889,15 @@ class DualStackBridge {
     return true;
   }
 
-  void _applyRoom(RoomEvent event) {
+  void _applyRoom(RoomEvent event, {bool persist = true}) {
     final key = '${event.writerId}:${event.seq}';
     if (roomLog.any((e) => '${e.writerId}:${e.seq}' == key)) return;
     roomLog.add(event);
     rooms.reset();
     rooms.applyAll(roomLog);
+    if (event.seq >= _roomSeq) _roomSeq = event.seq + 1;
     if (event.kind != 'membership') return;
+    if (!persist) return;
     final record = journal.append(
       ReplicationEventKind.roomMembershipChanged,
       <String, Object?>{
@@ -847,11 +906,16 @@ class DualStackBridge {
         'action': event.payload['action'],
         if (event.payload['displayName'] != null)
           'displayName': event.payload['displayName'],
+        'writerId': event.writerId,
+        'seq': event.seq,
         'createdAt': DateTime.now().millisecondsSinceEpoch,
       },
     );
     unawaited(_persistDurable(record));
     hypercore.append(record);
+    for (final peer in List<String>.from(authenticated)) {
+      _replicateRecord(peer, record);
+    }
   }
 
   Future<void> sendCallSignal(String peerId, CallSignal signal) async {
@@ -1147,6 +1211,10 @@ class DualStackBridge {
         final ingested = journal.ingest(remote);
         if (ingested != null) {
           unawaited(_persistDurable(ingested));
+        }
+        if (remote.kind == ReplicationEventKind.roomMembershipChanged) {
+          final event = _membershipEventFromJournal(remote);
+          if (event != null) _applyRoom(event, persist: false);
         }
       } catch (_) {}
       return;
