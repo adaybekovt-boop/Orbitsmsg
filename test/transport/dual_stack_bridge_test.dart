@@ -3274,13 +3274,34 @@ void main() {
   test('sendEncrypted source-scan uses sendTargets not only transportTargets',
       () {
     final src = File('lib/transport/dual_stack_bridge.dart').readAsStringSync();
+    final ids = src
+        .split('Set<String> _sendPeerIds')[1]
+        .split('Future<bool> sendEncrypted')[0];
+    expect(ids, contains('sendTargets'));
+    expect(ids, contains('selfPeerId: selfPeerId()'));
+    expect(ids, contains('sendingDeviceId: selfDeviceId'));
+    expect(ids, isNot(contains('transportTargets(peerId)')));
     final send = src
         .split('Future<bool> sendEncrypted')[1]
         .split('Future<bool> _sendEncryptedOne')[0];
-    expect(send, contains('sendTargets'));
-    expect(send, contains('selfPeerId: selfPeerId()'));
-    expect(send, contains('sendingDeviceId: selfDeviceId'));
+    expect(send, contains('_sendPeerIds'));
     expect(send, isNot(contains('transportTargets(peerId)')));
+    final ephemeral = src
+        .split('Future<bool> sendEphemeral')[1]
+        .split('bool sendRoomPacket')[0];
+    expect(ephemeral, contains('_sendPeerIds'));
+    final drop = src
+        .split('Future<bool> sendDrop')[1]
+        .split('Future<bool> sendFileFromPath')[0];
+    expect(drop, contains('_sendPeerIds'));
+    final file = src
+        .split('Future<bool> sendFileFromPath')[1]
+        .split('void _appendEnvelope')[0];
+    expect(file, contains('_sendPeerIds'));
+    final attach = src
+        .split('Future<bool> sendAttachmentCipherPath')[1]
+        .split('Future<void> _sendAttachmentChunks')[0];
+    expect(attach, contains('_sendPeerIds'));
   });
 
   test('loopback Autobase lists DualStack membership after room_join',

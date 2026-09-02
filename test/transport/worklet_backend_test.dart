@@ -273,7 +273,7 @@ void main() {
         .readAsStringSync()
         .split('Future<bool> sendEncrypted')[1]
         .split('Future<bool> _sendEncryptedOne')[0];
-    expect(sendEncrypted, contains('sendTargets'));
+    expect(sendEncrypted, contains('_sendPeerIds'));
     expect(sendEncrypted, isNot(contains('discoverySecret')));
     expect(
       File('lib/transport/native_transport_host.dart').readAsStringSync(),

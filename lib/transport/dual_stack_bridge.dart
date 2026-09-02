@@ -403,13 +403,18 @@ class DualStackBridge {
     );
   }
 
-  Future<bool> sendEncrypted(String peerId, Object? msg) async {
-    final targets = devices?.sendTargets(
+  /// Recipient devices plus own-device sync copies. Not the sending device.
+  Set<String> _sendPeerIds(String peerId) {
+    return devices?.sendTargets(
           peerId,
           selfPeerId: selfPeerId(),
           sendingDeviceId: selfDeviceId,
         ) ??
         <String>{normalizePeerId(peerId)};
+  }
+
+  Future<bool> sendEncrypted(String peerId, Object? msg) async {
+    final targets = _sendPeerIds(peerId);
     if (targets.length > 1) {
       var any = false;
       for (final target in targets) {
@@ -901,8 +906,6 @@ class DualStackBridge {
     required List<int> firstCipher,
     required int chunkCount,
   }) async {
-    final norm = normalizePeerId(peerId);
-    if (!await _ensureNativeSendReady(norm)) return false;
     if (file.path.isEmpty || file.path.contains('://')) {
       throw StateError('sendAttachmentCipherPath needs a local path');
     }
@@ -914,9 +917,15 @@ class DualStackBridge {
       throw StateError('sendAttachmentCipherPath needs fileId');
     }
     if (firstCipher.isEmpty || chunkCount <= 0) return false;
-    await transport.sendFile(norm, file);
+    var any = false;
+    for (final target in _sendPeerIds(peerId)) {
+      if (!await _ensureNativeSendReady(target)) continue;
+      await transport.sendFile(target, file);
+      any = true;
+    }
+    if (!any) return false;
     _journalAttachmentPublished(
-      norm,
+      normalizePeerId(peerId),
       firstCipher: List<int>.from(firstCipher),
       chunkCount: chunkCount,
       totalBytes: file.sizeBytes,
@@ -1087,14 +1096,17 @@ class DualStackBridge {
   }
 
   Future<bool> sendEphemeral(String peerId, Object? msg) async {
-    final norm = normalizePeerId(peerId);
     if (msg is Map && !outboundWireMapIsSendable(msg)) return false;
-    if (!await _ensureNativeSendReady(norm) || !isWireReady(norm)) {
-      return false;
+    var any = false;
+    for (final target in _sendPeerIds(peerId)) {
+      if (!await _ensureNativeSendReady(target) || !isWireReady(target)) {
+        continue;
+      }
+      final wire = await encryptWirePayload(target, msg);
+      await transport.send(target, TransportChannel.presence, utf8.encode(wire));
+      any = true;
     }
-    final wire = await encryptWirePayload(norm, msg);
-    await transport.send(norm, TransportChannel.presence, utf8.encode(wire));
-    return true;
+    return any;
   }
 
   bool sendRoomPacket(String peerId, Map<String, Object?> packet) {
@@ -1195,22 +1207,27 @@ class DualStackBridge {
   }
 
   Future<bool> sendDrop(String peerId, Object packet) async {
-    final norm = normalizePeerId(peerId);
-    if (!await _ensureNativeSendReady(norm)) return false;
-    if (packet is Map) {
-      if (!replicationValueIsSafe(packet)) return false;
-      await transport.send(
-        norm,
-        TransportChannel.attachment,
-        jsonPayload(Map<String, Object?>.from(packet)),
-      );
-      return true;
+    if (packet is Map && !replicationValueIsSafe(packet)) return false;
+    if (packet is! Map && packet is! List<int>) return false;
+    var any = false;
+    for (final target in _sendPeerIds(peerId)) {
+      if (!await _ensureNativeSendReady(target)) continue;
+      if (packet is Map) {
+        await transport.send(
+          target,
+          TransportChannel.attachment,
+          jsonPayload(Map<String, Object?>.from(packet)),
+        );
+      } else {
+        await transport.send(
+          target,
+          TransportChannel.attachment,
+          packet as List<int>,
+        );
+      }
+      any = true;
     }
-    if (packet is List<int>) {
-      await transport.send(norm, TransportChannel.attachment, packet);
-      return true;
-    }
-    return false;
+    return any;
   }
 
   /// Large files ride a path/descriptor into Bare. Never a Dart byte array
@@ -1219,13 +1236,16 @@ class DualStackBridge {
     String peerId,
     TransportFileDescriptor file,
   ) async {
-    final norm = normalizePeerId(peerId);
-    if (!await _ensureNativeSendReady(norm)) return false;
     if (file.path.isEmpty || file.path.contains('://')) {
       throw StateError('sendFileFromPath needs a local path');
     }
-    await transport.sendFile(norm, file);
-    return true;
+    var any = false;
+    for (final target in _sendPeerIds(peerId)) {
+      if (!await _ensureNativeSendReady(target)) continue;
+      await transport.sendFile(target, file);
+      any = true;
+    }
+    return any;
   }
 
   void _appendEnvelope(String peerId, List<int> encrypted) {
