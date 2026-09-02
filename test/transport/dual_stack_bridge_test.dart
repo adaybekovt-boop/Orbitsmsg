@@ -22,6 +22,7 @@ import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/rooms/autobase_log.dart';
 import 'package:orbits_flutter/attachments/resumable_blob.dart';
 import 'package:orbits_flutter/core/path_byte_stream.dart';
+import 'package:orbits_flutter/transport/capabilities.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
@@ -3608,6 +3609,32 @@ void main() {
     expect(right.canUseNative('ORBIT-AAAAAAAAAAAAAAAA'), isFalse);
     await left.detach();
     await right.detach();
+  });
+
+  test('old DualStack bindings do not advertise room-voice-v1', () async {
+    final (a, b, _) = await linked();
+    expect(a.canUseNative('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    expect(a.remoteUnderstandsRoomVoice('ORBIT-BBBBBBBBBBBBBBBB'), isFalse);
+    final old = a.remoteBindings['ORBIT-BBBBBBBBBBBBBBBB'];
+    expect(old, isNotNull);
+    expect(advertisesRoomVoiceV1(old!.capabilities), isFalse);
+    a.remoteBindings['ORBIT-BBBBBBBBBBBBBBBB'] = DeviceBinding(
+      version: old.version,
+      identityPublicKey: old.identityPublicKey,
+      deviceId: old.deviceId,
+      transportPublicKey: old.transportPublicKey,
+      hypercorePublicKey: old.hypercorePublicKey,
+      capabilities: <String>[
+        ...old.capabilities,
+        TransportCapability.roomVoiceV1.wireName,
+      ],
+      createdAt: old.createdAt,
+      expiresAt: old.expiresAt,
+      signatureByIdentityKey: old.signatureByIdentityKey,
+    );
+    expect(a.remoteUnderstandsRoomVoice('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    await a.detach();
+    await b.detach();
   });
 
   test('revoked device and TOFU mismatch fail connect checks', () async {

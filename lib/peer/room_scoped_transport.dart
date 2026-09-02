@@ -122,6 +122,9 @@ class RoomScopedTransport implements RoomTransport {
   bool canUseNative(String peerId) => false;
 
   @override
+  bool remoteUnderstandsRoomVoice(String peerId) => false;
+
+  @override
   Future<void> sendCallSignal(String peerId, CallSignal signal) async {}
 
   @override

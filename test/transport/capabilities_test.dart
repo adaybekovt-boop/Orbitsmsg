@@ -73,6 +73,15 @@ void main() {
       TransportCapability.fromWireName('multi-device-v1'),
       TransportCapability.multiDeviceV1,
     );
+    expect(
+      TransportCapability.fromWireName('room-voice-v1'),
+      TransportCapability.roomVoiceV1,
+    );
     expect(TransportCapability.fromWireName('nope'), isNull);
+    expect(advertisesRoomVoiceV1(const ['hyperswarm-v1', 'peerjs-v4']), isFalse);
+    expect(
+      advertisesRoomVoiceV1(const ['hyperswarm-v1', 'room-voice-v1']),
+      isTrue,
+    );
   });
 }

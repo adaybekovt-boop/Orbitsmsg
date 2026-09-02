@@ -42,6 +42,8 @@ class _RecordingTransport implements RoomTransport {
   @override
   bool canUseNative(String peerId) => false;
   @override
+  bool remoteUnderstandsRoomVoice(String peerId) => false;
+  @override
   Future<void> sendCallSignal(String peerId, CallSignal signal) async {}
   @override
   void bindRoomVoice(void Function(String from, CallSignal signal)? handler) {}

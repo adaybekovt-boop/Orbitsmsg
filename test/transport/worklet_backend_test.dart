@@ -265,6 +265,7 @@ void main() {
     final connSrc =
         File('lib/state/connections_notifier.dart').readAsStringSync();
     expect(connSrc, contains('bindRoomVoiceHandler'));
+    expect(connSrc, contains('remoteUnderstandsRoomVoice'));
     expect(connSrc, contains('signal.isRoomVoice'));
     expect(
       connSrc.indexOf('signal.isRoomVoice'),

@@ -59,6 +59,8 @@ class _FakeTransport implements RoomTransport {
   @override
   bool canUseNative(String peerId) => nativeReady;
   @override
+  bool remoteUnderstandsRoomVoice(String peerId) => nativeReady;
+  @override
   Future<void> sendCallSignal(String peerId, CallSignal signal) async {}
   @override
   void bindRoomVoice(void Function(String from, CallSignal signal)? handler) {}
@@ -452,6 +454,7 @@ void main() {
     expect(startVoice.indexOf('.callPeer'), greaterThan(gateIdx),
         reason: 'callPeer must sit after the isolation gate');
     expect(startVoice, contains('canUseNative'));
+    expect(startVoice, contains('remoteUnderstandsRoomVoice'));
     expect(startVoice, contains('_offerNativeVoice'));
     expect(startVoice, contains('willNative'));
     expect(startVoice, contains('roomVoiceUsesNativeLeg'));

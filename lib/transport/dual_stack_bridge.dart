@@ -26,6 +26,7 @@ import '../replication/hypercore_store.dart';
 import '../replication/memory_journal.dart';
 import '../rooms/autobase_log.dart';
 import '../transport/replication_schema.dart';
+import 'capabilities.dart';
 import 'connect_binding.dart';
 import 'device_binding.dart';
 import 'discovery_secret_store.dart';
@@ -402,6 +403,26 @@ class DualStackBridge {
     if (discoverySecretFor(peerId) == null) return false;
     final norm = normalizePeerId(peerId);
     return connected.contains(norm) && authenticated.contains(norm);
+  }
+
+  /// True when the remote advertised `room-voice-v1` on DeviceBinding,
+  /// a signed capability record, or a verified hello `caps` sibling.
+  /// Missing bit fail-closed: do not send DualStack `rv-` offers.
+  bool remoteUnderstandsRoomVoice(String peerId) {
+    final norm = normalizePeerId(peerId);
+    final binding = remoteBindings[norm];
+    if (binding != null && advertisesRoomVoiceV1(binding.capabilities)) {
+      return true;
+    }
+    for (final rec in remoteCapabilities) {
+      if (normalizePeerId(rec.peerId) == norm &&
+          rec.capabilities.contains(TransportCapability.roomVoiceV1)) {
+        return true;
+      }
+    }
+    final cached = remoteCapabilityCache.get(norm);
+    return cached?.capabilities.contains(TransportCapability.roomVoiceV1) ==
+        true;
   }
 
   Future<void> dial(String peerId) async {

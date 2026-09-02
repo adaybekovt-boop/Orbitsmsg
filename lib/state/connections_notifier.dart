@@ -452,6 +452,11 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   bool canUseNative(String peerId) => _dual?.canUseNative(peerId) == true;
 
+  /// Remote advertised DualStack room-voice (`room-voice-v1`). Missing
+  /// bit fail-closed so we do not send `rv-` offers to old clients.
+  bool remoteUnderstandsRoomVoice(String peerId) =>
+      _dual?.remoteUnderstandsRoomVoice(peerId) == true;
+
   /// Native is connected (DeviceBinding may still be in flight). DualStackBridge
   /// waits for ADR-0001 auth before application traffic. Secrets required —
   /// never HASH(peerId).

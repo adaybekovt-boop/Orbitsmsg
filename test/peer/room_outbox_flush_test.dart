@@ -42,6 +42,9 @@ class _FlakyHostTransport implements RoomTransport {
   bool canUseNative(String peerId) => false;
 
   @override
+  bool remoteUnderstandsRoomVoice(String peerId) => false;
+
+  @override
   Future<void> sendCallSignal(String peerId, CallSignal signal) async {}
 
   @override

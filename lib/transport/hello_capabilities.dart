@@ -120,6 +120,7 @@ Set<TransportCapability> advertisedLocalCapabilities() => {
       TransportCapability.mailboxV1,
       TransportCapability.hypercoreV1,
       TransportCapability.multiDeviceV1,
+      TransportCapability.roomVoiceV1,
     };
 
 /// Sorted wire names for [DeviceBinding.capabilities]. Never URLs.

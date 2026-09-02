@@ -11,7 +11,10 @@ enum TransportCapability {
   webPwaV1('web-pwa-v1'),
   mailboxV1('mailbox-v1'),
   hypercoreV1('hypercore-v1'),
-  multiDeviceV1('multi-device-v1');
+  multiDeviceV1('multi-device-v1'),
+  /// Remote understands DualStack room-voice (`rv-` + `media.channel`).
+  /// Old DualStack clients without this bit treat `rv-` offers as 1:1 rings.
+  roomVoiceV1('room-voice-v1');
 
   const TransportCapability(this.wireName);
   final String wireName;
@@ -73,3 +76,8 @@ Set<TransportCapability> defaultPwaCapabilities() => {
       TransportCapability.peerjsV4,
       TransportCapability.webPwaV1,
     };
+
+/// Wire names / DeviceBinding bits that mean the remote will not treat a
+/// DualStack `rv-` offer as a 1:1 call.
+bool advertisesRoomVoiceV1(Iterable<String> names) =>
+    names.contains(TransportCapability.roomVoiceV1.wireName);

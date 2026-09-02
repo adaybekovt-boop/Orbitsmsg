@@ -179,16 +179,26 @@ Map<String, Object?> roomVoiceMedia({
 bool shouldOfferNativeRoomVoice(String selfPeerId, String remotePeerId) =>
     selfPeerId.compareTo(remotePeerId) < 0;
 
-/// Native DualStack takes the voice leg when the member is already
-/// authenticated on the carrier. PeerJS stays for everyone else, and
-/// for the default-live product path when native is down.
-bool roomVoiceUsesNativeLeg({required bool canUseNative}) => canUseNative;
+/// Native DualStack takes the voice leg only when the member is
+/// authenticated on the carrier **and** advertised `room-voice-v1`.
+/// Old DualStack clients without that bit treat `rv-` as a 1:1 ring,
+/// so they stay on PeerJS room-voice (or get no offer under isolation).
+bool roomVoiceUsesNativeLeg({
+  required bool canUseNative,
+  required bool remoteUnderstandsRoomVoice,
+}) =>
+    canUseNative && remoteUnderstandsRoomVoice;
 
 bool roomVoiceUsesPeerJsLeg({
   required bool peerJsAllowed,
   required bool canUseNative,
+  required bool remoteUnderstandsRoomVoice,
 }) =>
-    peerJsAllowed && !canUseNative;
+    peerJsAllowed &&
+    !roomVoiceUsesNativeLeg(
+      canUseNative: canUseNative,
+      remoteUnderstandsRoomVoice: remoteUnderstandsRoomVoice,
+    );
 
 class _NativeVoiceLeg {
   _NativeVoiceLeg({required this.session, required this.media});
@@ -2346,7 +2356,12 @@ class RoomManager extends StateNotifier<RoomState> {
     // Product [kPeerjsIsolationMode] stays default-live; this uses
     // [kIsWeb], never the no-arg form.
     final peerJsOk = peerjsAllowedOnNative(isWeb: kIsWeb);
-    final nativeOk = targets.any(_connections.canUseNative);
+    final nativeOk = targets.any(
+      (t) => roomVoiceUsesNativeLeg(
+        canUseNative: _connections.canUseNative(t),
+        remoteUnderstandsRoomVoice: _connections.remoteUnderstandsRoomVoice(t),
+      ),
+    );
     if (!peerJsOk && !nativeOk) {
       debugPrint('[room] voice: PeerJS isolation and no native mesh');
       return;
@@ -2389,6 +2404,8 @@ class RoomManager extends StateNotifier<RoomState> {
       for (final t in targets) {
         if (roomVoiceUsesNativeLeg(
           canUseNative: _connections.canUseNative(t),
+          remoteUnderstandsRoomVoice:
+              _connections.remoteUnderstandsRoomVoice(t),
         )) {
           continue;
         }
@@ -2410,6 +2427,8 @@ class RoomManager extends StateNotifier<RoomState> {
       for (final t in targets) {
         if (!roomVoiceUsesNativeLeg(
           canUseNative: _connections.canUseNative(t),
+          remoteUnderstandsRoomVoice:
+              _connections.remoteUnderstandsRoomVoice(t),
         )) {
           continue;
         }
@@ -2776,6 +2795,10 @@ abstract class RoomTransport {
   /// [_ConnRoomTransport] forwards to [ConnectionsNotifier.canUseNative].
   bool canUseNative(String peerId) => false;
 
+  /// Remote advertised `room-voice-v1`. Default false. Implementors that
+  /// `implements RoomTransport` must override this.
+  bool remoteUnderstandsRoomVoice(String peerId) => false;
+
   /// Native room-voice signaling on DualStack. Implementors that
   /// `implements RoomTransport` must override this (Dart has no inherited
   /// default on `implements`).
@@ -2810,6 +2833,10 @@ class _ConnRoomTransport implements RoomTransport {
 
   @override
   bool canUseNative(String peerId) => _c.canUseNative(peerId);
+
+  @override
+  bool remoteUnderstandsRoomVoice(String peerId) =>
+      _c.remoteUnderstandsRoomVoice(peerId);
 
   @override
   Future<void> sendCallSignal(String peerId, CallSignal signal) =>
