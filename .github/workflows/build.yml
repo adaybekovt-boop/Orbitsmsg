@@ -730,6 +730,8 @@ jobs:
             --dart-define=PEER_SECURE_SET="${PEER_SECURE:+true}"
           test -x build/linux/x64/release/bundle/orbits_flutter \
             -o -x build/linux/arm64/release/bundle/orbits_flutter
+          chmod +x build/linux/x64/release/bundle/lib/bare 2>/dev/null || true
+          chmod +x build/linux/arm64/release/bundle/lib/bare 2>/dev/null || true
           if [ -x build/linux/x64/release/bundle/lib/bare ] || \
              [ -x build/linux/arm64/release/bundle/lib/bare ]; then
             echo "linux app bundle has local Bare; kBareBinaryShipped stays false"

@@ -81,6 +81,19 @@ void main() {
       contains('linux-arm64'),
     );
     expect(
+      File('linux/CMakeLists.txt').readAsStringSync(),
+      contains('install(PROGRAMS'),
+    );
+    expect(
+      File('linux/CMakeLists.txt').readAsStringSync(),
+      contains('_orbits_bundled_name STREQUAL "bare"'),
+    );
+    expect(
+      File('packages/orbits_transport_linux/linux/CMakeLists.txt')
+          .readAsStringSync(),
+      contains('chmod +x'),
+    );
+    expect(
       File('packages/orbits_transport_linux/linux/CMakeLists.txt')
           .readAsStringSync(),
       contains('configure_file'),
@@ -179,6 +192,7 @@ void main() {
     expect(ci, contains('flutter build linux --release'));
     expect(ci, contains('Build Linux'));
     expect(ci, contains('bundle/lib/bare'));
+    expect(ci, contains('chmod +x build/linux/x64/release/bundle/lib/bare'));
     expect(ci, contains('bundle/lib/bare_stdlib.zip'));
     expect(ci, contains('runner/Release/bare.exe'));
     expect(ci, contains('runner/Release/bare_stdlib.zip'));
