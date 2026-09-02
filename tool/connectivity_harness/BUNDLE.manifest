@@ -14,6 +14,6 @@
     "ipc.js": "cf983e1ac28d0f8187edcf589708658d9209510ecd968801ba94e41b1d336aa9",
     "swarm.js": "4d836eb862e892b58f4139f4ee1ce744a1370a59aaf41960de4af95c57d96d65",
     "stand.js": "d22402a34b2b80a59fc62a887ef8af748fdcdafb8ea6dde43b2c35236eb5af20",
-    "corestore_journal.js": "ad3677a0eeabfab0e9c72fd2b9e102a47f0585739062b39b86e4661d68c9a49c"
+    "corestore_journal.js": "b56609de75e5014b79e18acc8e43cf6262f53e4038ce273f82e8db91d35f2891"
   }
 }

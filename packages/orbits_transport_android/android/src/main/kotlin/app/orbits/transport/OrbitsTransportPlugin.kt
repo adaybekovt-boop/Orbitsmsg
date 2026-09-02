@@ -63,6 +63,7 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         out.setExecutable(true)
         if (out.exists() && out.canExecute()) {
           extractStdlibZip(ctx)
+          extractCorestoreAddon(ctx)
           out.absolutePath
         } else null
       }
@@ -78,6 +79,22 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
       }
     } catch (_: Exception) {
       // optional local zip
+    }
+  }
+
+  /// Optional local Corestore addon next to orbits-bare. Never fetched.
+  private fun extractCorestoreAddon(ctx: Context) {
+    val names = arrayOf("corestore.bare", "addons/corestore.bare")
+    val out = File(ctx.cacheDir, "corestore.bare")
+    for (name in names) {
+      try {
+        ctx.assets.open(name).use { input ->
+          out.outputStream().use { input.copyTo(it) }
+        }
+        if (out.exists() && out.length() > 0) return
+      } catch (_: Exception) {
+        // optional local addon
+      }
     }
   }
 }

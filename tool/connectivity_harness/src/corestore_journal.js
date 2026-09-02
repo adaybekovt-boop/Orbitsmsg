@@ -73,24 +73,55 @@ function parseStored(raw) {
   return rec
 }
 
+function isLocalAddonFile(p) {
+  if (typeof p !== 'string') return false
+  const t = p.trim()
+  if (!t || isRemoteUrl(t)) return false
+  if (!(t.endsWith('.bare') || t.endsWith('.node'))) return false
+  try {
+    return require('node:fs').existsSync(t)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Map `Bare.Addon.load` output to a Corestore constructor.
+ *
+ * Holepunch Corestore on Node is `require('corestore')`. That hangs Bare
+ * 1.31 — never `require('corestore')` on the Bare path. A Holepunch-built
+ * `corestore.bare` may return the constructor, `{ Corestore }`, or
+ * `{ default }`. Anything else → encrypted JSONL.
+ */
+function corestoreCtorFromAddon(loaded) {
+  if (typeof loaded === 'function') return loaded
+  if (loaded && typeof loaded === 'object') {
+    if (typeof loaded.Corestore === 'function') return loaded.Corestore
+    if (typeof loaded.default === 'function') return loaded.default
+  }
+  return null
+}
+
 function localBareAddonPath() {
   const env =
     (typeof process !== 'undefined' &&
       process.env &&
       process.env.ORBITS_CORESTORE_ADDON) ||
     ''
-  if (env && !isRemoteUrl(env)) return env
+  if (env) return isRemoteUrl(env) ? '' : env
   try {
     const path = require('node:path')
-    const fs = require('node:fs')
     const candidates = [
+      path.join(__dirname, 'addons', 'corestore.bare'),
+      path.join(__dirname, '..', 'addons', 'corestore.bare'),
+      path.join(__dirname, '..', 'corestore.bare'),
       path.join(__dirname, '..', '..', 'bare', 'addons', 'corestore.bare'),
     ]
     for (const c of candidates) {
-      if (!isRemoteUrl(c) && fs.existsSync(c)) return c
+      if (isLocalAddonFile(c)) return c
     }
   } catch {
-    // missing fs
+    // missing fs / __dirname
   }
   return ''
 }
@@ -133,10 +164,20 @@ class CorestoreJournal {
       this.backend = 'memory'
       return false
     }
-    this._store = new Corestore(root)
-    await this._store.ready()
-    this._core = this._store.get({ name: 'orbits-journal-v1' })
-    await this._core.ready()
+    try {
+      return await this._openWithCtor(Corestore, root)
+    } catch {
+      return this.useEncryptedEnvelopeFileJournal(root)
+    }
+  }
+
+  async _openWithCtor(Corestore, root) {
+    const store = new Corestore(root)
+    await store.ready()
+    const core = store.get({ name: 'orbits-journal-v1' })
+    await core.ready()
+    this._store = store
+    this._core = core
     await this._hydrateFromCore()
     this.backend = 'corestore'
     return true
@@ -153,10 +194,14 @@ class CorestoreJournal {
           Bare.Addon &&
           typeof Bare.Addon.load === 'function'
         ) {
-          Bare.Addon.load(addon)
+          const loaded = Bare.Addon.load(addon)
+          const Corestore = corestoreCtorFromAddon(loaded)
+          if (typeof Corestore === 'function') {
+            return await this._openWithCtor(Corestore, dir)
+          }
         }
       } catch {
-        // missing / unloadable local addon — keep probing fs journal
+        // missing / unloadable local addon — encrypted JSONL
       }
     }
     return this.useEncryptedEnvelopeFileJournal(dir)
@@ -269,9 +314,12 @@ class CorestoreJournal {
 
 module.exports = {
   CorestoreJournal,
+  corestoreCtorFromAddon,
   fieldsAreSafe,
   FORBIDDEN,
   ENVELOPE_KINDS,
+  isLocalAddonFile,
+  localBareAddonPath,
   parseStored,
   safeJournalDir,
 }

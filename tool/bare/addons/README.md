@@ -13,7 +13,10 @@ Place a locally built `corestore.node` at
   not this addon.
 - On Bare, `useCorestoreIfPresent` must **not** `require('corestore')`.
   Node's addon hangs Bare 1.31 instead of throwing. If a local `.bare`
-  file is in `kCorestoreBareAddonSlot` (or `ORBITS_CORESTORE_ADDON`),
-  the worklet calls `Bare.Addon.load` on that path only. Missing addon
-  → encrypted-envelope JSONL (`backend = 'fs'`). That still does not
-  flip `kHolepunchCorestoreAddonLinked`.
+  file is in `kCorestoreBareAddonSlot`, next to the worklet / Bare
+  binary, or `ORBITS_CORESTORE_ADDON`, the worklet calls `Bare.Addon.load`
+  on that path only and maps the result through `corestoreCtorFromAddon`.
+  A constructor binds Corestore; anything else → encrypted-envelope
+  JSONL (`backend = 'fs'`). CMake/Gradle/podspec copy the local sidecar
+  into the app bundle when the file exists. That still does not flip
+  `kHolepunchCorestoreAddonLinked`.

@@ -100,6 +100,12 @@ jobs:
           test -x packages/orbits_transport_linux/linux/bare-arm64
           echo "linux-arm64 vendored beside x64 host; kBareBinaryShipped stays false"
 
+      - name: Optionally embed local Corestore addon (slot may be empty)
+        run: |
+          set -euo pipefail
+          bash tool/bare/addons/embed-corestore.sh
+          echo "kHolepunchCorestoreAddonLinked stays false"
+
       - name: Connectivity harness (loopback, no hardware)
         working-directory: tool/connectivity_harness
         run: |
@@ -249,6 +255,8 @@ jobs:
           test -f packages/orbits_transport_macos/macos/bare
           test -f packages/orbits_transport_macos/macos/bare-x64
           echo "darwin-x64 vendored beside arm64 host; kBareBinaryShipped stays false"
+          bash tool/bare/addons/embed-corestore.sh
+          echo "kHolepunchCorestoreAddonLinked stays false"
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -448,7 +456,9 @@ jobs:
           tool/bare/vendor.sh android-arm64
           tool/bare/embed.sh android-arm64
           test -f packages/orbits_transport_android/android/src/main/assets/bare
+          bash tool/bare/addons/embed-corestore.sh
           echo "kBareBinaryShipped stays false"
+          echo "kHolepunchCorestoreAddonLinked stays false"
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -704,6 +714,8 @@ jobs:
           test -x packages/orbits_transport_linux/linux/bare
           test -x packages/orbits_transport_linux/linux/bare-arm64
           echo "kBareBinaryShipped stays false"
+          bash tool/bare/addons/embed-corestore.sh
+          echo "kHolepunchCorestoreAddonLinked stays false"
 
       - name: Pack local bare-* stdlib zip (not hyperswarm)
         run: bash tool/ci/vendor_bare_stdlib.sh
@@ -828,6 +840,8 @@ jobs:
           tool/bare/embed.sh windows-x64
           test -f packages/orbits_transport_windows/windows/bare.exe
           echo "kBareBinaryShipped stays false"
+          bash tool/bare/addons/embed-corestore.sh
+          echo "kHolepunchCorestoreAddonLinked stays false"
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:

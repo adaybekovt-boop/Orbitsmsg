@@ -56,11 +56,36 @@ test('Bare must not require Node corestore (hangs the runtime)', () => {
   assert.match(src, /typeof Bare !== 'undefined'/)
   assert.match(src, /must not be required from Bare/)
   assert.match(src, /Bare\.Addon\.load/)
+  assert.match(src, /corestoreCtorFromAddon/)
   assert.match(src, /envelopes\.jsonl/)
   assert.match(src, /isRemoteUrl/)
   assert.match(src, /_hydrateFromCore/)
   assert.match(src, /_hydrateFromLog/)
   assert.match(src, /await this\._core\.append/)
+  const start = src.indexOf('async _useBareJournal')
+  const end = src.indexOf('useEncryptedEnvelopeFileJournal(dir)')
+  assert.ok(start >= 0)
+  assert.ok(end > start)
+  const body = src.slice(start, end)
+  assert.doesNotMatch(body, /require\('corestore'\)/)
+  assert.match(body, /corestoreCtorFromAddon/)
+  assert.match(body, /Bare\.Addon\.load/)
+})
+
+test('corestoreCtorFromAddon maps Addon.load results', () => {
+  const { corestoreCtorFromAddon, isLocalAddonFile, localBareAddonPath } =
+    require('../src/corestore_journal')
+  function Ctor () {}
+  assert.equal(corestoreCtorFromAddon(Ctor), Ctor)
+  assert.equal(corestoreCtorFromAddon({ Corestore: Ctor }), Ctor)
+  assert.equal(corestoreCtorFromAddon({ default: Ctor }), Ctor)
+  assert.equal(corestoreCtorFromAddon(null), null)
+  assert.equal(corestoreCtorFromAddon({}), null)
+  assert.equal(corestoreCtorFromAddon('nope'), null)
+  assert.equal(isLocalAddonFile('https://evil.example/corestore.bare'), false)
+  assert.equal(isLocalAddonFile('not-an-addon'), false)
+  const env = localBareAddonPath()
+  if (env) assert.doesNotMatch(env, /:\/\//)
 })
 
 test('encrypted-envelope file journal stores ciphertext only', async () => {

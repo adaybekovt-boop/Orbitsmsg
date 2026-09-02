@@ -54,6 +54,8 @@ void main() {
     expect(journal, contains('envelopes.jsonl'));
     expect(journal, contains('_hydrateFromCore'));
     expect(journal, contains('await this._core.append'));
+    expect(journal, contains('corestoreCtorFromAddon'));
+    expect(journal, contains('_openWithCtor'));
     expect(
       File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
       contains('useCorestoreIfPresent'),
@@ -143,6 +145,11 @@ void main() {
           .readAsStringSync(),
       contains('copyOrbitsBareStdlibAsset'),
     );
+    expect(
+      File('packages/orbits_transport_android/android/build.gradle')
+          .readAsStringSync(),
+      contains('copyOrbitsCorestoreAddon'),
+    );
     final androidGradle =
         File('packages/orbits_transport_android/android/build.gradle')
             .readAsStringSync();
@@ -153,6 +160,11 @@ void main() {
       File('packages/orbits_transport_linux/linux/CMakeLists.txt')
           .readAsStringSync(),
       contains('bare_stdlib.zip'),
+    );
+    expect(
+      File('packages/orbits_transport_linux/linux/CMakeLists.txt')
+          .readAsStringSync(),
+      contains('corestore.bare'),
     );
     expect(
       File('packages/orbits_transport_android/android/build.gradle')
@@ -189,6 +201,7 @@ void main() {
     expect(ci, isNot(contains('tool/bare/embed.sh linux-arm64')));
     expect(ci, isNot(contains('tool/bare/embed.sh darwin-x64')));
     expect(ci, contains('kBareBinaryShipped stays false'));
+    expect(ci, contains('tool/bare/addons/embed-corestore.sh'));
     expect(ci, contains('flutter build linux --release'));
     expect(ci, contains('Build Linux'));
     expect(ci, contains('bundle/lib/bare'));

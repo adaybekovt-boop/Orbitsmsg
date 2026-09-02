@@ -71,4 +71,15 @@ copy_one "$ROOT/packages/orbits_transport_windows/windows/addons/$name"
 copy_one "$ROOT/packages/orbits_transport_android/android/src/main/assets/addons/$name"
 copy_one "$ROOT/packages/orbits_transport_ios/ios/addons/$name"
 
+# Flat sidecar next to the OS Bare host so CMake/Gradle/podspec can copy
+# it into the app bundle as `corestore.bare`.
+if [[ "$name" == "corestore.bare" ]]; then
+  copy_one "$ROOT/packages/orbits_transport_linux/linux/corestore.bare"
+  copy_one "$ROOT/packages/orbits_transport_macos/macos/corestore.bare"
+  copy_one "$ROOT/packages/orbits_transport_windows/windows/corestore.bare"
+  copy_one "$ROOT/packages/orbits_transport_android/android/src/main/assets/corestore.bare"
+  copy_one "$ROOT/packages/orbits_transport_ios/ios/corestore.bare"
+  copy_one "$ROOT/tool/connectivity_harness/corestore.bare"
+fi
+
 echo "kHolepunchCorestoreAddonLinked stays false until every OS slot is linked"

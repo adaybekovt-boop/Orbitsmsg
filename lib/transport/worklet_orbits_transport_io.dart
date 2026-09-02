@@ -45,7 +45,12 @@ Future<WorkletOrbitsTransport?> spawnWorkletTransport({
   } catch (_) {}
   await ensureLocalBareStdlib(script, bundledBare: bundled);
   final launch = resolveBareRuntime(script, bundledBare: bundled);
-  final started = await _spawnLaunch(launch, script, backend);
+  final started = await _spawnLaunch(
+    launch,
+    script,
+    backend,
+    bundledBare: bundled,
+  );
   if (started != null) return started;
   if (launch.kind == 'bare') {
     return _spawnLaunch(
@@ -56,6 +61,7 @@ Future<WorkletOrbitsTransport?> spawnWorkletTransport({
       ),
       script,
       backend,
+      bundledBare: bundled,
     );
   }
   return null;
@@ -83,8 +89,9 @@ Future<bool> _nativeHostAllowsLocalWorklet(File script) async {
 Future<WorkletOrbitsTransport?> _spawnLaunch(
   BareRuntimeLaunch launch,
   File script,
-  String backend,
-) async {
+  String backend, {
+  File? bundledBare,
+}) async {
   try {
     final env = Map<String, String>.from(Platform.environment);
     env['ORBITS_HARNESS_BACKEND'] = backend;
@@ -93,7 +100,13 @@ Future<WorkletOrbitsTransport?> _spawnLaunch(
     if (leakedAddon != null && !isLocalBarePath(leakedAddon)) {
       env.remove('ORBITS_CORESTORE_ADDON');
     }
-    env.addAll(_corestoreAddonEnv());
+    env.addAll(
+      _corestoreAddonEnv(
+        worklet: script,
+        bundledBare: bundledBare,
+        bareExecutable: launch.kind == 'bare' ? launch.executable : null,
+      ),
+    );
     final proc = await Process.start(
       launch.executable,
       launch.arguments,
@@ -106,15 +119,49 @@ Future<WorkletOrbitsTransport?> _spawnLaunch(
   }
 }
 
-Map<String, String> _corestoreAddonEnv() {
+/// Optional Holepunch Corestore native addon (`.bare` / `.node`).
+///
+/// Order: `ORBITS_CORESTORE_ADDON`, then next to the worklet / bundled
+/// Bare binary (app-bundle sidecar after CMake/Gradle/podspec copy),
+/// then the repo slot `tool/bare/addons/corestore.bare`. Never a remote
+/// URL.
+Map<String, String> _corestoreAddonEnv({
+  File? worklet,
+  File? bundledBare,
+  String? bareExecutable,
+}) {
   final fromEnv = Platform.environment['ORBITS_CORESTORE_ADDON'];
   if (fromEnv != null && isLocalBarePath(fromEnv)) {
     return {'ORBITS_CORESTORE_ADDON': File(fromEnv).absolute.path};
   }
+  final sep = Platform.pathSeparator;
+  final candidates = <String>[];
+  if (worklet != null) {
+    final dir = worklet.parent.path;
+    final parent = worklet.parent.parent.path;
+    candidates.addAll([
+      '$dir${sep}addons${sep}corestore.bare',
+      '$parent${sep}addons${sep}corestore.bare',
+      '$dir${sep}corestore.bare',
+      '$parent${sep}corestore.bare',
+    ]);
+  }
+  void addNextTo(String? p) {
+    if (p == null || p.isEmpty) return;
+    final dir = File(p).parent.path;
+    candidates.add('$dir${sep}corestore.bare');
+    candidates.add('$dir${sep}addons${sep}corestore.bare');
+  }
+
+  addNextTo(bundledBare?.path);
+  addNextTo(bareExecutable);
   if (corestoreBareAddonPresent()) {
-    return {
-      'ORBITS_CORESTORE_ADDON': File(kCorestoreBareAddonSlot).absolute.path,
-    };
+    candidates.add(File(kCorestoreBareAddonSlot).absolute.path);
+  }
+  for (final raw in candidates) {
+    if (isLocalBarePath(raw)) {
+      return {'ORBITS_CORESTORE_ADDON': File(raw).absolute.path};
+    }
   }
   return const <String, String>{};
 }

@@ -43,11 +43,22 @@ Production must not fetch remote executable JS or binaries.
     elif [ -f ./bare_stdlib.zip ]; then
       echo "orbits_transport_ios: using previously embedded bare stdlib zip"
     fi
+    ADDON="../../../tool/bare/addons/corestore.bare"
+    if [ -f "$ADDON" ]; then
+      cp -f "$ADDON" ./corestore.bare
+      echo "orbits_transport_ios: using local Corestore addon"
+    elif [ -f ./addons/corestore.bare ]; then
+      cp -f ./addons/corestore.bare ./corestore.bare
+      echo "orbits_transport_ios: using previously embedded Corestore addon"
+    elif [ -f ./corestore.bare ]; then
+      echo "orbits_transport_ios: using previously embedded Corestore addon"
+    fi
   CMD
 
   resources = []
   resources << 'bare' if File.exist?(File.join(__dir__, 'bare'))
   resources << 'bare_stdlib.zip' if File.exist?(File.join(__dir__, 'bare_stdlib.zip'))
+  resources << 'corestore.bare' if File.exist?(File.join(__dir__, 'corestore.bare'))
   unless resources.empty?
     s.resource_bundles = { 'OrbitsTransportBare' => resources }
     s.resources = resources

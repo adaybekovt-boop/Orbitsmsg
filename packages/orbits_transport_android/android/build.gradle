@@ -37,6 +37,13 @@ def orbitsBareAsset = file("${orbitsBareAssetDir}/bare")
 def orbitsStdlibZip = file("${project.projectDir}/../../../tool/connectivity_harness/bare_stdlib.zip")
 def orbitsStdlibAsset = file("${orbitsBareAssetDir}/bare_stdlib.zip")
 
+def orbitsCorestoreCandidates = [
+    file("${project.projectDir}/src/main/addons/corestore.bare"),
+    file("${project.projectDir}/src/main/assets/addons/corestore.bare"),
+    file("${project.projectDir}/../../../tool/bare/addons/corestore.bare"),
+]
+def orbitsCorestoreAsset = file("${orbitsBareAssetDir}/corestore.bare")
+
 // Copy into a generated dir, never into src/main/assets. Writing the
 // Copy outputs over the source-set directory makes generateReleaseLintModel
 // consume those files without a declared dependency (AGP 8 fails the
@@ -61,6 +68,22 @@ tasks.register("copyOrbitsBareStdlibAsset", Copy) {
     rename { "bare_stdlib.zip" }
 }
 
+tasks.register("copyOrbitsCorestoreAddon") {
+    description = "Copy a local Corestore addon into generated assets. Never downloads."
+    doLast {
+        if (orbitsCorestoreAsset.exists()) return
+        def src = orbitsCorestoreCandidates.find { it.exists() && it.isFile() }
+        if (src == null) return
+        generatedBareAssets.mkdirs()
+        def dest = file("${generatedBareAssets}/corestore.bare")
+        java.nio.file.Files.copy(
+            src.toPath(),
+            dest.toPath(),
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+        )
+    }
+}
+
 android.sourceSets.main.assets.srcDir(generatedBareAssets)
 
 afterEvaluate {
@@ -68,6 +91,7 @@ afterEvaluate {
         def n = it.name
         n != "copyOrbitsBareAsset" &&
             n != "copyOrbitsBareStdlibAsset" &&
+            n != "copyOrbitsCorestoreAddon" &&
             (
                 (n.contains("Assets") &&
                     (n.startsWith("merge") || n.startsWith("package"))) ||
@@ -75,7 +99,11 @@ afterEvaluate {
                 (n.startsWith("generate") && n.contains("Lint"))
             )
     }.configureEach {
-        dependsOn("copyOrbitsBareAsset", "copyOrbitsBareStdlibAsset")
+        dependsOn(
+            "copyOrbitsBareAsset",
+            "copyOrbitsBareStdlibAsset",
+            "copyOrbitsCorestoreAddon",
+        )
     }
 }
 
