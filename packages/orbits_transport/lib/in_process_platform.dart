@@ -50,12 +50,17 @@ class InProcessOrbitsTransportPlatform extends OrbitsTransportPlatform {
   @override
   Future<void> send(String peerId, String channel, List<int> frame) async {
     calls.add('send');
+    assertIpcFrameSize(frame);
     _requireLive();
   }
 
   @override
   Future<void> sendFile(String peerId, String path, int sizeBytes) async {
     calls.add('sendFile');
+    if (path.isEmpty) throw StateError('sendFile requires a path');
+    if (sizeBytes > 50 * 1024 * 1024) {
+      throw StateError('attachment exceeds path-transfer cap');
+    }
     _requireLive();
   }
 

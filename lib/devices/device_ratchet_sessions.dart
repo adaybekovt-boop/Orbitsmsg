@@ -61,8 +61,7 @@ class DeviceRatchetSessions {
   void revoke(String deviceId) {
     _revoked.add(deviceId);
     _sessions.removeWhere(
-      (key, _) =>
-          key.startsWith('$deviceId->') || key.endsWith('->$deviceId'),
+      (key, _) => key.startsWith('$deviceId->') || key.endsWith('->$deviceId'),
     );
   }
 
@@ -120,8 +119,9 @@ class DeviceRatchetSessions {
       'recvCk': state.recvCk == null ? null : bytesToBase64(state.recvCk!),
       'dhPriv': bytesToBase64(dhPriv),
       'dhPubSpki': bytesToBase64(state.dhPubSpki),
-      'remoteDhPub':
-          state.remoteDhPub == null ? null : bytesToBase64(state.remoteDhPub!),
+      'remoteDhPub': state.remoteDhPub == null
+          ? null
+          : bytesToBase64(state.remoteDhPub!),
       'ns': state.ns,
       'nr': state.nr,
       'pn': state.pn,
@@ -172,9 +172,9 @@ class DeviceRatchetSessions {
 
   /// Privacy-safe counters only. Never includes keys, peer IDs, or bodies.
   Map<String, Object?> diagnostics() => <String, Object?>{
-        'sessionCount': _sessions.length,
-        'revokedCount': _revoked.length,
-      };
+    'sessionCount': _sessions.length,
+    'revokedCount': _revoked.length,
+  };
 
   static String redactSnapshotForLog(Map<String, Object?> snapshot) {
     final safe = <String, Object?>{};
