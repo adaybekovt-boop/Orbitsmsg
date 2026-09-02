@@ -50,4 +50,11 @@ class WorkletOrbitsTransport implements OrbitsTransport {
 
   @override
   Future<void> refreshNetwork() async {}
+
+  @override
+  Future<void> appendJournal(Map<String, Object?> record) async {}
+
+  @override
+  Future<List<Map<String, Object?>>> listJournal() async =>
+      const <Map<String, Object?>>[];
 }

@@ -180,5 +180,17 @@ void main() {
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
       isNot(contains('https://')),
     );
+    expect(
+      File('lib/transport/worklet_orbits_transport_stub.dart').readAsStringSync(),
+      contains('appendJournal'),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_stub.dart').readAsStringSync(),
+      contains('listJournal'),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_stub.dart').readAsStringSync(),
+      isNot(contains('http://')),
+    );
   });
 }

@@ -153,8 +153,7 @@ Uint8List? _signRs256(pc.RSAPrivateKey key, List<int> data) {
   try {
     final signer = pc.RSASigner(pc.SHA256Digest(), '0609608648016503040201')
       ..init(true, pc.PrivateKeyParameter<pc.RSAPrivateKey>(key));
-    final sig = signer.generateSignature(Uint8List.fromList(data))
-        as pc.RSASignature;
+    final sig = signer.generateSignature(Uint8List.fromList(data));
     return sig.bytes;
   } catch (_) {
     return null;
@@ -226,28 +225,28 @@ class _DerReader {
 
   Uint8List expect(int tag) {
     final (t, v) = next();
-    if (t != tag) throw FormatException('unexpected der tag');
+    if (t != tag) throw const FormatException('unexpected der tag');
     return v;
   }
 
   BigInt integer() => _bytesToBigInt(expect(0x02));
 
   (int, Uint8List) next() {
-    if (i >= buf.length) throw FormatException('der eof');
+    if (i >= buf.length) throw const FormatException('der eof');
     final tag = buf[i++];
-    if (i >= buf.length) throw FormatException('der eof');
+    if (i >= buf.length) throw const FormatException('der eof');
     var len = buf[i++];
     if (len & 0x80 != 0) {
       final n = len & 0x7f;
       if (n == 0 || n > 4 || i + n > buf.length) {
-        throw FormatException('der length');
+        throw const FormatException('der length');
       }
       len = 0;
       for (var k = 0; k < n; k++) {
         len = (len << 8) | buf[i++];
       }
     }
-    if (i + len > buf.length) throw FormatException('der truncated');
+    if (i + len > buf.length) throw const FormatException('der truncated');
     final value = buf.sublist(i, i + len);
     i += len;
     return (tag, value);
