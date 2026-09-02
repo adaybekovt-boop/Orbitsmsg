@@ -585,13 +585,18 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     String type,
   ) async {
     final replyTo = payload['replyTo'];
+    Map<String, Object?>? replyToWire;
+    if (replyTo is Map) {
+      final copied = Map<String, Object?>.from(replyTo);
+      if (replicationValueIsSafe(copied)) replyToWire = copied;
+    }
     final common = <String, Object?>{
       'type': 'msg',
       'id': msgId,
       'text': (payload['text'] as String?) ?? '',
       'ts': payload['ts'],
       'from': payload['from'],
-      if (replyTo is Map) 'replyTo': Map<String, Object?>.from(replyTo),
+      if (replyToWire != null) 'replyTo': replyToWire,
     };
 
     switch (type) {
@@ -601,10 +606,11 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       case 'sticker':
         final sticker = payload['sticker'];
         if (sticker is! Map) return null;
+        final stickerMap = Map<String, Object?>.from(sticker);
         return <String, Object?>{
           ...common,
           'msgType': 'sticker',
-          'sticker': Map<String, Object?>.from(sticker),
+          if (replicationValueIsSafe(stickerMap)) 'sticker': stickerMap,
         };
 
       case 'voice':
@@ -662,20 +668,25 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
           }
         }
 
+        final rebuiltAtt = <String, Object?>{
+          'name': attMap['name'] ?? 'file',
+          'size': attMap['size'] ?? bytes.length,
+          'mime': attMap['mime'] ?? 'application/octet-stream',
+          'kind': attMap['kind'] ?? 'file',
+          'thumb': thumbDataUrl,
+          'width': attMap['width'] ?? 0,
+          'height': attMap['height'] ?? 0,
+          'duration': attMap['duration'] ?? 0,
+          'b64': b64,
+        };
+        // Chunked-file outbox retry still needs the ratchet key.
+        if (attMap.containsKey('fileKeyB64')) {
+          rebuiltAtt['fileKeyB64'] = attMap['fileKeyB64'];
+        }
         return <String, Object?>{
           ...common,
           'msgType': 'file',
-          'attachment': <String, Object?>{
-            'name': attMap['name'] ?? 'file',
-            'size': attMap['size'] ?? bytes.length,
-            'mime': attMap['mime'] ?? 'application/octet-stream',
-            'kind': attMap['kind'] ?? 'file',
-            'thumb': thumbDataUrl,
-            'width': attMap['width'] ?? 0,
-            'height': attMap['height'] ?? 0,
-            'duration': attMap['duration'] ?? 0,
-            'b64': b64,
-          },
+          'attachment': rebuiltAtt,
         };
     }
     return null;

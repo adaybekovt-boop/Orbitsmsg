@@ -18,7 +18,7 @@ Future<String?> sendDropFileFromFilesystem({
   String peerId = '',
   int resumeOffset = 0,
 }) async {
-  if (path.isEmpty) return null;
+  if (path.isEmpty || path.contains('://')) return null;
   final file = File(path);
   if (!file.existsSync()) return null;
   final hash = await sha256File(path);

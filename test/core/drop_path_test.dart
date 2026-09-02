@@ -90,6 +90,32 @@ void main() {
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
   });
 
+  test('sendFileFromPath refuses :// before native or PeerJS filesystem send', () {
+    final src = File('lib/state/drop_provider.dart').readAsStringSync();
+    String slice(String start, String end) => src.split(start)[1].split(end)[0];
+    final sendPath = slice('Future<String?> sendFileFromPath', 'void cancel(');
+    expect(sendPath, contains("contains('://')"));
+    expect(sendPath, contains('return null'));
+    final schemeIdx = sendPath.indexOf("contains('://')");
+    final nativeCall = sendPath.indexOf('conns.sendFileFromPath');
+    final peerjsFallback = sendPath.indexOf('sendDropFileFromFilesystem');
+    expect(schemeIdx, greaterThanOrEqualTo(0));
+    expect(nativeCall, greaterThan(schemeIdx));
+    expect(peerjsFallback, greaterThan(schemeIdx));
+    expect(peerjsFallback, greaterThan(nativeCall));
+  });
+
+  test('sendDropFileFromFilesystem refuses :// before File(path)', () {
+    final src = File('lib/state/drop_path_send_io.dart').readAsStringSync();
+    expect(src, contains("path.isEmpty || path.contains('://')"));
+    expect(src, contains('return null'));
+    expect(src, contains('File(path)'));
+    final refuseIdx = src.indexOf("path.contains('://')");
+    final fileIdx = src.indexOf('File(path)');
+    expect(refuseIdx, greaterThanOrEqualTo(0));
+    expect(fileIdx, greaterThan(refuseIdx));
+  });
+
   test('isolation blocks PeerJS Drop only when native cannot take the file', () {
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
     bool blocked({

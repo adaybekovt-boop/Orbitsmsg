@@ -429,6 +429,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// Resolve + encrypt + send on the reliable channel. Returns false if we
   /// don't have a reliable connection to this peer.
   Future<bool> sendEncrypted(String remoteId, Object? msg) async {
+    if (msg is Map && !outboundWireMapIsSendable(msg)) return false;
     final dual = _dual;
     if (dual != null && dual.nativeEnabled) {
       final known = dual.secrets.get(remoteId) != null;
@@ -458,6 +459,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   /// Same on the ephemeral channel (typing / heartbeat).
   Future<bool> sendEphemeral(String remoteId, Object? msg) async {
+    if (msg is Map && !outboundWireMapIsSendable(msg)) return false;
     final dual = _dual;
     if (dual != null && _nativeCarrierFor(remoteId)) {
       try {

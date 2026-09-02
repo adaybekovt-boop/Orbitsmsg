@@ -305,6 +305,7 @@ class DropNotifier extends StateNotifier<DropState> {
     int resumeOffset = 0,
   }) async {
     if (path.isEmpty) return null;
+    if (path.contains('://')) return null;
     final pid = normalizePeerId(peerId);
     final conns = _ref.read(connectionsNotifierProvider.notifier);
 

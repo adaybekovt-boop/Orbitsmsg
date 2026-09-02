@@ -21,6 +21,7 @@
 // sites don't need typed DTOs up front. The UI layer will likely wrap
 // these into dataclasses once it lands (Phase 11).
 
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math';
 
@@ -716,6 +717,65 @@ Future<Map<String, Object?>?> _getPeerRaw(String peerId) async {
   return row == null ? null : _secureDecode(row.data);
 }
 
+// ─── Message payload persist gate ───────────────────────────────────
+//
+// Drift is a local read-model after decrypt. Message `payload` blobs must
+// never store ratchet / identity / discovery secrets or plaintext dumps.
+// The walk matches `replicationValueIsSafe` (cycle-safe Map / Iterable,
+// `List<int>` leaf) but **allows** outbox `fileKey` / `fileKeyB64` so a
+// retry cannot mint a second XOR key (`nativeAttachFileKeyFromPayload`).
+// Do not call `replicationValueIsSafe` on the whole payload — that helper
+// forbids those keys. Host-plaintext `text` / `b64` (rooms) and `peerId`
+// are allowed.
+
+const Set<String> _kForbiddenMessagePayloadFields = {
+  'plaintext',
+  'password',
+  'kek',
+  'vaultKek',
+  'rootKey',
+  'sendCk',
+  'recvCk',
+  'dhPriv',
+  'skipped',
+  'discoverySecret',
+  'sharedDiscoverySecret',
+  'attachmentBytes',
+  'privBytes',
+};
+
+/// Returns false if [payload] nests a ratchet / identity / discovery secret
+/// or plaintext dump at any depth.
+bool messagePayloadIsSafeToPersist(Object? payload) {
+  return _messagePayloadIsSafeToPersist(payload, HashSet<Object>.identity());
+}
+
+bool _messagePayloadIsSafeToPersist(Object? value, Set<Object> seen) {
+  if (value == null || value is bool || value is num || value is String) {
+    return true;
+  }
+  // Ciphertext / key bytes are leaves — do not walk them as Iterables.
+  if (value is List<int>) return true;
+  if (value is Map) {
+    if (!seen.add(value)) return true;
+    for (final key in value.keys) {
+      if (_kForbiddenMessagePayloadFields.contains('$key')) return false;
+    }
+    for (final nested in value.values) {
+      if (!_messagePayloadIsSafeToPersist(nested, seen)) return false;
+    }
+    return true;
+  }
+  if (value is Iterable) {
+    if (!seen.add(value)) return true;
+    for (final item in value) {
+      if (!_messagePayloadIsSafeToPersist(item, seen)) return false;
+    }
+    return true;
+  }
+  return true;
+}
+
 // ─── Messages ───────────────────────────────────────────────────────
 
 Future<bool> saveMessage(Map<String, Object?> message) async {
@@ -742,6 +802,8 @@ Future<bool> saveMessage(Map<String, Object?> message) async {
     if (roomId != null) 'roomId': roomId,
     if (channelId != null) 'channelId': channelId,
   };
+
+  if (!messagePayloadIsSafeToPersist(row['payload'])) return false;
 
   final db = orbitsDb();
   final existing = await (db.select(db.messagesTable)
@@ -795,6 +857,12 @@ Future<Map<String, Object?>?> getMessageById(String id) async {
 
 Future<bool> updateMessage(String id, Map<String, Object?> patch) async {
   if (id.isEmpty) return false;
+  // Fail closed: an unsafe payload patch must not merge secrets into the
+  // stored blob. Other fields in the same patch are also skipped.
+  if (patch.containsKey('payload') &&
+      !messagePayloadIsSafeToPersist(patch['payload'])) {
+    return false;
+  }
   final db = orbitsDb();
   return db.transaction(() async {
     final row = await (db.select(db.messagesTable)

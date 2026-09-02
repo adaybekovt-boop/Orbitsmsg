@@ -222,6 +222,11 @@ void main() {
     expect(sendEncrypted, contains('isPeerjsFallbackEnabled()'));
     expect(sendEncrypted, contains('dual.sendEncrypted'));
     expect(sendEncrypted, contains('_wire.sendEncryptedOn'));
+    expect(sendEncrypted, contains('outboundWireMapIsSendable'));
+    expect(
+      sendEncrypted.indexOf('outboundWireMapIsSendable'),
+      lessThan(sendEncrypted.indexOf('dual.sendEncrypted')),
+    );
 
     final sendEphemeral = slice(
       'Future<bool> sendEphemeral',
@@ -230,6 +235,7 @@ void main() {
     expect(sendEphemeral, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
     expect(sendEphemeral, contains('isPeerjsFallbackEnabled()'));
     expect(sendEphemeral, contains('_wire.sendEphemeralOn'));
+    expect(sendEphemeral, contains('outboundWireMapIsSendable'));
 
     final hasReliable = slice('bool hasReliable', 'bool canDepositMailbox');
     expect(hasReliable, contains('_nativeCarrierFor'));

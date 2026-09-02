@@ -12,9 +12,103 @@
 // `false` (or silently completes for the handshake). The caller is expected
 // to surface UX via the connection status channel, not exceptions.
 
+import 'dart:collection';
+
 import '../core/wire_crypto.dart';
+import '../transport/hello_capabilities.dart';
+import '../transport/layers.dart';
 import 'helpers.dart';
 import 'peerjs_client.dart';
+
+/// True when [msg] may be encrypted and sent on the wire.
+///
+/// Non-maps (ciphertext [String], binary [List<int>]) are already sealed.
+/// `wireHello` / `wireRekey` use [helloEnvelopeIsSafe]. Typing / heartbeat
+/// use [replicationValueIsSafe]. Chat maps refuse nested
+/// [kForbiddenReplicationFields] except `fileKey` / `fileKeyB64` sitting
+/// directly on an `attachment` (needed for chunked-file outbox retry).
+/// Also refuses `opaqueWakeToken` and keys containing `://`. Cycle-safe;
+/// ciphertext [List<int>] is a leaf.
+bool outboundWireMapIsSendable(Object? msg) {
+  if (msg is! Map) return true;
+  final type = '${msg['type'] ?? ''}';
+  if (type == 'wireHello' || type == 'wireRekey') {
+    return helloEnvelopeIsSafe(msg);
+  }
+  if (type == 'typing' || type == 'hb') {
+    return replicationValueIsSafe(msg);
+  }
+
+  final looksLikeChat = type == 'msg' ||
+      msg.containsKey('sticker') ||
+      msg.containsKey('replyTo') ||
+      msg.containsKey('voice');
+  if (looksLikeChat) {
+    for (final key in const ['sticker', 'replyTo', 'voice']) {
+      final nested = msg[key];
+      if (nested is Map && !replicationValueIsSafe(nested)) return false;
+    }
+  }
+
+  return _outboundValueIsSendable(
+    msg,
+    HashSet<Object>.identity(),
+    allowAttachmentFileKey: looksLikeChat,
+  );
+}
+
+bool _outboundValueIsSendable(
+  Object? value,
+  Set<Object> seen, {
+  required bool allowAttachmentFileKey,
+  bool underAttachment = false,
+}) {
+  if (value == null || value is bool || value is num || value is String) {
+    return true;
+  }
+  // Ciphertext bytes are leaves — do not walk them as Iterables.
+  if (value is List<int>) return true;
+  if (value is Map) {
+    if (!seen.add(value)) return true;
+    for (final key in value.keys) {
+      final name = '$key';
+      final attachmentFileKey = underAttachment &&
+          allowAttachmentFileKey &&
+          (name == 'fileKey' || name == 'fileKeyB64');
+      if (attachmentFileKey) continue;
+      if (kForbiddenReplicationFields.contains(name) ||
+          name == 'opaqueWakeToken' ||
+          name.contains('://')) {
+        return false;
+      }
+    }
+    for (final entry in value.entries) {
+      if (!_outboundValueIsSendable(
+        entry.value,
+        seen,
+        allowAttachmentFileKey: allowAttachmentFileKey,
+        underAttachment: '${entry.key}' == 'attachment',
+      )) {
+        return false;
+      }
+    }
+    return true;
+  }
+  if (value is Iterable) {
+    if (!seen.add(value)) return true;
+    for (final item in value) {
+      if (!_outboundValueIsSendable(
+        item,
+        seen,
+        allowAttachmentFileKey: allowAttachmentFileKey,
+      )) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return true;
+}
 
 class WireTransport {
   WireTransport({required this.selfPeerId});
@@ -33,6 +127,7 @@ class WireTransport {
     Object? msg,
   ) async {
     if (!conn.open) return false;
+    if (msg is Map && !outboundWireMapIsSendable(msg)) return false;
     final norm = normalizePeerId(remoteId);
     try {
       if (!isWireReady(norm)) {
@@ -54,6 +149,7 @@ class WireTransport {
     Object? msg,
   ) async {
     if (!conn.open) return false;
+    if (msg is Map && !outboundWireMapIsSendable(msg)) return false;
     final norm = normalizePeerId(remoteId);
     if (!isWireReady(norm)) return false;
     try {

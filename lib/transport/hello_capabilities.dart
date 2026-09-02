@@ -38,7 +38,7 @@ Future<CapabilityRecord?> rememberHelloCapabilities(
   if (raw is! Map) return null;
   try {
     final record = CapabilityRecord.fromWire(Map<String, Object?>.from(raw));
-    if (_helloContainsForbiddenKeys(hello, HashSet<Object>.identity())) {
+    if (!helloEnvelopeIsSafe(hello)) {
       return null;
     }
     if (!await verifyCapabilityRecord(record)) return null;
@@ -51,6 +51,15 @@ Future<CapabilityRecord?> rememberHelloCapabilities(
   } catch (_) {
     return null;
   }
+}
+
+/// True when [value] has no forbidden / wake / URL-ish keys at any depth.
+///
+/// Inverse of [_helloContainsForbiddenKeys]. Ciphertext [List<int>] is a
+/// leaf. [CapabilityRecord.peerId] is a public field and is not refused.
+/// Cycle-safe over nested [Map] / [Iterable].
+bool helloEnvelopeIsSafe(Object? value) {
+  return !_helloContainsForbiddenKeys(value, HashSet<Object>.identity());
 }
 
 /// Cycle-safe walk of nested [Map] / [Iterable]. Ciphertext [List<int>]

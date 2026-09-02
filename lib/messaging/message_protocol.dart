@@ -38,6 +38,7 @@ import '../core/wire_crypto.dart';
 import '../peer/helpers.dart';
 import '../utils/heavy_codec.dart';
 import '../storage/db.dart' as db;
+import '../transport/hello_capabilities.dart';
 import '../transport/layers.dart';
 import '../utils/common.dart';
 import 'message_auth.dart';
@@ -251,6 +252,11 @@ Future<bool> dispatchReliableInbound(
   if (data is Map) {
     final type = data['type'];
     if (type == 'wireHello' || type == 'wireRekey') {
+      // Stricter than [replicationValueIsSafe]: refuse wake tokens and
+      // URL-ish keys before the handshake runs. Consumed, no reply.
+      if (!helloEnvelopeIsSafe(data)) {
+        return true;
+      }
       try {
         final result = await acceptWireHello(
           peerId: remoteId,
