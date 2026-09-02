@@ -17,14 +17,22 @@ const fs = require('node:fs')
 const path = require('node:path')
 const os = require('node:os')
 const { createHash } = require('node:crypto')
-const { encodeMux, MuxDecoder } = require('./mux')
-const { contactDiscoveryTopic } = require('./discovery')
+const {
+  encodeMux,
+  MuxDecoder,
+  FrameError,
+  MAX_MUX_FRAME_BYTES,
+} = require('./mux')
+const { contactDiscoveryTopic, asSecret, MIN_DISCOVERY_SECRET_BYTES } = require('./discovery')
 const { LoopbackBackend } = require('./loopback')
 const { REQUEST, RESPONSE, EVENT, encode, Decoder } = require('./ipc')
 const { CorestoreJournal } = require('./corestore_journal')
 const { AutobaseProjection, objectHasLiveForbiddenKeys } = require('./autobase')
 
 const FILE_CHUNK = 64 * 1024
+const MAX_FILE_BYTES = 64 * 1024 * 1024
+const OUTBOUND_QUEUE_CAP = 4 * 1024 * 1024
+const PRE_AUTH_TYPES = new Set(['device-binding', 'harness-hello'])
 
 // Attachment ciphertext must not carry named secrets. Same names as Dart
 // kForbiddenReplicationFields. Do not add `b64` — that is the chunk
@@ -44,7 +52,15 @@ const ATTACH_FORBIDDEN_KEYS = new Set([
   'attachmentBytes',
   'fileKey',
   'fileKeyB64',
+  'identityPrivateKey',
   'privBytes',
+])
+
+const IPC_FORBIDDEN_KEYS = new Set([
+  'identityPrivateKey',
+  'fileKey',
+  'fileKeyB64',
+  'discoverySecret',
 ])
 
 /**
@@ -67,6 +83,34 @@ function attachBodyHasForbiddenKey(value, seen) {
     if (attachBodyHasForbiddenKey(child, walk)) return true
   }
   return false
+}
+
+function objectHasKeysFrom(value, forbidden, seen) {
+  if (!value || typeof value !== 'object') return false
+  const walk = seen || new Set()
+  if (walk.has(value)) return false
+  walk.add(value)
+  if (Array.isArray(value)) {
+    return value.some((item) => objectHasKeysFrom(item, forbidden, walk))
+  }
+  for (const [k, v] of Object.entries(value)) {
+    if (forbidden.has(k)) return true
+    if (objectHasKeysFrom(v, forbidden, walk)) return true
+  }
+  return false
+}
+
+function ipcPayloadHasForbiddenKey(value) {
+  return objectHasKeysFrom(value, IPC_FORBIDDEN_KEYS)
+}
+
+function assertLocalPath(p, label) {
+  if (p == null || p === '') return
+  if (typeof p === 'string' && p.includes('://')) {
+    const err = new Error(label + ' refuses :// path')
+    err.code = 'remote-path'
+    throw err
+  }
 }
 
 function localJournalDir(p) {
@@ -108,8 +152,34 @@ function addRange(ranges, start, length) {
   return ranges
 }
 
+function waitDrain(socket) {
+  return new Promise((resolve, reject) => {
+    const onDrain = () => {
+      cleanup()
+      resolve()
+    }
+    const onClose = () => {
+      cleanup()
+      reject(Object.assign(new Error('socket-closed'), { code: 'socket-closed' }))
+    }
+    const onError = (err) => {
+      cleanup()
+      reject(err)
+    }
+    const cleanup = () => {
+      socket.off('drain', onDrain)
+      socket.off('close', onClose)
+      socket.off('error', onError)
+    }
+    socket.once('drain', onDrain)
+    socket.once('close', onClose)
+    socket.once('error', onError)
+  })
+}
+
 // Stream a file for hashing. Never load the whole blob into one buffer.
 function hashPath(filePath) {
+  assertLocalPath(filePath, 'hashPath')
   const hash = createHash('sha256')
   const fd = fs.openSync(filePath, 'r')
   try {
@@ -130,11 +200,14 @@ function hashPath(filePath) {
 class Worklet {
   constructor(opts = {}) {
     this.backend = opts.backend || 'loopback'
+    this._harnessAuth = opts.harnessAuth || 'local'
     this._loop = new LoopbackBackend()
     this._swarm = null
     this._peers = new Map()
+    this._peerHistory = new Map()
     this._started = false
     this._suspended = false
+    this._lifecycle = 'idle'
     this._diagnosticsEnabled = false
     this._config = null
     this._topic = null
@@ -146,8 +219,31 @@ class Worklet {
     this._resumeOffsets = new Map()
     this._resumeWaiters = new Map()
     this._noiseToPeerId = new Map()
+    this._timers = new Set()
+    this._fileCancels = new Set()
+    this._outgoingFiles = new Map()
+    this._droppedPreAuth = 0
+    this._oversizedFrames = 0
+    this._totals = { bytesSent: 0, bytesReceived: 0, connections: 0 }
+    this._outboundQueueCap = Number(opts.outboundQueueCap) || OUTBOUND_QUEUE_CAP
     this.fileSendBudget = null
     this._emit = opts.emit || ((name, payload) => this.events.push({ name, payload }))
+  }
+
+  _schedule(fn, ms) {
+    const t = setTimeout(() => {
+      this._timers.delete(t)
+      fn()
+    }, ms)
+    if (typeof t.unref === 'function') t.unref()
+    this._timers.add(t)
+    return t
+  }
+
+  _cancelTimer(t) {
+    if (!t) return
+    clearTimeout(t)
+    this._timers.delete(t)
   }
 
   /// Map a Hyperswarm Noise public key to the contact ORBIT id from Dart
@@ -189,36 +285,44 @@ class Worklet {
   }
 
   async start(config) {
-    this._config = config
-    this._diagnosticsEnabled = Boolean(config && config.diagnosticsEnabled)
+    this._lifecycle = 'starting'
+    this._config = config || {}
+    if (this._config.discoverySecret != null) {
+      asSecret(this._config.discoverySecret)
+    }
+    assertLocalPath(this._config.journalDir, 'journal')
+    assertLocalPath(this._config.worklet, 'worklet')
+    assertLocalPath(this._config.workletPath, 'worklet')
+    this._diagnosticsEnabled = Boolean(this._config.diagnosticsEnabled)
     this._started = true
     try {
-      const journalDir = localJournalDir(config && config.journalDir)
+      const journalDir = localJournalDir(this._config.journalDir)
       await this._journal.useCorestoreIfPresent(journalDir || undefined)
     } catch {
       this._journal.backend = 'memory'
     }
     this._hydrateAutobaseFromJournal()
     if (this.backend === 'loopback') {
-      await this._loop.listen()
+      await this._loop.listen(this._config.listenHost)
       this._loop.on('connection', (sock, info) => this._onConn(sock, info))
     } else {
       const { createHyperswarmBackend } = require('./swarm')
       const swarmOpts = {
-        bootstrap: config.bootstrap,
-        keyPair: config.keyPair,
-        firewall: config.firewall,
-        relayForced: Boolean(config.relayForced),
-        relayThrough: config.relayThrough,
+        bootstrap: this._config.bootstrap,
+        keyPair: this._config.keyPair,
+        firewall: this._config.firewall,
+        relayForced: Boolean(this._config.relayForced),
+        relayThrough: this._config.relayThrough,
       }
-      if (config.seed) {
-        swarmOpts.seed = Buffer.isBuffer(config.seed)
-          ? config.seed
-          : Buffer.from(config.seed)
+      if (this._config.seed) {
+        swarmOpts.seed = Buffer.isBuffer(this._config.seed)
+          ? this._config.seed
+          : Buffer.from(this._config.seed)
       }
       this._swarm = await createHyperswarmBackend(swarmOpts)
       this._swarm.onConnection((sock, info) => this._onConn(sock, info))
     }
+    this._lifecycle = 'started'
     this._emit('started', {
       backend: this.backend,
       port: this._loop.port,
@@ -234,7 +338,7 @@ class Worklet {
   }
 
   async publish(binding) {
-    const secret = Buffer.from(this._config.discoverySecret)
+    const secret = asSecret(this._config && this._config.discoverySecret)
     this._topic = contactDiscoveryTopic(secret)
     if (this._swarm) await this._swarm.join(this._topic)
     this._emit('published', { topicHex: this._topic.toString('hex'), binding })
@@ -247,9 +351,36 @@ class Worklet {
   async connect(peer) {
     if (this._suspended) throw new Error('suspended')
     this.rememberPeer(peer)
+    const timeoutMs = Number(peer && peer.timeoutMs) || 0
+    const inner = this._connectInner(peer)
+    if (!timeoutMs) {
+      await inner
+      return
+    }
+    let timer
+    const timeout = new Promise((_, reject) => {
+      timer = this._schedule(() => {
+        const err = new Error('connect-timeout')
+        err.code = 'connect-timeout'
+        reject(err)
+      }, timeoutMs)
+    })
+    try {
+      await Promise.race([inner, timeout])
+    } finally {
+      this._cancelTimer(timer)
+    }
+  }
+
+  async _connectInner(peer) {
     if (this.backend === 'loopback') {
       if (peer.port == null) throw new Error('loopback connect needs port')
-      await this._loop.connect(peer.port)
+      const host = peer.host || '127.0.0.1'
+      assertLocalPath(host, 'connect')
+      await this._loop.connect(peer.port, {
+        host,
+        timeoutMs: Number(peer.timeoutMs) || 0,
+      })
     } else if (this._swarm) {
       const noise =
         peer && peer.noisePublicKey != null ? String(peer.noisePublicKey) : ''
@@ -264,30 +395,98 @@ class Worklet {
     this._rememberOrbitPeer(orbitId, noise)
   }
 
+  markAuthenticated(peerId) {
+    if (typeof peerId !== 'string' || !peerId || peerId.includes('://')) return
+    const peer = this._peers.get(peerId)
+    if (!peer || peer.authenticated) return
+    peer.authenticated = true
+    this._emit('authenticated', { peerId })
+  }
+
   async disconnect(peerId) {
     if (typeof peerId !== 'string' || !peerId || peerId.includes('://')) return
     const peer = this._peers.get(peerId)
     if (!peer) return
+    peer.disconnectReason = 'local-disconnect'
     this._peers.delete(peerId)
+    this._recordHistory(peer, 'local-disconnect')
     if (peer.socket) {
       if (typeof peer.socket.destroy === 'function') peer.socket.destroy()
       else if (typeof peer.socket.end === 'function') peer.socket.end()
     }
-    this._emit('disconnected', { peerId })
+    this._emit('disconnected', { peerId, reason: 'local-disconnect' })
+  }
+
+  _recordHistory(peer, reason) {
+    if (!peer || !peer.peerId) return
+    const prev = this._peerHistory.get(peer.peerId) || { retryCount: 0 }
+    this._peerHistory.set(peer.peerId, {
+      retryCount: prev.retryCount,
+      disconnectReason: reason || peer.disconnectReason || 'closed',
+      lastPath: peer.info && peer.info.path,
+    })
   }
 
   async send(peerId, channel, frame) {
     if (this._suspended) throw new Error('suspended')
     const peer = this._peers.get(peerId)
     if (!peer) throw new Error('not connected: ' + peerId)
+    if (frame && typeof frame === 'object' && !Buffer.isBuffer(frame)) {
+      if (ipcPayloadHasForbiddenKey(frame) || attachBodyHasForbiddenKey(frame)) {
+        throw new Error('send refuses forbidden key')
+      }
+    }
     const payload = Buffer.isBuffer(frame) ? frame : Buffer.from(JSON.stringify(frame))
+    if (payload.length > MAX_MUX_FRAME_BYTES) {
+      this._oversizedFrames += 1
+      const err = new FrameError('oversized-frame', 'send payload exceeds MAX_MUX_FRAME_BYTES')
+      throw err
+    }
     if (channel === 'control') {
       this._applyControlAutobase(
         payload,
         (this._config && this._config.peerId) || 'local',
       )
     }
-    peer.socket.write(encodeMux(channel, payload))
+    const encoded = encodeMux(channel, payload)
+    if (peer.outBytes + encoded.length > this._outboundQueueCap) {
+      const err = new Error('outbound-queue-full')
+      err.code = 'outbound-queue-full'
+      throw err
+    }
+    peer.outBytes += encoded.length
+    if (peer.outBytes > peer.maxOutBytes) peer.maxOutBytes = peer.outBytes
+    return new Promise((resolve, reject) => {
+      peer.outQ.push({ buf: encoded, resolve, reject, bytes: encoded.length })
+      this._flushOut(peer)
+    })
+  }
+
+  async _flushOut(peer) {
+    if (peer.flushing) return
+    peer.flushing = true
+    try {
+      while (peer.outQ.length) {
+        const item = peer.outQ.shift()
+        try {
+          if (!peer.socket || peer.socket.destroyed) {
+            throw Object.assign(new Error('socket-closed'), { code: 'socket-closed' })
+          }
+          const ok = peer.socket.write(item.buf)
+          peer.bytesSent += item.bytes
+          this._totals.bytesSent += item.bytes
+          if (!ok) await waitDrain(peer.socket)
+          peer.outBytes -= item.bytes
+          item.resolve()
+        } catch (err) {
+          peer.outBytes -= item.bytes
+          item.reject(err)
+        }
+      }
+    } finally {
+      peer.flushing = false
+      if (peer.outQ.length) this._flushOut(peer)
+    }
   }
 
   async sendFile(peerId, file) {
@@ -303,7 +502,7 @@ class Worklet {
     }
     // Nested walk: `{ meta: { fileKey } }` must not stream. Same set as
     // inbound `_ingestAttachChunk`. Do not add `b64` — chunk ciphertext.
-    if (attachBodyHasForbiddenKey(file)) {
+    if (attachBodyHasForbiddenKey(file) || ipcPayloadHasForbiddenKey(file)) {
       throw new Error('sendFile refuses fileKey')
     }
     if (file.protocol === 'attach-chunk') {
@@ -311,50 +510,123 @@ class Worklet {
       return
     }
     const { digest, size } = hashPath(file.path)
-    const id = digest.slice(0, 16)
+    if (size > MAX_FILE_BYTES) {
+      const err = new Error('file-too-large')
+      err.code = 'file-too-large'
+      throw err
+    }
+    const id = typeof file.id === 'string' && file.id ? file.id : digest.slice(0, 16)
+    if (id.includes('://')) throw new Error('sendFile refuses remote path')
     const resumeOffset = Number(file.resumeOffset) || 0
     if (resumeOffset < 0 || resumeOffset > size) {
       throw new Error('sendFile resumeOffset out of range')
     }
-    await this.send(peerId, 'attachment', {
-      type: 'harness-file-start',
-      id,
-      name: file.fileName || path.basename(file.path),
-      size,
-      sha256: digest,
-    })
-    const agreed = await this._awaitResume(id, resumeOffset)
-    let offset = resumeOffset > agreed ? resumeOffset : agreed
-    const startOffset = offset
-    const fd = fs.openSync(file.path, 'r')
-    try {
-      const buf = Buffer.alloc(FILE_CHUNK)
-      while (offset < size) {
-        if (this.fileSendBudget != null && offset - startOffset >= this.fileSendBudget) {
-          throw new Error('file-send interrupted')
-        }
-        const n = fs.readSync(fd, buf, 0, buf.length, offset)
-        if (!n) break
-        await this.send(peerId, 'attachment', {
-          type: 'harness-file-chunk',
-          id,
-          offset,
-          b64: buf.subarray(0, n).toString('base64'),
-        })
-        offset += n
-      }
-    } finally {
-      fs.closeSync(fd)
-      this._resumeWaiters.delete(id)
+    const outgoing = { id, peerId, cancelled: false, size, path: file.path }
+    this._outgoingFiles.set(id, outgoing)
+    const onAbort = () => {
+      outgoing.cancelled = true
+      this._fileCancels.add(id)
     }
-    await this.send(peerId, 'attachment', { type: 'harness-file-end', id })
+    if (file.signal && typeof file.signal.addEventListener === 'function') {
+      if (file.signal.aborted) onAbort()
+      else file.signal.addEventListener('abort', onAbort)
+    }
+    try {
+      await this.send(peerId, 'attachment', {
+        type: 'harness-file-start',
+        id,
+        name: file.fileName || path.basename(file.path),
+        size,
+        sha256: digest,
+      })
+      const agreed = await this._awaitResume(id, resumeOffset)
+      let offset = resumeOffset > agreed ? resumeOffset : agreed
+      const startOffset = offset
+      const fd = fs.openSync(file.path, 'r')
+      try {
+        const buf = Buffer.alloc(FILE_CHUNK)
+        while (offset < size) {
+          if (this._fileCancels.has(id) || outgoing.cancelled) {
+            const err = new Error('file-cancelled')
+            err.code = 'file-cancelled'
+            throw err
+          }
+          if (this.fileSendBudget != null && offset - startOffset >= this.fileSendBudget) {
+            throw new Error('file-send interrupted')
+          }
+          const n = fs.readSync(fd, buf, 0, buf.length, offset)
+          if (!n) break
+          await this.send(peerId, 'attachment', {
+            type: 'harness-file-chunk',
+            id,
+            offset,
+            b64: buf.subarray(0, n).toString('base64'),
+          })
+          offset += n
+        }
+      } finally {
+        fs.closeSync(fd)
+        this._resumeWaiters.delete(id)
+      }
+      if (this._fileCancels.has(id) || outgoing.cancelled) {
+        const err = new Error('file-cancelled')
+        err.code = 'file-cancelled'
+        throw err
+      }
+      await this.send(peerId, 'attachment', { type: 'harness-file-end', id })
+    } finally {
+      if (file.signal && typeof file.signal.removeEventListener === 'function') {
+        file.signal.removeEventListener('abort', onAbort)
+      }
+      this._outgoingFiles.delete(id)
+    }
+  }
+
+  async cancelFile(id) {
+    if (typeof id !== 'string' || !id) throw new Error('cancelFile needs id')
+    if (id.includes('://')) throw new Error('cancelFile refuses :// path')
+    this._fileCancels.add(id)
+    const outgoing = this._outgoingFiles.get(id)
+    if (outgoing) outgoing.cancelled = true
+    const incoming = this._files.get(id)
+    if (incoming) {
+      try {
+        fs.closeSync(incoming.fd)
+      } catch {
+        // already closed
+      }
+      try {
+        fs.unlinkSync(incoming.path)
+      } catch {
+        // already gone
+      }
+      try {
+        fs.rmSync(path.dirname(incoming.path), { recursive: true, force: true })
+      } catch {
+        // temp already gone
+      }
+      this._files.delete(id)
+    }
+    const notifyPeer = (outgoing && outgoing.peerId) || null
+    const targets = notifyPeer ? [notifyPeer] : Array.from(this._peers.keys())
+    for (const peerId of targets) {
+      if (!this._peers.has(peerId)) continue
+      this.send(peerId, 'attachment', { type: 'harness-file-cancel', id }).catch(() => {})
+    }
+    this._emit('file-cancelled', { id })
   }
 
   async _sendAttachChunk(peerId, file) {
     const fileId = typeof file.fileId === 'string' ? file.fileId : ''
     if (!fileId) throw new Error('attach-chunk needs fileId')
+    if (fileId.includes('://')) throw new Error('sendFile refuses remote path')
     let offset = Number(file.resumeOffset) || 0
     const size = fs.statSync(file.path).size
+    if (size > MAX_FILE_BYTES) {
+      const err = new Error('file-too-large')
+      err.code = 'file-too-large'
+      throw err
+    }
     if (offset < 0 || offset > size) {
       throw new Error('sendFile resumeOffset out of range')
     }
@@ -388,6 +660,7 @@ class Worklet {
 
   async suspend() {
     this._suspended = true
+    this._lifecycle = 'suspended'
     if (this._swarm) await this._swarm.suspend()
     else await this._loop.suspend()
     this._emit('suspended', {})
@@ -395,6 +668,7 @@ class Worklet {
 
   async resume() {
     this._suspended = false
+    this._lifecycle = this._started ? 'started' : 'idle'
     if (this._swarm) await this._swarm.resume()
     else await this._loop.resume()
     this._emit('resumed', {})
@@ -405,8 +679,89 @@ class Worklet {
     this._emit('networkChanged', { detail: this.backend })
   }
 
+  diagnostics() {
+    const peers = {}
+    for (const [id, peer] of this._peers) {
+      const hist = this._peerHistory.get(id) || {}
+      peers[id] = {
+        path: (peer.info && peer.info.path) || 'unknown',
+        connectDurationMs:
+          peer.connectedAt != null ? Date.now() - peer.connectedAt : null,
+        bytesSent: peer.bytesSent || 0,
+        bytesReceived: peer.bytesReceived || 0,
+        retryCount: hist.retryCount || peer.retryCount || 0,
+        disconnectReason: hist.disconnectReason || peer.disconnectReason || null,
+        authenticated: Boolean(peer.authenticated),
+        queuedBytes: peer.outBytes || 0,
+        maxQueuedBytes: peer.maxOutBytes || 0,
+      }
+    }
+    const activeFileTransfers = []
+    for (const incoming of this._files.values()) {
+      activeFileTransfers.push({
+        id: incoming.id,
+        direction: 'recv',
+        size: incoming.size,
+        offset: nextContiguousOffset(incoming.ranges),
+      })
+    }
+    for (const outgoing of this._outgoingFiles.values()) {
+      activeFileTransfers.push({
+        id: outgoing.id,
+        direction: 'send',
+        size: outgoing.size,
+        cancelled: Boolean(outgoing.cancelled),
+      })
+    }
+    return {
+      lifecycle: this._lifecycle,
+      backend: this.backend,
+      transport: this.backend,
+      topicHex: this._topic ? this._topic.toString('hex') : null,
+      peers,
+      totals: { ...this._totals },
+      droppedPreAuth: this._droppedPreAuth,
+      oversizedFrames: this._oversizedFrames,
+      activeFileTransfers,
+      outboundQueueCap: this._outboundQueueCap,
+      maxFileBytes: MAX_FILE_BYTES,
+      maxMuxFrameBytes: MAX_MUX_FRAME_BYTES,
+      harnessAuth: this._harnessAuth,
+    }
+  }
+
   async stop() {
-    for (const peer of this._peers.values()) peer.socket.destroy()
+    this._lifecycle = 'stopping'
+    for (const t of this._timers) clearTimeout(t)
+    this._timers.clear()
+    for (const waiter of this._resumeWaiters.values()) {
+      try {
+        waiter(0)
+      } catch {
+        // ignore
+      }
+    }
+    this._resumeWaiters.clear()
+    this._resumeOffsets.clear()
+    for (const peer of this._peers.values()) {
+      for (const item of peer.outQ || []) {
+        try {
+          item.reject(Object.assign(new Error('stopped'), { code: 'stopped' }))
+        } catch {
+          // ignore
+        }
+      }
+      peer.outQ = []
+      peer.outBytes = 0
+      if (peer.socket) {
+        try {
+          if (typeof peer.socket.destroy === 'function') peer.socket.destroy()
+          else if (typeof peer.socket.end === 'function') peer.socket.end()
+        } catch {
+          // already closed
+        }
+      }
+    }
     this._peers.clear()
     for (const incoming of this._files.values()) {
       try {
@@ -424,7 +779,19 @@ class Worklet {
       }
     }
     this._attachFiles.clear()
-    if (this._swarm) await this._swarm.destroy()
+    this._outgoingFiles.clear()
+    this._fileCancels.clear()
+    if (this._loop && typeof this._loop.removeAllListeners === 'function') {
+      this._loop.removeAllListeners('connection')
+    }
+    if (this._swarm) {
+      try {
+        await this._swarm.destroy()
+      } catch {
+        // already destroyed
+      }
+      this._swarm = null
+    }
     await this._loop.destroy()
     try {
       await this._journal.close()
@@ -432,26 +799,82 @@ class Worklet {
       // journal already closed
     }
     this._started = false
+    this._suspended = false
     this._noiseToPeerId.clear()
+    this._lifecycle = 'stopped'
   }
 
   _onConn(socket, info) {
     const peerId = this._resolvePeerId(info)
+    const hist = this._peerHistory.get(peerId)
+    const retryCount = hist ? hist.retryCount + 1 : 0
+    if (hist) hist.retryCount = retryCount
+    else this._peerHistory.set(peerId, { retryCount: 0 })
     const decoder = new MuxDecoder()
-    const peer = { socket, info, decoder, peerId }
+    const peer = {
+      socket,
+      info,
+      decoder,
+      peerId,
+      authenticated: this._harnessAuth === 'local',
+      helloSent: false,
+      connectedAt: Date.now(),
+      bytesSent: 0,
+      bytesReceived: 0,
+      outQ: [],
+      outBytes: 0,
+      maxOutBytes: 0,
+      flushing: false,
+      retryCount,
+      disconnectReason: null,
+    }
     this._peers.set(peerId, peer)
+    this._totals.connections += 1
     this._emit('connected', { peerId, path: info.path || 'unknown' })
     this._emit('pathChanged', { peerId, path: info.path || 'direct' })
+    if (peer.authenticated) this._emit('authenticated', { peerId })
     socket.on('data', (chunk) => {
-      for (const frame of decoder.add(chunk)) {
-        this._onFrame(peer.peerId, frame.channel, frame.payload)
+      peer.bytesReceived += chunk.length
+      this._totals.bytesReceived += chunk.length
+      try {
+        for (const frame of decoder.add(chunk)) {
+          this._onFrame(peer.peerId, frame.channel, frame.payload)
+        }
+      } catch (err) {
+        const code = err && err.code
+        const reason = code === 'oversized-frame' ? 'oversized-frame' : 'malformed-frame'
+        if (reason === 'oversized-frame') this._oversizedFrames += 1
+        peer.disconnectReason = reason
+        this._recordHistory(peer, reason)
+        try {
+          socket.destroy()
+        } catch {
+          // already closed
+        }
+        this._emit('disconnected', { peerId: peer.peerId, reason })
+        const cur = this._peers.get(peer.peerId)
+        if (cur === peer) this._peers.delete(peer.peerId)
       }
     })
     socket.on('error', () => {})
     socket.on('close', () => {
-      if (!this._peers.delete(peer.peerId)) return
-      this._emit('disconnected', { peerId: peer.peerId })
+      const cur = this._peers.get(peer.peerId)
+      if (cur !== peer) return
+      this._peers.delete(peer.peerId)
+      const reason = peer.disconnectReason || 'closed'
+      this._recordHistory(peer, reason)
+      this._emit('disconnected', { peerId: peer.peerId, reason })
     })
+    if (this._harnessAuth === 'local' && !peer.helloSent) {
+      peer.helloSent = true
+      this.send(peerId, 'control', { type: 'harness-hello' }).catch(() => {})
+    }
+  }
+
+  _isAuthenticated(peerId) {
+    const peer = this._peers.get(peerId)
+    if (!peer) return this._harnessAuth === 'local'
+    return Boolean(peer.authenticated)
   }
 
   _onFrame(peerId, channel, payload) {
@@ -460,8 +883,30 @@ class Worklet {
     try {
       body = JSON.parse(payload.toString('utf8'))
     } catch {
+      if (!this._isAuthenticated(peerId)) {
+        this._droppedPreAuth += 1
+        return
+      }
       this._emit('frame', { peerId, channel, frameB64 })
       return
+    }
+    const preAuthAllowed =
+      channel === 'control' && body && PRE_AUTH_TYPES.has(body.type)
+    if (!this._isAuthenticated(peerId) && !preAuthAllowed) {
+      this._droppedPreAuth += 1
+      return
+    }
+    if (channel === 'control' && body && body.type === 'harness-hello') {
+      this.markAuthenticated(peerId)
+      const peer = this._peers.get(peerId)
+      if (peer && !peer.helloSent) {
+        peer.helloSent = true
+        this.send(peerId, 'control', { type: 'harness-hello' }).catch(() => {})
+      }
+    }
+    if (channel === 'control' && body && body.type === 'device-binding') {
+      // Dart marks the peer after its own checks. Emit so the host can
+      // call markAuthenticated. Do not auto-auth in strict mode.
     }
     if (channel === 'message' && body.type === 'harness-echo') {
       this.send(peerId, 'message', {
@@ -488,12 +933,12 @@ class Worklet {
       return Promise.resolve(n > fallback ? n : fallback)
     }
     return new Promise((resolve) => {
-      const t = setTimeout(() => {
+      const t = this._schedule(() => {
         this._resumeWaiters.delete(id)
         resolve(fallback)
       }, 2000)
       this._resumeWaiters.set(id, (n) => {
-        clearTimeout(t)
+        this._cancelTimer(t)
         resolve(n > fallback ? n : fallback)
       })
     })
@@ -524,6 +969,33 @@ class Worklet {
     ) {
       return true
     }
+    if (type === 'harness-file-cancel') {
+      if (id) {
+        this._fileCancels.add(id)
+        const outgoing = this._outgoingFiles.get(id)
+        if (outgoing) outgoing.cancelled = true
+        const incoming = this._files.get(id)
+        if (incoming) {
+          try {
+            fs.closeSync(incoming.fd)
+          } catch {
+            // already closed
+          }
+          try {
+            fs.unlinkSync(incoming.path)
+          } catch {
+            // already gone
+          }
+          try {
+            fs.rmSync(path.dirname(incoming.path), { recursive: true, force: true })
+          } catch {
+            // temp already gone
+          }
+          this._files.delete(id)
+        }
+      }
+      return true
+    }
     if (type === 'attach-chunk') {
       this._ingestAttachChunk(peerId, body)
       return true
@@ -534,6 +1006,11 @@ class Worklet {
     }
     if (type === 'harness-file-start') {
       const digest = body.sha256 || ''
+      const size = Number(body.size) || 0
+      if (size > MAX_FILE_BYTES) {
+        this._emit('error', { code: 'file-too-large', message: 'incoming file exceeds MAX_FILE_BYTES' })
+        return true
+      }
       let incoming = this._files.get(id)
       if (!incoming || incoming.sha256 !== digest) {
         if (incoming) {
@@ -549,7 +1026,7 @@ class Worklet {
         incoming = {
           id,
           name: safeFileName(body.name || id),
-          size: Number(body.size) || 0,
+          size,
           sha256: digest,
           path: filePath,
           fd,
@@ -569,6 +1046,7 @@ class Worklet {
       if (!incoming) return
       const buf = Buffer.from(body.b64 || '', 'base64')
       const offset = Number(body.offset) || 0
+      if (offset < 0 || offset + buf.length > MAX_FILE_BYTES) return
       fs.writeSync(incoming.fd, buf, 0, buf.length, offset)
       addRange(incoming.ranges, offset, buf.length)
       return
@@ -616,7 +1094,7 @@ class Worklet {
     const buf = Buffer.from(body.b64 || '', 'base64')
     if (!buf.length) return
     const offset = Number(body.offset) || 0
-    if (offset < 0 || offset + buf.length > 50 * 1024 * 1024) return
+    if (offset < 0 || offset + buf.length > MAX_FILE_BYTES) return
     const hash = typeof body.hash === 'string' ? body.hash : ''
     if (hash) {
       const actual = createHash('sha256').update(buf).digest('hex')
@@ -665,6 +1143,22 @@ class Worklet {
 async function handleIpcRequest(worklet, body) {
   const method = body.method
   const params = body.params || {}
+  if (method === 'send' || method === 'sendFile' || method === 'journal.append') {
+    if (ipcPayloadHasForbiddenKey(params)) {
+      throw new Error('refusing forbidden key in IPC payload')
+    }
+    if (method === 'send' && params.frame && ipcPayloadHasForbiddenKey(params.frame)) {
+      throw new Error('refusing forbidden key in IPC payload')
+    }
+    if (method === 'sendFile' && params.file && ipcPayloadHasForbiddenKey(params.file)) {
+      throw new Error('refusing forbidden key in IPC payload')
+    }
+  }
+  if (method === 'start') {
+    assertLocalPath(params.journalDir, 'journal')
+    assertLocalPath(params.worklet, 'worklet')
+    assertLocalPath(params.workletPath, 'worklet')
+  }
   switch (method) {
     case 'start':
       await worklet.start(params)
@@ -692,6 +1186,9 @@ async function handleIpcRequest(worklet, body) {
     case 'rememberPeer':
       worklet.rememberPeer(params)
       return {}
+    case 'markAuthenticated':
+      worklet.markAuthenticated(params.peerId)
+      return {}
     case 'send':
       await worklet.send(
         params.peerId,
@@ -702,6 +1199,11 @@ async function handleIpcRequest(worklet, body) {
     case 'sendFile':
       await worklet.sendFile(params.peerId, params.file)
       return {}
+    case 'cancelFile':
+      await worklet.cancelFile(params.id)
+      return {}
+    case 'diagnostics':
+      return worklet.diagnostics()
     case 'suspend':
       await worklet.suspend()
       return {}
@@ -746,18 +1248,36 @@ if (require.main === module) {
   })
   const decoder = new Decoder()
   process.stdin.on('data', async (chunk) => {
-    for (const msg of decoder.add(chunk)) {
-      if (msg.type !== REQUEST) continue
-      try {
-        const result = await handleIpcRequest(worklet, msg.body)
-        process.stdout.write(encode(RESPONSE, { id: msg.body.id, ok: true, result }))
-      } catch (err) {
-        process.stdout.write(
-          encode(RESPONSE, { id: msg.body.id, ok: false, error: String(err.message || err) }),
-        )
+    try {
+      for (const msg of decoder.add(chunk)) {
+        if (msg.type !== REQUEST) continue
+        try {
+          const result = await handleIpcRequest(worklet, msg.body)
+          process.stdout.write(encode(RESPONSE, { id: msg.body.id, ok: true, result }))
+        } catch (err) {
+          process.stdout.write(
+            encode(RESPONSE, { id: msg.body.id, ok: false, error: String(err.message || err) }),
+          )
+        }
       }
+    } catch (err) {
+      process.stderr.write(String(err && err.message ? err.message : err) + '\n')
     }
   })
 }
 
-module.exports = { Worklet, handleIpcRequest, hashPath, FILE_CHUNK }
+module.exports = {
+  Worklet,
+  handleIpcRequest,
+  hashPath,
+  FILE_CHUNK,
+  MAX_FILE_BYTES,
+  OUTBOUND_QUEUE_CAP,
+  MAX_MUX_FRAME_BYTES,
+  MIN_DISCOVERY_SECRET_BYTES,
+  ATTACH_FORBIDDEN_KEYS,
+  IPC_FORBIDDEN_KEYS,
+  attachBodyHasForbiddenKey,
+  ipcPayloadHasForbiddenKey,
+  assertLocalPath,
+}

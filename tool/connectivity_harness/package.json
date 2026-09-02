@@ -5,10 +5,16 @@
   "description": "Phase 1 headless Bare/Hyperswarm connectivity harness. No UI, Drift, Hypercore, or rooms.",
   "type": "commonjs",
   "main": "src/worklet.js",
+  "bin": {
+    "orbits-harness": "src/cli.js"
+  },
   "scripts": {
     "test": "node --test --test-force-exit test/*.test.js",
     "start": "node src/worklet.js",
-    "stand": "node src/stand.js"
+    "stand": "node src/stand.js",
+    "cli": "node src/cli.js",
+    "listen": "node src/cli.js listen",
+    "dial": "node src/cli.js dial"
   },
   "engines": {
     "node": ">=20"
