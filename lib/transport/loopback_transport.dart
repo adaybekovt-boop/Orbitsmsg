@@ -76,6 +76,8 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   final List<PeerDescriptor> rememberedPeers = <PeerDescriptor>[];
   final List<Map<String, Object?>> sentAttachmentFrames =
       <Map<String, Object?>>[];
+  final List<Map<String, Object?>> sentReplicationFrames =
+      <Map<String, Object?>>[];
 
   /// Shared in-process hub. Own-device sync copies join a second topic.
   LoopbackHub get hub => _hub;
@@ -194,6 +196,11 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
     if (channel == TransportChannel.attachment) {
       try {
         sentAttachmentFrames.add(decodeJsonPayload(frame));
+      } catch (_) {}
+    }
+    if (channel == TransportChannel.replication) {
+      try {
+        sentReplicationFrames.add(decodeJsonPayload(frame));
       } catch (_) {}
     }
     remote._deliver(this.peerId, channel, Uint8List.fromList(frame));

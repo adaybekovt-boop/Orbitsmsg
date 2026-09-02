@@ -227,18 +227,75 @@ class RoomEvent {
   }
 }
 
+/// Live frames: `abWriter` may differ from the authenticated sender
+/// only when that sender is the room host. Guests may claim their peer
+/// id or device id. Membership control from a non-host is refused once
+/// a host is known. No auth context → unchanged parse (unit tests).
+bool _liveRoomEventAuthorized({
+  required String claimedWriter,
+  required String? roomId,
+  required bool membership,
+  String? authenticatedPeer,
+  String? authenticatedDeviceId,
+  String? Function(String roomId)? roomHostFor,
+}) {
+  if (authenticatedPeer == null) return true;
+  final host = (roomId != null && roomId.isNotEmpty)
+      ? roomHostFor?.call(roomId)
+      : null;
+  final isHost = host != null &&
+      host.isNotEmpty &&
+      (host == authenticatedPeer || host == authenticatedDeviceId);
+  if (isHost) return true;
+  final writerOk = claimedWriter == authenticatedPeer ||
+      (authenticatedDeviceId != null &&
+          claimedWriter == authenticatedDeviceId);
+  if (!writerOk) return false;
+  if (membership && host != null && host.isNotEmpty) return false;
+  return true;
+}
+
 /// Map the live host-plaintext room protocol onto Autobase events.
 /// Message bodies stay in the local projection — never Hypercore.
 RoomEvent? roomEventFromNativePacket(
   Map<String, Object?> packet, {
   required String fallbackWriter,
+  String? authenticatedPeer,
+  String? authenticatedDeviceId,
+  String? Function(String roomId)? roomHostFor,
 }) {
   if (!autobaseLiveEnvelopeIsSafe(packet)) return null;
   if (fallbackWriter.contains('://')) return null;
   final abWriter = packet['abWriter'] as String?;
   if (abWriter != null && abWriter.contains('://')) return null;
-  if (packet['type'] == 'autobase-event') return RoomEvent.fromWire(packet);
+  if (packet['type'] == 'autobase-event') {
+    final ev = RoomEvent.fromWire(packet);
+    if (ev == null) return null;
+    if (!_liveRoomEventAuthorized(
+      claimedWriter: ev.writerId,
+      roomId: ev.payload['roomId'] as String?,
+      membership: ev.kind == 'membership',
+      authenticatedPeer: authenticatedPeer,
+      authenticatedDeviceId: authenticatedDeviceId,
+      roomHostFor: roomHostFor,
+    )) {
+      return null;
+    }
+    return ev;
+  }
   final writer = abWriter ?? fallbackWriter;
+  if (!_liveRoomEventAuthorized(
+    claimedWriter: writer,
+    roomId: packet['roomId'] as String?,
+    membership: packet['type'] == 'room_join' ||
+        packet['type'] == 'room_leave' ||
+        packet['type'] == 'room_destroy',
+    authenticatedPeer: authenticatedPeer,
+    authenticatedDeviceId: authenticatedDeviceId,
+    roomHostFor: roomHostFor,
+  )) {
+    return null;
+  }
   final seq = (packet['abSeq'] as num?)?.toInt() ?? 0;
   switch (packet['type']) {
     case 'room_join':

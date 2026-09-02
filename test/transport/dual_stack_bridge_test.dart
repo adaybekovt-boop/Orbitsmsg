@@ -165,8 +165,8 @@ void main() {
         discoverySecret: secret,
       ),
     );
-    await pair.$1.publish(await _bind('a'));
-    await pair.$2.publish(await _bind('b'));
+    await pair.$1.publish(await _bind('dev-a'));
+    await pair.$2.publish(await _bind('dev-b'));
     final a = make(pair.$1, 'ORBIT-AAAAAAAAAAAAAAAA', 'dev-a');
     final b = make(pair.$2, 'ORBIT-BBBBBBBBBBBBBBBB', 'dev-b');
     await pair.$1.connect(
@@ -2484,11 +2484,11 @@ void main() {
         isTrue,
       );
       expect(
-        await b.sendAutobaseEvent(
-          'ORBIT-AAAAAAAAAAAAAAAA',
+        await a.sendAutobaseEvent(
+          'ORBIT-BBBBBBBBBBBBBBBB',
           const RoomEvent(
-            writerId: 'b',
-            seq: 0,
+            writerId: 'a',
+            seq: 2,
             kind: 'membership',
             payload: {
               'roomId': 'room-ab',
@@ -2516,7 +2516,7 @@ void main() {
         await b.sendAutobaseEvent(
           'ORBIT-AAAAAAAAAAAAAAAA',
           const RoomEvent(
-            writerId: 'b',
+            writerId: 'dev-b',
             seq: 1,
             kind: 'message',
             payload: {'id': 'm1', 'text': 'host-plaintext'},
@@ -2669,7 +2669,7 @@ void main() {
         await b.sendAutobaseEvent(
           'ORBIT-AAAAAAAAAAAAAAAA',
           const RoomEvent(
-            writerId: 'b',
+            writerId: 'dev-b',
             seq: 1,
             kind: 'message',
             payload: {'id': 'm-host', 'text': 'host-plaintext'},
@@ -3780,7 +3780,7 @@ void main() {
       expect(a.authenticated.contains('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
       expect(b.authenticated.contains('ORBIT-AAAAAAAAAAAAAAAA'), isTrue);
       expect(a.canUseNative('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
-      expect(a.remoteBindings['ORBIT-BBBBBBBBBBBBBBBB']?.deviceId, 'b');
+      expect(a.remoteBindings['ORBIT-BBBBBBBBBBBBBBBB']?.deviceId, 'dev-b');
       await a.detach();
       await b.detach();
 

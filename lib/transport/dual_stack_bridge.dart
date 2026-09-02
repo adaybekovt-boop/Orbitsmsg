@@ -13,6 +13,7 @@ import '../calls/hyperswarm_signaling.dart';
 import '../core/path_byte_stream.dart';
 import '../core/feature_flags.dart';
 import '../core/peer_pins.dart';
+import '../core/identity_key.dart' as identity_key;
 import '../core/wire_crypto.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
@@ -28,6 +29,7 @@ import '../replication/memory_journal.dart';
 import '../rooms/autobase_log.dart';
 import '../transport/replication_schema.dart';
 import 'capabilities.dart';
+import 'replication_auth.dart';
 import 'connect_binding.dart';
 import 'device_binding.dart';
 import 'discovery_secret_store.dart';
@@ -148,6 +150,12 @@ class DualStackBridge {
     this.devices,
     this.connectionNoiseFor,
     this.tofuCheck,
+    this.ownIdentityPublicKey,
+    this.signRecord,
+    this.verifyRecord,
+    this.roomHostFor,
+    this.onReplicatedContactBlocked,
+    this.onReplicationAccepted,
     HypercoreLocalStore? hypercore,
   }) : secrets = secrets ?? discoverySecretStore,
        hypercore = hypercore ?? HypercoreLocalStore(selfDeviceId);
@@ -171,6 +179,22 @@ class DualStackBridge {
   final Future<PinCheck> Function(String peerId, List<int> identitySpki)?
   tofuCheck;
   final HypercoreLocalStore hypercore;
+
+  /// Injected own identity SPKI. Defaults to [localBinding].
+  List<int>? Function()? ownIdentityPublicKey;
+
+  /// Sync identity-key signer for own-account records. Tests inject keys.
+  List<int>? Function(List<int> canonical)? signRecord;
+
+  /// Identity-key verifier for own-account records. Tests inject keys.
+  Future<bool> Function(List<int> identitySpki, List<int> payload, List<int> sig)?
+      verifyRecord;
+
+  /// Host-authoritative room lookup. Defaults to first accepted writer.
+  String? Function(String roomId)? roomHostFor;
+
+  void Function(String peerId, bool blocked)? onReplicatedContactBlocked;
+  void Function(JournalRecord record)? onReplicationAccepted;
   final MailboxPump _mailboxPump = MailboxPump();
   void Function(String peerId, Object packet)? onDrop;
   final Set<String> _drainedMailboxKeys = <String>{};
@@ -185,6 +209,7 @@ class DualStackBridge {
   static const int _maxInboundAttachBytes = kMaxNativeAttachBytes;
   final AutobaseProjection rooms = AutobaseProjection();
   final List<RoomEvent> roomLog = <RoomEvent>[];
+  final Map<String, String> _roomHosts = <String, String>{};
   int _roomSeq = 0;
 
   final Set<String> connected = <String>{};
@@ -284,6 +309,8 @@ class DualStackBridge {
         'action': rec.fields['action'] as String? ?? 'join',
         if (rec.fields['displayName'] is String)
           'displayName': rec.fields['displayName'],
+        if (rec.fields['hostPeerId'] is String)
+          'hostPeerId': rec.fields['hostPeerId'],
       },
     );
   }
@@ -362,6 +389,31 @@ class DualStackBridge {
     final owner = _ownerPeerIdForTransport(peerId);
     if (owner == null) return false;
     return owner == normalizePeerId(selfPeerId());
+  }
+
+  List<int>? resolveOwnIdentityPublicKey() {
+    final hooked = ownIdentityPublicKey?.call();
+    if (hooked != null && hooked.isNotEmpty) return hooked;
+    final local = localBinding?.identityPublicKey;
+    if (local != null && local.isNotEmpty) return local;
+    return null;
+  }
+
+  /// Own-device: binding identity matches ours and [deviceId] is a
+  /// known non-revoked own device. Not a payload flag.
+  bool isOwnDevice(DeviceBinding binding) {
+    final own = resolveOwnIdentityPublicKey();
+    if (own == null || own.isEmpty) return false;
+    if (!identityPublicKeysEqual(own, binding.identityPublicKey)) {
+      return false;
+    }
+    final registry = devices;
+    if (registry != null) {
+      final device = registry.getDevice(binding.deviceId);
+      if (device == null) return binding.deviceId == selfDeviceId;
+      return device.status != DeviceStatus.revoked;
+    }
+    return binding.deviceId == selfDeviceId;
   }
 
   /// Own-device sync copies join the local advertise topic after
@@ -615,12 +667,14 @@ class DualStackBridge {
     if (deviceId.isEmpty || deviceId.contains('://')) return;
     final before = devices?.getDevice(deviceId);
     devices?.revoke(deviceId);
+    final fields = <String, Object?>{
+      'deviceId': deviceId,
+      'createdAt': DateTime.now().millisecondsSinceEpoch,
+    };
+    _attachIdentitySignature(ReplicationEventKind.deviceRevoked, fields);
     final record = journal.append(
       ReplicationEventKind.deviceRevoked,
-      <String, Object?>{
-        'deviceId': deviceId,
-        'createdAt': DateTime.now().millisecondsSinceEpoch,
-      },
+      fields,
     );
     unawaited(_persistDurable(record));
     hypercore.append(record);
@@ -658,12 +712,14 @@ class DualStackBridge {
         }());
       }
     }
+    final fields = <String, Object?>{
+      'deviceId': device.deviceId,
+      'createdAt': device.createdAt,
+    };
+    _attachIdentitySignature(ReplicationEventKind.deviceAuthorized, fields);
     final record = journal.append(
       ReplicationEventKind.deviceAuthorized,
-      <String, Object?>{
-        'deviceId': device.deviceId,
-        'createdAt': device.createdAt,
-      },
+      fields,
     );
     unawaited(_persistDurable(record));
     hypercore.append(record);
@@ -680,14 +736,16 @@ class DualStackBridge {
     if (norm.isEmpty || peerId.contains('://') || norm.contains('://')) {
       return;
     }
+    final fields = <String, Object?>{
+      'conversationId': norm,
+      'peerId': norm,
+      'blocked': blocked,
+      'createdAt': DateTime.now().millisecondsSinceEpoch,
+    };
+    _attachIdentitySignature(ReplicationEventKind.contactBlocked, fields);
     final record = journal.append(
       ReplicationEventKind.contactBlocked,
-      <String, Object?>{
-        'conversationId': norm,
-        'peerId': norm,
-        'blocked': blocked,
-        'createdAt': DateTime.now().millisecondsSinceEpoch,
-      },
+      fields,
     );
     unawaited(_persistDurable(record));
     hypercore.append(record);
@@ -1314,7 +1372,13 @@ class DualStackBridge {
         !replicationValueIsSafe(event.toWire())) {
       return false;
     }
+    final before = roomLog.length;
     _applyRoom(event);
+    if (event.kind == 'membership' &&
+        roomLog.length == before &&
+        !roomLog.any((e) => '${e.writerId}:${e.seq}' == '${event.writerId}:${event.seq}')) {
+      return false;
+    }
     var any = false;
     for (final target in _sendPeerIds(peerId)) {
       if (!await _ensureNativeSendReady(target)) continue;
@@ -1328,16 +1392,22 @@ class DualStackBridge {
     return any;
   }
 
-  void _applyRoom(RoomEvent event, {bool persist = true}) {
+  void _applyRoom(RoomEvent event, {bool persist = true, String? fromPeerId}) {
     if (event.writerId.contains('://') || event.kind.contains('://')) return;
     final key = '${event.writerId}:${event.seq}';
     if (roomLog.any((e) => '${e.writerId}:${e.seq}' == key)) return;
+    if (event.kind == 'membership' &&
+        !_authorizeRoomMembership(event, fromPeerId: fromPeerId, persist: persist)) {
+      return;
+    }
     roomLog.add(event);
     rooms.reset();
     rooms.applyAll(roomLog);
     if (event.seq >= _roomSeq) _roomSeq = event.seq + 1;
     if (event.kind != 'membership') return;
     if (!persist) return;
+    final roomId = event.payload['roomId'];
+    final host = roomId is String ? _hostForRoom(roomId) : null;
     final record = journal.append(
       ReplicationEventKind.roomMembershipChanged,
       <String, Object?>{
@@ -1348,12 +1418,14 @@ class DualStackBridge {
           'displayName': event.payload['displayName'],
         'writerId': event.writerId,
         'seq': event.seq,
+        if (host != null) 'hostPeerId': host,
         'createdAt': DateTime.now().millisecondsSinceEpoch,
       },
     );
     unawaited(_persistDurable(record));
     hypercore.append(record);
     for (final peer in List<String>.from(authenticated)) {
+      if (!_recordVisibleTo(peer, record)) continue;
       _replicateRecord(peer, record);
     }
   }
@@ -1454,6 +1526,7 @@ class DualStackBridge {
 
   void _replicateToAuthenticated(JournalRecord record) {
     for (final peer in List<String>.from(authenticated)) {
+      if (!_recordVisibleTo(peer, record)) continue;
       _replicateRecord(peer, record);
     }
   }
@@ -1462,6 +1535,7 @@ class DualStackBridge {
     final norm = normalizePeerId(peerId);
     if (!authenticated.contains(norm) || !connected.contains(norm)) return;
     if (isBlocked(norm)) return;
+    if (!_recordVisibleTo(norm, record)) return;
     final frame = hypercore.toReplicationFrame(record);
     if (!replicationValueIsSafe(frame)) return;
     unawaited(
@@ -1474,11 +1548,264 @@ class DualStackBridge {
     if (!authenticated.contains(norm) || !connected.contains(norm)) return;
     if (isBlocked(norm)) return;
     for (final record in hypercore.blocks) {
+      if (!_recordVisibleTo(norm, record)) continue;
       final frame = hypercore.toReplicationFrame(record);
       if (!replicationValueIsSafe(frame)) continue;
       unawaited(
         transport.send(norm, TransportChannel.replication, jsonPayload(frame)),
       );
+    }
+  }
+
+  void _attachIdentitySignature(
+    ReplicationEventKind kind,
+    Map<String, Object?> fields,
+  ) {
+    final hook = signRecord;
+    if (hook == null) return;
+    final canonical = canonicalReplicationRecordBytes(
+      kind: kind,
+      writerDeviceId: selfDeviceId,
+      fields: fields,
+    );
+    final sig = hook(canonical);
+    if (sig == null || sig.isEmpty) return;
+    fields['signature'] = base64Encode(sig);
+  }
+
+  String? _hostForRoom(String roomId) {
+    final hooked = roomHostFor?.call(roomId);
+    if (hooked != null && hooked.isNotEmpty) {
+      return normalizePeerId(hooked);
+    }
+    return _roomHosts[roomId];
+  }
+
+  void _rememberRoomHost(String roomId, String host) {
+    if (roomId.isEmpty || host.isEmpty || roomId.contains('://')) return;
+    _roomHosts.putIfAbsent(roomId, () => normalizePeerId(host));
+  }
+
+  bool _senderIsRoomHost(
+    String roomId,
+    String senderPeerId,
+    DeviceBinding? binding,
+  ) {
+    final host = _hostForRoom(roomId);
+    if (host == null || host.isEmpty) return false;
+    if (host == normalizePeerId(senderPeerId)) return true;
+    if (binding != null && host == binding.deviceId) return true;
+    return false;
+  }
+
+  bool _authorizeRoomMembership(
+    RoomEvent event, {
+    required String? fromPeerId,
+    required bool persist,
+  }) {
+    final roomId = event.payload['roomId'] as String?;
+    if (roomId == null || roomId.isEmpty) return true;
+    if (fromPeerId != null) {
+      final norm = normalizePeerId(fromPeerId);
+      final binding = remoteBindings[norm];
+      final host = _hostForRoom(roomId);
+      if (host != null) {
+        final own = binding != null && isOwnDevice(binding);
+        if (!_senderIsRoomHost(roomId, norm, binding) && !own) {
+          return false;
+        }
+      } else {
+        _rememberRoomHost(roomId, norm);
+      }
+      return true;
+    }
+    if (persist) {
+      final host = _hostForRoom(roomId);
+      final self = normalizePeerId(selfPeerId());
+      if (host != null && host != self) return false;
+      _rememberRoomHost(roomId, self);
+      return true;
+    }
+    final stored = event.payload['hostPeerId'] as String?;
+    _rememberRoomHost(roomId, stored ?? selfPeerId());
+    return true;
+  }
+
+  bool _recordVisibleTo(String peerId, JournalRecord record) {
+    final norm = normalizePeerId(peerId);
+    final binding = remoteBindings[norm];
+    if (binding != null && isOwnDevice(binding)) return true;
+    switch (record.kind) {
+      case ReplicationEventKind.contactBlocked:
+        return false;
+      case ReplicationEventKind.deviceAuthorized:
+        return false;
+      case ReplicationEventKind.deviceRevoked:
+        // Own devices already returned true. A foreign contact is told
+        // only when we already have a 1:1 conversation with them (they
+        // may still address the revoked device). Do not fan out to the
+        // whole authenticated set — that can include unrelated contacts
+        // who must not learn our device inventory.
+        return _hasConversationWith(norm);
+      case ReplicationEventKind.roomMembershipChanged:
+        return _peerMaySeeRoomMembership(norm, record);
+      case ReplicationEventKind.messageEnvelopeCreated:
+      case ReplicationEventKind.deliveryAcknowledged:
+      case ReplicationEventKind.readAcknowledged:
+      case ReplicationEventKind.messageTombstoned:
+      case ReplicationEventKind.attachmentPublished:
+      case ReplicationEventKind.attachmentExpired:
+        final conv = record.fields['conversationId'] as String?;
+        if (conv == null || conv.isEmpty) return false;
+        return normalizePeerId(conv) == norm;
+    }
+  }
+
+  bool _hasConversationWith(String peerId) {
+    final norm = normalizePeerId(peerId);
+    for (final rec in journal.records) {
+      if (!kConversationScopedReplicationKinds.contains(rec.kind)) continue;
+      final conv = rec.fields['conversationId'] as String?;
+      if (conv != null && normalizePeerId(conv) == norm) return true;
+    }
+    return false;
+  }
+
+  bool _peerMaySeeRoomMembership(String peerId, JournalRecord record) {
+    final member = record.fields['peerId'] as String?;
+    if (member != null && normalizePeerId(member) == peerId) return true;
+    final roomId = record.fields['roomId'] as String?;
+    if (roomId == null || roomId.isEmpty) {
+      return rooms.state.members.containsKey(peerId);
+    }
+    if (_hostForRoom(roomId) == peerId) return true;
+    var inRoom = false;
+    for (final event in roomLog) {
+      if (event.kind != 'membership') continue;
+      if (event.payload['roomId'] != roomId) continue;
+      if (event.payload['peerId'] != peerId) continue;
+      final action = event.payload['action'] as String? ?? 'join';
+      inRoom = action != 'leave' && action != 'kick';
+    }
+    return inRoom;
+  }
+
+  Future<void> _ingestReplication(String norm, List<int> bytes) async {
+    if (isBlocked(norm)) return;
+    try {
+      final frame = decodeJsonPayload(bytes);
+      if (!await _authorizeInboundReplication(norm, frame)) return;
+      final remote = hypercore.applyRemote(frame);
+      if (remote == null) return;
+      final ingested = journal.ingest(remote);
+      if (ingested != null) {
+        unawaited(_persistDurable(ingested));
+      }
+      final accepted = ingested ?? remote;
+      _applyAuthorizedReplicationSideEffects(accepted);
+      onReplicationAccepted?.call(accepted);
+      if (remote.kind == ReplicationEventKind.roomMembershipChanged) {
+        final event = _membershipEventFromJournal(remote);
+        if (event != null) {
+          _applyRoom(event, persist: false, fromPeerId: norm);
+        }
+      }
+    } catch (_) {}
+  }
+
+  void _applyAuthorizedReplicationSideEffects(JournalRecord record) {
+    switch (record.kind) {
+      case ReplicationEventKind.contactBlocked:
+        final peer = (record.fields['peerId'] as String?) ??
+            (record.fields['conversationId'] as String?) ??
+            '';
+        if (peer.isEmpty) return;
+        onReplicatedContactBlocked?.call(
+          normalizePeerId(peer),
+          record.fields['blocked'] != false,
+        );
+      case ReplicationEventKind.deviceRevoked:
+        final deviceId = record.fields['deviceId'] as String?;
+        if (deviceId == null || deviceId.isEmpty) return;
+        devices?.revoke(deviceId);
+      default:
+        break;
+    }
+  }
+
+  Future<bool> _authorizeInboundReplication(
+    String norm,
+    Map<String, Object?> frame,
+  ) async {
+    final binding = remoteBindings[norm];
+    if (binding == null) return false;
+    final writerId = frame['writerDeviceId'] as String? ?? '';
+    if (writerId.isEmpty || writerId != binding.deviceId) return false;
+    if (devices?.isRevoked(writerId) == true) return false;
+    final kindName = frame['kind'] as String?;
+    if (kindName == null) return false;
+    ReplicationEventKind? kind;
+    for (final k in ReplicationEventKind.values) {
+      if (k.name == kindName) {
+        kind = k;
+        break;
+      }
+    }
+    if (kind == null) return false;
+    final raw = frame['fields'];
+    if (raw is! Map) return false;
+    final fields = <String, Object?>{};
+    raw.forEach((k, v) {
+      fields['$k'] = v;
+    });
+    final own = isOwnDevice(binding);
+    if (kOwnAccountReplicationKinds.contains(kind)) {
+      if (!own) return false;
+      return _verifyOwnAccountSignature(kind, writerId, fields);
+    }
+    if (kConversationScopedReplicationKinds.contains(kind)) {
+      if (own) return true;
+      final conv = fields['conversationId'] as String?;
+      if (conv == null || conv.isEmpty) return false;
+      return conversationScopedToPeer(
+        conversationId: conv,
+        peerId: norm,
+        selfPeerId: selfPeerId(),
+      );
+    }
+    if (kind == ReplicationEventKind.roomMembershipChanged) {
+      if (own) return true;
+      final roomId = fields['roomId'] as String?;
+      if (roomId == null || roomId.isEmpty) return false;
+      final host = _hostForRoom(roomId);
+      if (host == null) return true;
+      return _senderIsRoomHost(roomId, norm, binding);
+    }
+    return false;
+  }
+
+  Future<bool> _verifyOwnAccountSignature(
+    ReplicationEventKind kind,
+    String writerDeviceId,
+    Map<String, Object?> fields,
+  ) async {
+    final own = resolveOwnIdentityPublicKey();
+    if (own == null || own.isEmpty) return false;
+    final sigBytes = decodeReplicationSignature(fields['signature']);
+    if (sigBytes == null || sigBytes.isEmpty) return false;
+    final canonical = canonicalReplicationRecordBytes(
+      kind: kind,
+      writerDeviceId: writerDeviceId,
+      fields: fields,
+    );
+    final hook = verifyRecord;
+    try {
+      if (hook != null) {
+        return await hook(own, canonical, sigBytes);
+      }
+      return await identity_key.verifyWithRemoteSpki(own, canonical, sigBytes);
+    } catch (_) {
+      return false;
     }
   }
 
@@ -1679,21 +2006,7 @@ class DualStackBridge {
     }
     if (channel == TransportChannel.replication) {
       if (isBlocked(norm)) return;
-      try {
-        final frame = decodeJsonPayload(bytes);
-        final writerId = frame['writerDeviceId'] as String? ?? '';
-        if (devices?.isRevoked(writerId) == true) return;
-        final remote = hypercore.applyRemote(frame);
-        if (remote == null) return;
-        final ingested = journal.ingest(remote);
-        if (ingested != null) {
-          unawaited(_persistDurable(ingested));
-        }
-        if (remote.kind == ReplicationEventKind.roomMembershipChanged) {
-          final event = _membershipEventFromJournal(remote);
-          if (event != null) _applyRoom(event, persist: false);
-        }
-      } catch (_) {}
+      unawaited(_ingestReplication(norm, bytes));
       return;
     }
     Object? data;
@@ -1709,9 +2022,12 @@ class DualStackBridge {
         data = decoded;
         final roomEvent = roomEventFromNativePacket(
           decoded,
-          fallbackWriter: norm,
+          fallbackWriter: remoteBindings[norm]?.deviceId ?? norm,
+          authenticatedPeer: norm,
+          authenticatedDeviceId: remoteBindings[norm]?.deviceId,
+          roomHostFor: _hostForRoom,
         );
-        if (roomEvent != null) _applyRoom(roomEvent);
+        if (roomEvent != null) _applyRoom(roomEvent, fromPeerId: norm);
         if (decoded['type'] == kDeviceBindingWireType) {
           try {
             unawaited(
