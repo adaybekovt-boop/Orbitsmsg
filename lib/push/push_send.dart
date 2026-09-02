@@ -7,8 +7,10 @@ import 'dart:io';
 import 'opaque_wake.dart';
 import 'push_gateway.dart';
 import 'apns_provider_jwt.dart';
+import 'fcm_service_account_jwt.dart';
 
 export 'apns_provider_jwt.dart';
+export 'fcm_service_account_jwt.dart';
 
 /// iOS APNs topic. Must match the Runner bundle id. Never a Peer ID.
 const String kApnsTopic = 'com.orbits.orbitsFlutter';
@@ -52,15 +54,21 @@ class PushSender {
   }
 
   /// FCM HTTP v1. Refused until the live gateway flag is true.
+  /// A service-account JWT may be built (RS256, not identity-signing-v1)
+  /// and is still not exchanged or sent while [kLiveFcmGateway] is false.
   Future<PushSendResult> sendFcm({
     required String deviceToken,
     required OpaqueWake wake,
     String projectId = '',
+    FcmServiceAccountKey? serviceAccount,
+    int? iatSeconds,
   }) async {
     final request = buildFcmRequest(
       deviceToken: deviceToken,
       wake: wake,
       projectId: projectId,
+      serviceAccount: serviceAccount,
+      iatSeconds: iatSeconds,
     );
     if (request == null) {
       return const PushSendResult(sent: false, reason: 'unsafe-keys');
@@ -119,10 +127,12 @@ class FcmOpaqueRequest {
     required this.host,
     required this.path,
     required this.body,
+    this.headers = const <String, String>{},
   });
 
   final String host;
   final String path;
+  final Map<String, String> headers;
   final Map<String, Object?> body;
 }
 
@@ -159,18 +169,29 @@ ApnsOpaqueRequest? buildApnsRequest({
   );
 }
 
-/// Build an FCM HTTP v1 body. Does not send.
+/// Build an FCM HTTP v1 body. Does not send. Null if the wake is unsafe
+/// or the token is empty. Does not POST the JWT to [kFcmOauthTokenUri].
 FcmOpaqueRequest? buildFcmRequest({
   required String deviceToken,
   required OpaqueWake wake,
   String projectId = 'orbits',
+  FcmServiceAccountKey? serviceAccount,
+  int? iatSeconds,
 }) {
   final payload = wake.toJson();
   if (deviceToken.isEmpty || !OpaqueWake.isSafe(payload)) return null;
   final project = projectId.isEmpty ? 'orbits' : projectId;
+  final headers = <String, String>{};
+  final jwt = serviceAccount == null
+      ? null
+      : buildFcmServiceAccountJwt(serviceAccount, iatSeconds: iatSeconds);
+  if (jwt != null) {
+    headers['authorization'] = 'bearer $jwt';
+  }
   return FcmOpaqueRequest(
     host: kFcmSendHost,
     path: '/v1/projects/$project/messages:send',
+    headers: headers,
     body: <String, Object?>{
       'message': <String, Object?>{
         'token': deviceToken,

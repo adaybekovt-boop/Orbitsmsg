@@ -6,6 +6,7 @@ import 'package:orbits_flutter/push/opaque_wake.dart';
 import 'package:orbits_flutter/push/push_gateway.dart';
 import 'package:orbits_flutter/push/push_registration.dart';
 import 'package:orbits_flutter/push/push_send.dart';
+import 'package:pointycastle/export.dart' as pc;
 
 import '../helpers/pointycastle_ecdh.dart';
 
@@ -188,6 +189,85 @@ void main() {
     expect(
       File('lib/push/apns_provider_jwt.dart').readAsStringSync(),
       contains('Not identity-signing-v1'),
+    );
+  });
+
+  test('FCM service-account JWT is RS256, opaque, and still not sent', () async {
+    final pair = generateFcmRsaKeyForTests();
+    final priv = pair.privateKey as pc.RSAPrivateKey;
+    final pub = pair.publicKey as pc.RSAPublicKey;
+    final pem = encodeFcmPkcs8Pem(priv);
+    expect(parseFcmPkcs8Pem(pem)!.modulus, priv.modulus);
+    final key = FcmServiceAccountKey(
+      clientEmail: 'orbits-fcm@orbits.iam.gserviceaccount.com',
+      privateKeyPem: pem,
+      privateKeyId: 'kid-fcm-1',
+    );
+    const wake = OpaqueWake(
+      opaqueWakeToken: 'tok',
+      collapseId: 'c1',
+      protocolVersion: 1,
+    );
+    final req = buildFcmRequest(
+      deviceToken: 'ftok',
+      wake: wake,
+      serviceAccount: key,
+      iatSeconds: 1700000000,
+    )!;
+    final auth = req.headers['authorization']!;
+    expect(auth.startsWith('bearer '), isTrue);
+    final jwt = auth.substring(7);
+    expect(
+      verifyFcmServiceAccountJwt(
+        jwt: jwt,
+        modulus: fcmModulusBytes(pub),
+        publicExponent: fcmPublicExponentBytes(pub),
+        clientEmail: 'orbits-fcm@orbits.iam.gserviceaccount.com',
+        privateKeyId: 'kid-fcm-1',
+      ),
+      isTrue,
+    );
+    expect(jwt.split('.'), hasLength(3));
+    expect(jwt, isNot(contains('peerId')));
+    expect(jwt, isNot(contains('opaqueWakeToken')));
+    expect(jwt, isNot(contains('rootKey')));
+    expect(req.body.containsKey('authorization'), isFalse);
+    final data = Map<String, Object?>.from(
+      (req.body['message'] as Map)['data'] as Map,
+    );
+    expect(OpaqueWake.isSafe(data), isTrue);
+    expect(data.containsKey('peerId'), isFalse);
+    expect(
+      File('lib/push/fcm_service_account_jwt.dart').readAsStringSync(),
+      isNot(contains('identity_key')),
+    );
+    expect(
+      File('lib/push/fcm_service_account_jwt.dart').readAsStringSync(),
+      contains('Not identity-signing-v1'),
+    );
+    expect(
+      File('lib/push/fcm_service_account_jwt.dart').readAsStringSync(),
+      contains('Never POSTs to the OAuth token URI'),
+    );
+
+    const sender = PushSender();
+    final result = await sender.sendFcm(
+      deviceToken: 'ftok',
+      wake: wake,
+      serviceAccount: key,
+    );
+    expect(result.sent, isFalse);
+    expect(result.reason, 'fcm-not-deployed');
+    expect(kLiveFcmGateway, isFalse);
+
+    expect(
+      buildFcmServiceAccountJwt(
+        const FcmServiceAccountKey(
+          clientEmail: 'not-an-email',
+          privateKeyPem: '-----BEGIN PRIVATE KEY-----\nQQ==\n-----END PRIVATE KEY-----',
+        ),
+      ),
+      isNull,
     );
   });
 }
