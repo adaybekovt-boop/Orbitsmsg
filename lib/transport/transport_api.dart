@@ -229,4 +229,8 @@ abstract class OrbitsTransport {
   /// Empty on carriers without a worklet. Never file bytes or fileKey.
   Future<Map<String, Object?>> listAutobase() async =>
       const <String, Object?>{};
+
+  /// Rebuild worklet Autobase membership from journal rows.
+  /// Membership metadata only. No-op on carriers without a worklet.
+  Future<void> hydrateAutobase([List<Map<String, Object?>>? rows]) async {}
 }

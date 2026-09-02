@@ -105,6 +105,78 @@ void main() {
     );
   });
 
+  test('node worklet Autobase hydrates membership from journal after restart',
+      () async {
+    final script = File('tool/connectivity_harness/src/worklet.js');
+    final dir = Directory.systemTemp.createTempSync('orbits-worklet-ab-');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+
+    Future<Map<String, Object?>> runOnce({required bool append}) async {
+      final node = await Process.start('node', [script.absolute.path]);
+      node.stderr.listen((_) {});
+      final client = BareIpcClient(write: node.stdin.add);
+      node.stdout.listen(client.addBytes);
+      try {
+        await client.request('start', {
+          'peerId': 'ORBIT-AA',
+          'journalDir': dir.path,
+        }).timeout(const Duration(seconds: 8));
+        if (append) {
+          await client.request('journal.append', {
+            'kind': 'roomMembershipChanged',
+            'writerDeviceId': 'dev-a',
+            'fields': {
+              'roomId': 'room-hydrate',
+              'peerId': 'ORBIT-BB',
+              'action': 'join',
+              'displayName': 'B',
+              'writerId': 'a',
+              'seq': 0,
+            },
+          }).timeout(const Duration(seconds: 8));
+          await client.request('journal.append', {
+            'fields': {'encryptedEnvelope': 'djI6bm90LWEtYm9keQ=='},
+          }).timeout(const Duration(seconds: 8));
+        }
+        final hydrated = await client
+            .request('autobase.hydrate')
+            .timeout(const Duration(seconds: 8));
+        final state = await client
+            .request('autobase.state')
+            .timeout(const Duration(seconds: 8));
+        await client.request('stop').timeout(const Duration(seconds: 8));
+        return {
+          'hydrated': hydrated,
+          'state': state,
+        };
+      } finally {
+        await client.close();
+        node.kill();
+        await node.exitCode.timeout(
+          const Duration(seconds: 3),
+          onTimeout: () => -1,
+        );
+      }
+    }
+
+    final first = await runOnce(append: true);
+    final firstMembers = (first['state'] as Map)['members'] as Map;
+    expect(firstMembers['ORBIT-BB'], 'B');
+    expect((first['state'] as Map)['messages'], isEmpty);
+    expect(jsonEncode(first), isNot(contains('fileKey')));
+    expect(jsonEncode(first), isNot(contains('plaintext')));
+    expect(jsonEncode(first), isNot(contains('not-a-body')));
+
+    final second = await runOnce(append: false);
+    final secondMembers = (second['state'] as Map)['members'] as Map;
+    expect(secondMembers['ORBIT-BB'], 'B');
+    expect((second['state'] as Map)['messages'], isEmpty);
+    expect(jsonEncode(second['state']), isNot(contains('djI6bm90LWEtYm9keQ==')));
+    expect((second['hydrated'] as Map).containsKey('hydrated'), isTrue);
+  });
+
   test('hyperswarm worklet start without bootstrap is refused', () async {
     final script = File('tool/connectivity_harness/src/worklet.js');
     final node = await Process.start(

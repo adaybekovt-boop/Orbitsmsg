@@ -17,7 +17,29 @@ const STRIP = new Set([
   'kek',
   'rootKey',
   'bytes',
+  'discoverySecret',
 ])
+
+/** Journal rows that rebuild membership after restart. Not live packet kinds. */
+const JOURNAL_MEMBERSHIP_KINDS = new Set([
+  'roomMembershipChanged',
+  'RoomMembershipChanged',
+])
+
+/** Skip the whole journal row if any of these keys appear (fields or nested). */
+const JOURNAL_FORBIDDEN = new Set([
+  'text',
+  'b64',
+  'fileKey',
+  'fileKeyB64',
+  'plaintext',
+  'password',
+  'kek',
+  'rootKey',
+  'discoverySecret',
+])
+
+const MEMBERSHIP_PAYLOAD_KEYS = ['peerId', 'action', 'displayName', 'roomId']
 
 function sanitize(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return value
@@ -27,6 +49,88 @@ function sanitize(value) {
     out[k] = sanitize(v)
   }
   return out
+}
+
+function objectHasForbiddenKeys(value, seen) {
+  if (!value || typeof value !== 'object') return false
+  const walk = seen || new Set()
+  if (walk.has(value)) return false
+  walk.add(value)
+  if (Array.isArray(value)) {
+    return value.some((item) => objectHasForbiddenKeys(item, walk))
+  }
+  for (const [k, v] of Object.entries(value)) {
+    if (JOURNAL_FORBIDDEN.has(k)) return true
+    if (objectHasForbiddenKeys(v, walk)) return true
+  }
+  return false
+}
+
+function isJournalMembershipKind(kind) {
+  return typeof kind === 'string' && JOURNAL_MEMBERSHIP_KINDS.has(kind)
+}
+
+function journalFieldsOf(row) {
+  if (!row || typeof row !== 'object') return null
+  const fields = row.fields
+  if (fields && typeof fields === 'object' && !Array.isArray(fields)) return fields
+  return row
+}
+
+/**
+ * Map a worklet journal row to a membership event.
+ * Only `roomMembershipChanged` (journal.append kind). Payload is
+ * peerId / action / displayName / roomId — never ciphertext or secrets.
+ */
+function membershipEventFromJournalRow(row) {
+  if (!row || typeof row !== 'object' || Array.isArray(row)) return null
+  if (!isJournalMembershipKind(row.kind)) return null
+  const fields = journalFieldsOf(row)
+  if (!fields) return null
+  if (objectHasForbiddenKeys(fields) || objectHasForbiddenKeys(row)) return null
+  const peerId = fields.peerId
+  if (typeof peerId !== 'string' || !peerId) return null
+  const payload = {}
+  for (const key of MEMBERSHIP_PAYLOAD_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(fields, key)) continue
+    const value = fields[key]
+    if (key === 'peerId' || key === 'action' || key === 'displayName') {
+      if (typeof value !== 'string' || !value) continue
+    } else if (value == null || value === '') {
+      continue
+    }
+    payload[key] = value
+  }
+  if (!payload.peerId) return null
+  if (!payload.action) payload.action = 'join'
+  const writer =
+    (typeof fields.writerId === 'string' && fields.writerId) ||
+    (typeof row.writerDeviceId === 'string' && row.writerDeviceId) ||
+    (typeof row.writerId === 'string' && row.writerId) ||
+    'journal'
+  const seq = Number(fields.seq != null ? fields.seq : row.seq) || 0
+  return {
+    writerId: writer,
+    seq,
+    kind: 'membership',
+    payload,
+  }
+}
+
+/**
+ * Rebuild membership from worklet journal rows. Skips envelopes, message
+ * bodies, and any row that carries forbidden field names.
+ */
+function hydrateFromJournal(projection, rows) {
+  if (!projection || typeof projection.apply !== 'function') return 0
+  if (!Array.isArray(rows)) return 0
+  const events = []
+  for (const row of rows) {
+    const event = membershipEventFromJournalRow(row)
+    if (event) events.push(event)
+  }
+  projection.applyAll(events)
+  return events.length
 }
 
 function fromWire(packet) {
@@ -219,6 +323,11 @@ class AutobaseProjection {
     return event
   }
 
+  // Journal restart path. Membership metadata only — never message bodies.
+  hydrateFromJournal(rows) {
+    return hydrateFromJournal(this, rows)
+  }
+
   snapshot() {
     return {
       members: { ...this.state.members },
@@ -237,4 +346,9 @@ module.exports = {
   AutobaseProjection,
   roomEventFromNativePacket,
   fromWire,
+  hydrateFromJournal,
+  membershipEventFromJournalRow,
+  isJournalMembershipKind,
+  JOURNAL_FORBIDDEN,
+  JOURNAL_MEMBERSHIP_KINDS,
 }

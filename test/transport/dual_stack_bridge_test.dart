@@ -16,6 +16,7 @@ import 'package:orbits_flutter/push/opaque_wake.dart';
 import 'package:orbits_flutter/transport/replication_schema.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
+import 'package:orbits_flutter/replication/file_journal.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/rooms/autobase_log.dart';
 import 'package:orbits_flutter/core/path_byte_stream.dart';
@@ -23,6 +24,7 @@ import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
+import 'package:orbits_flutter/transport/mux_frames.dart';
 import 'package:orbits_flutter/transport/native_rollback.dart';
 import 'package:orbits_flutter/transport/relay_directory.dart';
 import 'package:orbits_flutter/transport/signed_capabilities.dart';
@@ -105,6 +107,8 @@ void main() {
     List<int>? Function(String peerId)? connectionNoiseFor,
     Future<PinCheck> Function(String peerId, List<int> identitySpki)? tofuCheck,
     bool awaitAuth = true,
+    FileJournal? durableA,
+    FileJournal? durableB,
   }) async {
     setHyperswarmRollout(HyperswarmRollout.internal);
     final pair = loopbackPair();
@@ -116,6 +120,7 @@ void main() {
       return DualStackBridge(
         transport: t,
         journal: MemoryJournal(device),
+        durableJournal: device == 'dev-a' ? durableA : durableB,
         selfPeerId: () => self,
         selfDeviceId: device,
         secrets: secrets,
@@ -1430,6 +1435,175 @@ void main() {
     );
     expect(kRoomsApplicationE2eImplemented, isFalse);
     await restored.detach();
+    await b.detach();
+  });
+
+  test(
+      'FileJournal persist/replay restores Autobase membership and Hypercore envelopes without re-append',
+      () async {
+    final durable = FileJournal.memory('dev-a');
+    final (a, b, _) = await linked(durableA: durable);
+    expect(
+      await a.sendAutobaseEvent(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        const RoomEvent(
+          writerId: 'a',
+          seq: 0,
+          kind: 'membership',
+          payload: {
+            'roomId': 'room-hydrate',
+            'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+            'action': 'join',
+            'displayName': 'B',
+          },
+        ),
+      ),
+      isTrue,
+    );
+    expect(a.rooms.state.members['ORBIT-BBBBBBBBBBBBBBBB'], 'B');
+    await b.transport.send(
+      'ORBIT-AAAAAAAAAAAAAAAA',
+      TransportChannel.message,
+      utf8.encode('v2:aaa:bbb:ccc'),
+    );
+    final envelopeDeadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(envelopeDeadline) &&
+        !a.journal.records.any(
+          (r) =>
+              r.kind == ReplicationEventKind.messageEnvelopeCreated &&
+              r.fields['encryptedEnvelope'] != null,
+        )) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(await a.verifyLiveMatchesReplay(), isTrue);
+    final replayed = await durable.replay();
+    expect(identical(replayed, a.journal), isFalse);
+    expect(
+      replayed.records.any(
+        (r) =>
+            r.kind == ReplicationEventKind.roomMembershipChanged &&
+            r.fields['roomId'] == 'room-hydrate' &&
+            r.fields['peerId'] == 'ORBIT-BBBBBBBBBBBBBBBB',
+      ),
+      isTrue,
+    );
+    expect(
+      replayed.records.any(
+        (r) =>
+            r.kind == ReplicationEventKind.messageEnvelopeCreated &&
+            r.fields['encryptedEnvelope'] != null,
+      ),
+      isTrue,
+    );
+    await a.detach();
+
+    final journalLen = replayed.length;
+    final restored = DualStackBridge(
+      transport: a.transport,
+      journal: replayed,
+      selfPeerId: a.selfPeerId,
+      selfDeviceId: a.selfDeviceId,
+      secrets: a.secrets,
+      isBlocked: a.isBlocked,
+      tofuCheck: _allowTofu,
+      onPacket: (_, __) async {},
+    )..attach();
+
+    expect(restored.rooms.state.members['ORBIT-BBBBBBBBBBBBBBBB'], 'B');
+    expect(restored.journal.length, journalLen);
+    expect(restored.hypercoreMatchesJournal(), isTrue);
+    expect(await restored.verifyLiveMatchesReplay(), isTrue);
+    expect(
+      restored.journal.records.every((r) => !r.fields.containsKey('text')),
+      isTrue,
+    );
+    expect(
+      restored.journal.records.every((r) => !r.fields.containsKey('b64')),
+      isTrue,
+    );
+    expect(
+      restored.journal.records.every((r) => !r.fields.containsKey('fileKey')),
+      isTrue,
+    );
+    expect(
+      restored.journal.records
+          .every((r) => !r.fields.containsKey('plaintext')),
+      isTrue,
+    );
+    expect(
+      restored.hypercore.blocks.every((r) => !r.fields.containsKey('text')),
+      isTrue,
+    );
+    expect(
+      restored.hypercore.blocks.every((r) => !r.fields.containsKey('b64')),
+      isTrue,
+    );
+    expect(
+      restored.hypercore.blocks.every((r) => !r.fields.containsKey('fileKey')),
+      isTrue,
+    );
+    expect(
+      restored.hypercore.blocks
+          .every((r) => !r.fields.containsKey('plaintext')),
+      isTrue,
+    );
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+    await restored.detach();
+    await b.detach();
+  });
+
+  test(
+      'inbound Hypercore replication of RoomMembershipChanged projects Autobase without a second journal append',
+      () async {
+    final (a, b, _) = await linked();
+    const rec = JournalRecord(
+      seq: 0,
+      writerDeviceId: 'dev-a',
+      kind: ReplicationEventKind.roomMembershipChanged,
+      fields: {
+        'roomId': 'room-hydrate',
+        'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+        'action': 'join',
+        'displayName': 'B',
+        'writerId': 'a',
+        'seq': 0,
+        'createdAt': 1,
+      },
+    );
+    final frame = a.hypercore.toReplicationFrame(rec);
+    await a.transport.send(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      TransportChannel.replication,
+      jsonPayload(frame),
+    );
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(deadline) &&
+        b.rooms.state.members['ORBIT-BBBBBBBBBBBBBBBB'] != 'B') {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(b.rooms.state.members['ORBIT-BBBBBBBBBBBBBBBB'], 'B');
+    final journalLen = b.journal.length;
+    expect(journalLen, greaterThan(0));
+    await a.transport.send(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      TransportChannel.replication,
+      jsonPayload(frame),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(b.journal.length, journalLen);
+    expect(
+      b.journal.records.every((r) => !r.fields.containsKey('text')),
+      isTrue,
+    );
+    expect(
+      b.journal.records.every((r) => !r.fields.containsKey('b64')),
+      isTrue,
+    );
+    expect(
+      b.journal.records.every((r) => !r.fields.containsKey('fileKey')),
+      isTrue,
+    );
+    await a.detach();
     await b.detach();
   });
 

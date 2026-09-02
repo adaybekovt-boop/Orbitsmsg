@@ -64,4 +64,7 @@ class WorkletOrbitsTransport implements OrbitsTransport {
   @override
   Future<Map<String, Object?>> listAutobase() async =>
       const <String, Object?>{};
+
+  @override
+  Future<void> hydrateAutobase([List<Map<String, Object?>>? rows]) async {}
 }

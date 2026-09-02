@@ -352,6 +352,9 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   Future<Map<String, Object?>> listAutobase() async =>
       const <String, Object?>{};
 
+  @override
+  Future<void> hydrateAutobase([List<Map<String, Object?>>? rows]) async {}
+
   /// Harness helper: inject a carrier event (relay blow-up, crash, …).
   void emitEvent(TransportEvent event) => _events.add(event);
 

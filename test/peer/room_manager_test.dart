@@ -9,7 +9,11 @@
 //     and NO room session (role stays none) — never a silent no-op.
 //   • createRoom(selfHosted, isolationMode: removed) → native-carrier host
 //     (no RoomSignalingHost.start, selfHostInvite null, joinError null).
+//   • joinRoom(orbits-room invite, isolationMode: removed) → native-carrier
+//     guest (no buildRoomScopedClient / PeerJS start).
 //   • clearJoinError resets the error.
+
+import 'dart:io';
 
 import 'package:drift/native.dart';
 import 'package:flutter/foundation.dart'
@@ -40,6 +44,7 @@ import 'package:orbits_flutter/storage/db.dart' as db;
 
 class _FakeTransport implements RoomTransport {
   RoomBridge bridge = RoomBridge.empty;
+  final List<String> openReliableCalls = [];
   @override
   void bindRoom(RoomBridge b) => bridge = b;
   @override
@@ -47,7 +52,7 @@ class _FakeTransport implements RoomTransport {
   @override
   bool hasReliable(String peerId) => true;
   @override
-  void openReliable(String peerId) {}
+  void openReliable(String peerId) => openReliableCalls.add(peerId);
   @override
   PeerJsClient? get rawPeer => null;
 }
@@ -224,6 +229,75 @@ void main() {
       roomSelfHostUsesEmbeddedPeerjs(kPeerjsIsolationWebOnly, isWeb: false),
       isFalse,
     );
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+  });
+
+  test('joinRoom under isolation does not construct PeerJS', () async {
+    const guestId = 'ORBIT-BBBBBB';
+    const guestUser = AuthedUser(
+      peerId: guestId,
+      displayName: 'Guest',
+      bio: '',
+      avatarDataUrl: null,
+    );
+    final transport = _FakeTransport();
+    final c = ProviderContainer(overrides: [
+      localProfileProvider.overrideWithValue(guestUser),
+      roomTransportProvider.overrideWithValue(transport),
+    ]);
+    containers.add(c);
+
+    // TEST-NET-1 address + discard port: a missing gate would dial PeerJS
+    // here and miss the 3s budget (client open poll is ~4s).
+    final invite = RoomInvite(
+      roomId: hostId,
+      lanHosts: const ['192.0.2.55'],
+      port: 9,
+      key: 'isolation-test-key',
+    );
+
+    await c
+        .read(roomManagerProvider.notifier)
+        .joinRoom(
+          invite.encode(),
+          'Guest',
+          isolationMode: kPeerjsIsolationRemoved,
+        )
+        .timeout(const Duration(seconds: 3));
+
+    expect(
+      transport.openReliableCalls,
+      [hostId],
+      reason: 'must join by host peer code on the default transport',
+    );
+    final st = c.read(roomManagerProvider);
+    expect(st.role, RoomRole.guest);
+    expect(st.roomId, hostId);
+    expect(st.hostPeerId, hostId);
+    expect(st.joinError, isNull);
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+  });
+
+  test('joinRoom isolation gate sits before buildRoomScopedClient', () {
+    final src = File('lib/peer/room_manager.dart').readAsStringSync();
+    final joinRoomFn =
+        src.split('Future<void> joinRoom(')[1].split('void clearJoinError')[0];
+    expect(joinRoomFn, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(joinRoomFn, contains('isolationMode'));
+    expect(
+      joinRoomFn,
+      isNot(contains('buildRoomScopedClient')),
+      reason: 'joinRoom must not construct PeerJS; _joinSelfHosted does',
+    );
+
+    final selfHosted = src
+        .split('Future<void> _joinSelfHosted')[1]
+        .split('Future<void> _discardCandidate')[0];
+    final gateIdx =
+        selfHosted.indexOf('peerjsAllowedOnNative(isWeb: kIsWeb)');
+    final buildIdx = selfHosted.indexOf('buildRoomScopedClient');
+    expect(gateIdx, greaterThanOrEqualTo(0));
+    expect(buildIdx, greaterThan(gateIdx));
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
   });
 

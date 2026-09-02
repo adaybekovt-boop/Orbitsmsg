@@ -46,12 +46,46 @@ class FileJournal {
     final out = MemoryJournal(writerDeviceId);
     for (final line in await _readLines()) {
       if (line.trim().isEmpty) continue;
-      final row = jsonDecode(line) as Map<String, Object?>;
-      final kindName = row['kind'] as String;
-      final kind = ReplicationEventKind.values.firstWhere(
-        (k) => k.name == kindName,
+      final Object? decoded;
+      try {
+        decoded = jsonDecode(line);
+      } catch (_) {
+        continue;
+      }
+      if (decoded is! Map) continue;
+      final row = Map<String, Object?>.from(decoded);
+      final kindName = row['kind'] as String?;
+      if (kindName == null || kindName.isEmpty) continue;
+      ReplicationEventKind? kind;
+      for (final k in ReplicationEventKind.values) {
+        if (k.name == kindName) {
+          kind = k;
+          break;
+        }
+      }
+      if (kind == null) continue;
+      final rawFields = row['fields'];
+      if (rawFields is! Map) continue;
+      final fields = _decodeFields(rawFields);
+      if (!replicationFieldsAreSafe(fields.keys)) continue;
+      final seqRaw = row['seq'];
+      final seq = seqRaw is int
+          ? seqRaw
+          : seqRaw is num
+              ? seqRaw.toInt()
+              : 0;
+      final writerRaw = row['writerDeviceId'];
+      final writer = writerRaw is String && writerRaw.isNotEmpty
+          ? writerRaw
+          : writerDeviceId;
+      out.adopt(
+        JournalRecord(
+          seq: seq,
+          writerDeviceId: writer,
+          kind: kind,
+          fields: fields,
+        ),
       );
-      out.append(kind, _decodeFields(row['fields'] as Map));
     }
     return out;
   }
@@ -67,11 +101,17 @@ Map<String, Object?> _encodeFields(Map<String, Object?> fields) {
 Map<String, Object?> _decodeFields(Map raw) {
   final out = <String, Object?>{};
   raw.forEach((k, v) {
-    if (k == 'encryptedEnvelope' && v is String) {
-      out[k] = base64Decode(v);
-    } else {
-      out[k] = v;
+    final key = '$k';
+    if (kForbiddenReplicationFields.contains(key)) return;
+    if (key == 'encryptedEnvelope') {
+      if (v is String) {
+        out[key] = base64Decode(v);
+      } else if (v is List<int>) {
+        out[key] = List<int>.from(v);
+      }
+      return;
     }
+    out[key] = v;
   });
   return out;
 }

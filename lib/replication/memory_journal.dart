@@ -55,31 +55,54 @@ class MemoryJournal {
     return append(ReplicationEventKind.messageEnvelopeCreated, event.toJournalFields());
   }
 
-  /// Ingest a remote/durable record. Skips duplicate envelope eventIds.
-  /// Local seq is assigned here; Hypercore writer seq stays on [record].
+  /// Restore a durable record without restamping [record.seq] or
+  /// [record.writerDeviceId]. Live [append] is unchanged. Advances [_seq]
+  /// past the adopted writer seq so the next local write continues it.
+  JournalRecord? adopt(JournalRecord record) {
+    if (!replicationFieldsAreSafe(record.fields.keys)) {
+      throw ArgumentError('refusing secret field in journal');
+    }
+    if (_isDuplicate(record)) return null;
+    final kept = JournalRecord(
+      seq: record.seq,
+      writerDeviceId: record.writerDeviceId,
+      kind: record.kind,
+      fields: Map<String, Object?>.from(record.fields),
+    );
+    _records.add(kept);
+    if (kept.seq >= _seq) {
+      _seq = kept.seq + 1;
+    }
+    return kept;
+  }
+
+  /// Ingest a remote/carrier record. Skips duplicate envelope eventIds.
+  /// Local seq is assigned here; use [adopt] to keep a Hypercore writer seq.
   JournalRecord? ingest(JournalRecord record) {
     if (!replicationFieldsAreSafe(record.fields.keys)) {
       throw ArgumentError('refusing secret field in journal');
     }
+    if (_isDuplicate(record)) return null;
+    return append(record.kind, record.fields);
+  }
+
+  bool _isDuplicate(JournalRecord record) {
     if (record.kind == ReplicationEventKind.messageEnvelopeCreated) {
       final id = record.fields['eventId'] as String?;
       if (id != null &&
           _records.any((r) => r.fields['eventId'] == id)) {
-        return null;
+        return true;
       }
       final enc = record.fields['encryptedEnvelope'];
       if (enc is List<int> && hasEncryptedEnvelope(enc)) {
-        return null;
+        return true;
       }
     }
     // Boot hydrates FileJournal then the carrier. Same revoke / ack
     // payload must not land twice even if writer ids were restamped.
-    if (_records.any((r) =>
+    return _records.any((r) =>
         r.kind == record.kind &&
-        journalFieldsEqual(r.fields, record.fields))) {
-      return null;
-    }
-    return append(record.kind, record.fields);
+        journalFieldsEqual(r.fields, record.fields));
   }
 
   List<JournalRecord> since(int cursor) =>

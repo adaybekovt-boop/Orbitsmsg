@@ -165,12 +165,10 @@ class NativeTransportHost {
     final mailbox = BlindMailboxStore()..grant(cap);
     final storagePeer = await _bindStoragePeer(mailbox, cap, directory);
 
-    final memory = MemoryJournal('local-device');
-    if (journal != null) {
-      for (final record in (await journal.replay()).records) {
-        memory.ingest(record);
-      }
-    }
+    // Replay keeps FileJournal writer seq / writerDeviceId. Do not
+    // ingest() those rows — that restamps them as fresh local appends.
+    final memory =
+        await journal?.replay() ?? MemoryJournal('local-device');
     try {
       ingestWorkletRows(memory, await transport!.listJournal());
     } catch (_) {}

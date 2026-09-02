@@ -568,6 +568,11 @@ class RoomManager extends StateNotifier<RoomState> {
   /// Start the embedded server + the host's loopback room-scoped client. Swaps
   /// [_selfHostedTransport] in and returns the (LAN-only) invite string.
   Future<String?> _startSelfHost(String roomId) async {
+    // Fail closed before [buildRoomScopedClient] if product isolation
+    // forbids native PeerJS (createRoom already skips this path).
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      throw SelfHostException(SelfHostFailure.peerjsIsolation);
+    }
     final host = _ref.read(roomSignalingHostFactoryProvider)();
     final invite = await host.start(roomId: roomId);
     _selfHost = host;
@@ -616,17 +621,55 @@ class RoomManager extends StateNotifier<RoomState> {
   }
 
   /// Join an existing room. Accepts either a plain host peer code (cloud /
-  /// peerjs.com room) OR an `orbits-room:` invite for a self-hosted room — the
-  /// latter is detected and routed to [_joinSelfHosted]. For the cloud path we
-  /// dial the host's reliable channel, then announce ourselves with `room_join`;
-  /// the host replies with the channel list + roster.
-  Future<void> joinRoom(String roomCode, String displayName) async {
+  /// native carrier) OR an `orbits-room:` invite for a self-hosted room.
+  ///
+  /// When isolation still allows native PeerJS, an invite is routed to
+  /// [_joinSelfHosted] (room-scoped PeerJS client). When isolation
+  /// forbids PeerJS (web-only on native, or removed), join **fail-closes
+  /// before** [buildRoomScopedClient]: guests use the host peer code on
+  /// the default/native transport — same path [createRoom] documents
+  /// under isolation. Still host-plaintext. Never starts Hyperswarm
+  /// itself (rollout stays off).
+  ///
+  /// [isolationMode] defaults to the product [kPeerjsIsolationMode].
+  /// Tests pass an explicit mode; do not flip the live constant.
+  Future<void> joinRoom(
+    String roomCode,
+    String displayName, {
+    String? isolationMode,
+  }) async {
     final invite = RoomInvite.tryParse(roomCode);
     if (invite != null) {
-      await _joinSelfHosted(invite, displayName);
+      if (!_peerJsClientAllowed(isolationMode)) {
+        debugPrint(
+          '[room] joinRoom: isolation forbids PeerJS guest client; '
+          'joining host ${invite.roomId} on native/default transport',
+        );
+        await _joinByHostPeerCode(invite.roomId, displayName);
+        return;
+      }
+      await _joinSelfHosted(
+        invite,
+        displayName,
+        isolationMode: isolationMode,
+      );
       return;
     }
 
+    await _joinByHostPeerCode(roomCode, displayName);
+  }
+
+  /// Whether a room-scoped PeerJS client may be constructed for this
+  /// [isolationMode]. Null uses the product [kPeerjsIsolationMode] via
+  /// [peerjsAllowedOnNative] (must pass [kIsWeb]).
+  bool _peerJsClientAllowed(String? isolationMode) => isolationMode != null
+      ? peerjsAllowedOnNativeFor(isolationMode, isWeb: kIsWeb)
+      : peerjsAllowedOnNative(isWeb: kIsWeb);
+
+  /// Guest join by host peer code on the default/native [RoomTransport]
+  /// (cloud PeerJS when isolation allows it, DualStack/native otherwise).
+  /// Does not construct a room-scoped [PeerJsClient].
+  Future<void> _joinByHostPeerCode(String roomCode, String displayName) async {
     final self = _ref.read(localProfileProvider);
     final selfId = self?.peerId ?? _selfPeerId();
     final hostPeerId = normalizePeerId(roomCode);
@@ -695,7 +738,24 @@ class RoomManager extends StateNotifier<RoomState> {
   /// reachable endpoint (public first, then LAN) until both the signaling
   /// client opens AND a reliable channel to the host comes up; then announces
   /// `room_join` exactly like the cloud path.
-  Future<void> _joinSelfHosted(RoomInvite invite, String displayName) async {
+  ///
+  /// [isolationMode] is the same override [joinRoom] accepts. When PeerJS
+  /// is forbidden, this method must not call [buildRoomScopedClient] —
+  /// it falls through to [_joinByHostPeerCode] instead.
+  Future<void> _joinSelfHosted(
+    RoomInvite invite,
+    String displayName, {
+    String? isolationMode,
+  }) async {
+    if (!_peerJsClientAllowed(isolationMode)) {
+      debugPrint(
+        '[room] _joinSelfHosted: isolation forbids PeerJS; '
+        'joining by host peer code',
+      );
+      await _joinByHostPeerCode(invite.roomId, displayName);
+      return;
+    }
+
     final self = _ref.read(localProfileProvider);
     final selfId = self?.peerId ?? _selfPeerId();
     final hostPeerId = invite.roomId;
@@ -730,6 +790,14 @@ class RoomManager extends StateNotifier<RoomState> {
       roomId: roomId,
       hostPeerId: hostPeerId,
     );
+
+    // Fail closed immediately before any PeerJS client construction.
+    // Product [kPeerjsIsolationMode] is the live gate; [isolationMode]
+    // was already checked at the top of this method.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      await _joinByHostPeerCode(invite.roomId, displayName);
+      return;
+    }
 
     RoomScopedTransport? connected;
     for (final ep in endpoints) {

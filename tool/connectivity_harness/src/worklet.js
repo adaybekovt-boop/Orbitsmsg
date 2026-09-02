@@ -153,6 +153,7 @@ class Worklet {
     } catch {
       this._journal.backend = 'memory'
     }
+    this._hydrateAutobaseFromJournal()
     if (this.backend === 'loopback') {
       await this._loop.listen()
       this._loop.on('connection', (sock, info) => this._onConn(sock, info))
@@ -577,6 +578,13 @@ class Worklet {
       // binary / non-JSON control frames are not Autobase events
     }
   }
+
+  // Rebuild members from journal rows. Encrypted envelopes and message
+  // bodies are skipped. Safe to call after open, append, or IPC hydrate.
+  _hydrateAutobaseFromJournal(rows) {
+    const list = Array.isArray(rows) ? rows : this._journal.list()
+    return this._autobase.hydrateFromJournal(list)
+  }
 }
 
 async function handleIpcRequest(worklet, body) {
@@ -625,10 +633,25 @@ async function handleIpcRequest(worklet, body) {
     case 'refreshNetwork':
       await worklet.refreshNetwork()
       return {}
-    case 'journal.append':
-      return await worklet._journal.append(params)
-    case 'journal.list':
-      return { blocks: worklet._journal.list() }
+    case 'journal.append': {
+      const stored = await worklet._journal.append(params)
+      worklet._hydrateAutobaseFromJournal([stored])
+      return stored
+    }
+    case 'journal.list': {
+      const blocks = worklet._journal.list()
+      worklet._hydrateAutobaseFromJournal(blocks)
+      return { blocks }
+    }
+    case 'autobase.hydrate': {
+      const rows = Array.isArray(params.rows)
+        ? params.rows
+        : Array.isArray(params.blocks)
+          ? params.blocks
+          : worklet._journal.list()
+      const hydrated = worklet._hydrateAutobaseFromJournal(rows)
+      return { hydrated, ...worklet._autobase.snapshot() }
+    }
     case 'autobase.state':
       return worklet._autobase.snapshot()
     default:

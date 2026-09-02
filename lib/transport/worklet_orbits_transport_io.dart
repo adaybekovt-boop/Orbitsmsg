@@ -247,6 +247,7 @@ class WorkletOrbitsTransport implements OrbitsTransport {
         'journalDir': config.journalDir,
     });
     noisePublicKey = noisePublicKeyFromHex(result['noisePublicKey'] as String?);
+    await hydrateAutobase();
   }
 
   @override
@@ -352,6 +353,13 @@ class WorkletOrbitsTransport implements OrbitsTransport {
   Future<Map<String, Object?>> listAutobase() async {
     final result = await _client.request('autobase.state');
     return Map<String, Object?>.from(result);
+  }
+
+  @override
+  Future<void> hydrateAutobase([List<Map<String, Object?>>? rows]) async {
+    await _client.request('autobase.hydrate', {
+      if (rows != null) 'rows': rows,
+    });
   }
 
   void _onIpcEvent(Map<String, Object?> event) {

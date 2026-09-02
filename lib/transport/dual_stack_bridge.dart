@@ -117,7 +117,22 @@ class DualStackBridge {
   void attach() {
     _sub ??= transport.events.listen(_onEvent);
     hydrateFromJournal();
+    unawaited(_pushAutobaseToCarrier());
     unawaited(rememberKnownPeers());
+  }
+
+  /// Seed the worklet Autobase from local membership rows after restart.
+  /// Ciphertext envelopes stay in the journal — not this snapshot.
+  Future<void> _pushAutobaseToCarrier() async {
+    final rows = <Map<String, Object?>>[];
+    for (final rec in journal.records) {
+      if (rec.kind != ReplicationEventKind.roomMembershipChanged) continue;
+      if (!replicationFieldsAreSafe(rec.fields.keys)) continue;
+      rows.add(journalRecordToWorklet(rec));
+    }
+    try {
+      await transport.hydrateAutobase(rows);
+    } catch (_) {}
   }
 
   /// Restart path: replay the local journal into Hypercore and Autobase.
