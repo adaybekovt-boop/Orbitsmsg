@@ -18,23 +18,51 @@ import 'device_binding.dart';
 import 'discovery_secret_store.dart';
 import 'journal_file_io.dart' if (dart.library.html) 'journal_file_stub.dart';
 import 'loopback_transport.dart';
+import 'native_backend_policy.dart';
 import 'signed_capabilities.dart';
 import 'transport_api.dart';
 import 'transport_lifecycle.dart';
 import 'worklet_orbits_transport.dart';
 
+typedef WorkletSpawner =
+    Future<WorkletOrbitsTransport?> Function({String backend});
+
 class NativeTransportHost {
-  NativeTransportHost(this._ref);
+  NativeTransportHost(
+    this._ref, {
+    WorkletSpawner? spawnWorklet,
+    this.contactForbidsFallback = false,
+  }) : spawnWorklet = spawnWorklet ?? spawnWorkletTransport;
 
   final Ref _ref;
+  final WorkletSpawner spawnWorklet;
+  final bool contactForbidsFallback;
   OrbitsTransport? transport;
   String backend = 'none';
+  NativeBackendDecision? lastDecision;
   bool attached = false;
   TransportLifecycle? lifecycle;
   OpaqueWakeService? wake;
 
+  Map<String, Object?> get routeDiagnostics =>
+      lastDecision?.diagnostics() ??
+      <String, Object?>{
+        'backend': backend,
+        'reason': attached ? 'attached' : 'idle',
+        'rollout': hyperswarmRollout().name,
+      };
+
   Future<void> ensureStarted() async {
-    if (!isHyperswarmTransportEnabled()) return;
+    if (!isHyperswarmTransportEnabled()) {
+      lastDecision = selectNativeBackend(
+        rollout: hyperswarmRollout(),
+        peerjsFallbackEnabled: isPeerjsFallbackEnabled(),
+        contactForbidsFallback: contactForbidsFallback,
+        probe: const NativeBackendProbe(hyperswarmModuleAvailable: false),
+      );
+      backend = 'none';
+      return;
+    }
     if (attached) return;
     final auth = _ref.read(authNotifierProvider);
     if (auth is! AuthAuthed) return;
@@ -42,9 +70,10 @@ class NativeTransportHost {
     await discoverySecretStore.hydrate();
     await deviceRegistry.hydrate();
 
-    final worklet = await spawnWorkletTransport(backend: 'loopback');
-    transport = worklet ?? LoopbackOrbitsTransport();
-    backend = worklet != null ? 'worklet' : 'loopback';
+    final chosen = await _chooseTransport();
+    if (chosen == null) return;
+
+    transport = chosen;
 
     final journal = await openLocalFileJournal('local-device');
     final secret = discoverySecretStore.getOrCreateLocal();
@@ -98,7 +127,9 @@ class NativeTransportHost {
         ),
       );
 
-    _ref.read(connectionsNotifierProvider.notifier).bindNativeTransport(
+    _ref
+        .read(connectionsNotifierProvider.notifier)
+        .bindNativeTransport(
           transport!,
           journal: MemoryJournal('local-device'),
           deviceId: 'local-device',
@@ -121,6 +152,93 @@ class NativeTransportHost {
     );
     wake = OpaqueWakeService(onAccepted: (_) => lifecycle!.onOpaqueWake());
     attached = true;
+  }
+
+  Future<OrbitsTransport?> _chooseTransport() async {
+    WorkletOrbitsTransport? hyperswarm;
+    var moduleAvailable = false;
+    var started = false;
+    try {
+      hyperswarm = await spawnWorklet(backend: 'hyperswarm');
+      moduleAvailable = hyperswarm != null;
+      started = hyperswarm != null;
+    } catch (_) {
+      moduleAvailable = false;
+      started = false;
+    }
+
+    var decision = selectNativeBackend(
+      rollout: hyperswarmRollout(),
+      peerjsFallbackEnabled: isPeerjsFallbackEnabled(),
+      contactForbidsFallback: contactForbidsFallback,
+      probe: NativeBackendProbe(
+        hyperswarmModuleAvailable: moduleAvailable,
+        hyperswarmStarted: started,
+      ),
+    );
+
+    if (decision.backend == NativeBackendKind.hyperswarm &&
+        hyperswarm != null) {
+      lastDecision = decision;
+      backend = 'hyperswarm';
+      return hyperswarm;
+    }
+
+    if (decision.failure == NativeBackendFailure.fallbackForbidden) {
+      lastDecision = decision;
+      backend = 'none';
+      return null;
+    }
+
+    if (decision.backend == NativeBackendKind.peerjs) {
+      lastDecision = decision;
+      backend = 'peerjs';
+      return null;
+    }
+
+    try {
+      final loopback = await spawnWorklet(backend: 'loopback');
+      lastDecision = decision;
+      backend = loopback != null ? 'worklet' : 'loopback';
+      return loopback ?? LoopbackOrbitsTransport();
+    } catch (_) {
+      lastDecision = selectNativeBackend(
+        rollout: hyperswarmRollout(),
+        peerjsFallbackEnabled: isPeerjsFallbackEnabled(),
+        contactForbidsFallback: contactForbidsFallback,
+        probe: const NativeBackendProbe(
+          hyperswarmModuleAvailable: true,
+          hyperswarmStarted: false,
+        ),
+      );
+      if (contactForbidsFallback) {
+        backend = 'none';
+        return null;
+      }
+      backend = 'loopback';
+      return LoopbackOrbitsTransport();
+    }
+  }
+
+  Future<void> recoverAfterCrash() async {
+    attached = false;
+    try {
+      await transport?.stop();
+    } catch (_) {}
+    transport = null;
+    lifecycle = null;
+    await ensureStarted();
+  }
+
+  Future<void> shutdown() async {
+    await lifecycle?.onBackground();
+    try {
+      await transport?.stop();
+    } catch (_) {}
+    transport = null;
+    lifecycle = null;
+    attached = false;
+    backend = 'none';
   }
 
   Future<void> onBackground() async {
