@@ -69,4 +69,70 @@ void main() {
     expect(rejoined.accepts('d2'), isTrue);
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
+
+  test('removed writer and conflicting roles still converge', () {
+    final events = [
+      const RoomEvent(
+        writerId: 'a',
+        seq: 0,
+        kind: 'membership',
+        payload: {'peerId': 'a', 'action': 'join', 'displayName': 'A'},
+      ),
+      const RoomEvent(
+        writerId: 'b',
+        seq: 0,
+        kind: 'membership',
+        payload: {'peerId': 'b', 'action': 'join', 'displayName': 'B'},
+      ),
+      const RoomEvent(
+        writerId: 'a',
+        seq: 1,
+        kind: 'role',
+        payload: {'peerId': 'b', 'role': 'mod'},
+      ),
+      const RoomEvent(
+        writerId: 'b',
+        seq: 1,
+        kind: 'role',
+        payload: {'peerId': 'b', 'role': 'member'},
+      ),
+      const RoomEvent(
+        writerId: 'b',
+        seq: 2,
+        kind: 'message',
+        payload: {'id': 'm-old', 'text': 'stale'},
+      ),
+    ];
+    final left = AutobaseProjection()..applyAll(events);
+    left.revokeWriter('b');
+    left.apply(
+      const RoomEvent(
+        writerId: 'b',
+        seq: 3,
+        kind: 'message',
+        payload: {'id': 'm-revoked', 'text': 'should-drop'},
+      ),
+    );
+    final right = AutobaseProjection()..applyAll(events.reversed);
+    right.revokeWriter('b');
+    expect(left.state.roles['b'], right.state.roles['b']);
+    expect(left.state.messages.any((m) => m['id'] == 'm-revoked'), isFalse);
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('skipped-epoch recovery is bounded and attachments wrap per epoch', () {
+    var epoch = SenderKeyEpoch(
+      epochId: 1,
+      memberDeviceIds: {'d1', 'd2'},
+      epochKey: const [4, 5, 6],
+    );
+    epoch = epoch.rotateAfterRemoval('d2', const [7, 8, 9]);
+    expect(epoch.canRecoverSkipped(1), isTrue);
+    expect(epoch.canRecoverSkipped(1 - 10), isFalse);
+    final wrapped = epoch.wrapAttachmentKey(const [1, 2, 3]);
+    expect(epoch.unwrapAttachmentKey(wrapped, 'd1'), [1, 2, 3]);
+    expect(() => epoch.unwrapAttachmentKey(wrapped, 'd2'), throwsStateError);
+    expect(epoch.toPersistedJson().containsKey('epochKey'), isFalse);
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
 }
