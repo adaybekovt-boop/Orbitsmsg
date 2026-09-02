@@ -306,12 +306,16 @@ void main() {
     }
     final launch = resolveBareRuntime(worklet, bundledBare: probe);
     expect(bareSpawnExecutableIsLocal(launch.executable), isTrue);
-    if (bareWorkletGraphPresent(worklet)) {
-      expect(launch.kind, 'bare');
-      expect(launch.executable, probe.absolute.path);
-    } else {
-      expect(launch.kind, 'node');
-    }
+    // Unpinned local fixture is refused. Node harness may still run.
+    expect(launch.kind, 'node');
+    expect(launch.executable, isNot(probe.absolute.path));
+    expect(
+      bareBinaryAcceptedForSpawn(
+        probe,
+        expectedSha256: sha256HexOfFile(probe),
+      ),
+      isTrue,
+    );
 
     final remote = resolveBareRuntime(
       worklet,

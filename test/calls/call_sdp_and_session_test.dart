@@ -92,7 +92,7 @@ void main() {
     expect(
       acceptInboundCallSignal(
         from: 'ORBIT-AAAAAAAAAAAAAAAA',
-        signal: CallSignal(type: CallSignalType.iceCandidate, callId: 'stale'),
+        signal: const CallSignal(type: CallSignalType.iceCandidate, callId: 'stale'),
         activeRemotePeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
         sessionCallId: 'c1',
         sessionActive: true,

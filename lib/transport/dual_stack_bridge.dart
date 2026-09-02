@@ -1939,7 +1939,7 @@ class DualStackBridge {
       await transport.markAuthenticated(norm);
     } catch (_) {}
     if (tofuCheck == null &&
-        tofu?.status == PinStatus.newPin &&
+        tofu.status == PinStatus.newPin &&
         binding.identityPublicKey.isNotEmpty) {
       try {
         await setPin(norm, binding.identityPublicKey);

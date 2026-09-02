@@ -34,7 +34,7 @@ class OrbitsIpcCodec {
   static Uint8List encode(OrbitsIpcMessage message) {
     final payload = utf8.encode(jsonEncode(message.body));
     if (payload.length > kMaxIpcFrameBytes) {
-      throw FormatException('IPC encode exceeds $kMaxIpcFrameBytes');
+      throw const FormatException('IPC encode exceeds max frame');
     }
     final out = BytesBuilder(copy: false);
     final header = ByteData(10);
@@ -50,7 +50,7 @@ class OrbitsIpcCodec {
   List<OrbitsIpcMessage> add(List<int> chunk) {
     if (_buf.length + chunk.length > kMaxIpcFrameBytes + 10) {
       _buf.clear();
-      throw FormatException('IPC pending exceeds $kMaxIpcFrameBytes');
+      throw const FormatException('IPC pending exceeds max frame');
     }
     _buf.add(chunk);
     final data = _buf.takeBytes();
@@ -69,13 +69,13 @@ class OrbitsIpcCodec {
       final type = view.getUint8(offset + 5);
       final len = view.getUint32(offset + 6);
       if (len > kMaxIpcFrameBytes) {
-        throw FormatException('IPC frame exceeds $kMaxIpcFrameBytes');
+        throw const FormatException('IPC frame exceeds max');
       }
       if (offset + 10 + len > data.length) break;
       final payload = data.sublist(offset + 10, offset + 10 + len);
       final decoded = jsonDecode(utf8.decode(payload));
       if (decoded is! Map) {
-        throw FormatException('IPC payload must be a JSON object');
+        throw const FormatException('IPC payload must be a JSON object');
       }
       out.add(
         OrbitsIpcMessage(
