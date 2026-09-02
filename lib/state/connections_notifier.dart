@@ -415,9 +415,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   // ─── Public API ────────────────────────────────────────────────
 
-  /// Look up a live connection by peerId + channel. Null if never attached
-  /// or already torn down.
+  /// Look up a live connection by peerId + channel. Null if never attached,
+  /// already torn down, or isolation forbids PeerJS. Fail closed: leftover
+  /// `_bindings` must not leak a [PeerDataConnection] when native isolation
+  /// disallows PeerJS. Product [kPeerjsIsolationMode] stays default-live.
   PeerDataConnection? getConn(String remoteId, String channel) {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return null;
     final key = connKey(remoteId, channel);
     return _bindings[key]?.conn;
   }
@@ -693,6 +696,15 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// accepted [PeerDataConnection]. Idempotent: if a different connection
   /// already holds the same key, glare resolution decides which to keep.
   Future<void> attachConn(PeerDataConnection conn, String channel) async {
+    // Isolation fail-closed: a leftover PeerDataConnection must not wire
+    // onOpen/onData, insert `_bindings`, or mark the peer online.
+    // Product [kPeerjsIsolationMode] stays default-live.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      try {
+        unawaited(conn.close());
+      } catch (_) {}
+      return;
+    }
     final remoteId = normalizePeerId(conn.peer);
     if (remoteId.isEmpty) return;
     if (_messaging.isPeerBlocked(remoteId)) {
@@ -1026,9 +1038,13 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   void _refreshConnectedIds() {
     final next = <String>{};
-    for (final b in _bindings.values) {
-      if (b.channel == 'reliable' && b.conn.open) {
-        next.add(normalizePeerId(b.conn.peer));
+    // Isolation fail-closed: leftover PeerJS bindings must not light the
+    // green dot. Native DualStack presence is still valid.
+    if (peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      for (final b in _bindings.values) {
+        if (b.channel == 'reliable' && b.conn.open) {
+          next.add(normalizePeerId(b.conn.peer));
+        }
       }
     }
     next.addAll(_dual?.connected ?? const <String>{});

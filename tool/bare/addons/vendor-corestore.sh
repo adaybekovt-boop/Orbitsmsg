@@ -31,7 +31,8 @@ if [[ -z "$SRC" ]]; then
   echo "kHolepunchCorestoreAddonLinked stays false"
   exit 0
 fi
-if [[ "$SRC" == http://* || "$SRC" == https://* ]]; then
+# Any scheme (http, https, ftp, file, HTTP://, …) — never a remote fetch.
+if [[ "$SRC" == http://* || "$SRC" == https://* || "$SRC" == *://* ]]; then
   echo "refusing remote Corestore addon URL" >&2
   exit 2
 fi

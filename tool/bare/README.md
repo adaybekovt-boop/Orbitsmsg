@@ -31,3 +31,6 @@ Node. `ORBITS_BARE_BIN` remains an explicit experimental override.
 - The worklet stays `require('node:fs')`; Bare resolves those specifiers
   through `package.json` import maps to `bare-*`. `worklet.js` loads
   `bare-process` only when the `process` global is missing.
+- Corestore addon vendor/embed (`addons/vendor-corestore.sh`,
+  `addons/embed-corestore.sh`) copy a local `.bare`/`.node` only — they
+  refuse any `://` URL and leave `kHolepunchCorestoreAddonLinked` false.

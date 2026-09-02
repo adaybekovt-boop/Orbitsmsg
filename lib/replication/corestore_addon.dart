@@ -20,14 +20,36 @@ const String kCorestoreBareAddonSlot = 'tool/bare/addons/corestore.bare';
 const String kCorestoreAddonManifestPath =
     'tool/bare/addons/CORESTORE.manifest';
 
+/// Local filesystem addon path. Any `://` URL is refused — never fetched.
+bool corestoreAddonPathIsLocal(String path) {
+  final p = path.trim();
+  if (p.isEmpty) return false;
+  if (p.contains('://')) return false;
+  return true;
+}
+
 bool corestoreAddonPresent({String path = kCorestoreAddonSlot}) {
   if (kCorestoreAddonRemoteFetch) return false;
+  if (!corestoreAddonPathIsLocal(path)) return false;
   return File(path).existsSync();
 }
 
 bool corestoreBareAddonPresent({String path = kCorestoreBareAddonSlot}) {
   if (kCorestoreAddonRemoteFetch) return false;
+  if (!corestoreAddonPathIsLocal(path)) return false;
   return File(path).existsSync();
+}
+
+/// Vendor/embed scripts must refuse every URL scheme and never curl/wget.
+bool corestoreAddonScriptForbidsRemoteFetch(String script) {
+  return script.contains('NEVER downloads') &&
+      script.contains('refusing remote Corestore addon URL') &&
+      script.contains('http://*') &&
+      script.contains('https://*') &&
+      script.contains('*://*') &&
+      script.contains('kHolepunchCorestoreAddonLinked stays false') &&
+      !script.contains('curl') &&
+      !script.contains('wget');
 }
 
 bool corestoreAddonManifestForbidsRemoteFetch(Map<String, Object?> manifest) {

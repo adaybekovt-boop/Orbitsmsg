@@ -81,23 +81,51 @@ void main() {
     expect(manifest['shipped'], isFalse);
     expect(kBareBinaryShipped, isFalse);
     expect(kBareWorkletRunsOnBareRuntime, isTrue);
-    expect(bareOsSlot(osArch: 'linux-x64'), 'tool/bare/linux-x64/bare');
-    expect(bareOsSlot(osArch: 'windows-x64'), 'tool/bare/windows-x64/bare.exe');
+    expect(bareOsSlotMapIsComplete(kBareOsSlots), isTrue);
+    expect(
+      kBareOsSlots.keys.toSet(),
+      {
+        'linux-x64',
+        'linux-arm64',
+        'darwin-x64',
+        'darwin-arm64',
+        'windows-x64',
+        'android-arm64',
+        'ios-arm64',
+      },
+    );
+    final binaries = Map<String, Object?>.from(manifest['binaries'] as Map);
+    for (final entry in kBareOsSlots.entries) {
+      expect(binaries[entry.key], entry.value, reason: entry.key);
+      expect(bareOsSlot(osArch: entry.key), entry.value, reason: entry.key);
+      expect(bareSpawnExecutableIsLocal(entry.value), isTrue, reason: entry.key);
+      expect(entry.value, isNot(contains('://')));
+    }
     expect(manifest['vendor'], isA<Map>());
     expect((manifest['vendor'] as Map)['version'], '1.31.0');
     expect(File('tool/bare/vendor.sh').existsSync(), isTrue);
     final vendor = File('tool/bare/vendor.sh').readAsStringSync();
     expect(vendor, contains('NEVER invoked from Dart'));
     expect(vendor, contains('no sha256 pin for'));
+    final embed = File('tool/bare/embed.sh').readAsStringSync();
+    expect(embed, contains('NEVER downloads'));
+    for (final slot in kBareOsSlots.keys) {
+      expect(vendor, contains(slot), reason: slot);
+      expect(embed, contains(slot), reason: slot);
+    }
+    expect(bareOsSlotMapIsComplete({'linux-x64': 'tool/bare/linux-x64/bare'}), isFalse);
+    expect(
+      bareOsSlotMapIsComplete({
+        ...kBareOsSlots,
+        'linux-x64': 'https://example.invalid/bare',
+      }),
+      isFalse,
+    );
     expect(
       File('lib/transport/bare_runtime.dart').readAsStringSync(),
       isNot(contains('github.com')),
     );
     expect(File('tool/bare/embed.sh').existsSync(), isTrue);
-    expect(
-      File('tool/bare/embed.sh').readAsStringSync(),
-      contains('NEVER downloads'),
-    );
     expect(
       File('.github/workflows/build.yml').readAsStringSync(),
       contains('tool/bare/embed.sh linux-x64'),
@@ -180,6 +208,9 @@ void main() {
     ));
 
     final launch = resolveBareRuntime(worklet);
+    expect(bareSpawnExecutableIsLocal(launch.executable), isTrue);
+    expect(launch.executable, isNot(contains('://')));
+    expect(launch.arguments, isNot(contains(contains('://'))));
     final haveBin = File(bareOsSlot()).existsSync();
     final haveGraph = bareWorkletGraphPresent(worklet);
     if (haveBin && haveGraph) {
@@ -206,8 +237,54 @@ void main() {
       bundledBareCandidates(osArch: 'windows-x64'),
       contains('packages/orbits_transport_windows/windows/bare.exe'),
     );
+    expect(
+      bundledBareCandidates(osArch: 'darwin-x64'),
+      contains('packages/orbits_transport_macos/macos/bare-x64'),
+    );
+    expect(
+      bundledBareCandidates(osArch: 'darwin-arm64'),
+      contains('packages/orbits_transport_macos/macos/bare'),
+    );
+    expect(
+      bundledBareCandidates(osArch: 'android-arm64'),
+      contains('packages/orbits_transport_android/android/src/main/assets/bare'),
+    );
+    expect(
+      bundledBareCandidates(osArch: 'ios-arm64'),
+      contains('packages/orbits_transport_ios/ios/bare'),
+    );
+    expect(
+      bundledBareCandidates(osArch: 'linux-x64'),
+      contains('packages/orbits_transport_linux/linux/bare'),
+    );
+    const pluginHosts = {
+      'linux-x64': 'packages/orbits_transport_linux/linux/bare',
+      'linux-arm64': 'packages/orbits_transport_linux/linux/bare-arm64',
+      'darwin-x64': 'packages/orbits_transport_macos/macos/bare-x64',
+      'darwin-arm64': 'packages/orbits_transport_macos/macos/bare',
+      'windows-x64': 'packages/orbits_transport_windows/windows/bare.exe',
+      'android-arm64':
+          'packages/orbits_transport_android/android/src/main/assets/bare',
+      'ios-arm64': 'packages/orbits_transport_ios/ios/bare',
+    };
+    expect(pluginHosts.keys.toSet(), kBareOsSlots.keys.toSet());
+    for (final os in kBareOsSlots.keys) {
+      final candidates = bundledBareCandidates(osArch: os);
+      expect(candidates, contains(kBareOsSlots[os]), reason: os);
+      expect(candidates, contains(pluginHosts[os]), reason: os);
+      for (final c in candidates) {
+        expect(bareSpawnExecutableIsLocal(c), isTrue, reason: '$os $c');
+        expect(c, isNot(contains('://')), reason: '$os $c');
+      }
+    }
+    expect(bareSpawnExecutableIsLocal('https://example.invalid/bare'), isFalse);
+    expect(bareSpawnExecutableIsLocal('http://example.invalid/bare'), isFalse);
+    expect(bareSpawnExecutableIsLocal('file://tmp/bare'), isFalse);
+    expect(bareSpawnExecutableIsLocal('node'), isTrue);
     expect(isLocalBarePath('http://example.invalid/bare'), isFalse);
     expect(isLocalBarePath('https://example.invalid/bare'), isFalse);
+    expect(isLocalBarePath('HTTP://example.invalid/bare'), isFalse);
+    expect(isLocalBarePath('ftp://example.invalid/bare'), isFalse);
     expect(isLocalBarePath('file://tmp/bare'), isFalse);
     expect(isLocalBarePath(''), isFalse);
     expect(isLocalBarePath(worklet.path), isTrue);
@@ -228,12 +305,21 @@ void main() {
       return;
     }
     final launch = resolveBareRuntime(worklet, bundledBare: probe);
+    expect(bareSpawnExecutableIsLocal(launch.executable), isTrue);
     if (bareWorkletGraphPresent(worklet)) {
       expect(launch.kind, 'bare');
       expect(launch.executable, probe.absolute.path);
     } else {
       expect(launch.kind, 'node');
     }
+
+    final remote = resolveBareRuntime(
+      worklet,
+      bundledBare: File('https://example.invalid/bare'),
+    );
+    expect(bareSpawnExecutableIsLocal(remote.executable), isTrue);
+    expect(remote.executable, isNot(contains('://')));
+    expect(remote.executable, isNot('https://example.invalid/bare'));
   });
 }
 

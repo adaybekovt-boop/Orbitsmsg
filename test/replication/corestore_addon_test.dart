@@ -24,6 +24,14 @@ void main() {
       isTrue,
     );
     expect(manifest['linked'], isFalse);
+    expect(manifest['remoteFetch'], isFalse);
+    expect(manifest['downloadUrl'], isNull);
+    expect(manifest['bundleUrl'], isNull);
+    expect(kCorestoreAddonSlot, isNot(contains('://')));
+    expect(kCorestoreBareAddonSlot, isNot(contains('://')));
+    expect(corestoreAddonPathIsLocal(kCorestoreAddonSlot), isTrue);
+    expect(corestoreAddonPathIsLocal(kCorestoreBareAddonSlot), isTrue);
+    expect(corestoreAddonPathIsLocal('https://evil.example/corestore.bare'), isFalse);
     expect(manifest['bareSlot'], kCorestoreBareAddonSlot);
     expect(
       File('tool/connectivity_harness/src/corestore_journal.js').readAsStringSync(),
@@ -58,20 +66,99 @@ void main() {
       contains('_openWithCtor'),
     );
     final vendor = File('tool/bare/addons/vendor-corestore.sh').readAsStringSync();
-    expect(vendor, contains('NEVER downloads'));
-    expect(vendor, contains('kHolepunchCorestoreAddonLinked stays false'));
-    expect(vendor, isNot(contains('curl')));
-    expect(vendor, isNot(contains('wget')));
-    expect(vendor, contains('refusing remote Corestore addon URL'));
+    expect(corestoreAddonScriptForbidsRemoteFetch(vendor), isTrue);
+    expect(vendor, isNot(contains('urllib.request')));
+    expect(vendor, isNot(contains('npm install')));
+    expect(vendor, isNot(contains('github.com')));
     final embed = File('tool/bare/addons/embed-corestore.sh').readAsStringSync();
-    expect(embed, contains('NEVER downloads'));
-    expect(embed, contains('kHolepunchCorestoreAddonLinked stays false'));
-    expect(embed, isNot(contains('curl')));
-    expect(embed, isNot(contains('wget')));
-    expect(embed, contains('refusing remote Corestore addon URL'));
+    expect(corestoreAddonScriptForbidsRemoteFetch(embed), isTrue);
+    expect(embed, isNot(contains('urllib.request')));
+    expect(embed, isNot(contains('npm install')));
+    expect(embed, isNot(contains('github.com')));
     expect(embed, contains('packages/orbits_transport_linux'));
     expect(embed, contains('linux/corestore.bare'));
     expect(embed, contains('src/main/assets/corestore.bare'));
+  });
+
+  test('vendor-corestore.sh and embed-corestore.sh refuse remote URLs at runtime', () {
+    expect(kHolepunchCorestoreAddonLinked, isFalse);
+    expect(corestoreAddonIsProductionReady(), isFalse);
+    const urls = [
+      'https://example.invalid/corestore.bare',
+      'http://example.invalid/corestore.node',
+      'HTTP://example.invalid/corestore.bare',
+      'ftp://example.invalid/corestore.bare',
+      'file://tmp/corestore.bare',
+    ];
+    for (final script in [
+      'tool/bare/addons/vendor-corestore.sh',
+      'tool/bare/addons/embed-corestore.sh',
+    ]) {
+      for (final url in urls) {
+        final result = Process.runSync('bash', [script, url]);
+        expect(result.exitCode, 2, reason: '$script $url');
+        expect(
+          '${result.stderr}${result.stdout}',
+          contains('refusing remote Corestore addon URL'),
+          reason: '$script $url',
+        );
+        expect(File(kCorestoreAddonSlot).existsSync(), isFalse);
+        expect(File(kCorestoreBareAddonSlot).existsSync(), isFalse);
+      }
+    }
+    final leaked = Process.runSync(
+      'bash',
+      ['tool/bare/addons/vendor-corestore.sh'],
+      environment: {
+        ...Platform.environment,
+        'CORESTORE_ADDON': 'https://example.invalid/corestore.bare',
+      },
+    );
+    expect(leaked.exitCode, 2);
+    expect(
+      '${leaked.stderr}${leaked.stdout}',
+      contains('refusing remote Corestore addon URL'),
+    );
+  });
+
+  test('a local addon file does not flip production-ready or remote-fetch', () {
+    expect(kHolepunchCorestoreAddonLinked, isFalse);
+    expect(kCorestoreAddonRemoteFetch, isFalse);
+    expect(corestoreAddonIsProductionReady(), isFalse);
+    expect(corestoreAddonPresent(path: 'https://evil.example/corestore.node'), isFalse);
+    expect(
+      corestoreBareAddonPresent(path: 'https://evil.example/corestore.bare'),
+      isFalse,
+    );
+    expect(corestoreAddonPresent(path: 'file://tmp/corestore.node'), isFalse);
+    expect(corestoreAddonManifestForbidsRemoteFetch({
+      'remoteFetch': true,
+      'downloadUrl': null,
+      'bundleUrl': null,
+      'linked': false,
+    }), isFalse);
+    expect(corestoreAddonManifestForbidsRemoteFetch({
+      'remoteFetch': false,
+      'downloadUrl': 'https://evil.example/corestore.bare',
+      'bundleUrl': null,
+      'linked': false,
+    }), isFalse);
+    expect(corestoreAddonManifestForbidsRemoteFetch({
+      'remoteFetch': false,
+      'downloadUrl': null,
+      'bundleUrl': null,
+      'linked': true,
+    }), isFalse);
+    final tmp = File(
+      '${Directory.systemTemp.path}/orbits-corestore-probe-${DateTime.now().microsecondsSinceEpoch}.node',
+    );
+    tmp.writeAsBytesSync(const [0]);
+    addTearDown(() {
+      if (tmp.existsSync()) tmp.deleteSync();
+    });
+    expect(corestoreAddonPresent(path: tmp.path), isTrue);
+    expect(corestoreAddonIsProductionReady(), isFalse);
+    expect(kHolepunchCorestoreAddonLinked, isFalse);
   });
 
   test('optional Corestore addon copies into the app bundle when a local slot exists', () {

@@ -1,5 +1,7 @@
 // Phase 14 leftover: PeerConnectionManager.start() must fail closed on
 // isolation before setSignalingHost, MultiTabLock, or PeerJsClient.
+// reconnectNow / host rotation / _scheduleReconnect must not rotate or
+// reconnect a PeerJS client when isolation forbids.
 // Product [kPeerjsIsolationMode] stays default-live.
 
 import 'dart:io';
@@ -79,6 +81,60 @@ void main() {
     expect(startFn.indexOf('cb.setSignalingHost'), greaterThan(gateIdx));
     expect(startFn.indexOf('multiTabLock = MultiTabLock'), greaterThan(gateIdx));
     expect(startFn.indexOf('_createPeerNow'), greaterThan(gateIdx));
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(kPeerjsSupportWindowOpen, isTrue);
+  });
+
+  test('reconnectNow is gated with peerjsAllowedOnNative(isWeb: kIsWeb)', () {
+    final src =
+        File('lib/peer/peer_connection_manager.dart').readAsStringSync();
+    final reconnectNow = src
+        .split('void reconnectNow()')[1]
+        .split('void _scheduleReconnect')[0];
+    expect(reconnectNow, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(reconnectNow, isNot(contains('peerjsAllowedOnNative()')));
+    final gateIdx =
+        reconnectNow.indexOf('peerjsAllowedOnNative(isWeb: kIsWeb)');
+    expect(gateIdx, greaterThanOrEqualTo(0));
+    expect(reconnectNow.indexOf('p.reconnect()'), greaterThan(gateIdx));
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(kPeerjsSupportWindowOpen, isTrue);
+  });
+
+  test(
+      '_handleError host rotation is gated with peerjsAllowedOnNative(isWeb: kIsWeb)',
+      () {
+    final src =
+        File('lib/peer/peer_connection_manager.dart').readAsStringSync();
+    final handleError = src.split('void _handleError(PeerError err)')[1];
+    expect(handleError, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(handleError, isNot(contains('peerjsAllowedOnNative()')));
+    final rotateIdx = handleError.indexOf('canRotateHosts');
+    expect(rotateIdx, greaterThanOrEqualTo(0));
+    final rotateBlock = handleError.substring(rotateIdx);
+    final gateIdx =
+        rotateBlock.indexOf('peerjsAllowedOnNative(isWeb: kIsWeb)');
+    expect(gateIdx, greaterThanOrEqualTo(0));
+    expect(rotateBlock.indexOf('cb.setSignalingHost'), greaterThan(gateIdx));
+    expect(rotateBlock.indexOf('swapPeerId'), greaterThan(gateIdx));
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(kPeerjsSupportWindowOpen, isTrue);
+  });
+
+  test(
+      '_scheduleReconnect is gated with peerjsAllowedOnNative(isWeb: kIsWeb)',
+      () {
+    final src =
+        File('lib/peer/peer_connection_manager.dart').readAsStringSync();
+    final schedule = src
+        .split('void _scheduleReconnect(String reason)')[1]
+        .split('Future<PeerJsClient> _createPeerNow')[0];
+    expect(schedule, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(schedule, isNot(contains('peerjsAllowedOnNative()')));
+    final gateIdx = schedule.indexOf('peerjsAllowedOnNative(isWeb: kIsWeb)');
+    expect(gateIdx, greaterThanOrEqualTo(0));
+    expect(schedule.indexOf('_reconnectTimer = Timer'), greaterThan(gateIdx));
+    expect(schedule.indexOf('cur.reconnect()'), greaterThan(gateIdx));
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
     expect(kPeerjsSupportWindowOpen, isTrue);
   });

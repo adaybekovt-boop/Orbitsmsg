@@ -279,6 +279,50 @@ void main() {
     expect(peerjsAllowedOnNative(), isTrue);
   });
 
+  test('attachConn and getConn fail closed when isolation disallows PeerJS',
+      () {
+    final src = File('lib/state/connections_notifier.dart').readAsStringSync();
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(peerjsAllowedOnNative(), isTrue);
+
+    final getConn = src
+        .split('PeerDataConnection? getConn')[1]
+        .split('Future<bool> sendEncrypted')[0];
+    expect(getConn, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(getConn, isNot(contains('peerjsAllowedOnNative()')));
+    final getGate = getConn.indexOf('peerjsAllowedOnNative(isWeb: kIsWeb)');
+    final getLookup = getConn.indexOf('_bindings[key]');
+    expect(getGate, greaterThanOrEqualTo(0));
+    expect(getLookup, greaterThan(getGate));
+
+    final attach = src
+        .split('Future<void> attachConn')[1]
+        .split('bool _resolveGlare')[0];
+    expect(attach, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(attach, isNot(contains('peerjsAllowedOnNative()')));
+    final attachGate = attach.indexOf('peerjsAllowedOnNative(isWeb: kIsWeb)');
+    final attachClose = attach.indexOf('conn.close()');
+    final attachBind = attach.indexOf('_bindings[key] = binding');
+    final attachOpen = attach.indexOf('onOpen.listen');
+    final attachData = attach.indexOf('onData.listen');
+    expect(attachGate, greaterThanOrEqualTo(0));
+    expect(attachClose, greaterThan(attachGate));
+    expect(attachBind, greaterThan(attachGate));
+    expect(attachOpen, greaterThan(attachGate));
+    expect(attachData, greaterThan(attachGate));
+    expect(attachClose, lessThan(attachBind));
+
+    final refresh = src
+        .split('void _refreshConnectedIds()')[1]
+        .split('void _bindToCurrentPeer()')[0];
+    expect(refresh, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
+    expect(refresh, contains('_dual?.connected'));
+    final refreshGate = refresh.indexOf('peerjsAllowedOnNative(isWeb: kIsWeb)');
+    final refreshBindings = refresh.indexOf('_bindings.values');
+    expect(refreshGate, greaterThanOrEqualTo(0));
+    expect(refreshBindings, greaterThan(refreshGate));
+  });
+
   test('RoomScopedTransport skips PeerJS when isolation disallows it', () {
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
     expect(

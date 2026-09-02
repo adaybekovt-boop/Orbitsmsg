@@ -6,5 +6,5 @@
   "linked": false,
   "slot": "tool/bare/addons/corestore.node",
   "bareSlot": "tool/bare/addons/corestore.bare",
-  "note": "Run tool/bare/addons/vendor-corestore.sh with a local .node or .bare. Production must not download a remote addon. JS require('corestore') is optional and is not this flag. Bare 1.31 needs a .bare addon, not Node's .node. linked stays false until every OS ships the addon."
+  "note": "Run tool/bare/addons/vendor-corestore.sh with a local .node or .bare. Vendor/embed refuse any :// URL (http, https, ftp, file). Production must not download a remote addon. JS require('corestore') is optional and is not this flag. Bare 1.31 needs a .bare addon, not Node's .node. linked stays false until every OS ships the addon."
 }

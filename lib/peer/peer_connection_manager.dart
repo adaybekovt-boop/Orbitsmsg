@@ -225,6 +225,7 @@ class PeerConnectionManager {
 
   /// Trigger a reconnect on the current peer (network-change path).
   void reconnectNow() {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
     final p = peer;
     if (p == null || p.destroyed) return;
     try {
@@ -243,6 +244,7 @@ class PeerConnectionManager {
   //   - every other error → show via mapPeerError
 
   void _scheduleReconnect(String reason) {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
     if (isDropInProgress) return;
     final p = peer;
     if (p != null && p.open && reason != 'offline') return;
@@ -392,6 +394,12 @@ class PeerConnectionManager {
       if (hosts != null &&
           canRotateHosts(env, hosts) &&
           networkErrStreak >= 2) {
+        // Isolation must not rotate signaling hosts or rebuild a PeerJS
+        // client. Product default-live still takes this branch.
+        if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+          cb.setStatus?.call('disconnected');
+          return;
+        }
         networkErrStreak = 0;
         signalingIndex = (signalingIndex + 1) % hosts.length;
         _hostRotationCount += 1;

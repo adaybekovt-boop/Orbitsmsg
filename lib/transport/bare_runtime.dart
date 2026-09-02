@@ -28,6 +28,8 @@ class BareRuntimeLaunch {
   bool get isBare => kind == 'bare';
 }
 
+/// Complete shipping OS list. Keep in sync with `BARE.manifest` `binaries`.
+/// None of these paths are URLs; Dart spawn never downloads a slot.
 const Map<String, String> kBareOsSlots = {
   'linux-x64': 'tool/bare/linux-x64/bare',
   'linux-arm64': 'tool/bare/linux-arm64/bare',
@@ -37,6 +39,35 @@ const Map<String, String> kBareOsSlots = {
   'android-arm64': 'tool/bare/android-arm64/bare',
   'ios-arm64': 'tool/bare/ios-arm64/bare',
 };
+
+/// True when [slots] lists every shipping OS and every path is local.
+bool bareOsSlotMapIsComplete(Map<String, String> slots) {
+  const required = <String>{
+    'linux-x64',
+    'linux-arm64',
+    'darwin-x64',
+    'darwin-arm64',
+    'windows-x64',
+    'android-arm64',
+    'ios-arm64',
+  };
+  if (slots.length != required.length) return false;
+  for (final key in required) {
+    final path = slots[key];
+    if (path == null || path.isEmpty || !bareSpawnExecutableIsLocal(path)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/// `Process.start` executable: local path or `node`. Never a URL.
+bool bareSpawnExecutableIsLocal(String executable) {
+  final p = executable.trim();
+  if (p.isEmpty) return false;
+  if (p.contains('://')) return false;
+  return true;
+}
 
 String currentBareOsArch() {
   switch (Abi.current()) {

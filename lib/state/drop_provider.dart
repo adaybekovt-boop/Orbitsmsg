@@ -8,11 +8,13 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/orbits_drop.dart';
 import '../peer/helpers.dart';
 import '../storage/db.dart' as db;
+import '../transport/peerjs_window.dart';
 import '../transport/transport_api.dart';
 import 'auth_notifier.dart';
 import 'connections_notifier.dart';
@@ -136,6 +138,32 @@ class DropNotifier extends StateNotifier<DropState> {
 
   // ── Outbound ──────────────────────────────────────────────────
 
+  /// Isolation fail-closed: PeerJS is forbidden and DualStack cannot take
+  /// the file. Product [kPeerjsIsolationMode] stays default-live, so this
+  /// is false until the support window closes in writing.
+  bool _isolationBlocksPeerjsDrop(ConnectionsNotifier conns, String pid) =>
+      !peerjsAllowedOnNative(isWeb: kIsWeb) && !conns.canUseNative(pid);
+
+  String _failOutboundIsolated({
+    required String peerId,
+    required String name,
+    required String mime,
+    required int size,
+  }) {
+    final id = dropNewFileId();
+    _upsert(DropTransfer(
+      id: id,
+      name: name,
+      size: size,
+      mime: mime,
+      peerId: peerId,
+      direction: DropDirection.outgoing,
+      status: DropStatus.failed,
+      error: 'Нет активного P2P-соединения',
+    ));
+    return id;
+  }
+
   /// Send [bytes] to [peerId]. Opens the reliable channel if needed and waits
   /// briefly for it. Returns the transfer id, or null if the channel never
   /// came up.
@@ -147,6 +175,15 @@ class DropNotifier extends StateNotifier<DropState> {
   }) async {
     final pid = normalizePeerId(peerId);
     final conns = _ref.read(connectionsNotifierProvider.notifier);
+
+    if (_isolationBlocksPeerjsDrop(conns, pid)) {
+      return _failOutboundIsolated(
+        peerId: pid,
+        name: name,
+        mime: mime,
+        size: bytes.length,
+      );
+    }
 
     if (!conns.hasReliable(pid)) {
       conns.openReliable(pid);
@@ -192,6 +229,15 @@ class DropNotifier extends StateNotifier<DropState> {
     if (sizeBytes <= 0) return null;
     final pid = normalizePeerId(peerId);
     final conns = _ref.read(connectionsNotifierProvider.notifier);
+
+    if (_isolationBlocksPeerjsDrop(conns, pid)) {
+      return _failOutboundIsolated(
+        peerId: pid,
+        name: name,
+        mime: mime,
+        size: sizeBytes,
+      );
+    }
 
     if (!conns.hasReliable(pid)) {
       conns.openReliable(pid);
@@ -240,7 +286,18 @@ class DropNotifier extends StateNotifier<DropState> {
     final pid = normalizePeerId(peerId);
     final conns = _ref.read(connectionsNotifierProvider.notifier);
 
-    if (!conns.hasReliable(pid)) {
+    if (_isolationBlocksPeerjsDrop(conns, pid)) {
+      return _failOutboundIsolated(
+        peerId: pid,
+        name: name,
+        mime: mime,
+        size: sizeBytes,
+      );
+    }
+
+    // Native path-stream does not need a PeerJS reliable channel. Only
+    // open one when isolation still allows PeerJS (product default-live).
+    if (peerjsAllowedOnNative(isWeb: kIsWeb) && !conns.hasReliable(pid)) {
       conns.openReliable(pid);
       final ok = await _waitForReliable(pid);
       if (!ok) return null;
@@ -281,6 +338,20 @@ class DropNotifier extends StateNotifier<DropState> {
         direction: DropDirection.outgoing,
         status: DropStatus.failed,
         error: e.message,
+      ));
+      return id;
+    }
+
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      _upsert(DropTransfer(
+        id: id,
+        name: name,
+        size: sizeBytes,
+        mime: mime,
+        peerId: pid,
+        direction: DropDirection.outgoing,
+        status: DropStatus.failed,
+        error: 'Нет активного P2P-соединения',
       ));
       return id;
     }
