@@ -7,8 +7,8 @@ still PeerJS.
 
 | Phase | In tree | Gate |
 |------:|---------|------|
-| 0 | ADRs, contracts, tests | Closed |
-| 1 | Harness + loopback echo/file/suspend | NAT matrix **blocked** |
+| 0 | ADRs + remediations landed; default still PeerJS; `kCompletedMigrationPhase = 0` | Contracts locked; **not** a Holepunch default |
+| 1 | Harness scaffold ready (loopback echo/file/suspend/CLI) | Scaffold ready / hardware-NAT validation **pending** |
 | 2 | Stand runner + metrics schema | Live KZ matrix **blocked** |
 | 3 | Plugin + worklet IPC + OS hosts refuse remote JS (any `://` worklet path); federated `orbits_transport` is an app dependency with per-OS `default_package` (no web — PWA stays PeerJS); Linux/Windows C plugin registrars (`orbits_transport_plugin_register_with_registrar` / `OrbitsTransportPluginRegisterWithRegistrar`) plus `barePath` on every host; spawn asks the native host `start(remoteJs: false, worklet: localPath)` before Node/Bare; spawn prefers plugin-bundled local `bare` then `tool/bare/` then Node when stdlib is present; per-OS Bare slots + build-time `vendor.sh` / `embed.sh` / `vendor-bare-modules.sh`; iOS/macOS podspecs copy a local slot into `OrbitsTransportBare` and never curl; **all** vendor tarball sha256 pins; CI vendors+embeds linux-x64, ios-arm64, darwin-arm64, android-arm64, windows-x64 into plugin hosts **and vendors** linux-arm64 / darwin-x64 beside the host-arch binary (never overwriting it); CMake/Gradle copy the matching slot into the **app bundle** as `bare` / `bare.exe` / `assets/bare` (plugin-dir fallback is three parents to repo root, not four); CI `flutter build linux` / `macos` / Windows / iOS / APK **assert the bundled binary is present**; worklet import maps; `BUNDLE.manifest` pins every `extractBundledWorklet` source; path-streamed `sendFile` | Bare binary not shipped as the product flag (`kBareBinaryShipped` false) |
 | 4 | App boot binds native host when rollout ≠ off; prefers Hyperswarm **only** with module + explicit HyperDHT bootstrap (`ORBITS_DHT_BOOTSTRAP` / directory rows), else loopback; worklet `connect` / `rememberPeer` maps Noise public key → ORBIT contact id (never `HASH(peerId)`; DualStackBridge seeds known contacts on attach without sending discovery secrets); Noise seed ≠ identity; ConnectionsNotifier waits for that carrier (and DeviceBinding auth) before native chat/files/calls/rooms/Drop; loopback natives exchange `v2:` / wireHello | Default still PeerJS; two physical natives not run |
@@ -23,6 +23,34 @@ still PeerJS.
 | 14 | Isolation helpers wired into `decideDualStack` (tests may pass a mode); `_openChannel` skips PeerJS when `peerjsAllowedOnNative` is false; `sendEncrypted` / `sendEphemeral` / `sendDrop` / `sendRoomPacket` / `hasReliable` do not fall back to PeerJS in those modes (`isWeb: kIsWeb`); `PeerConnectionManager` / `buildRoomScopedClient` / `RoomScopedTransport` do not construct or send on PeerJS in those modes; `RoomSignalingHost.start` does not bind an embedded PeerJS listener in those modes; self-hosted `createRoom` under isolation hosts on the native carrier (no embedded PeerJS; guests join by host peer code; still host-plaintext); `CallsNotifier` skips PeerJS dial/answer/`onCall` in those modes; 1:1 DualStack is used only when the remote advertised `call-v1` (old DualStack stays on PeerJS `callPeer`); room voice mesh skips PeerJS dial/`onCall` in those modes and uses DualStack `NativeCallMedia` when `canUseNative` **and** the remote advertised `room-voice-v1`; default-live prefers those native legs per member and keeps PeerJS for the rest (including old DualStack clients); product mode stays `default-live`; support window [peerjs-support-window.md](peerjs-support-window.md) | Support window not started |
 
 PWA official mode today: **compatibility client on PeerJS**.
+
+Phase 0 remediations are in tree. The default live path is still
+PeerJS. `kCompletedMigrationPhase` stays **0**. `HyperswarmRollout`
+stays `off`. Phase 1 is **scaffold ready / hardware-NAT validation
+pending** — see [phase1-harness.md](phase1-harness.md). Do not treat
+the harness as a closed NAT gate.
+
+```text
+cd tool/connectivity_harness
+npm test
+# two process:
+node --test --test-force-exit test/cli_two_process.test.js
+# two machines (hyperswarm): see phase1-harness.md
+```
+
+- **Auto-tested** (`npm test` / CI): loopback connect, echo, binary and
+  empty payloads, malformed/oversized drop, 10 MiB file sha256, resume
+  after kill, connect timeout, file cancel, outbound queue cap, handle
+  cleanup, short/missing discovery secret, `://` refuse, pre-auth drop,
+  two-process CLI echo + 1 MiB `send-file`. Hyperswarm-backend tests
+  **skip if the module is missing**; they use a local HyperDHT bootstrap
+  only and do not prove public DHT, NAT, or UDP holepunch.
+- **Loopback-only**: default bind is `127.0.0.1`. `--listen-host 0.0.0.0`
+  is opt-in LAN TCP and is still not holepunch.
+- **Two-machine**: shared secret file + LAN TCP, or Hyperswarm with an
+  explicit bootstrap. Not a NAT claim.
+- **NAT / Kazakhstan pending**: operator matrices stay blocked unless
+  the user is free and asks.
 
 Hardware / Kazakhstan checks: **blocked** until the user is free.
 

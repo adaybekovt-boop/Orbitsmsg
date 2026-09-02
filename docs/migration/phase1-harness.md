@@ -2,7 +2,8 @@
 
 Status: **scaffold ready / hardware-NAT validation pending.**
 
-This is a **verifiable, isolated** Node/Bare harness under
+Phase 0 remediations are in tree. `kCompletedMigrationPhase` stays
+**0**. This is a **verifiable, isolated** Node/Bare harness under
 `tool/connectivity_harness/`. It is **not** wired into the Flutter
 product. `HyperswarmRollout` stays `off`. Default live transport is
 still PeerJS. Do not treat this document as a closed NAT gate.
