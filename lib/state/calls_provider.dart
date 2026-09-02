@@ -42,7 +42,6 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import '../calls/hyperswarm_signaling.dart';
 import '../calls/native_call_media.dart';
 import '../calls/system_calling.dart';
-import '../core/feature_flags.dart';
 import '../peer/peerjs_client.dart';
 import '../transport/peerjs_window.dart';
 import 'connections_notifier.dart';
@@ -211,8 +210,10 @@ class CallsNotifier extends StateNotifier<CallState> {
     final conns = _ref.read(connectionsNotifierProvider.notifier);
     // Isolation fail-closed before media acquire: leftover PeerJS clients
     // do not count when isolation forbids. Native DualStack still proceeds.
+    final takeNative = conns.canUseNative(remotePeerId) &&
+        conns.remoteUnderstandsNativeCall(remotePeerId);
     if ((!peerjsAllowedOnNative(isWeb: kIsWeb) || peer == null) &&
-        !conns.canUseNative(remotePeerId)) {
+        !takeNative) {
       state = state.copyWith(lastError: 'Нет активного P2P-соединения');
       return;
     }
@@ -251,7 +252,7 @@ class CallsNotifier extends StateNotifier<CallState> {
     }
     state = state.copyWith(localStream: local);
 
-    if (conns.canUseNative(remotePeerId)) {
+    if (takeNative) {
       _nativeSession = NativeCallSession(
         send: (signal) => conns.sendCallSignal(remotePeerId, signal),
       );
@@ -264,19 +265,15 @@ class CallsNotifier extends StateNotifier<CallState> {
       try {
         await _nativeMedia!.attachLocal(local);
         sdp = await _nativeMedia!.createOfferSdp();
-      } catch (_) {
-        // Signaling still proceeds; media attach can use PeerJS fallback.
-      }
+      } catch (_) {}
       await _nativeSession!.startOutgoing(
         callId: remotePeerId,
         sdp: sdp,
         media: {'video': video},
       );
-      if (!isPeerjsFallbackEnabled() ||
-          peer == null ||
-          !peerjsAllowedOnNative(isWeb: kIsWeb)) {
-        return;
-      }
+      // Native-only when the remote advertised call-v1. Do not also
+      // callPeer — that double-rings / double-audios new DualStack pairs.
+      return;
     }
 
     if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
@@ -366,10 +363,11 @@ class CallsNotifier extends StateNotifier<CallState> {
         sdp = await _nativeMedia!.createAnswerSdp(offer);
       } catch (_) {}
       await _nativeSession!.accept(sdp: sdp);
-      if (!isPeerjsFallbackEnabled() ||
-          !peerjsAllowedOnNative(isWeb: kIsWeb)) {
-        return;
+      if (conn != null) {
+        _conn = null;
+        unawaited(conn.close().catchError((_) {}));
       }
+      return;
     }
     if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
       try {
@@ -710,6 +708,10 @@ class CallsNotifier extends StateNotifier<CallState> {
       // never surface them as a 1:1 call (audit item 6). Normal 1:1 calls have
       // no such tag and continue exactly as before.
       if (conn.metadata['channel'] == 'room-voice') return;
+      if (_nativeSession != null || _nativeMedia != null) {
+        unawaited(conn.close().catchError((_) {}));
+        return;
+      }
       // Only one call at a time. If we're already busy, decline so
       // the caller's pill clears cleanly.
       if (state.isActive) {

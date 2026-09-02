@@ -405,25 +405,33 @@ class DualStackBridge {
     return connected.contains(norm) && authenticated.contains(norm);
   }
 
-  /// True when the remote advertised `room-voice-v1` on DeviceBinding,
-  /// a signed capability record, or a verified hello `caps` sibling.
-  /// Missing bit fail-closed: do not send DualStack `rv-` offers.
-  bool remoteUnderstandsRoomVoice(String peerId) {
+  /// DeviceBinding, signed capability record, or verified hello `caps`.
+  /// Missing bit fail-closed.
+  bool remoteAdvertisesCapability(String peerId, TransportCapability cap) {
     final norm = normalizePeerId(peerId);
     final binding = remoteBindings[norm];
-    if (binding != null && advertisesRoomVoiceV1(binding.capabilities)) {
+    if (binding != null && binding.capabilities.contains(cap.wireName)) {
       return true;
     }
     for (final rec in remoteCapabilities) {
       if (normalizePeerId(rec.peerId) == norm &&
-          rec.capabilities.contains(TransportCapability.roomVoiceV1)) {
+          rec.capabilities.contains(cap)) {
         return true;
       }
     }
     final cached = remoteCapabilityCache.get(norm);
-    return cached?.capabilities.contains(TransportCapability.roomVoiceV1) ==
-        true;
+    return cached?.capabilities.contains(cap) == true;
   }
+
+  /// True when the remote advertised `room-voice-v1`.
+  /// Missing bit: do not send DualStack `rv-` offers.
+  bool remoteUnderstandsRoomVoice(String peerId) =>
+      remoteAdvertisesCapability(peerId, TransportCapability.roomVoiceV1);
+
+  /// True when the remote advertised `call-v1`.
+  /// Missing bit: 1:1 stays on PeerJS `callPeer`.
+  bool remoteUnderstandsNativeCall(String peerId) =>
+      remoteAdvertisesCapability(peerId, TransportCapability.callV1);
 
   Future<void> dial(String peerId) async {
     final targets = devices?.transportTargets(peerId) ??

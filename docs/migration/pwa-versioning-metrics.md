@@ -33,6 +33,7 @@ mailbox-v1
 hypercore-v1
 multi-device-v1
 room-voice-v1
+call-v1
 ```
 
 Signed with the identity key when advertised. Cached per contact.

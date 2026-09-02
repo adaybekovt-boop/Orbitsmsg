@@ -280,6 +280,7 @@ void main() {
     expect(names, contains('hypercore-v1'));
     expect(names, contains('multi-device-v1'));
     expect(names, contains('room-voice-v1'));
+    expect(names, contains('call-v1'));
     expect(names, contains('peerjs-v4'));
     expect(names, contains('hyperswarm-v1'));
     expect(names, isNot(contains('://')));

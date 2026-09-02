@@ -30,7 +30,19 @@ void main() {
     final early = startFn.substring(0, startFn.indexOf('getUserMedia'));
     expect(early, contains('peerjsAllowedOnNative(isWeb: kIsWeb)'));
     expect(early, contains('canUseNative'));
+    expect(early, contains('remoteUnderstandsNativeCall'));
+    expect(early, contains('takeNative'));
     expect(early, contains('Нет активного P2P-соединения'));
+
+    final startOutgoing = startFn.indexOf('startOutgoing');
+    final callPeer = startFn.indexOf('callPeer');
+    expect(startOutgoing, greaterThan(startFn.indexOf('takeNative')));
+    expect(callPeer, greaterThan(startOutgoing));
+    expect(
+      startFn.indexOf('return;', startOutgoing),
+      lessThan(callPeer),
+      reason: 'native call-v1 path must return before PeerJS callPeer',
+    );
 
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
     expect(kPeerjsSupportWindowOpen, isTrue);
@@ -48,9 +60,11 @@ void main() {
       required bool isWeb,
       required bool leftoverPeer,
       required bool canUseNative,
+      bool remoteUnderstandsNativeCall = false,
     }) {
       final peerjsOk = peerjsAllowedOnNativeFor(mode, isWeb: isWeb);
-      return (!peerjsOk || !leftoverPeer) && !canUseNative;
+      final takeNative = canUseNative && remoteUnderstandsNativeCall;
+      return (!peerjsOk || !leftoverPeer) && !takeNative;
     }
 
     expect(
@@ -68,6 +82,16 @@ void main() {
         isWeb: false,
         leftoverPeer: true,
         canUseNative: true,
+      ),
+      isTrue,
+    );
+    expect(
+      failClosedBeforeMedia(
+        mode: kPeerjsIsolationWebOnly,
+        isWeb: false,
+        leftoverPeer: true,
+        canUseNative: true,
+        remoteUnderstandsNativeCall: true,
       ),
       isFalse,
     );
@@ -122,6 +146,14 @@ void main() {
     );
     expect(accept, contains('_nativeSession == null'));
     expect(accept, contains('Нет активного P2P-соединения'));
+    expect(accept, contains('conn.close'));
+    final acceptNative = accept.indexOf('_nativeSession!.accept');
+    expect(acceptNative, greaterThan(0));
+    expect(
+      accept.indexOf('return;', acceptNative),
+      lessThan(accept.indexOf('conn?.answer')),
+      reason: 'native answer must return before PeerJS answer',
+    );
 
     expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
     expect(kPeerjsSupportWindowOpen, isTrue);

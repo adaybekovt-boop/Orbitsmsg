@@ -3633,6 +3633,23 @@ void main() {
       signatureByIdentityKey: old.signatureByIdentityKey,
     );
     expect(a.remoteUnderstandsRoomVoice('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    expect(a.remoteUnderstandsNativeCall('ORBIT-BBBBBBBBBBBBBBBB'), isFalse);
+    a.remoteBindings['ORBIT-BBBBBBBBBBBBBBBB'] = DeviceBinding(
+      version: old.version,
+      identityPublicKey: old.identityPublicKey,
+      deviceId: old.deviceId,
+      transportPublicKey: old.transportPublicKey,
+      hypercorePublicKey: old.hypercorePublicKey,
+      capabilities: <String>[
+        ...old.capabilities,
+        TransportCapability.roomVoiceV1.wireName,
+        TransportCapability.callV1.wireName,
+      ],
+      createdAt: old.createdAt,
+      expiresAt: old.expiresAt,
+      signatureByIdentityKey: old.signatureByIdentityKey,
+    );
+    expect(a.remoteUnderstandsNativeCall('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
     await a.detach();
     await b.detach();
   });
