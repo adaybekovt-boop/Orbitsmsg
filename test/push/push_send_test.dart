@@ -178,6 +178,42 @@ void main() {
     );
   });
 
+  test('APNs/FCM builders refuse URL and secret-fragment device tokens', () {
+    const wake = OpaqueWake(
+      opaqueWakeToken: 'tok',
+      collapseId: 'c1',
+      protocolVersion: 1,
+    );
+    expect(
+      buildApnsRequest(
+        deviceToken: 'https://evil.example/tok',
+        wake: wake,
+      ),
+      isNull,
+    );
+    expect(
+      buildFcmRequest(
+        deviceToken: 'https://evil.example/tok',
+        wake: wake,
+      ),
+      isNull,
+    );
+    expect(buildApnsRequest(deviceToken: 'has-fileKey', wake: wake), isNull);
+    expect(buildFcmRequest(deviceToken: 'has-fileKey', wake: wake), isNull);
+    expect(
+      buildApnsRequest(deviceToken: 'peerId-fragment', wake: wake),
+      isNull,
+    );
+    expect(
+      buildFcmRequest(deviceToken: 'peerId-fragment', wake: wake),
+      isNull,
+    );
+    expect(buildApnsRequest(deviceToken: 'devtoken', wake: wake), isNotNull);
+    expect(buildFcmRequest(deviceToken: 'ftok', wake: wake), isNotNull);
+    expect(kLiveApnsGateway, isFalse);
+    expect(kLiveFcmGateway, isFalse);
+  });
+
   test('APNs provider JWT is ES256, opaque, and still not sent', () async {
     installPointyCastleEcdh();
     final pair = await generateP256EcdsaKey();

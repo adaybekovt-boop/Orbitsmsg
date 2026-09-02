@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -7,6 +8,19 @@ import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
 import 'package:orbits_flutter/transport/mux_frames.dart';
 import 'package:orbits_flutter/transport/transport_api.dart';
+
+bool _attachCipherExists(String fileId) {
+  for (final entity in Directory.systemTemp.listSync()) {
+    if (entity is! Directory) continue;
+    final name = entity.uri.pathSegments.where((s) => s.isNotEmpty).last;
+    if (!name.startsWith('orbits-attach-')) continue;
+    if (File('${entity.path}${Platform.pathSeparator}$fileId.bin')
+        .existsSync()) {
+      return true;
+    }
+  }
+  return false;
+}
 
 DeviceBinding _binding(String deviceId) {
   return DeviceBinding(
@@ -244,6 +258,90 @@ void main() {
       )['text'],
       'yes',
     );
+    await a.stop();
+    await b.stop();
+  });
+
+  test('inbound attach-chunk emits attach-chunk-path for a clean body', () async {
+    final (a, b) = await paired();
+    final received = b.events
+        .where((e) => e is TransportFrame)
+        .cast<TransportFrame>()
+        .firstWhere((e) {
+      if (e.channel != TransportChannel.attachment) return false;
+      return decodeJsonPayload(e.bytes)['type'] == 'attach-chunk-path';
+    });
+    final cipher = utf8.encode('clean-cipher');
+    await a.send(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      TransportChannel.attachment,
+      jsonPayload({
+        'type': 'attach-chunk',
+        'fileId': 'chat-clean',
+        'offset': 0,
+        'b64': base64Encode(cipher),
+      }),
+    );
+    final frame = await received.timeout(const Duration(seconds: 2));
+    final body = decodeJsonPayload(frame.bytes);
+    expect(body['fileId'], 'chat-clean');
+    expect(body['path'], isNot(contains('://')));
+    final out = File(body['path'] as String);
+    expect(out.existsSync(), isTrue);
+    expect(out.readAsBytesSync(), cipher);
+    await a.stop();
+    await b.stop();
+  });
+
+  test('inbound attach-chunk drops nested fileKey and does not write cipher',
+      () async {
+    final (a, b) = await paired();
+    final types = <String>[];
+    final pathFileIds = <String>[];
+    final barrier = Completer<void>();
+    final sub = b.events.listen((e) {
+      if (e is! TransportFrame || e.channel != TransportChannel.attachment) {
+        return;
+      }
+      final body = decodeJsonPayload(e.bytes);
+      types.add(body['type'] as String? ?? '');
+      if (body['type'] != 'attach-chunk-path') return;
+      final id = body['fileId'] as String? ?? '';
+      pathFileIds.add(id);
+      if (id == 'chat-after-nested' && !barrier.isCompleted) {
+        barrier.complete();
+      }
+    });
+    await a.send(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      TransportChannel.attachment,
+      jsonPayload({
+        'type': 'attach-chunk',
+        'fileId': 'chat-nested',
+        'offset': 0,
+        'b64': base64Encode(utf8.encode('nested-cipher')),
+        'meta': {'fileKey': 'nope'},
+      }),
+    );
+    // Ingest is serialized on `_attachmentIo`. A later clean chunk's
+    // attach-chunk-path means the nested body already ran and was dropped.
+    await a.send(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      TransportChannel.attachment,
+      jsonPayload({
+        'type': 'attach-chunk',
+        'fileId': 'chat-after-nested',
+        'offset': 0,
+        'b64': base64Encode(utf8.encode('after-cipher')),
+      }),
+    );
+    await barrier.future.timeout(const Duration(seconds: 2));
+    expect(types, isNot(contains('attach-chunk')));
+    expect(pathFileIds, isNot(contains('chat-nested')));
+    expect(pathFileIds, contains('chat-after-nested'));
+    expect(_attachCipherExists('chat-nested'), isFalse);
+    expect(_attachCipherExists('chat-after-nested'), isTrue);
+    await sub.cancel();
     await a.stop();
     await b.stop();
   });

@@ -154,6 +154,58 @@ void main() {
     expect(remoteCapabilityCache.get('ORBIT-BBBBBBBBBBBBBBBB'), isNull);
   });
 
+  test('rememberHelloCapabilities refuses secret keys on the hello envelope',
+      () async {
+    remoteCapabilityCache.clear();
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final record = await issueCapabilityRecord(
+      peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+      deviceId: 'dev-1',
+      capabilities: {
+        TransportCapability.hyperswarmV1,
+        TransportCapability.peerjsV4,
+      },
+      issuedAt: 1,
+      expiresAt: DateTime.now().millisecondsSinceEpoch + 86400000,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    const peerId = 'ORBIT-AAAAAAAAAAAAAAAA';
+    final caps = record.toWire();
+
+    expect(
+      await rememberHelloCapabilities(peerId, {
+        'type': 'wireHello',
+        'v': 3,
+        'caps': caps,
+        'extra': {'fileKey': 'x'},
+      }),
+      isNull,
+    );
+    expect(remoteCapabilityCache.get(peerId), isNull);
+
+    expect(
+      await rememberHelloCapabilities(peerId, {
+        'type': 'wireHello',
+        'v': 3,
+        'caps': caps,
+        'wake': {'opaqueWakeToken': 'tok'},
+      }),
+      isNull,
+    );
+    expect(remoteCapabilityCache.get(peerId), isNull);
+
+    final remembered = await rememberHelloCapabilities(peerId, {
+      'type': 'wireHello',
+      'v': 3,
+      'peerId': peerId,
+      'caps': caps,
+    });
+    expect(remembered, isNotNull);
+    expect(remoteCapabilityCache.get(peerId)?.deviceId, 'dev-1');
+  });
+
   test('identity key signs device binding; Noise is not used', () async {
     final pair = await generateP256EcdsaKey();
     final spki = buildP256Spki(x: pair.x, y: pair.y);

@@ -19,6 +19,7 @@ import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
 import 'package:orbits_flutter/replication/file_journal.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/rooms/autobase_log.dart';
+import 'package:orbits_flutter/attachments/resumable_blob.dart';
 import 'package:orbits_flutter/core/path_byte_stream.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
@@ -485,6 +486,134 @@ void main() {
         isNot(contains('fileKey')));
     expect(jsonEncode(a.journal.records.map((r) => r.fields).toList()),
         isNot(contains('fileKeyB64')));
+  });
+
+  test('attach-chunk nested fileKey is refused and does not decrypt', () async {
+    final (a, b, _) = await linked();
+    final drop = <Object>[];
+    b.onDrop = (peer, packet) => drop.add(packet);
+    final key = List<int>.generate(32, (i) => i + 4);
+    final plain = List<int>.generate(90, (i) => i + 1);
+    final chunk = ResumableAttachment.chunk(plain, key).single;
+    final transport = b.transport as LoopbackOrbitsTransport;
+    transport.emitEvent(
+      TransportFrame(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        TransportChannel.attachment,
+        jsonPayload({
+          'type': 'attach-chunk',
+          'fileId': 'chat-nested-key',
+          'hash': chunk.hash,
+          'b64': base64Encode(chunk.ciphertext),
+          'index': 0,
+          'offset': 0,
+          'meta': {'fileKey': 'x'},
+        }),
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(
+      await b.decryptInboundAttachment(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        'chat-nested-key',
+        key,
+      ),
+      isNull,
+    );
+    expect(
+      await b.decryptInboundAttachmentPath(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        'chat-nested-key',
+        key,
+      ),
+      isNull,
+    );
+    expect(drop, isEmpty);
+
+    transport.emitEvent(
+      TransportFrame(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        TransportChannel.attachment,
+        jsonPayload({
+          'type': 'attach-chunk',
+          'fileId': 'chat-clean-chunk',
+          'hash': chunk.hash,
+          'b64': base64Encode(chunk.ciphertext),
+          'index': 0,
+          'offset': 0,
+        }),
+      ),
+    );
+    Uint8List? got;
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(deadline)) {
+      got = await b.decryptInboundAttachment(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        'chat-clean-chunk',
+        key,
+      );
+      if (got != null) break;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(got, Uint8List.fromList(plain));
+    expect(drop, isEmpty);
+    await a.detach();
+    await b.detach();
+  });
+
+  test('attach-chunk-path nested fileKey or b64 is refused', () async {
+    final (a, b, _) = await linked();
+    final dir = Directory.systemTemp.createTempSync('orbits-att-nested-path-');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final cipherPath = '${dir.path}${Platform.pathSeparator}cipher.bin';
+    File(cipherPath).writeAsBytesSync(List<int>.generate(16, (i) => i));
+    final key = List<int>.generate(32, (i) => i + 8);
+    final transport = b.transport as LoopbackOrbitsTransport;
+    transport.emitEvent(
+      TransportFrame(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        TransportChannel.attachment,
+        jsonPayload({
+          'type': 'attach-chunk-path',
+          'fileId': 'chat-nested-path-key',
+          'path': cipherPath,
+          'meta': {'fileKey': 'x'},
+        }),
+      ),
+    );
+    transport.emitEvent(
+      TransportFrame(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        TransportChannel.attachment,
+        jsonPayload({
+          'type': 'attach-chunk-path',
+          'fileId': 'chat-nested-path-b64',
+          'path': cipherPath,
+          'extra': {'b64': 'AQID'},
+        }),
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(
+      await b.decryptInboundAttachmentPath(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        'chat-nested-path-key',
+        key,
+      ),
+      isNull,
+    );
+    expect(
+      await b.decryptInboundAttachmentPath(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        'chat-nested-path-b64',
+        key,
+      ),
+      isNull,
+    );
+    await a.detach();
+    await b.detach();
   });
 
   test('attach-chunk via ciphertext path sendFile is not Dart frameB64', () async {

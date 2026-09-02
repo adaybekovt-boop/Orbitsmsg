@@ -198,8 +198,20 @@ String orbitsApnsId(String collapseId) {
       '${h.substring(16, 20)}-${h.substring(20, 32)}';
 }
 
+/// Same fragment rules as mailbox/wake tokens, duplicated so this
+/// library does not import the mailbox client.
+bool _deviceTokenIsSafe(String token) {
+  if (token.isEmpty) return false;
+  if (token.contains('://')) return false;
+  if (token.contains('peerId')) return false;
+  if (token.contains('fileKey')) return false;
+  if (token.contains('rootKey')) return false;
+  if (token.contains('discoverySecret')) return false;
+  return true;
+}
+
 /// Build an APNs HTTP/2 body. Does not send. Null if the wake is unsafe
-/// or the token is empty.
+/// or the device token is empty / looks like a URL or secret fragment.
 ApnsOpaqueRequest? buildApnsRequest({
   required String deviceToken,
   required OpaqueWake wake,
@@ -212,6 +224,7 @@ ApnsOpaqueRequest? buildApnsRequest({
 }) {
   final payload = wake.toJson();
   if (deviceToken.isEmpty || !OpaqueWake.isSafe(payload)) return null;
+  if (!_deviceTokenIsSafe(deviceToken)) return null;
   final now = nowUnix ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
   final headers = <String, String>{
     'apns-push-type': 'background',
@@ -241,7 +254,8 @@ ApnsOpaqueRequest? buildApnsRequest({
 }
 
 /// Build an FCM HTTP v1 body. Does not send. Null if the wake is unsafe
-/// or the token is empty. Does not POST to [kFcmOauthTokenUri].
+/// or the device token is empty / looks like a URL or secret fragment.
+/// Does not POST to [kFcmOauthTokenUri].
 /// [accessToken] is a Google OAuth access_token. Never the service-account
 /// assertion JWT (that belongs on [buildFcmOauthTokenRequest] only).
 FcmOpaqueRequest? buildFcmRequest({
@@ -252,6 +266,7 @@ FcmOpaqueRequest? buildFcmRequest({
 }) {
   final payload = wake.toJson();
   if (deviceToken.isEmpty || !OpaqueWake.isSafe(payload)) return null;
+  if (!_deviceTokenIsSafe(deviceToken)) return null;
   final project = projectId.isEmpty ? 'orbits' : projectId;
   final headers = <String, String>{};
   final token = accessToken?.trim() ?? '';

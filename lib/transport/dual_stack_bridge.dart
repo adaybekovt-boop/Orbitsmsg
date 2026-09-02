@@ -76,6 +76,60 @@ bool _hasJournalMembershipBanned(Object? value, Set<Object> seen) {
   return false;
 }
 
+/// Cycle-safe walk of an inbound attach frame. Rejects
+/// [kForbiddenReplicationFields] (includes `fileKey` / `fileKeyB64`) at any
+/// depth, including nested `{ meta: { fileKey } }`. [List<int>] is a
+/// ciphertext leaf. Do not treat `text` as forbidden here.
+///
+/// `b64` is the chunk ciphertext field — allowed on `_ingestAttachChunk`.
+/// Path frames must not carry chunk bytes, so [rejectB64] refuses `b64`
+/// at any depth.
+bool _attachFrameHasForbiddenKey(
+  Object? value, {
+  required bool rejectB64,
+  Set<Object>? seen,
+}) {
+  if (value == null || value is bool || value is num || value is String) {
+    return false;
+  }
+  if (value is List<int>) return false; // ciphertext leaf
+  final walk = seen ?? HashSet<Object>.identity();
+  if (value is Map) {
+    if (!walk.add(value)) return false;
+    for (final e in value.entries) {
+      final key = '${e.key}';
+      if (kForbiddenReplicationFields.contains(key) ||
+          key == 'fileKey' ||
+          key == 'fileKeyB64' ||
+          (rejectB64 && key == 'b64')) {
+        return true;
+      }
+      if (_attachFrameHasForbiddenKey(
+        e.value,
+        rejectB64: rejectB64,
+        seen: walk,
+      )) {
+        return true;
+      }
+    }
+    return false;
+  }
+  if (value is Iterable) {
+    if (!walk.add(value)) return false;
+    for (final item in value) {
+      if (_attachFrameHasForbiddenKey(
+        item,
+        rejectB64: rejectB64,
+        seen: walk,
+      )) {
+        return true;
+      }
+    }
+    return false;
+  }
+  return false;
+}
+
 class DualStackBridge {
   DualStackBridge({
     required this.transport,
@@ -849,7 +903,7 @@ class DualStackBridge {
   }
 
   void _ingestAttachChunk(String fromPeerId, Map<String, Object?> frame) {
-    if (frame.containsKey('fileKey') || frame.containsKey('fileKeyB64')) {
+    if (_attachFrameHasForbiddenKey(frame, rejectB64: false)) {
       return;
     }
     final fileId = frame['fileId'] as String? ?? '';
@@ -881,9 +935,7 @@ class DualStackBridge {
   }
 
   void _ingestAttachPath(String fromPeerId, Map<String, Object?> frame) {
-    if (frame.containsKey('fileKey') ||
-        frame.containsKey('fileKeyB64') ||
-        frame.containsKey('b64')) {
+    if (_attachFrameHasForbiddenKey(frame, rejectB64: true)) {
       return;
     }
     final fileId = frame['fileId'] as String? ?? '';

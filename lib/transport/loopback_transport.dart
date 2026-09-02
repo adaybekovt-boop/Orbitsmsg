@@ -550,9 +550,9 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
     String from,
     Map<String, Object?> body,
   ) async {
-    if (body.containsKey('fileKey') || body.containsKey('fileKeyB64')) {
-      return;
-    }
+    // Nested walk via [kForbiddenReplicationFields]. `b64` stays allowed
+    // (chunk ciphertext). [List<int>] is a leaf.
+    if (!replicationValueIsSafe(body)) return;
     final fileId = body['fileId'] as String? ?? '';
     if (fileId.isEmpty || fileId.contains('://')) return;
     final raw = body['b64'] as String? ?? '';
