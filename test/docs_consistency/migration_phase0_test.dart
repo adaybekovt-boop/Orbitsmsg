@@ -7,7 +7,12 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
+import 'package:orbits_flutter/replication/corestore_addon.dart';
+import 'package:orbits_flutter/transport/bare_runtime.dart';
+import 'package:orbits_flutter/transport/fleet_status.dart';
 import 'package:orbits_flutter/transport/layers.dart';
+import 'package:orbits_flutter/transport/peerjs_window.dart';
+import 'package:orbits_flutter/transport/relay_directory.dart';
 
 void main() {
   String read(String rel) {
@@ -28,6 +33,7 @@ void main() {
       'docs/migration/pwa-versioning-metrics.md',
       'docs/migration/master-plan.md',
       'docs/migration/phase-status.md',
+      'docs/migration/phase1-harness.md',
       'docs/migration/relay-runbook.md',
       'docs/migration/app-review-notes.md',
       'docs/migration/store-data-safety.json',
@@ -75,6 +81,35 @@ void main() {
     expect(kCompletedMigrationPhase, 0);
     expect(isHyperswarmTransportEnabled(), isFalse);
     expect(hyperswarmRollout(), HyperswarmRollout.off);
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+    expect(kPeerjsSupportWindowOpen, isTrue);
+    expect(kPeerjsIsolationMode, kPeerjsIsolationDefaultLive);
+    expect(peerjsIsProductPath(), isTrue);
+    expect(kLiveStorageFleet, isFalse);
+    expect(kLiveSignedRelayDirectory, isFalse);
+    expect(kBareBinaryShipped, isFalse);
+    expect(kHolepunchCorestoreAddonLinked, isFalse);
+    final roomCrypto = Directory('lib')
+        .listSync(recursive: true)
+        .whereType<File>()
+        .where((f) => f.uri.pathSegments.last == 'room_crypto.dart');
+    expect(roomCrypto, isEmpty, reason: 'no lib/**/room_crypto.dart');
+  });
+
+  test('Phase 0/1 docs stay honest about PeerJS default and pending NAT', () {
+    final status = read('docs/migration/phase-status.md');
+    expect(status, contains('kCompletedMigrationPhase'));
+    expect(status, contains('scaffold ready / hardware-NAT validation'));
+    expect(status, contains('npm test'));
+    expect(status, contains('cli_two_process.test.js'));
+    expect(status, isNot(contains('Phase 1 closed')));
+    final harness = read('docs/migration/phase1-harness.md');
+    expect(harness, contains('scaffold ready / hardware-NAT validation pending'));
+    expect(harness, contains('npm test'));
+    expect(harness, contains('cli_two_process.test.js'));
+    final plan = read('docs/migration/master-plan.md');
+    expect(plan, contains('Scaffold ready / hardware-NAT validation pending'));
+    expect(plan, isNot(contains('Phase 1 closed')));
   });
 
   test('store-review packet is not filed and stays honest', () {
