@@ -149,6 +149,7 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
 
   @override
   Future<void> rememberPeer(PeerDescriptor peer) async {
+    rememberedPeers.removeWhere((p) => p.peerId == peer.peerId);
     rememberedPeers.add(peer);
   }
 
