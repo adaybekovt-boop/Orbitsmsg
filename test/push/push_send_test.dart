@@ -260,6 +260,40 @@ void main() {
     expect(result.reason, 'fcm-not-deployed');
     expect(kLiveFcmGateway, isFalse);
 
+    final oauth = buildFcmOauthTokenRequest(assertionJwt: jwt)!;
+    expect(oauth.host, 'oauth2.googleapis.com');
+    expect(oauth.path, '/token');
+    expect(oauth.method, 'POST');
+    expect(
+      oauth.headers['content-type'],
+      'application/x-www-form-urlencoded',
+    );
+    expect(oauth.body, contains('grant_type='));
+    expect(
+      oauth.body,
+      contains(Uri.encodeQueryComponent(kFcmOauthGrantType)),
+    );
+    expect(oauth.body, contains('assertion='));
+    expect(oauth.body, contains(Uri.encodeQueryComponent(jwt)));
+    expect(oauth.body, isNot(contains('peerId')));
+    expect(oauth.body, isNot(contains('rootKey')));
+    expect(
+      File('lib/push/fcm_oauth_token_request.dart').readAsStringSync(),
+      isNot(contains('HttpClient')),
+    );
+    expect(
+      File('lib/push/fcm_oauth_token_request.dart').readAsStringSync(),
+      contains('Never opens a socket'),
+    );
+
+    expect(
+      buildFcmOauthTokenRequest(assertionJwt: 'not-a-jwt'),
+      isNull,
+    );
+    expect(
+      buildFcmOauthTokenRequest(assertionJwt: 'a.b.c://evil'),
+      isNull,
+    );
     expect(
       buildFcmServiceAccountJwt(
         const FcmServiceAccountKey(

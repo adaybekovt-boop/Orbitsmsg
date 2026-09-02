@@ -85,8 +85,13 @@ void main() {
     expect(packet['kRoomsApplicationE2eImplemented'], isFalse);
     expect(packet['kLiveApnsGateway'], isFalse);
     expect(packet['kLiveFcmGateway'], isFalse);
+    expect(packet['kLiveStorageFleet'], isFalse);
+    expect(packet['kLiveSignedRelayDirectory'], isFalse);
     expect(packet['voipBackgroundMode'], isFalse);
     expect(packet['collectsMessageBodies'], isFalse);
     expect(packet['defaultLivePath'], 'PeerJS');
+    final export = Map<String, Object?>.from(packet['encryptionExport'] as Map);
+    expect(export['customMilitaryClaims'], isFalse);
+    expect(export['usesStandardHttps'], isTrue);
   });
 }

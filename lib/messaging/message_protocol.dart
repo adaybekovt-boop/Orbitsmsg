@@ -28,7 +28,9 @@
 //   base64-decoded bytes straight through.
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import '../core/bundle_cache.dart';
 import '../core/prekey_bundle.dart';
@@ -96,6 +98,7 @@ class ReliableInboundCtx {
     this.onUnexpectedPlaintext,
     this.persistInbound,
     this.isPeerBlocked,
+    this.assembleNativeAttachment,
     Set<String>? processingMsgIds,
   }) : processingMsgIds = processingMsgIds ?? <String>{};
 
@@ -181,6 +184,15 @@ class ReliableInboundCtx {
   final void Function(Object err)? onHandshakeError;
   final void Function(Object err)? onDecryptError;
   final void Function(Object? data)? onUnexpectedPlaintext;
+
+  /// Native `attach-chunk` reassembly. [fileKey] comes from the ratcheted
+  /// envelope, never from the journal. Null when the default PeerJS
+  /// path is in use.
+  final Future<Uint8List?> Function(
+    String remoteId,
+    String fileId,
+    List<int> fileKey,
+  )? assembleNativeAttachment;
 }
 
 // в”Ђв”Ђв”Ђ Ephemeral dispatch в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
@@ -635,7 +647,7 @@ Future<bool> dispatchReliablePlaintext(
           final b64 = attachmentMeta['b64'] as String;
           // Anti-OOM (audit finding 4): cap base64 length BEFORE decode.
           // Mirrors the send-side gate `_maxFileB64Len` (16 MiB) in
-          // messaging_notifier.dart. Oversized в†’ marked missing (below).
+          // messaging_notifier.dart. Oversized → marked missing (below).
           if (b64.length > 16 * 1024 * 1024) {
             throw const FormatException('attachment b64 exceeds inbound cap');
           }
@@ -652,13 +664,28 @@ Future<bool> dispatchReliablePlaintext(
             duration: duration,
             // `thumb` on the wire is a dataURL string; persisting it as bytes
             // would round-trip through utf8 which hurts nothing but adds
-            // nothing either вЂ” we keep the string copy inside the UI-side
+            // nothing either — we keep the string copy inside the UI-side
             // attachmentRef and leave the bytes-column null for now.
           );
           attachmentRef = metaOut;
         } catch (_) {
           attachmentRef = <String, Object?>{...metaOut, 'missing': true};
         }
+      } else if (attachmentMeta['chunked'] == true) {
+        attachmentRef = await _assembleChunkedAttachment(
+          ctx: ctx,
+          remoteId: remoteId,
+          msgId: msgId,
+          meta: attachmentMeta,
+          metaOut: metaOut,
+          mime: mime,
+          name: name,
+          kind: kind,
+          size: size,
+          width: width,
+          height: height,
+          duration: duration,
+        );
       } else {
         attachmentRef = <String, Object?>{...metaOut, 'missing': true};
       }
@@ -761,6 +788,60 @@ List<double>? _numListToDoubles(Object? v) {
     }
   }
   return out;
+}
+
+Future<JsonMap> _assembleChunkedAttachment({
+  required ReliableInboundCtx ctx,
+  required String remoteId,
+  required String msgId,
+  required JsonMap meta,
+  required JsonMap metaOut,
+  required String mime,
+  required String name,
+  required String kind,
+  required int size,
+  required int width,
+  required int height,
+  required int duration,
+}) async {
+  final missing = <String, Object?>{...metaOut, 'missing': true};
+  final fileId = meta['fileId'];
+  final keyB64 = meta['fileKeyB64'];
+  if (fileId is! String ||
+      fileId.isEmpty ||
+      fileId.length > 200 ||
+      keyB64 is! String ||
+      keyB64.isEmpty ||
+      keyB64.length > 64) {
+    return missing;
+  }
+  List<int> key;
+  try {
+    key = base64Decode(keyB64);
+  } catch (_) {
+    return missing;
+  }
+  if (key.length < 8) return missing;
+  final assemble = ctx.assembleNativeAttachment;
+  if (assemble == null) return missing;
+  try {
+    final bytes = await assemble(remoteId, fileId, key);
+    if (bytes == null || bytes.isEmpty) return missing;
+    await db.saveFileBlob(
+      msgId,
+      bytes,
+      mime: mime,
+      name: name,
+      kind: kind,
+      size: size == 0 ? bytes.length : size,
+      width: width,
+      height: height,
+      duration: duration,
+    );
+    return metaOut;
+  } catch (_) {
+    return missing;
+  }
 }
 
 /// Entropy for fallback [msgId] generation. Message ids are not keys, but

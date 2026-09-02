@@ -12,6 +12,9 @@ void main() {
     expect(chat, contains('withData: kIsWeb'));
     expect(chat, isNot(contains('withData: true')));
     expect(chat, contains('readPickedBytes'));
+    expect(chat, contains('sendFileFromPath'));
+    expect(chat, contains('canUseNative'));
+    expect(chat, contains('localPathLength'));
     expect(chat, isNot(contains("File(pf.path!).readAsBytes")));
     expect(chat, isNot(contains("import 'dart:io'")));
 
@@ -26,6 +29,31 @@ void main() {
     expect(io, contains('RandomAccessFile'));
     expect(io, contains('.length()'));
     expect(io, isNot(contains('readAsBytes')));
+
+    expect(
+      File('lib/core/path_byte_stream.dart').readAsStringSync(),
+      contains('openLocalPathByteStream'),
+    );
+    expect(
+      File('lib/core/path_byte_stream_io.dart').readAsStringSync(),
+      contains('openRead'),
+    );
+    expect(
+      File('lib/core/path_byte_stream_io.dart').readAsStringSync(),
+      isNot(contains('readAsBytes')),
+    );
+    expect(
+      File('lib/state/messaging_notifier.dart').readAsStringSync(),
+      contains('_readyToShip'),
+    );
+    expect(
+      File('lib/state/messaging_notifier.dart').readAsStringSync(),
+      contains('hasReliable'),
+    );
+    expect(
+      File('lib/state/messaging_notifier.dart').readAsStringSync(),
+      contains('sendChatAttachmentFromPath'),
+    );
   });
 
   test('native path read stats size before loading bytes', () async {

@@ -2,7 +2,8 @@
 // not the Hyperswarm Noise key, not a ratchet scalar, and not the APNs
 // P-256 provider key. Built so tests can prove the token shape;
 // PushSender still refuses to send while kLiveFcmGateway is false.
-// Never POSTs to the OAuth token URI.
+// Never POSTs to the OAuth token URI. The JWT-bearer form lives in
+// fcm_oauth_token_request.dart and is also never sent.
 
 import 'dart:convert';
 import 'dart:math';

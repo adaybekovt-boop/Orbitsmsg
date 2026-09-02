@@ -1,9 +1,11 @@
 // Read a `file_picker` result under a size cap.
 //
-// Native chat/room attachments still go out as PeerJS base64 (12 MiB),
-// not Bare path-stream. This helper only avoids `withData: true` loading
-// an unbounded file into Dart before the cap is checked. Drop already
-// uses `sendFileFromPath` and must not be routed through here.
+// Native chat/room attachments still go out as PeerJS base64 (12 MiB)
+// unless the native carrier is live (`canUseNative`). Then chat uses
+// `sendFileFromPath` + `openLocalPathByteStream`. This helper only
+// avoids `withData: true` loading an unbounded file into Dart before
+// the cap is checked. Drop already uses `sendFileFromPath` and must
+// not be routed through here.
 //
 // dart:io lives in the `_io` impl so `room_chat_page.dart` stays
 // web-safe (no `dart:io` import).

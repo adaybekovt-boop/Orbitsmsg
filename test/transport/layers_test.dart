@@ -112,6 +112,7 @@ void main() {
     expect(replicationFieldsAreSafe(['vaultKek']), isFalse);
     expect(replicationFieldsAreSafe(['plaintext']), isFalse);
     expect(replicationFieldsAreSafe(['fileKey']), isFalse);
+    expect(replicationFieldsAreSafe(['fileKeyB64']), isFalse);
     expect(replicationFieldsAreSafe(['attachmentBytes']), isFalse);
   });
 

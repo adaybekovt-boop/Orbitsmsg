@@ -332,6 +332,37 @@ void main() {
     );
   });
 
+  test('attach-chunk is not Drop and decrypts with the local fileKey', () async {
+    final (a, b, _) = await linked();
+    final drop = <Object>[];
+    b.onDrop = (peer, packet) => drop.add(packet);
+    final key = List<int>.generate(32, (i) => i + 4);
+    final plain = List<int>.generate(90, (i) => i + 1);
+    await a.sendAttachmentChunks(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      plain,
+      key,
+      fileId: 'chat-file-1',
+    );
+    Uint8List? got;
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(deadline)) {
+      got = b.decryptInboundAttachment(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        'chat-file-1',
+        key,
+      );
+      if (got != null) break;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(got, Uint8List.fromList(plain));
+    expect(drop, isEmpty);
+    expect(jsonEncode(a.journal.records.map((r) => r.fields).toList()),
+        isNot(contains('fileKey')));
+    expect(jsonEncode(a.journal.records.map((r) => r.fields).toList()),
+        isNot(contains('fileKeyB64')));
+  });
+
   test('recipient reads mailbox after the sender is gone', () async {
     final store = BlindMailboxStore()
       ..grant(

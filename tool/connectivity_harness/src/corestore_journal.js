@@ -24,6 +24,7 @@ const FORBIDDEN = new Set([
   'sharedDiscoverySecret',
   'attachmentBytes',
   'fileKey',
+  'fileKeyB64',
   'privBytes',
 ])
 

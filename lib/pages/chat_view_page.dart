@@ -26,6 +26,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image/image.dart' as img;
 import 'package:mime/mime.dart';
 
+import '../core/path_byte_stream.dart';
 import '../core/read_picked_bytes.dart';
 import '../state/calls_provider.dart';
 import '../state/chat_prefs_provider.dart';
@@ -281,10 +282,9 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
   Future<void> _runAttachmentPick() async {
     FilePickerResult? picked;
     try {
-      // Native: path only, then [readPickedBytes] stats the size before
-      // reading so a 100 MiB pick is refused without a Dart Uint8List.
-      // Web still needs picker bytes (`xFile` requires `withData`).
-      // Chat send is still PeerJS base64 (12 MiB) — not Bare Drop.
+      // Native: path only. When the native carrier is live, chat streams
+      // from the path (no Dart Uint8List on the wire). Default PeerJS
+      // still uses [readPickedBytes] then base64. Web needs picker bytes.
       picked = await FilePicker.platform.pickFiles(
         type: FileType.any,
         allowMultiple: false,
@@ -308,6 +308,67 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
     // error before we burn time encoding base64 to learn the same
     // thing on the wire side.
     const int maxRaw = 12 * 1024 * 1024;
+    final name = pf.name;
+    final mime = lookupMimeType(name) ?? 'application/octet-stream';
+    final kind = _classifyKind(mime);
+    final notifier = ref.read(messagingNotifierProvider.notifier);
+    final nativePath = pf.path;
+    if (!kIsWeb &&
+        nativePath != null &&
+        nativePath.isNotEmpty &&
+        ref
+            .read(connectionsNotifierProvider.notifier)
+            .canUseNative(widget.peerId)) {
+      final size = localPathLength(nativePath);
+      if (size == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(
+            const SnackBar(content: Text('Не удалось прочитать файл')),
+          );
+        return;
+      }
+      if (size > maxRaw) {
+        if (!mounted) return;
+        final mb = (size / (1024 * 1024)).ceil();
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(
+            SnackBar(
+              content: Text(
+                'Файл больше 12 МБ — отправка невозможна ($mb МБ).',
+              ),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        return;
+      }
+      final reply = _consumeReplyTarget();
+      final id = await notifier.sendFileFromPath(
+        widget.peerId,
+        nativePath,
+        name: name,
+        mime: mime,
+        kind: kind,
+        replyTo: reply,
+      );
+      if (!mounted) return;
+      if (id == null) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('Не удалось отправить файл'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        if (reply != null && _replyTo == null) {
+          setState(() => _replyTo = _restoreReplyRowFromPayload(reply));
+        }
+      }
+      return;
+    }
     final pickedBytes = await readPickedBytes(pf, maxRawBytes: maxRaw);
     if (pickedBytes.tooLarge) {
       if (!mounted) return;
@@ -335,13 +396,6 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
       return;
     }
 
-    final name = pf.name;
-    // `file_picker` doesn't always set `extension`; fall back to `mime`
-    // package which sniffs by filename (enough for the kind classifier —
-    // content-sniffing would require reading the bytes again).
-    final mime = lookupMimeType(name) ?? 'application/octet-stream';
-    final kind = _classifyKind(mime);
-
     // For images, synthesise a JPEG thumbnail so the peer's bubble
     // renders a preview instantly (before the full b64 lands). Matches
     // the JS peer's `buildAttachmentPreview` contract. Decoding the
@@ -357,7 +411,6 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
       height = t.height;
     }
 
-    final notifier = ref.read(messagingNotifierProvider.notifier);
     final reply = _consumeReplyTarget();
     final id = await notifier.sendFile(
       widget.peerId,

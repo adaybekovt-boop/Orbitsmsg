@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/attachments/resumable_blob.dart';
 
@@ -105,5 +107,29 @@ void main() {
     final bulk = ResumableAttachment.chunk(plain, key);
     expect(streamed.length, bulk.length);
     expect(ResumableAttachment.decrypt(streamed, key), plain);
+  });
+
+  test('chunkStream yields without collecting the caller list', () async {
+    final key = List<int>.generate(32, (i) => i + 9);
+    final plain = List<int>.generate(70 * 1024, (i) => i % 199);
+    var yielded = 0;
+    final out = <AttachmentChunk>[];
+    await for (final chunk in ResumableAttachment.chunkStream(
+      Stream<List<int>>.fromIterable(<List<int>>[plain]),
+      key,
+    )) {
+      yielded++;
+      out.add(chunk);
+    }
+    expect(yielded, 2);
+    expect(ResumableAttachment.decrypt(out, key), plain);
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('chunkStream'),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      isNot(contains('chunkFromByteStream(plaintext, fileKey)')),
+    );
   });
 }

@@ -85,6 +85,13 @@ void main() {
       }),
       throwsArgumentError,
     );
+    expect(
+      () => journal.append(ReplicationEventKind.attachmentPublished, {
+        'fileKeyB64': 'nope',
+        'encryptedEnvelope': <int>[1],
+      }),
+      throwsArgumentError,
+    );
   });
 
   test('block list skips decrypt and persist', () async {

@@ -7,9 +7,11 @@ import 'dart:io';
 import 'opaque_wake.dart';
 import 'push_gateway.dart';
 import 'apns_provider_jwt.dart';
+import 'fcm_oauth_token_request.dart';
 import 'fcm_service_account_jwt.dart';
 
 export 'apns_provider_jwt.dart';
+export 'fcm_oauth_token_request.dart';
 export 'fcm_service_account_jwt.dart';
 
 /// iOS APNs topic. Must match the Runner bundle id. Never a Peer ID.
@@ -55,7 +57,8 @@ class PushSender {
 
   /// FCM HTTP v1. Refused until the live gateway flag is true.
   /// A service-account JWT may be built (RS256, not identity-signing-v1)
-  /// and is still not exchanged or sent while [kLiveFcmGateway] is false.
+  /// and the OAuth JWT-bearer form may be built; neither is exchanged or
+  /// sent while [kLiveFcmGateway] is false.
   Future<PushSendResult> sendFcm({
     required String deviceToken,
     required OpaqueWake wake,
@@ -72,6 +75,16 @@ class PushSender {
     );
     if (request == null) {
       return const PushSendResult(sent: false, reason: 'unsafe-keys');
+    }
+    if (serviceAccount != null) {
+      final jwt = buildFcmServiceAccountJwt(
+        serviceAccount,
+        iatSeconds: iatSeconds,
+      );
+      if (jwt != null) {
+        // Shape only — never HttpClient.post to kFcmOauthTokenUri.
+        buildFcmOauthTokenRequest(assertionJwt: jwt);
+      }
     }
     if (!kLiveFcmGateway) {
       return const PushSendResult(sent: false, reason: 'fcm-not-deployed');

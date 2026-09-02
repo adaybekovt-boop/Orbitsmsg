@@ -4,6 +4,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import '../attachments/resumable_blob.dart';
 import '../calls/hyperswarm_signaling.dart';
@@ -70,6 +71,10 @@ class DualStackBridge {
   void Function(String peerId, Object packet)? onDrop;
   final Set<String> _drainedMailboxKeys = <String>{};
   Future<void> _durable = Future<void>.value();
+  final Map<String, List<AttachmentChunk>> _inboundAttach =
+      <String, List<AttachmentChunk>>{};
+  var _inboundAttachBytes = 0;
+  static const int _maxInboundAttachBytes = 50 * 1024 * 1024;
   final AutobaseProjection rooms = AutobaseProjection();
   final List<RoomEvent> roomLog = <RoomEvent>[];
   int _roomSeq = 0;
@@ -412,64 +417,168 @@ class DualStackBridge {
   Future<void> sendAttachmentChunks(
     String peerId,
     List<int> plaintext,
-    List<int> fileKey,
-  ) {
+    List<int> fileKey, {
+    String fileId = '',
+  }) {
     return _sendAttachmentChunks(
       peerId,
       ResumableAttachment.chunk(plaintext, fileKey),
+      fileId: fileId,
     );
   }
 
   /// Chunk plaintext from a stream (path `openRead`) so a large file
   /// never becomes one Dart `Uint8List`. [fileKey] stays local — it is
-  /// not journaled.
+  /// not journaled and must travel in the ratcheted chat envelope, not
+  /// on this channel.
   Future<void> sendAttachmentStream(
     String peerId,
     Stream<List<int>> plaintext,
-    List<int> fileKey,
-  ) async {
-    final chunks =
-        await ResumableAttachment.chunkFromByteStream(plaintext, fileKey);
-    await _sendAttachmentChunks(peerId, chunks);
+    List<int> fileKey, {
+    String fileId = '',
+  }) async {
+    final norm = normalizePeerId(peerId);
+    if (isBlocked(norm)) return;
+    final id = fileId.isEmpty
+        ? 'att-${DateTime.now().millisecondsSinceEpoch}'
+        : fileId;
+    List<int>? firstCipher;
+    var count = 0;
+    var total = 0;
+    await for (final chunk
+        in ResumableAttachment.chunkStream(plaintext, fileKey)) {
+      await _sendOneAttachChunk(norm, chunk, fileId: id);
+      firstCipher ??= List<int>.from(chunk.ciphertext);
+      count++;
+      total += chunk.ciphertext.length;
+    }
+    if (firstCipher == null) return;
+    _journalAttachmentPublished(
+      norm,
+      firstCipher: firstCipher,
+      chunkCount: count,
+      totalBytes: total,
+    );
   }
 
   Future<void> _sendAttachmentChunks(
     String peerId,
-    List<AttachmentChunk> chunks,
-  ) async {
+    List<AttachmentChunk> chunks, {
+    String fileId = '',
+  }) async {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return;
+    final id = fileId.isEmpty
+        ? 'att-${DateTime.now().millisecondsSinceEpoch}'
+        : fileId;
     for (final chunk in chunks) {
-      await transport.send(
-        norm,
-        TransportChannel.attachment,
-        jsonPayload({
-          'type': 'attach-chunk',
-          'index': chunk.index,
-          'offset': chunk.offset,
-          'hash': chunk.hash,
-          'b64': base64Encode(chunk.ciphertext),
-        }),
-      );
+      await _sendOneAttachChunk(norm, chunk, fileId: id);
     }
     if (chunks.isEmpty) return;
     var total = 0;
     for (final chunk in chunks) {
       total += chunk.ciphertext.length;
     }
+    _journalAttachmentPublished(
+      norm,
+      firstCipher: List<int>.from(chunks.first.ciphertext),
+      chunkCount: chunks.length,
+      totalBytes: total,
+    );
+  }
+
+  Future<void> _sendOneAttachChunk(
+    String norm,
+    AttachmentChunk chunk, {
+    required String fileId,
+  }) {
+    return transport.send(
+      norm,
+      TransportChannel.attachment,
+      jsonPayload({
+        'type': 'attach-chunk',
+        'fileId': fileId,
+        'index': chunk.index,
+        'offset': chunk.offset,
+        'hash': chunk.hash,
+        'b64': base64Encode(chunk.ciphertext),
+      }),
+    );
+  }
+
+  void _journalAttachmentPublished(
+    String norm, {
+    required List<int> firstCipher,
+    required int chunkCount,
+    required int totalBytes,
+  }) {
     final record = journal.append(
       ReplicationEventKind.attachmentPublished,
       <String, Object?>{
         'eventId':
-            '${DateTime.now().millisecondsSinceEpoch}-$norm-att-${chunks.length}',
+            '${DateTime.now().millisecondsSinceEpoch}-$norm-att-$chunkCount',
         'conversationId': norm,
-        'encryptedEnvelope': List<int>.from(chunks.first.ciphertext),
-        'chunkCount': chunks.length,
-        'totalBytes': total,
+        'encryptedEnvelope': firstCipher,
+        'chunkCount': chunkCount,
+        'totalBytes': totalBytes,
       },
     );
     unawaited(_persistDurable(record));
     hypercore.append(record);
+  }
+
+  /// Decrypt inbound `attach-chunk` ciphertext with the fileKey from the
+  /// ratcheted chat envelope. Never journals the key.
+  Uint8List? decryptInboundAttachment(
+    String fromPeerId,
+    String fileId,
+    List<int> fileKey,
+  ) {
+    if (fileId.isEmpty || fileKey.isEmpty) return null;
+    final key = '${normalizePeerId(fromPeerId)}\x1f$fileId';
+    final chunks = _inboundAttach.remove(key);
+    if (chunks == null || chunks.isEmpty) return null;
+    for (final chunk in chunks) {
+      _inboundAttachBytes -= chunk.ciphertext.length;
+    }
+    if (_inboundAttachBytes < 0) _inboundAttachBytes = 0;
+    try {
+      return ResumableAttachment.decrypt(chunks, fileKey);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _ingestAttachChunk(String fromPeerId, Map<String, Object?> frame) {
+    if (frame.containsKey('fileKey') || frame.containsKey('fileKeyB64')) {
+      return;
+    }
+    final fileId = frame['fileId'] as String? ?? '';
+    final hash = frame['hash'] as String? ?? '';
+    final b64 = frame['b64'] as String? ?? '';
+    final index = frame['index'];
+    final offset = frame['offset'];
+    if (fileId.isEmpty || hash.isEmpty || b64.isEmpty) return;
+    if (index is! num || offset is! num) return;
+    List<int> cipher;
+    try {
+      cipher = base64Decode(b64);
+    } catch (_) {
+      return;
+    }
+    if (cipher.isEmpty) return;
+    if (_inboundAttachBytes + cipher.length > _maxInboundAttachBytes) return;
+    final key = '$fromPeerId\x1f$fileId';
+    final list = _inboundAttach.putIfAbsent(key, () => <AttachmentChunk>[]);
+    list.add(
+      AttachmentChunk(
+        index: index.toInt(),
+        offset: offset.toInt(),
+        ciphertext: Uint8List.fromList(cipher),
+        hash: hash,
+      ),
+    );
+    _inboundAttachBytes += cipher.length;
   }
 
   Future<bool> sendEphemeral(String peerId, Object? msg) async {
@@ -669,7 +778,12 @@ class DualStackBridge {
         return;
       }
       try {
-        onDrop?.call(norm, decodeJsonPayload(bytes));
+        final decoded = decodeJsonPayload(bytes);
+        if (decoded['type'] == 'attach-chunk') {
+          _ingestAttachChunk(norm, decoded);
+          return;
+        }
+        onDrop?.call(norm, decoded);
       } catch (_) {}
       return;
     }

@@ -33,6 +33,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/path_byte_stream.dart';
 import '../core/bundle_cache.dart';
 import '../core/wire_crypto.dart'
     show
@@ -400,6 +401,37 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     if (_dual?.isNativeConnected(remoteId) == true) return true;
     final conn = getConn(remoteId, 'reliable');
     return conn != null && conn.open;
+  }
+
+  /// Whether a native mailbox can take an encrypted envelope while the
+  /// peer is offline. Default rollout is off, so this is false in product.
+  bool canDepositMailbox(String remoteId) {
+    final dual = _dual;
+    if (dual == null || !dual.nativeEnabled) return false;
+    if (dual.secrets.get(remoteId) == null) return false;
+    return dual.hasMailbox;
+  }
+
+  /// Native chat attachment path. PeerJS chat still uses base64 in
+  /// [MessagingNotifier.sendFile]. Rooms stay host-plaintext bytes.
+  Future<bool> sendChatAttachmentFromPath(
+    String remoteId,
+    String path, {
+    required List<int> fileKey,
+    required String fileId,
+  }) async {
+    final dual = _dual;
+    if (dual == null || !dual.canUseNative(remoteId)) return false;
+    if (fileKey.isEmpty || fileId.isEmpty) return false;
+    final stream = openLocalPathByteStream(path);
+    if (stream == null) return false;
+    await dual.sendAttachmentStream(
+      remoteId,
+      stream,
+      fileKey,
+      fileId: fileId,
+    );
+    return true;
   }
 
   /// Send a raw Orbits-Drop packet on the reliable channel — a control [Map]
@@ -787,6 +819,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
           // Same — sound cue hooks live in a future audio slice.
         },
         isAppInForeground: () => true,
+        assembleNativeAttachment: (rid, fileId, key) async {
+          return _dual?.decryptInboundAttachment(rid, fileId, key);
+        },
     );
   }
 

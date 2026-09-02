@@ -7,16 +7,24 @@
   "kLiveApnsGateway": false,
   "kLiveFcmGateway": false,
   "kLiveStorageFleet": false,
+  "kLiveSignedRelayDirectory": false,
   "voipBackgroundMode": false,
   "tracking": false,
   "collectsMessageBodies": false,
   "pushPayload": "opaqueWakeToken only",
+  "encryptionExport": {
+    "usesStandardHttps": true,
+    "oneToOne": "X3DH + Double Ratchet on device; bodies are not readable by relays",
+    "rooms": "host-plaintext; DTLS only protects the hop to the host",
+    "customMilitaryClaims": false
+  },
   "dataSafety": {
     "oneToOne": "X3DH + Double Ratchet; bodies stay on device",
     "rooms": "host-plaintext; UI warning required",
     "metadata": "PeerJS and STUN see connection metadata on the default live path",
     "account": false,
     "encryptionAtRest": "device vault",
-    "mailbox": "encrypted envelopes only, and only if a fleet is deployed (none today)"
+    "mailbox": "encrypted envelopes only, and only if a fleet is deployed (none today)",
+    "push": "not sent; APNs/FCM JWT and OAuth assertion may be built and are not exchanged"
   }
 }
