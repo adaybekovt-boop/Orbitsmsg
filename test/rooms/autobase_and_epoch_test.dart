@@ -48,14 +48,15 @@ void main() {
       roomEventFromNativePacket(
         {
           'type': 'room_join',
+          'roomId': 'room-1',
           'abWriter': 'a',
           'abSeq': 0,
           'guestPeerId': 'p1',
           'guestName': 'Pat',
         },
         fallbackWriter: 'x',
-      )?.kind,
-      'membership',
+      )?.payload['roomId'],
+      'room-1',
     );
   });
 

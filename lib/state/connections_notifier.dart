@@ -61,6 +61,7 @@ import '../replication/memory_journal.dart';
 import '../replication/drift_projector.dart';
 import '../rooms/autobase_log.dart';
 import '../storage/db.dart' as db;
+import '../transport/replication_schema.dart';
 import '../transport/device_binding.dart';
 import '../transport/dual_stack_bridge.dart';
 import '../transport/peerjs_window.dart';
@@ -298,7 +299,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   }
 
   /// Replay the native journal into Drift after decrypt. Block list runs
-  /// first. Drift is not the sync source of truth.
+  /// first. Drift is not the sync source of truth. Non-message kinds
+  /// (devices, block, attachment metadata, membership) never carry
+  /// fileKey / plaintext / ratchet scalars.
   Future<int> restoreReadModelFromJournal() async {
     final journal = _nativeJournal;
     if (journal == null) return 0;
@@ -329,7 +332,55 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
           'status': msg.status,
         });
       },
+      persistNonMessage: _persistProjectedNonMessage,
     );
+  }
+
+  Future<void> _persistProjectedNonMessage(ProjectedNonMessage event) async {
+    switch (event.kind) {
+      case ReplicationEventKind.deviceRevoked:
+        final id = event.fields['deviceId'] as String?;
+        if (id != null && id.isNotEmpty) deviceRegistry.revoke(id);
+      case ReplicationEventKind.deviceAuthorized:
+        // Journal has deviceId only — never reconstruct transport keys.
+        break;
+      case ReplicationEventKind.contactBlocked:
+        final peerId = (event.fields['peerId'] as String?) ??
+            (event.fields['conversationId'] as String?) ??
+            '';
+        if (peerId.isEmpty) return;
+        await db.setPeerBlocked(peerId, event.fields['blocked'] != false);
+      case ReplicationEventKind.attachmentPublished:
+        // Metadata only. Ciphertext is not a Drift chat row.
+        break;
+      case ReplicationEventKind.attachmentExpired:
+        final id = event.fields['eventId'] as String?;
+        if (id != null && id.isNotEmpty) await db.deleteFileBlob(id);
+      case ReplicationEventKind.roomMembershipChanged:
+        final roomId = event.fields['roomId'] as String? ?? '';
+        final peerId = event.fields['peerId'] as String? ?? '';
+        if (roomId.isEmpty || peerId.isEmpty) return;
+        final action = event.fields['action'] as String? ?? 'join';
+        final online = action != 'leave' && action != 'kick';
+        await db.saveRoomMember({
+          'roomId': roomId,
+          'peerId': peerId,
+          'displayName': event.fields['displayName'] as String? ?? peerId,
+          'isOnline': online,
+        });
+      case ReplicationEventKind.messageEnvelopeCreated:
+      case ReplicationEventKind.deliveryAcknowledged:
+      case ReplicationEventKind.readAcknowledged:
+      case ReplicationEventKind.messageTombstoned:
+        break;
+    }
+  }
+
+  /// Persist the local block flag and, when the native journal is bound,
+  /// append `contactBlocked` so restore can replay it.
+  Future<void> setPeerBlockedAndJournal(String peerId, bool blocked) async {
+    await db.setPeerBlocked(peerId, blocked);
+    _dual?.journalContactBlocked(peerId: peerId, blocked: blocked);
   }
 
   Future<void> unbindNativeTransport() async {

@@ -58,6 +58,7 @@ RoomEvent? roomEventFromNativePacket(
         seq: seq,
         kind: 'membership',
         payload: {
+          if (packet['roomId'] != null) 'roomId': packet['roomId'],
           'peerId': peer,
           'action': 'join',
           'displayName': packet['guestName'] as String? ?? peer,
@@ -72,7 +73,11 @@ RoomEvent? roomEventFromNativePacket(
         writerId: writer,
         seq: seq,
         kind: 'membership',
-        payload: {'peerId': peer, 'action': 'leave'},
+        payload: {
+          if (packet['roomId'] != null) 'roomId': packet['roomId'],
+          'peerId': peer,
+          'action': 'leave',
+        },
       );
     case 'room_channel_create':
       final raw = packet['channel'];

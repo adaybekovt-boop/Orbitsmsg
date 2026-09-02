@@ -133,4 +133,177 @@ void main() {
     expect(decrypted, ['c1']);
     expect(persisted, ['e-ok']);
   });
+
+  test('live apply and replay match with mixed non-message kinds', () async {
+    final journal = MemoryJournal('dev-a');
+    Future<Map<String, Object?>?> decrypt(List<int> enc, String conv) async => {
+          'text': String.fromCharCodes(enc),
+        };
+    journal.appendEnvelope(
+      const MessageEnvelopeCreated(
+        eventId: 'e1',
+        conversationId: 'c1',
+        senderIdentity: 'alice',
+        senderDeviceId: 'dev-a',
+        logicalSequence: 1,
+        createdAt: 1,
+        encryptedEnvelope: <int>[72, 105],
+      ),
+    );
+    journal.append(ReplicationEventKind.deviceAuthorized, {
+      'deviceId': 'dev-b',
+      'createdAt': 2,
+    });
+    journal.append(ReplicationEventKind.deviceRevoked, {
+      'deviceId': 'dev-gone',
+      'createdAt': 3,
+    });
+    journal.append(ReplicationEventKind.contactBlocked, {
+      'conversationId': 'eve',
+      'peerId': 'eve',
+      'blocked': true,
+    });
+    journal.append(ReplicationEventKind.attachmentPublished, {
+      'eventId': 'att-1',
+      'conversationId': 'c1',
+      'encryptedEnvelope': <int>[9, 9, 9],
+      'chunkCount': 2,
+      'totalBytes': 40,
+    });
+    journal.append(ReplicationEventKind.roomMembershipChanged, {
+      'roomId': 'room-1',
+      'peerId': 'guest-1',
+      'action': 'join',
+      'displayName': 'Guest',
+    });
+    journal.append(ReplicationEventKind.attachmentExpired, {
+      'eventId': 'att-1',
+      'conversationId': 'c1',
+    });
+
+    final live = JournalProjector(decrypt: decrypt);
+    await live.applyAll(journal);
+    final replay = JournalProjector(decrypt: decrypt);
+    await replay.applyAll(journal);
+    expect(live.matches(replay), isTrue);
+    expect(live.devices['dev-b'], 'authorized');
+    expect(live.devices['dev-gone'], 'revoked');
+    expect(live.blocked['eve'], isTrue);
+    expect(live.attachments['att-1']?.expired, isTrue);
+    expect(live.attachments['att-1']?.chunkCount, 2);
+    expect(live.membership.containsKey('room-1\x1fguest-1'), isTrue);
+    expect(live.messages['e1']?.plaintext, 'Hi');
+  });
+
+  test('attachmentPublished does not decrypt or persist as chat', () async {
+    final journal = MemoryJournal('dev-a');
+    var decryptCalls = 0;
+    final persisted = <String>[];
+    final meta = <ProjectedNonMessage>[];
+    journal.append(ReplicationEventKind.attachmentPublished, {
+      'eventId': 'att-plain',
+      'conversationId': 'c1',
+      'encryptedEnvelope': <int>[1, 2, 3],
+      'chunkCount': 4,
+      'totalBytes': 100,
+    });
+    final projector = JournalProjector(
+      decrypt: (enc, conv) async {
+        decryptCalls++;
+        return {'text': 'LEAK'};
+      },
+      persist: (msg) async => persisted.add(msg.eventId),
+      persistNonMessage: (event) async => meta.add(event),
+    );
+    await projector.applyAll(journal);
+    expect(decryptCalls, 0);
+    expect(persisted, isEmpty);
+    expect(projector.messages, isEmpty);
+    expect(projector.attachments['att-plain']?.chunkCount, 4);
+    expect(meta, hasLength(1));
+    expect(meta.single.kind, ReplicationEventKind.attachmentPublished);
+    expect(meta.single.fields.containsKey('encryptedEnvelope'), isFalse);
+    expect(meta.single.fields.containsKey('fileKey'), isFalse);
+  });
+
+  test('block list skips attachment persist and later journaled blocks skip decrypt',
+      () async {
+    final journal = MemoryJournal('dev-a');
+    journal.append(ReplicationEventKind.contactBlocked, {
+      'conversationId': 'eve',
+      'peerId': 'eve',
+      'blocked': true,
+    });
+    journal.append(ReplicationEventKind.attachmentPublished, {
+      'eventId': 'att-eve',
+      'conversationId': 'eve',
+      'encryptedEnvelope': <int>[1],
+      'chunkCount': 1,
+      'totalBytes': 1,
+    });
+    journal.appendEnvelope(
+      const MessageEnvelopeCreated(
+        eventId: 'e-eve',
+        conversationId: 'eve',
+        senderIdentity: 'eve',
+        senderDeviceId: 'dev-e',
+        logicalSequence: 1,
+        createdAt: 1,
+        encryptedEnvelope: <int>[72, 105],
+      ),
+    );
+    final decrypted = <String>[];
+    final meta = <ReplicationEventKind>[];
+    final projector = JournalProjector(
+      decrypt: (enc, conv) async {
+        decrypted.add(conv);
+        return {'text': String.fromCharCodes(enc)};
+      },
+      persistNonMessage: (event) async => meta.add(event.kind),
+    );
+    await projector.applyAll(journal);
+    expect(decrypted, isEmpty);
+    expect(projector.messages, isEmpty);
+    expect(projector.attachments.containsKey('att-eve'), isFalse);
+    expect(meta, [ReplicationEventKind.contactBlocked]);
+  });
+
+  test('device revoke is terminal and membership round-trips', () async {
+    final journal = MemoryJournal('dev-a');
+    journal.append(ReplicationEventKind.deviceAuthorized, {
+      'deviceId': 'd1',
+    });
+    journal.append(ReplicationEventKind.deviceRevoked, {
+      'deviceId': 'd1',
+    });
+    journal.append(ReplicationEventKind.deviceAuthorized, {
+      'deviceId': 'd1',
+    });
+    journal.append(ReplicationEventKind.roomMembershipChanged, {
+      'roomId': 'r1',
+      'peerId': 'p1',
+      'action': 'join',
+    });
+    journal.append(ReplicationEventKind.roomMembershipChanged, {
+      'roomId': 'r1',
+      'peerId': 'p1',
+      'action': 'leave',
+    });
+    final events = <ProjectedNonMessage>[];
+    final projector = JournalProjector(
+      decrypt: (enc, conv) async => {'text': ''},
+      persistNonMessage: (event) async => events.add(event),
+    );
+    await projector.applyAll(journal);
+    expect(projector.devices['d1'], 'revoked');
+    expect(projector.membership['r1\x1fp1'], 'leave');
+    expect(
+      events.where((e) => e.kind == ReplicationEventKind.deviceAuthorized),
+      hasLength(1),
+    );
+    expect(
+      events.last.fields.containsKey('rootKey'),
+      isFalse,
+    );
+  });
 }

@@ -236,6 +236,7 @@ void main() {
     expect(
       a.sendRoomPacket('ORBIT-BBBBBBBBBBBBBBBB', {
         'type': 'room_join',
+        'roomId': 'room-live',
         'guestPeerId': 'ORBIT-AAAAAAAAAAAAAAAA',
         'guestName': 'A',
       }),
@@ -275,6 +276,15 @@ void main() {
     );
     expect(a.rooms.state.members['ORBIT-AAAAAAAAAAAAAAAA'], 'A');
     expect(b.rooms.state.members['ORBIT-AAAAAAAAAAAAAAAA'], 'A');
+    expect(
+      a.journal.records.any(
+        (r) =>
+            r.kind == ReplicationEventKind.roomMembershipChanged &&
+            r.fields['roomId'] == 'room-live' &&
+            r.fields['peerId'] == 'ORBIT-AAAAAAAAAAAAAAAA',
+      ),
+      isTrue,
+    );
     expect(
       b.rooms.state.messages.any((m) => m['text'] == 'host-plaintext'),
       isTrue,
@@ -349,6 +359,42 @@ void main() {
       restored.records.every((r) => !r.fields.containsKey('rootKey')),
       isTrue,
     );
+  });
+
+  test('contactBlocked and attachmentExpired journal without secrets', () async {
+    final (a, b, _) = await linked();
+    a.journalContactBlocked(
+      peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+      blocked: true,
+    );
+    a.journalAttachmentExpired(
+      eventId: 'att-gone',
+      conversationId: 'ORBIT-BBBBBBBBBBBBBBBB',
+    );
+    expect(
+      a.journal.records.any(
+        (r) =>
+            r.kind == ReplicationEventKind.contactBlocked &&
+            r.fields['peerId'] == 'ORBIT-BBBBBBBBBBBBBBBB' &&
+            r.fields['blocked'] == true,
+      ),
+      isTrue,
+    );
+    expect(
+      a.journal.records.any(
+        (r) =>
+            r.kind == ReplicationEventKind.attachmentExpired &&
+            r.fields['eventId'] == 'att-gone',
+      ),
+      isTrue,
+    );
+    expect(
+      a.journal.records.every((r) => !r.fields.containsKey('fileKey')),
+      isTrue,
+    );
+    expect(await a.verifyLiveMatchesReplay(), isTrue);
+    await a.detach();
+    await b.detach();
   });
 
   test('attachment chunks journal ciphertext and never the fileKey', () async {
@@ -1190,6 +1236,7 @@ void main() {
           seq: 0,
           kind: 'membership',
           payload: {
+            'roomId': 'room-ab',
             'peerId': 'ORBIT-AAAAAAAAAAAAAAAA',
             'action': 'join',
             'displayName': 'A',
@@ -1206,6 +1253,7 @@ void main() {
           seq: 0,
           kind: 'membership',
           payload: {
+            'roomId': 'room-ab',
             'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
             'action': 'join',
             'displayName': 'B',
@@ -1247,6 +1295,14 @@ void main() {
     expect(
       a.journal.records.any(
         (r) => r.kind == ReplicationEventKind.roomMembershipChanged,
+      ),
+      isTrue,
+    );
+    expect(
+      a.journal.records.any(
+        (r) =>
+            r.kind == ReplicationEventKind.roomMembershipChanged &&
+            r.fields['roomId'] == 'room-ab',
       ),
       isTrue,
     );

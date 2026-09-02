@@ -313,6 +313,46 @@ class DualStackBridge {
     hypercore.append(record);
   }
 
+  /// Local block list is Drift + the inbound [isBlocked] hook. This
+  /// journals the decision so restore can replay it. No secrets.
+  void journalContactBlocked({
+    required String peerId,
+    required bool blocked,
+  }) {
+    final norm = normalizePeerId(peerId);
+    if (norm.isEmpty) return;
+    final record = journal.append(
+      ReplicationEventKind.contactBlocked,
+      <String, Object?>{
+        'conversationId': norm,
+        'peerId': norm,
+        'blocked': blocked,
+        'createdAt': DateTime.now().millisecondsSinceEpoch,
+      },
+    );
+    unawaited(_persistDurable(record));
+    hypercore.append(record);
+  }
+
+  /// Metadata-only expiry. Ciphertext and fileKey stay out of the journal.
+  void journalAttachmentExpired({
+    required String eventId,
+    String? conversationId,
+  }) {
+    if (eventId.isEmpty) return;
+    final record = journal.append(
+      ReplicationEventKind.attachmentExpired,
+      <String, Object?>{
+        'eventId': eventId,
+        if (conversationId != null && conversationId.isNotEmpty)
+          'conversationId': conversationId,
+        'createdAt': DateTime.now().millisecondsSinceEpoch,
+      },
+    );
+    unawaited(_persistDurable(record));
+    hypercore.append(record);
+  }
+
   Future<int> drainMailbox({String? fromPeerId}) async {
     final token = mailboxToken;
     final writer = mailboxWriterKey;
@@ -780,8 +820,11 @@ class DualStackBridge {
     final record = journal.append(
       ReplicationEventKind.roomMembershipChanged,
       <String, Object?>{
+        if (event.payload['roomId'] != null) 'roomId': event.payload['roomId'],
         'peerId': event.payload['peerId'],
         'action': event.payload['action'],
+        if (event.payload['displayName'] != null)
+          'displayName': event.payload['displayName'],
         'createdAt': DateTime.now().millisecondsSinceEpoch,
       },
     );
