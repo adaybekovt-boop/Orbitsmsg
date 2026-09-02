@@ -8,6 +8,7 @@ import 'package:crypto/crypto.dart';
 
 import 'opaque_wake.dart';
 import 'push_gateway.dart';
+import 'push_registration.dart';
 import 'apns_provider_jwt.dart';
 import 'fcm_oauth_token_request.dart';
 import 'fcm_service_account_jwt.dart';
@@ -35,6 +36,9 @@ class PushSendResult {
   final String reason;
 }
 
+/// Env origin for local `tool/push_gateway`. Never Apple / Google.
+const String kPushGatewayOriginEnv = 'ORBITS_PUSH_GATEWAY_ORIGIN';
+
 /// True only for loopback HTTP origins used by `tool/push_gateway`.
 ///
 /// Allowed: `http://127.0.0.1`, `http://localhost`, `http://[::1]`
@@ -46,6 +50,41 @@ bool localPushOriginIsLoopback(String origin) {
   }
   final host = uri.host;
   return host == '127.0.0.1' || host == 'localhost' || host == '::1';
+}
+
+/// Loopback `tool/push_gateway` only. Missing / public / HTTPS → null.
+String? resolvePushGatewayOrigin({Map<String, String>? env}) {
+  final raw = env?[kPushGatewayOriginEnv];
+  if (raw == null || raw.trim().isEmpty) return null;
+  final origin = raw.trim();
+  if (!localPushOriginIsLoopback(origin)) return null;
+  return origin;
+}
+
+/// Deposit wake: local intake, then APNs/FCM builders with **on-device**
+/// tokens (still refused while live flags are false), then optional
+/// loopback HTTP. Never a dummy `undeployed` token. Never a peer id.
+Future<void> dispatchMailboxWake({
+  required OpaqueWake wake,
+  required DevicePushTokenStore tokens,
+  PushSender sender = const PushSender(),
+  String? localOrigin,
+  Future<void> Function(OpaqueWake wake)? onLocalIntake,
+}) async {
+  if (onLocalIntake != null) {
+    await onLocalIntake(wake);
+  }
+  final apns = tokens.apnsToken;
+  if (apns != null && apns.isNotEmpty) {
+    await sender.sendApns(deviceToken: apns, wake: wake);
+  }
+  final fcm = tokens.fcmToken;
+  if (fcm != null && fcm.isNotEmpty) {
+    await sender.sendFcm(deviceToken: fcm, wake: wake);
+  }
+  if (localOrigin != null && localOrigin.isNotEmpty) {
+    await sender.sendLocalHttp(origin: localOrigin, wake: wake);
+  }
 }
 
 class PushSender {

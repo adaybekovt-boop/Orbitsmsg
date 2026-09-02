@@ -61,6 +61,10 @@ void main() {
     expect(src, contains('PushGateway'));
     expect(src, contains('ingestFcm'));
     expect(src, contains('acceptPushToken'));
+    expect(src, contains('dispatchMailboxWake'));
+    expect(src, contains('pushRegistration.tokens'));
+    expect(src, contains('resolvePushGatewayOrigin'));
+    expect(src, isNot(contains("'undeployed'")));
     expect(src, contains('onDoze'));
     expect(src, contains('onLowBattery'));
     expect(src, contains('onBatteryOkay'));

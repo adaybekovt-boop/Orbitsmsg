@@ -42,6 +42,54 @@ void main() {
     expect(store.debugSummary().containsKey('fcmToken'), isFalse);
   });
 
+  test('push gateway origin is loopback-only', () {
+    expect(
+      resolvePushGatewayOrigin(
+        env: const {kPushGatewayOriginEnv: 'http://127.0.0.1:8788'},
+      ),
+      'http://127.0.0.1:8788',
+    );
+    expect(
+      resolvePushGatewayOrigin(
+        env: const {kPushGatewayOriginEnv: 'https://api.push.apple.com'},
+      ),
+      isNull,
+    );
+    expect(
+      resolvePushGatewayOrigin(
+        env: const {kPushGatewayOriginEnv: 'http://evil.example'},
+      ),
+      isNull,
+    );
+    expect(resolvePushGatewayOrigin(env: const {}), isNull);
+  });
+
+  test('mailbox wake uses stored tokens, never a dummy undeployed token',
+      () async {
+    const wake = OpaqueWake(
+      opaqueWakeToken: 'tok',
+      collapseId: 'c1',
+      protocolVersion: 1,
+    );
+    final tokens = DevicePushTokenStore()
+      ..setApns('apns-on-device')
+      ..setFcm('fcm-on-device');
+    var intake = 0;
+    await dispatchMailboxWake(
+      wake: wake,
+      tokens: tokens,
+      onLocalIntake: (_) async {
+        intake++;
+      },
+      localOrigin: 'https://api.push.apple.com',
+    );
+    expect(intake, 1);
+    expect(tokens.apnsToken, 'apns-on-device');
+    expect(tokens.fcmToken, 'fcm-on-device');
+    expect(kLiveApnsGateway, isFalse);
+    expect(kLiveFcmGateway, isFalse);
+  });
+
   test('native push registration is skipped while gateways are off', () async {
     final reg = PushRegistration();
     expect(reg.shouldRegisterNative, isFalse);

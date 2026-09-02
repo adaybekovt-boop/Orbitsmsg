@@ -51,6 +51,9 @@ enabled — do not promise always-on P2P.
   `app.orbits/push` (`wake`) when Flutter is attached. iOS APNs device
   tokens arrive as `token` on the same channel and stay on-device.
   A public push gateway is still not deployed.
+  Mailbox deposit wakes call `dispatchMailboxWake` with on-device
+  tokens (never a dummy `undeployed` token) and may POST the opaque
+  wake to loopback `ORBITS_PUSH_GATEWAY_ORIGIN` only.
   `PushSender.sendApns` / `sendFcm` refuse while `kLiveApnsGateway` /
   `kLiveFcmGateway` are false. An APNs provider ES256 JWT may be built
   (Apple p8 scalar, not the identity key) and is still not sent. An FCM

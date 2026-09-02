@@ -207,9 +207,14 @@ class NativeTransportHost {
     push = PushGateway(wake!);
     _ref.read(connectionsNotifierProvider.notifier).nativeBridge?.onMailboxWake =
         (w) async {
-      await wake?.handle(w.toJson());
-      await const PushSender().sendApns(deviceToken: 'undeployed', wake: w);
-      await const PushSender().sendFcm(deviceToken: 'undeployed', wake: w);
+      await dispatchMailboxWake(
+        wake: w,
+        tokens: pushRegistration.tokens,
+        localOrigin: resolvePushGatewayOrigin(env: Platform.environment),
+        onLocalIntake: (next) async {
+          await wake?.handle(next.toJson());
+        },
+      );
     };
     attached = true;
   }
