@@ -63,6 +63,22 @@ LocalWorkletBundle inspectLocalWorkletBundle({
     );
   }
   final manifest = jsonDecode(manifestFile.readAsStringSync()) as Map;
+  final files = manifest['files'];
+  if (files is Map) {
+    final srcDir = script.parent;
+    for (final entry in files.entries) {
+      final name = entry.key.toString();
+      final expected = entry.value.toString();
+      final file = File('${srcDir.path}${Platform.pathSeparator}$name');
+      if (!file.existsSync()) {
+        throw StateError('local Bare bundle missing: $name');
+      }
+      final digest = sha256.convert(file.readAsBytesSync()).toString();
+      if (digest != expected) {
+        throw StateError('local bundle hash mismatch: $name');
+      }
+    }
+  }
   final actual = script.existsSync()
       ? sha256.convert(script.readAsBytesSync()).toString()
       : '';

@@ -21,11 +21,22 @@ class BareRuntimeLaunch {
 /// 1. `ORBITS_BARE_BIN` (absolute local path)
 /// 2. `tool/bare/bare.exe` / `tool/bare/bare` next to the repo
 /// 3. `node` for CI / desktop harness
-BareRuntimeLaunch resolveBareRuntime(File worklet) {
+BareRuntimeLaunch resolveBareRuntime(
+  File worklet, {
+  bool allowNode = true,
+  bool releaseMode = false,
+}) {
   final env = Platform.environment['ORBITS_BARE_BIN'];
-  if (env != null && env.isNotEmpty && File(env).existsSync()) {
+  if (env != null && env.isNotEmpty) {
+    if (releaseMode) {
+      throw StateError('ORBITS_BARE_BIN is disabled in release builds');
+    }
+    final file = File(env);
+    if (!file.existsSync() || !file.isAbsolute) {
+      throw StateError('ORBITS_BARE_BIN must be an absolute local path');
+    }
     return BareRuntimeLaunch(
-      executable: env,
+      executable: file.path,
       arguments: [worklet.path],
       kind: 'bare',
     );
@@ -37,6 +48,9 @@ BareRuntimeLaunch resolveBareRuntime(File worklet) {
       arguments: [worklet.path],
       kind: 'bare',
     );
+  }
+  if (!allowNode || releaseMode) {
+    throw StateError('BARE_RUNTIME_MISSING');
   }
   return BareRuntimeLaunch(
     executable: 'node',

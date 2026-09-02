@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'bare_ipc_client.dart';
 import 'bare_runtime.dart';
 import 'device_binding.dart';
+import 'local_worklet_bundle.dart';
 import 'transport_api.dart';
 
 const _bundledWorkletFiles = <String>[
@@ -28,10 +29,17 @@ const _bundledWorkletFiles = <String>[
 Future<WorkletOrbitsTransport?> spawnWorkletTransport({
   String backend = 'loopback',
 }) async {
-  final script = _resolveWorklet() ?? await extractBundledWorklet();
+  inspectLocalWorkletBundle().assertSafeForProduction();
+  final script =
+      _resolveWorklet(releaseMode: kReleaseMode) ??
+      await extractBundledWorklet();
   if (script == null) return null;
   try {
-    final launch = resolveBareRuntime(script);
+    final launch = resolveBareRuntime(
+      script,
+      allowNode: !kReleaseMode,
+      releaseMode: kReleaseMode,
+    );
     final proc = await Process.start(
       launch.executable,
       launch.arguments,
@@ -42,15 +50,24 @@ Future<WorkletOrbitsTransport?> spawnWorkletTransport({
       },
     );
     return WorkletOrbitsTransport._(proc, runtime: launch.kind);
+  } on StateError {
+    rethrow;
   } catch (_) {
     return null;
   }
 }
 
-File? _resolveWorklet() {
+File? _resolveWorklet({required bool releaseMode}) {
   final fromEnv = Platform.environment['ORBITS_WORKLET_JS'];
-  if (fromEnv != null && File(fromEnv).existsSync()) {
-    return File(fromEnv);
+  if (fromEnv != null && fromEnv.isNotEmpty) {
+    if (releaseMode) {
+      throw StateError('ORBITS_WORKLET_JS is disabled in release builds');
+    }
+    final file = File(fromEnv);
+    if (!file.isAbsolute || !file.existsSync()) {
+      throw StateError('ORBITS_WORKLET_JS must be an absolute local path');
+    }
+    return file;
   }
   const relative = 'tool/connectivity_harness/src/worklet.js';
   if (File(relative).existsSync()) return File(relative);
@@ -61,14 +78,15 @@ File? _resolveWorklet() {
 Future<File?> extractBundledWorklet() async {
   try {
     final dir = await getApplicationSupportDirectory();
-    final dest = Directory('${dir.path}${Platform.pathSeparator}orbits_worklet');
+    final dest = Directory(
+      '${dir.path}${Platform.pathSeparator}orbits_worklet',
+    );
     await dest.create(recursive: true);
     for (final name in _bundledWorkletFiles) {
-      final data = await rootBundle.load(
-        'tool/connectivity_harness/src/$name',
-      );
-      await File('${dest.path}${Platform.pathSeparator}$name')
-          .writeAsBytes(data.buffer.asUint8List());
+      final data = await rootBundle.load('tool/connectivity_harness/src/$name');
+      await File(
+        '${dest.path}${Platform.pathSeparator}$name',
+      ).writeAsBytes(data.buffer.asUint8List());
     }
     final script = File('${dest.path}${Platform.pathSeparator}worklet.js');
     return script.existsSync() ? script : null;
@@ -120,6 +138,12 @@ class WorkletOrbitsTransport implements OrbitsTransport {
       'binding': {
         'deviceId': binding.deviceId,
         'capabilities': binding.capabilities,
+        'identityPublicKeyB64': base64Encode(binding.identityPublicKey),
+        'transportPublicKeyB64': base64Encode(binding.transportPublicKey),
+        'hypercorePublicKeyB64': base64Encode(binding.hypercorePublicKey),
+        'signatureB64': base64Encode(binding.signatureByIdentityKey),
+        'createdAt': binding.createdAt,
+        'expiresAt': binding.expiresAt,
       },
     });
   }
@@ -140,11 +164,7 @@ class WorkletOrbitsTransport implements OrbitsTransport {
       _client.request('disconnect', {'peerId': peerId});
 
   @override
-  Future<void> send(
-    String peerId,
-    TransportChannel channel,
-    List<int> frame,
-  ) {
+  Future<void> send(String peerId, TransportChannel channel, List<int> frame) {
     return _client.request('send', {
       'peerId': peerId,
       'channel': channel.name,
@@ -161,6 +181,8 @@ class WorkletOrbitsTransport implements OrbitsTransport {
         'sizeBytes': file.sizeBytes,
         'fileName': file.fileName,
         'mime': file.mime,
+        if (file.transferId != null) 'transferId': file.transferId,
+        'resumeOffset': file.resumeOffset,
       },
     });
   }
@@ -176,7 +198,8 @@ class WorkletOrbitsTransport implements OrbitsTransport {
 
   void _onIpcEvent(Map<String, Object?> event) {
     final name = event['name'] as String? ?? '';
-    final payload = (event['payload'] as Map?)?.cast<String, Object?>() ??
+    final payload =
+        (event['payload'] as Map?)?.cast<String, Object?>() ??
         const <String, Object?>{};
     switch (name) {
       case 'connected':
@@ -188,12 +211,16 @@ class WorkletOrbitsTransport implements OrbitsTransport {
       case 'resumed':
         _events.add(const TransportResumed());
       case 'networkChanged':
-        _events.add(TransportNetworkChanged(payload['detail'] as String? ?? ''));
+        _events.add(
+          TransportNetworkChanged(payload['detail'] as String? ?? ''),
+        );
       case 'pathChanged':
         _events.add(
           TransportPathChanged(
             payload['peerId'] as String? ?? '',
-            payload['path'] == 'relay' ? TransportPath.relay : TransportPath.direct,
+            payload['path'] == 'relay'
+                ? TransportPath.relay
+                : TransportPath.direct,
           ),
         );
       case 'frame':
