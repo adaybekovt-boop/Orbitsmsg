@@ -93,6 +93,13 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   @override
   bool get bindsNoisePublicKey => false;
 
+  final List<String> markAuthenticatedCalls = <String>[];
+
+  @override
+  Future<void> markAuthenticated(String peerId) async {
+    markAuthenticatedCalls.add(peerId);
+  }
+
   @override
   Future<void> start(TransportLocalConfiguration config) async {
     _config = config;

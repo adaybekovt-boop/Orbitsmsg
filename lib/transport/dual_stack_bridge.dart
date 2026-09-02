@@ -1927,6 +1927,9 @@ class DualStackBridge {
     authenticated.add(norm);
     remoteBindings[norm] = binding;
     bindingFailures.remove(norm);
+    try {
+      await transport.markAuthenticated(norm);
+    } catch (_) {}
     if (tofuCheck == null &&
         tofu?.status == PinStatus.newPin &&
         binding.identityPublicKey.isNotEmpty) {

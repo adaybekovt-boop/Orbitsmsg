@@ -288,6 +288,12 @@ class InProcessBareWorklet {
       case 'rememberPeer':
         rememberedPeers.add(_params(body));
         return {'ok': true, 'result': <String, Object?>{}};
+      case 'markAuthenticated':
+        final authId = _params(body)['peerId'] as String? ?? '';
+        if (authId.isEmpty || authId.contains('://')) {
+          throw StateError('markAuthenticated refuses peer id');
+        }
+        return {'ok': true, 'result': <String, Object?>{}};
       case 'journal.append':
         final record = _params(body);
         journal.add(record);

@@ -250,6 +250,7 @@ class WorkletOrbitsTransport implements OrbitsTransport {
         'journalDir': config.journalDir,
       if (config.diagnosticsEnabled) 'diagnosticsEnabled': true,
     });
+    // Production never passes harnessAuth:'local'. Worklet stays strict.
     noisePublicKey = noisePublicKeyFromHex(result['noisePublicKey'] as String?);
     await hydrateAutobase();
   }
@@ -299,6 +300,11 @@ class WorkletOrbitsTransport implements OrbitsTransport {
   @override
   Future<void> disconnect(String peerId) =>
       _client.request('disconnect', {'peerId': peerId});
+
+  @override
+  Future<void> markAuthenticated(String peerId) {
+    return _client.request('markAuthenticated', {'peerId': peerId});
+  }
 
   @override
   Future<void> send(

@@ -39,6 +39,9 @@ class WorkletOrbitsTransport implements OrbitsTransport {
   Future<void> disconnect(String peerId) async {}
 
   @override
+  Future<void> markAuthenticated(String peerId) async {}
+
+  @override
   Future<void> send(
     String peerId,
     TransportChannel channel,

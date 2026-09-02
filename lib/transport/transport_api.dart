@@ -206,6 +206,10 @@ abstract class OrbitsTransport {
   /// when the connection key is empty.
   bool get bindsNoisePublicKey => false;
 
+  /// Tell a Bare/worklet carrier the peer completed DeviceBinding.
+  /// Loopback is a no-op. Never a substitute for Dart-side auth.
+  Future<void> markAuthenticated(String peerId) async {}
+
   Future<void> start(TransportLocalConfiguration config);
   Future<void> stop();
 
