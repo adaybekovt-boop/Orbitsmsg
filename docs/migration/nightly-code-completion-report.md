@@ -13,7 +13,8 @@ gate passed.
 | Base | `main` at `671c2e57875d62e56b371a7d4c651de9d2477836` |
 | Starting HEAD | `671c2e57875d62e56b371a7d4c651de9d2477836` (`feat(migration): land Holepunch in-tree while keeping PeerJS live`) |
 | Expected starting commit | Matched. Latest `main` at session start **was** the expected SHA. |
-| Ending code HEAD | `2f6e7e0` (documentation commit follows) |
+| Last implementation commit | `2f6e7e0` |
+| Documentation commits | `87061ea`, plus the commit that pins this line |
 | Flutter | 3.44.7 at `/workspace/.toolchains/flutter-3.44.7` (Dart 3.12.2) |
 
 `kCompletedMigrationPhase` remains **0**. `HyperswarmRollout` default
@@ -37,6 +38,8 @@ started.
 11. `2e95d66` feat(migration): isolate PeerJS and add fail-closed removal plus SBOM listing
 12. `1211a60` feat(transport): complete Bare host lifecycle and pin the local worklet hash
 13. `2f6e7e0` test(migration): add chaos, fuzz, Doze, and journal-corruption recovery
+14. `87061ea` docs(migration): record nightly code-completion evidence
+15. docs pin commit on this branch tip (this file)
 
 ## Files changed by phase
 
