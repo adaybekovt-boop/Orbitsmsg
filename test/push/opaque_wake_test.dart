@@ -59,6 +59,50 @@ void main() {
     expect(OpaqueWake.forbiddenKeys.contains('body'), isTrue);
   });
 
+  test('isSafe rejects forbidden keys nested under a child map', () {
+    const wake = OpaqueWake(
+      opaqueWakeToken: 'tok',
+      collapseId: 'c1',
+      protocolVersion: 1,
+    );
+    final safe = wake.toJson();
+    expect(
+      OpaqueWake.isSafe({
+        ...safe,
+        'extra': {'fileKey': 'x'},
+      }),
+      isFalse,
+    );
+    expect(
+      OpaqueWake.isSafe({
+        ...safe,
+        'extra': {'text': 'hi'},
+      }),
+      isFalse,
+    );
+    expect(
+      OpaqueWake.isSafe({
+        ...safe,
+        'extra': {'discoverySecret': 'd'},
+      }),
+      isFalse,
+    );
+    expect(
+      OpaqueWake.isSafe({
+        ...safe,
+        'extra': {'peerId': 'ORBIT-AA'},
+      }),
+      isFalse,
+    );
+    expect(
+      OpaqueWake.isSafe({
+        ...safe,
+        'ciphertext': <int>[1, 2, 3],
+      }),
+      isTrue,
+    );
+  });
+
   test('live APNs and FCM gateways stay off', () {
     expect(kLiveApnsGateway, isFalse);
     expect(kLiveFcmGateway, isFalse);

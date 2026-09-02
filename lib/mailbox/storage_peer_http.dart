@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import '../transport/fleet_status.dart';
 import 'blind_store.dart';
 import 'storage_peer_client.dart';
 
@@ -215,6 +216,28 @@ class _MailboxHttpTooLarge implements Exception {
   const _MailboxHttpTooLarge();
 }
 
+/// True only for loopback HTTP origins used by the local mailbox peer.
+///
+/// Allowed: `http://127.0.0.1`, `http://localhost`, `http://[::1]`
+/// (any port). HTTPS, other schemes, and public hosts are false.
+bool localStoragePeerOriginIsLoopback(String origin) {
+  final uri = Uri.tryParse(origin);
+  if (uri == null || uri.scheme != 'http' || !uri.hasAuthority) {
+    return false;
+  }
+  final host = uri.host;
+  return host == '127.0.0.1' || host == 'localhost' || host == '::1';
+}
+
+void _refusePublicMailboxOrigin(String origin) {
+  if (!kLiveStorageFleet && !localStoragePeerOriginIsLoopback(origin)) {
+    throw StateError(
+      'mailbox HTTP refused: origin is not loopback while '
+      'kLiveStorageFleet is false',
+    );
+  }
+}
+
 StoragePeerClient httpStoragePeerClient(String origin) {
   return StoragePeerClient(
     putRemote: ({
@@ -222,6 +245,7 @@ StoragePeerClient httpStoragePeerClient(String origin) {
       required writerKey,
       required block,
     }) async {
+      _refusePublicMailboxOrigin(origin);
       final client = HttpClient();
       try {
         final req = await client.postUrl(Uri.parse('$origin/v1/blocks'));
@@ -247,6 +271,7 @@ StoragePeerClient httpStoragePeerClient(String origin) {
       required writerKey,
       fromSeq = 0,
     }) async {
+      _refusePublicMailboxOrigin(origin);
       final client = HttpClient();
       try {
         final uri = Uri.parse(
@@ -276,6 +301,7 @@ StoragePeerClient httpStoragePeerClient(String origin) {
       }
     },
     grantRemote: (cap) async {
+      _refusePublicMailboxOrigin(origin);
       final client = HttpClient();
       try {
         final req = await client.postUrl(Uri.parse('$origin/v1/grant'));
@@ -297,6 +323,7 @@ StoragePeerClient httpStoragePeerClient(String origin) {
       }
     },
     tombstoneRemote: (token, writerKey, seq) async {
+      _refusePublicMailboxOrigin(origin);
       final client = HttpClient();
       try {
         final req = await client.postUrl(Uri.parse('$origin/v1/tombstone'));
@@ -317,6 +344,7 @@ StoragePeerClient httpStoragePeerClient(String origin) {
       }
     },
     statsRemote: ({required token, required writerKey}) async {
+      _refusePublicMailboxOrigin(origin);
       final client = HttpClient();
       try {
         final uri = Uri.parse(

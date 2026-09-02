@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/transport/dht_bootstrap.dart';
+import 'package:orbits_flutter/transport/fleet_status.dart';
 import 'package:orbits_flutter/transport/relay_directory.dart';
 import 'package:orbits_flutter/transport/transport_api.dart';
 
@@ -80,16 +81,28 @@ void main() {
         const DhtBootstrapNode(host: '10.1.0.2', port: 49737),
       ],
     );
-    expect(
-      resolveStoragePeerOrigin(directory: directory),
-      'http://10.3.0.1:8787',
-    );
+    expect(kLiveStorageFleet, isFalse);
+    expect(resolveStoragePeerOrigin(directory: directory), isNull);
     expect(
       resolveStoragePeerOrigin(
         env: const {kStoragePeerOriginEnv: 'http://127.0.0.1:9'},
         directory: directory,
       ),
       'http://127.0.0.1:9',
+    );
+    expect(
+      resolveStoragePeerOrigin(
+        env: const {kStoragePeerOriginEnv: 'https://evil.example'},
+        directory: directory,
+      ),
+      isNull,
+    );
+    expect(
+      resolveStoragePeerOrigin(
+        env: const {kStoragePeerOriginEnv: 'http://evil.example'},
+        directory: directory,
+      ),
+      isNull,
     );
   });
 
@@ -111,6 +124,8 @@ void main() {
     );
     expect(bootstrapNodesFromDirectory(directory), isEmpty);
     expect(storageOriginFromPeer(directory.peers.single), 'http://10.3.0.1:8787');
+    expect(kLiveStorageFleet, isFalse);
+    expect(resolveStoragePeerOrigin(directory: directory), isNull);
   });
 
   test('relayThrough keys come from HyperDHT relay rows only', () {
@@ -259,6 +274,11 @@ void main() {
     );
     expect(relayThroughKeysFromDirectory(directory), [good]);
     expect(kLiveSignedRelayDirectory, isFalse);
+    expect(kLiveStorageFleet, isFalse);
+    expect(
+      resolveStoragePeerOrigin(directory: directory),
+      'http://127.0.0.1:8787',
+    );
   });
 
   test('HTTP lab bootstrap rows are not HyperDHT addresses', () {

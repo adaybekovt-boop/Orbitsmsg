@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/mailbox/blind_store.dart';
 import 'package:orbits_flutter/mailbox/storage_peer_http.dart';
+import 'package:orbits_flutter/transport/fleet_status.dart';
 
 void main() {
   test('HTTP mailbox rejects oversized bodies and rate-limits deposits', () async {
@@ -23,6 +24,8 @@ void main() {
     );
     await http.start();
     addTearDown(http.stop);
+    expect(http.origin, startsWith('http://127.0.0.1:'));
+    expect(localStoragePeerOriginIsLoopback(http.origin), isTrue);
 
     Future<int> put({required String b64, int seq = 0}) async {
       final client = HttpClient();
@@ -117,4 +120,73 @@ void main() {
       client.close(force: true);
     }
   });
+
+  test('kLiveStorageFleet stays false', () {
+    expect(kLiveStorageFleet, isFalse);
+  });
+
+  test('localStoragePeerOriginIsLoopback allows only loopback HTTP', () {
+    expect(localStoragePeerOriginIsLoopback('http://127.0.0.1'), isTrue);
+    expect(localStoragePeerOriginIsLoopback('http://127.0.0.1:8080'), isTrue);
+    expect(localStoragePeerOriginIsLoopback('http://localhost'), isTrue);
+    expect(localStoragePeerOriginIsLoopback('http://localhost:9'), isTrue);
+    expect(localStoragePeerOriginIsLoopback('http://[::1]'), isTrue);
+    expect(localStoragePeerOriginIsLoopback('http://[::1]:1'), isTrue);
+
+    expect(localStoragePeerOriginIsLoopback(''), isFalse);
+    expect(localStoragePeerOriginIsLoopback('https://evil'), isFalse);
+    expect(localStoragePeerOriginIsLoopback('https://evil.example/v1'), isFalse);
+    expect(localStoragePeerOriginIsLoopback('ftp://x'), isFalse);
+    expect(localStoragePeerOriginIsLoopback('file://'), isFalse);
+    expect(localStoragePeerOriginIsLoopback('example.com'), isFalse);
+    expect(localStoragePeerOriginIsLoopback('http://example.com'), isFalse);
+    expect(localStoragePeerOriginIsLoopback('https://127.0.0.1'), isFalse);
+    expect(
+      localStoragePeerOriginIsLoopback('http://127.0.0.1.example.com'),
+      isFalse,
+    );
+  });
+
+  test(
+    'httpStoragePeerClient refuses public origin before HttpClient',
+    () async {
+      expect(kLiveStorageFleet, isFalse);
+      var httpClientBuilt = false;
+      await HttpOverrides.runZoned(
+        () async {
+          final client = httpStoragePeerClient('https://evil.example/v1');
+          const cap = MailboxCapability(
+            token: 't',
+            quotaBytes: 1,
+            retentionMs: 1,
+            expiresAt: 1,
+          );
+          const block = EncryptedBlock(seq: 0, bytes: <int>[], storedAt: 0);
+
+          await expectLater(
+            client.put(token: 't', writerKey: 'w', block: block),
+            throwsA(isA<StateError>()),
+          );
+          await expectLater(
+            client.get(token: 't', writerKey: 'w'),
+            throwsA(isA<StateError>()),
+          );
+          await expectLater(client.grant(cap), throwsA(isA<StateError>()));
+          await expectLater(
+            client.tombstone('t', 'w', 0),
+            throwsA(isA<StateError>()),
+          );
+          await expectLater(
+            client.stats(token: 't', writerKey: 'w'),
+            throwsA(isA<StateError>()),
+          );
+        },
+        createHttpClient: (context) {
+          httpClientBuilt = true;
+          fail('HttpClient must not be constructed for a public mailbox origin');
+        },
+      );
+      expect(httpClientBuilt, isFalse);
+    },
+  );
 }

@@ -22,6 +22,7 @@ import '../state/connections_notifier.dart';
 import 'device_binding.dart';
 import 'dht_bootstrap.dart';
 import 'discovery_secret_store.dart';
+import 'fleet_status.dart';
 import 'hello_capabilities.dart';
 import 'journal_file_io.dart' if (dart.library.html) 'journal_file_stub.dart';
 import 'loopback_transport.dart';
@@ -280,17 +281,23 @@ class NativeTransportHost {
     storageHttp = null;
   }
 
-  /// Local HTTP mailbox when possible; env origin for a desktop peer.
-  /// Not a public fleet.
+  /// Local HTTP mailbox when possible; loopback env origin for a
+  /// desktop peer. Not a public fleet — skip non-loopback while
+  /// [kLiveStorageFleet] is false.
   Future<StoragePeerClient> _bindStoragePeer(
     BlindMailboxStore mailbox,
     MailboxCapability cap,
     RelayDirectory? directory,
   ) async {
-    final origin = resolveStoragePeerOrigin(
+    var origin = resolveStoragePeerOrigin(
       env: Platform.environment,
       directory: directory,
     );
+    if (!kLiveStorageFleet &&
+        origin != null &&
+        !storageOriginIsLoopbackHttp(origin)) {
+      origin = null;
+    }
     if (origin != null && origin.isNotEmpty) {
       try {
         final client = httpStoragePeerClient(origin);

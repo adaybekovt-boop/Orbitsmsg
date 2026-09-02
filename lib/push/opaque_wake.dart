@@ -1,6 +1,8 @@
 // APNs / FCM wake payload. Must not carry message text, names, peer IDs,
 // conversation IDs, attachment metadata, or Hypercore / mailbox secrets.
 
+import 'dart:collection';
+
 import '../transport/layers.dart';
 
 class OpaqueWake {
@@ -34,13 +36,38 @@ class OpaqueWake {
     'fileName',
   };
 
+  /// True when [payload] has the three wake fields and no [forbiddenKeys]
+  /// at any depth. Walks [Map] and [Iterable] with identity-based cycle
+  /// detection. Ciphertext [List<int>] and scalars are allowed.
   static bool isSafe(Map<String, Object?> payload) {
-    for (final key in payload.keys) {
-      if (forbiddenKeys.contains(key)) return false;
-    }
+    if (_hasForbiddenKey(payload, HashSet<Object>.identity())) return false;
     return payload.containsKey('opaqueWakeToken') &&
         payload.containsKey('collapseId') &&
         payload.containsKey('protocolVersion');
+  }
+
+  static bool _hasForbiddenKey(Object? value, Set<Object> seen) {
+    if (value == null || value is bool || value is num || value is String) {
+      return false;
+    }
+    // Ciphertext bytes are leaves — do not walk them as Iterables.
+    if (value is List<int>) return false;
+    if (value is Map) {
+      if (!seen.add(value)) return false;
+      for (final entry in value.entries) {
+        if (forbiddenKeys.contains('${entry.key}')) return true;
+        if (_hasForbiddenKey(entry.value, seen)) return true;
+      }
+      return false;
+    }
+    if (value is Iterable) {
+      if (!seen.add(value)) return false;
+      for (final item in value) {
+        if (_hasForbiddenKey(item, seen)) return true;
+      }
+      return false;
+    }
+    return false;
   }
 }
 

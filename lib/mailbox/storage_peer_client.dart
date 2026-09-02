@@ -1,7 +1,30 @@
 // HTTP client for a blind storage peer. Ciphertext only.
 
+import 'dart:collection';
+
 import '../transport/layers.dart';
 import 'blind_store.dart';
+
+/// Capability tokens are opaque. A URL or a secret-field fragment is
+/// not a mailbox grant. Same rules as mailboxPumpTokenIsSafe.
+bool storagePeerTokenIsSafe(String token) {
+  if (token.isEmpty) return false;
+  if (token.contains('://')) return false;
+  if (token.contains('peerId')) return false;
+  if (token.contains('fileKey')) return false;
+  if (token.contains('rootKey')) return false;
+  if (token.contains('discoverySecret')) return false;
+  return true;
+}
+
+void _assertClientToken(String token, {required String emptyMessage}) {
+  if (token.isEmpty) {
+    throw StateError(emptyMessage);
+  }
+  if (!storagePeerTokenIsSafe(token)) {
+    throw StateError('unsafe mailbox token');
+  }
+}
 
 class MailboxPeerStats {
   const MailboxPeerStats({required this.usedBytes, required this.pendingCount});
@@ -46,9 +69,7 @@ class StoragePeerClient {
     required String writerKey,
     required EncryptedBlock block,
   }) {
-    if (token.isEmpty) {
-      throw StateError('anonymous writes are rejected');
-    }
+    _assertClientToken(token, emptyMessage: 'anonymous writes are rejected');
     return putRemote(token: token, writerKey: writerKey, block: block);
   }
 
@@ -57,16 +78,12 @@ class StoragePeerClient {
     required String writerKey,
     int fromSeq = 0,
   }) {
-    if (token.isEmpty) {
-      throw StateError('anonymous reads are rejected');
-    }
+    _assertClientToken(token, emptyMessage: 'anonymous reads are rejected');
     return getRemote(token: token, writerKey: writerKey, fromSeq: fromSeq);
   }
 
   Future<void> tombstone(String token, String writerKey, int seq) async {
-    if (token.isEmpty) {
-      throw StateError('anonymous writes are rejected');
-    }
+    _assertClientToken(token, emptyMessage: 'anonymous writes are rejected');
     await tombstoneRemote?.call(token, writerKey, seq);
   }
 
@@ -74,6 +91,9 @@ class StoragePeerClient {
     final fn = grantRemote;
     if (fn == null) {
       throw StateError('storage peer cannot grant');
+    }
+    if (!storagePeerTokenIsSafe(cap.token)) {
+      throw StateError('unsafe mailbox token');
     }
     await fn(cap);
   }
@@ -84,9 +104,7 @@ class StoragePeerClient {
   }) async {
     final fn = statsRemote;
     if (fn == null) return null;
-    if (token.isEmpty) {
-      throw StateError('anonymous reads are rejected');
-    }
+    _assertClientToken(token, emptyMessage: 'anonymous reads are rejected');
     return fn(token: token, writerKey: writerKey);
   }
 
@@ -134,9 +152,32 @@ const Set<String> kStoragePeerForbiddenKeys = {
   'peerId',
 };
 
+/// Rejects [kStoragePeerForbiddenKeys] at any depth. [b64] is allowed.
+/// Walks nested [Map] / [Iterable] with identity-based cycle detection.
 bool storagePeerKeysAreSafe(Map<String, Object?> body) {
-  for (final key in body.keys) {
-    if (kStoragePeerForbiddenKeys.contains(key)) return false;
+  return _storagePeerValueIsSafe(body, HashSet<Object>.identity());
+}
+
+bool _storagePeerValueIsSafe(Object? value, Set<Object> seen) {
+  if (value == null || value is bool || value is num || value is String) {
+    return true;
+  }
+  if (value is Map) {
+    if (!seen.add(value)) return true;
+    for (final key in value.keys) {
+      if (kStoragePeerForbiddenKeys.contains('$key')) return false;
+    }
+    for (final nested in value.values) {
+      if (!_storagePeerValueIsSafe(nested, seen)) return false;
+    }
+    return true;
+  }
+  if (value is Iterable) {
+    if (!seen.add(value)) return true;
+    for (final nested in value) {
+      if (!_storagePeerValueIsSafe(nested, seen)) return false;
+    }
+    return true;
   }
   return true;
 }
@@ -145,7 +186,7 @@ bool storagePeerBodyIsSafe(Map<String, Object?> body) {
   if (!storagePeerKeysAreSafe(body)) return false;
   final token = body['token'];
   final writer = body['writerKey'];
-  if (token is! String || token.isEmpty) return false;
+  if (token is! String || !storagePeerTokenIsSafe(token)) return false;
   if (writer is! String || writer.isEmpty) return false;
   return body.containsKey('b64') || body.containsKey('seq');
 }
@@ -153,5 +194,5 @@ bool storagePeerBodyIsSafe(Map<String, Object?> body) {
 bool storagePeerGrantIsSafe(Map<String, Object?> body) {
   if (!storagePeerKeysAreSafe(body)) return false;
   final token = body['token'];
-  return token is String && token.isNotEmpty;
+  return token is String && storagePeerTokenIsSafe(token);
 }

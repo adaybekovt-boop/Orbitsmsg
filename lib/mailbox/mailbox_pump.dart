@@ -4,17 +4,8 @@
 import 'blind_store.dart';
 import 'storage_peer_client.dart';
 
-/// Capability tokens are opaque. A URL or a secret-field fragment is
-/// not a mailbox grant.
-bool mailboxPumpTokenIsSafe(String token) {
-  if (token.isEmpty) return false;
-  if (token.contains('://')) return false;
-  if (token.contains('peerId')) return false;
-  if (token.contains('fileKey')) return false;
-  if (token.contains('rootKey')) return false;
-  if (token.contains('discoverySecret')) return false;
-  return true;
-}
+/// Capability tokens are opaque. Same rules as [storagePeerTokenIsSafe].
+bool mailboxPumpTokenIsSafe(String token) => storagePeerTokenIsSafe(token);
 
 void _assertMailboxPumpArgs({
   required String token,

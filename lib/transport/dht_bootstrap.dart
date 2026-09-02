@@ -2,8 +2,9 @@
 // public DHT. Directory bootstrap rows are HyperDHT addresses, not the
 // local fleet's HTTP health ports.
 
-import 'transport_api.dart';
+import 'fleet_status.dart';
 import 'relay_directory.dart';
+import 'transport_api.dart';
 
 const String kDhtBootstrapEnv = 'ORBITS_DHT_BOOTSTRAP';
 const String kRelayDirectoryEnv = 'ORBITS_RELAY_DIRECTORY';
@@ -100,19 +101,39 @@ String? storageOriginFromPeer(DirectoryPeer peer) {
   return 'http://${peer.host}:${peer.port}';
 }
 
-/// Env origin first, then the lowest-RTT storage row. Not a public fleet.
+/// True for loopback HTTP only: `http://127.0.0.1`, `http://localhost`,
+/// `http://[::1]` (any port). HTTPS and non-loopback hosts are false.
+bool storageOriginIsLoopbackHttp(String origin) {
+  final uri = Uri.tryParse(origin);
+  if (uri == null || uri.scheme != 'http' || !uri.hasAuthority) {
+    return false;
+  }
+  final host = uri.host;
+  return host == '127.0.0.1' || host == 'localhost' || host == '::1';
+}
+
+/// Env origin first, then the lowest-RTT storage row. While
+/// [kLiveStorageFleet] is false, only loopback HTTP is returned.
 String? resolveStoragePeerOrigin({
   Map<String, String>? env,
   RelayDirectory? directory,
 }) {
+  String? origin;
   final explicit = env?[kStoragePeerOriginEnv];
   if (explicit != null && explicit.trim().isNotEmpty) {
-    return explicit.trim();
+    origin = explicit.trim();
+  } else if (directory != null) {
+    for (final peer in directory.pick(DirectoryPeerKind.storage)) {
+      final fromPeer = storageOriginFromPeer(peer);
+      if (fromPeer != null) {
+        origin = fromPeer;
+        break;
+      }
+    }
   }
-  if (directory == null) return null;
-  for (final peer in directory.pick(DirectoryPeerKind.storage)) {
-    final origin = storageOriginFromPeer(peer);
-    if (origin != null) return origin;
+  if (origin == null) return null;
+  if (!kLiveStorageFleet && !storageOriginIsLoopbackHttp(origin)) {
+    return null;
   }
-  return null;
+  return origin;
 }
