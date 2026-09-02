@@ -1,5 +1,7 @@
 // APNs / FCM wake payload. Must not carry message text, names, peer IDs,
-// conversation IDs, or attachment metadata.
+// conversation IDs, attachment metadata, or Hypercore / mailbox secrets.
+
+import '../transport/layers.dart';
 
 class OpaqueWake {
   const OpaqueWake({
@@ -19,6 +21,7 @@ class OpaqueWake {
       };
 
   static const forbiddenKeys = <String>{
+    ...kForbiddenReplicationFields,
     'text',
     'body',
     'title',

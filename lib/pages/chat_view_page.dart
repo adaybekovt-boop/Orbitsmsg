@@ -38,6 +38,7 @@ import '../state/peers_provider.dart';
 import '../state/strict_verify_provider.dart';
 import '../storage/db.dart' as db;
 import '../themes/orbits_tokens.dart';
+import '../transport/peerjs_window.dart';
 import '../ui/chat/chat_composer.dart';
 import '../ui/chat/chat_settings_sheet.dart';
 import '../ui/chat/message_bubble.dart';
@@ -95,11 +96,16 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
     // green and the first message goes out immediately rather than
     // sitting in the outbox until the next manual action. `openReliable`
     // is idempotent — if a channel is already open it's a no-op.
+    // Fail closed when isolation forbids PeerJS unless DualStack can
+    // take the peer (`canUseNative`). Product [kPeerjsIsolationMode]
+    // stays default-live, so this is a no-op on the live path.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ref
-          .read(connectionsNotifierProvider.notifier)
-          .openReliable(widget.peerId);
+      final conns = ref.read(connectionsNotifierProvider.notifier);
+      if (peerjsAllowedOnNative(isWeb: kIsWeb) ||
+          conns.canUseNative(widget.peerId)) {
+        conns.openReliable(widget.peerId);
+      }
     });
     // The user opened the chat → everything up to *now* counts as read.
     // Stamping on mount ensures the badge clears even if no new inbound

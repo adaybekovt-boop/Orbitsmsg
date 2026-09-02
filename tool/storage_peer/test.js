@@ -92,6 +92,51 @@ test('HTTP storage peer grants, rejects plaintext/anonymous, stores ciphertext',
   assert.equal(JSON.parse(after.body).blocks.length, 0)
 })
 
+test('HTTP storage peer rejects fileKey and discoverySecret on /v1/blocks', async (t) => {
+  const server = createServer({ token: 'cap-forbid' })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const port = server.address().port
+
+  const fileKey = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-forbid',
+      writerKey: 'w',
+      seq: 0,
+      b64: Buffer.from([1, 2, 3]).toString('base64'),
+      fileKey: 'must-not-persist',
+    },
+  })
+  assert.equal(fileKey.status, 400)
+
+  const discovery = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-forbid',
+      writerKey: 'w',
+      seq: 1,
+      b64: Buffer.from([1, 2, 3]).toString('base64'),
+      discoverySecret: 'must-not-persist',
+    },
+  })
+  assert.equal(discovery.status, 400)
+
+  const ok = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-forbid',
+      writerKey: 'w',
+      seq: 0,
+      b64: Buffer.from([1, 2, 3]).toString('base64'),
+    },
+  })
+  assert.equal(ok.status, 200)
+})
+
 test('HTTP storage peer caps body size, rate-limits, and GCs expired ciphertext', async (t) => {
   const server = createServer({
     token: 'cap-lim',

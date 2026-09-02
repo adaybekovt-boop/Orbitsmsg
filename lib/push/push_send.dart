@@ -35,6 +35,19 @@ class PushSendResult {
   final String reason;
 }
 
+/// True only for loopback HTTP origins used by `tool/push_gateway`.
+///
+/// Allowed: `http://127.0.0.1`, `http://localhost`, `http://[::1]`
+/// (any port). HTTPS, other schemes, and public hosts are false.
+bool localPushOriginIsLoopback(String origin) {
+  final uri = Uri.tryParse(origin);
+  if (uri == null || uri.scheme != 'http' || !uri.hasAuthority) {
+    return false;
+  }
+  final host = uri.host;
+  return host == '127.0.0.1' || host == 'localhost' || host == '::1';
+}
+
 class PushSender {
   const PushSender();
 
@@ -115,7 +128,7 @@ class PushSender {
     return const PushSendResult(sent: false, reason: 'fcm-not-configured');
   }
 
-  /// Local `tool/push_gateway` only. Not Apple / Google.
+  /// Local `tool/push_gateway` only. Loopback HTTP. Not Apple / Google.
   Future<PushSendResult> sendLocalHttp({
     required String origin,
     required OpaqueWake wake,
@@ -123,10 +136,15 @@ class PushSender {
     if (!OpaqueWake.isSafe(wake.toJson())) {
       return const PushSendResult(sent: false, reason: 'unsafe-keys');
     }
-    if (origin.isEmpty ||
-        origin.contains('apple.com') ||
-        origin.contains('googleapis.com')) {
-      return const PushSendResult(sent: false, reason: 'refused-public-origin');
+    if (origin.isEmpty || !localPushOriginIsLoopback(origin)) {
+      final public = origin.contains('apple.com') ||
+          origin.contains('googleapis.com');
+      return PushSendResult(
+        sent: false,
+        reason: origin.isEmpty || public
+            ? 'refused-public-origin'
+            : 'refused-non-loopback',
+      );
     }
     final client = HttpClient();
     try {

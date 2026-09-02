@@ -8,13 +8,26 @@
 const http = require('node:http')
 const { URL } = require('node:url')
 
+/** Keep in sync with kStoragePeerForbiddenKeys in lib/mailbox/storage_peer_client.dart */
 const FORBIDDEN = new Set([
   'plaintext',
+  'password',
+  'kek',
+  'vaultKek',
+  'rootKey',
+  'sendCk',
+  'recvCk',
+  'dhPriv',
+  'skipped',
+  'discoverySecret',
+  'sharedDiscoverySecret',
+  'attachmentBytes',
+  'fileKey',
+  'fileKeyB64',
+  'privBytes',
   'text',
   'body',
   'peerId',
-  'kek',
-  'rootKey',
 ])
 
 /** Keep in sync with kMailboxHttpMaxBodyBytes in lib/mailbox/blind_store.dart */

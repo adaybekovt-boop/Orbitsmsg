@@ -72,6 +72,18 @@ void main() {
     expect(kMailboxHttpRateWindowMs, 10 * 1000);
   });
 
+  test('HTTP mailbox JS FORBIDDEN stays in sync with Dart mailbox keys', () {
+    final js = File('tool/storage_peer/server.js').readAsStringSync();
+    final start = js.indexOf('const FORBIDDEN');
+    expect(start, greaterThanOrEqualTo(0));
+    final end = js.indexOf(']', start);
+    expect(end, greaterThan(start));
+    final region = js.substring(start, end + 1);
+    expect(region, contains('fileKey'));
+    expect(region, contains('discoverySecret'));
+    expect(region, isNot(contains("'b64'")));
+  });
+
   test('HTTP mailbox rejects deposit bodies with fileKey', () async {
     final http = StoragePeerHttp(BlindMailboxStore());
     http.grant(

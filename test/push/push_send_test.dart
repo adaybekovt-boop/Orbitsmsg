@@ -79,6 +79,51 @@ void main() {
     expect(result.reason, 'local-http');
   });
 
+  test('localPushOriginIsLoopback allows only loopback HTTP', () {
+    expect(localPushOriginIsLoopback('http://127.0.0.1'), isTrue);
+    expect(localPushOriginIsLoopback('http://127.0.0.1:8080'), isTrue);
+    expect(localPushOriginIsLoopback('http://localhost'), isTrue);
+    expect(localPushOriginIsLoopback('http://localhost:9'), isTrue);
+    expect(localPushOriginIsLoopback('http://[::1]'), isTrue);
+    expect(localPushOriginIsLoopback('http://[::1]:1'), isTrue);
+
+    expect(localPushOriginIsLoopback(''), isFalse);
+    expect(localPushOriginIsLoopback('https://127.0.0.1'), isFalse);
+    expect(localPushOriginIsLoopback('https://localhost'), isFalse);
+    expect(localPushOriginIsLoopback('https://[::1]'), isFalse);
+    expect(localPushOriginIsLoopback('https://example.invalid'), isFalse);
+    expect(localPushOriginIsLoopback('http://example.invalid'), isFalse);
+    expect(localPushOriginIsLoopback('ftp://127.0.0.1/wake'), isFalse);
+    expect(localPushOriginIsLoopback('file:///tmp/wake'), isFalse);
+    expect(localPushOriginIsLoopback('https://api.push.apple.com'), isFalse);
+    expect(localPushOriginIsLoopback('https://fcm.googleapis.com'), isFalse);
+    expect(localPushOriginIsLoopback('http://127.0.0.1.example.invalid'), isFalse);
+  });
+
+  test('sendLocalHttp refuses non-loopback origins before HTTP', () async {
+    expect(kLiveApnsGateway, isFalse);
+    expect(kLiveFcmGateway, isFalse);
+    const sender = PushSender();
+    const wake = OpaqueWake(
+      opaqueWakeToken: 'tok',
+      collapseId: 'c1',
+      protocolVersion: 1,
+    );
+    for (final origin in <String>[
+      'https://example.invalid',
+      'http://example.invalid',
+      'ftp://127.0.0.1/wake',
+      'file:///tmp/wake',
+      '',
+    ]) {
+      final result = await sender.sendLocalHttp(origin: origin, wake: wake);
+      expect(result.sent, isFalse, reason: origin);
+      expect(result.reason, isNot('local-http'), reason: origin);
+    }
+    expect(kLiveApnsGateway, isFalse);
+    expect(kLiveFcmGateway, isFalse);
+  });
+
   test('APNs/FCM request builders stay opaque and are not sent', () {
     const wake = OpaqueWake(
       opaqueWakeToken: 'tok',
