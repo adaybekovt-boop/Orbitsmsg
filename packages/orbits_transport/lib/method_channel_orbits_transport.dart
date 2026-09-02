@@ -4,9 +4,8 @@ import 'package:orbits_transport_platform_interface/orbits_transport_platform_in
 /// Method-channel host. Platform packages spawn a local Bare/worklet
 /// binary. This class refuses remote JS before the channel is invoked.
 class MethodChannelOrbitsTransport extends OrbitsTransportPlatform {
-  MethodChannelOrbitsTransport({
-    MethodChannel? channel,
-  }) : _channel = channel ?? const MethodChannel('app.orbits/transport');
+  MethodChannelOrbitsTransport({MethodChannel? channel})
+    : _channel = channel ?? const MethodChannel('app.orbits/transport');
 
   final MethodChannel _channel;
 
@@ -35,20 +34,29 @@ class MethodChannelOrbitsTransport extends OrbitsTransportPlatform {
       _channel.invokeMethod<void>('disconnect', peerId);
 
   @override
-  Future<void> send(String peerId, String channel, List<int> frame) =>
-      _channel.invokeMethod<void>('send', {
-        'peerId': peerId,
-        'channel': channel,
-        'frame': frame,
-      });
+  Future<void> send(String peerId, String channel, List<int> frame) {
+    assertIpcFrameSize(frame);
+    return _channel.invokeMethod<void>('send', {
+      'peerId': peerId,
+      'channel': channel,
+      'frame': frame,
+    });
+  }
 
   @override
-  Future<void> sendFile(String peerId, String path, int sizeBytes) =>
-      _channel.invokeMethod<void>('sendFile', {
-        'peerId': peerId,
-        'path': path,
-        'sizeBytes': sizeBytes,
-      });
+  Future<void> sendFile(String peerId, String path, int sizeBytes) {
+    if (path.isEmpty) {
+      throw StateError('sendFile requires a path');
+    }
+    if (sizeBytes > 50 * 1024 * 1024) {
+      throw StateError('attachment exceeds path-transfer cap');
+    }
+    return _channel.invokeMethod<void>('sendFile', {
+      'peerId': peerId,
+      'path': path,
+      'sizeBytes': sizeBytes,
+    });
+  }
 
   @override
   Future<void> suspend() => _channel.invokeMethod<void>('suspend');

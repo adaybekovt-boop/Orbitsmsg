@@ -1,5 +1,7 @@
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
+export 'bare_host_machine.dart';
+
 /// Binary IPC version spoken by every platform implementation.
 const String kOrbitsBareIpcInfo = 'orbits-bare-ipc-v1';
 const int kOrbitsBareIpcMaxFrameBytes = 256 * 1024;

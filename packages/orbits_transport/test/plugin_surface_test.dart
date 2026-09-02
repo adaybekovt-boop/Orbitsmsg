@@ -56,6 +56,21 @@ void main() {
     await expectLater(channel.start({'remoteJs': true}), throwsStateError);
   });
 
+  test('BareHostMachine covers crash recovery and bundle/ABI failures', () {
+    final machine = BareHostMachine();
+    expect(
+      () => machine.start({'remoteJs': true}),
+      throwsA(isA<BareHostException>()),
+    );
+    machine.start({'remoteJs': false, 'ipcVersion': 'orbits-bare-ipc-v1'});
+    machine.crash();
+    expect(machine.started, isFalse);
+    machine.recover({'remoteJs': false});
+    expect(machine.started, isTrue);
+    machine.shutdown();
+    expect(machine.started, isFalse);
+  });
+
   test('oversized IPC frames and missing file paths fail closed', () async {
     final host = InProcessOrbitsTransportPlatform();
     OrbitsTransportPlatform.instance = host;

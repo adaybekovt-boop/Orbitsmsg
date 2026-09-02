@@ -14,6 +14,14 @@ void main() {
     expect(kMailboxHttpVersion, 'orbits-mailbox-http-v1');
     expect(kRelayDirectoryInfo, 'orbits-relay-directory-v1');
     expect(kCompletedMigrationPhase, 0);
+    expect(
+      File('lib/peer/room_disclaimer.dart').readAsStringSync(),
+      contains('kRoomsApplicationE2eImplemented = false'),
+    );
+    expect(
+      File('lib/transport/peerjs_window.dart').readAsStringSync(),
+      contains('kPeerjsSupportWindowOpen = true'),
+    );
     final ipc = File(
       'packages/orbits_transport_platform_interface/lib/orbits_transport_platform_interface.dart',
     ).readAsStringSync();
