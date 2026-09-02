@@ -178,8 +178,18 @@ class Worklet {
     if (!file || typeof file.path !== 'string' || file.path.length === 0) {
       throw new Error('sendFile needs a path')
     }
+    if (String(file.path).includes('://')) {
+      throw new Error('sendFile refuses remote path')
+    }
     if (file.bytes != null) {
       throw new Error('sendFile takes a path, not bytes')
+    }
+    if (file.fileKey != null || file.fileKeyB64 != null) {
+      throw new Error('sendFile refuses fileKey')
+    }
+    if (file.protocol === 'attach-chunk') {
+      await this._sendAttachChunk(peerId, file)
+      return
     }
     const { digest, size } = hashPath(file.path)
     const id = digest.slice(0, 16)
@@ -219,6 +229,42 @@ class Worklet {
       this._resumeWaiters.delete(id)
     }
     await this.send(peerId, 'attachment', { type: 'harness-file-end', id })
+  }
+
+  async _sendAttachChunk(peerId, file) {
+    const fileId = typeof file.fileId === 'string' ? file.fileId : ''
+    if (!fileId) throw new Error('attach-chunk needs fileId')
+    let offset = Number(file.resumeOffset) || 0
+    const size = fs.statSync(file.path).size
+    if (offset < 0 || offset > size) {
+      throw new Error('sendFile resumeOffset out of range')
+    }
+    offset = Math.floor(offset / FILE_CHUNK) * FILE_CHUNK
+    const fd = fs.openSync(file.path, 'r')
+    try {
+      const buf = Buffer.alloc(FILE_CHUNK)
+      const startOffset = offset
+      while (offset < size) {
+        if (this.fileSendBudget != null && offset - startOffset >= this.fileSendBudget) {
+          throw new Error('file-send interrupted')
+        }
+        const n = fs.readSync(fd, buf, 0, buf.length, offset)
+        if (!n) break
+        const ct = buf.subarray(0, n)
+        const hash = createHash('sha256').update(ct).digest('hex')
+        await this.send(peerId, 'attachment', {
+          type: 'attach-chunk',
+          fileId,
+          index: Math.floor(offset / FILE_CHUNK),
+          offset,
+          hash,
+          b64: ct.toString('base64'),
+        })
+        offset += n
+      }
+    } finally {
+      fs.closeSync(fd)
+    }
   }
 
   async suspend() {

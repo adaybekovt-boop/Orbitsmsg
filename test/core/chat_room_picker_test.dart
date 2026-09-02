@@ -54,6 +54,18 @@ void main() {
       File('lib/state/messaging_notifier.dart').readAsStringSync(),
       contains('sendChatAttachmentFromPath'),
     );
+    expect(
+      File('lib/state/connections_notifier.dart').readAsStringSync(),
+      contains('xorPlaintextPathToCipherFile'),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('sendAttachmentCipherPath'),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      isNot(contains("import 'dart:io'")),
+    );
   });
 
   test('native path read stats size before loading bytes', () async {

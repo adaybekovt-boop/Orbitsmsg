@@ -150,6 +150,65 @@ test('sendFile interrupt then resume writes a complete hashed file', async () =>
   await b.stop()
 })
 
+test('sendFile attach-chunk streams ciphertext from a path', async () => {
+  const { a, b, peerId } = await pair()
+  const src = path.join(os.tmpdir(), 'orbits-attach-chunk.bin')
+  const ct = Buffer.alloc(FILE_CHUNK + 100, 5)
+  fs.writeFileSync(src, ct)
+  const chunks = []
+  const prev = b._emit
+  const done = new Promise((resolve) => {
+    b._emit = (name, payload) => {
+      prev(name, payload)
+      if (name === 'frame' && payload.channel === 'attachment') {
+        chunks.push(payload.body)
+        if (payload.body && payload.body.type === 'attach-chunk' && payload.body.index === 1) {
+          resolve()
+        }
+      }
+    }
+  })
+  await a.sendFile(peerId, { path: src, protocol: 'attach-chunk', fileId: 'chat-1' })
+  await done
+  assert.ok(!chunks.some((c) => c && c.type === 'harness-file-start'))
+  const first = chunks.find((c) => c && c.type === 'attach-chunk' && c.index === 0)
+  const second = chunks.find((c) => c && c.type === 'attach-chunk' && c.index === 1)
+  assert.ok(first)
+  assert.ok(second)
+  assert.equal(first.fileId, 'chat-1')
+  assert.equal(first.offset, 0)
+  assert.equal(second.offset, FILE_CHUNK)
+  const firstCt = Buffer.from(first.b64, 'base64')
+  assert.equal(firstCt.length, FILE_CHUNK)
+  assert.equal(first.hash, createHash('sha256').update(firstCt).digest('hex'))
+  await a.stop()
+  await b.stop()
+})
+
+test('sendFile attach-chunk rejects fileKey, bytes, remote paths, and missing fileId', async () => {
+  const { a, b, peerId } = await pair()
+  const src = path.join(os.tmpdir(), 'orbits-attach-chunk-reject.bin')
+  fs.writeFileSync(src, Buffer.alloc(32, 3))
+  await assert.rejects(
+    () => a.sendFile(peerId, { path: src, bytes: Buffer.from('no') }),
+    /path, not bytes/,
+  )
+  await assert.rejects(
+    () => a.sendFile(peerId, { path: src, protocol: 'attach-chunk', fileId: 'x', fileKey: 'nope' }),
+    /fileKey/,
+  )
+  await assert.rejects(
+    () => a.sendFile(peerId, { path: 'https://evil.example/x', protocol: 'attach-chunk', fileId: 'x' }),
+    /remote path/,
+  )
+  await assert.rejects(
+    () => a.sendFile(peerId, { path: src, protocol: 'attach-chunk' }),
+    /fileId/,
+  )
+  await a.stop()
+  await b.stop()
+})
+
 test('suspend blocks send', async () => {
   const { a, b, peerId } = await pair()
   await a.suspend()

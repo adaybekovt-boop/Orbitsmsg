@@ -42,9 +42,10 @@ Events: `connected`, `authenticated`, `frame`, `deliveryState`,
 ## Files
 
 `sendFile` takes a **path or platform descriptor**, not a `Uint8List`
-over Flutter IPC. Current Drop / chat attachments still buffer in Dart
-memory; that is a known limitation (`docs/security.md`). The new plugin
-must not copy that pattern.
+over Flutter IPC. Native chat `attach-chunk` sets `protocol:
+attach-chunk` and `fileId` on a **ciphertext** path (XOR stays in Dart;
+the worklet never sees `fileKey`). Drop / harness transfers omit
+`protocol`. PeerJS chat attachments still buffer in Dart on web.
 
 ## Dual-stack (Phase 4)
 

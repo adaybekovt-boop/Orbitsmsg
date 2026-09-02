@@ -24,6 +24,8 @@ class TransportFileDescriptor {
     this.mime,
     this.fileName,
     this.resumeOffset = 0,
+    this.protocol,
+    this.fileId,
   });
 
   /// Local filesystem path or platform handle. Not a byte array over IPC.
@@ -35,6 +37,13 @@ class TransportFileDescriptor {
   /// Byte offset already acked. Worklet / loopback skip those bytes.
   final int resumeOffset;
 
+  /// `attach-chunk` for native chat ciphertext. Null/empty is Drop/harness.
+  /// Never a place for `fileKey`.
+  final String? protocol;
+
+  /// Chat `attach-chunk` id. Must travel without the fileKey.
+  final String? fileId;
+
   TransportFileDescriptor copyWith({int? resumeOffset}) =>
       TransportFileDescriptor(
         path: path,
@@ -42,6 +51,8 @@ class TransportFileDescriptor {
         mime: mime,
         fileName: fileName,
         resumeOffset: resumeOffset ?? this.resumeOffset,
+        protocol: protocol,
+        fileId: fileId,
       );
 }
 

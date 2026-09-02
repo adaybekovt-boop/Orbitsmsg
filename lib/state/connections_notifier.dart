@@ -412,8 +412,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     return dual.hasMailbox;
   }
 
-  /// Native chat attachment path. PeerJS chat still uses base64 in
-  /// [MessagingNotifier.sendFile]. Rooms stay host-plaintext bytes.
+  /// Native chat attachment path. XOR happens in Dart; Bare/loopback
+  /// `sendFile` reads the ciphertext path. PeerJS chat still uses base64
+  /// in [MessagingNotifier.sendFile]. Rooms stay host-plaintext bytes.
   Future<bool> sendChatAttachmentFromPath(
     String remoteId,
     String path, {
@@ -423,15 +424,23 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     final dual = _dual;
     if (dual == null || !dual.canUseNative(remoteId)) return false;
     if (fileKey.isEmpty || fileId.isEmpty) return false;
-    final stream = openLocalPathByteStream(path);
-    if (stream == null) return false;
-    await dual.sendAttachmentStream(
-      remoteId,
-      stream,
-      fileKey,
-      fileId: fileId,
-    );
-    return true;
+    final cipher = await xorPlaintextPathToCipherFile(path, fileKey);
+    if (cipher == null) return false;
+    try {
+      return await dual.sendAttachmentCipherPath(
+        remoteId,
+        TransportFileDescriptor(
+          path: cipher.path,
+          sizeBytes: cipher.sizeBytes,
+          protocol: 'attach-chunk',
+          fileId: fileId,
+        ),
+        firstCipher: cipher.firstCipher,
+        chunkCount: cipher.chunkCount,
+      );
+    } finally {
+      cipher.dispose();
+    }
   }
 
   /// Send a raw Orbits-Drop packet on the reliable channel — a control [Map]

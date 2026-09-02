@@ -263,6 +263,8 @@ class WorkletOrbitsTransport implements OrbitsTransport {
         'fileName': file.fileName,
         'mime': file.mime,
         'resumeOffset': file.resumeOffset,
+        'protocol': file.protocol,
+        'fileId': file.fileId,
       },
     });
   }

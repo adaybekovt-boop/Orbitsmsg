@@ -90,6 +90,7 @@ void main() {
     expect(apns.path, '/3/device/devtoken');
     expect(apns.headers['apns-topic'], kApnsTopic);
     expect(apns.headers['apns-push-type'], 'background');
+    expect(apns.headers['apns-collapse-id'], 'c1');
     expect(OpaqueWake.isSafe(apns.body), isTrue);
     expect(apns.body.containsKey('peerId'), isFalse);
     expect(apns.body.containsKey('text'), isFalse);
@@ -284,6 +285,30 @@ void main() {
     expect(
       File('lib/push/fcm_oauth_token_request.dart').readAsStringSync(),
       contains('Never opens a socket'),
+    );
+
+    final token = parseFcmOauthTokenResponse(
+      '{"access_token":"ya29-opaque","token_type":"Bearer","expires_in":3600}',
+    )!;
+    expect(token.accessToken, 'ya29-opaque');
+    expect(token.tokenType, 'Bearer');
+    expect(token.expiresIn, 3600);
+    expect(
+      parseFcmOauthTokenResponse('{"access_token":"https://evil.example/t"}'),
+      isNull,
+    );
+    expect(parseFcmOauthTokenResponse('{"token":"nope"}'), isNull);
+    expect(
+      parseFcmOauthTokenResponse('{"access_token":"x","peerId":"ORBIT"}'),
+      isNull,
+    );
+    expect(
+      File('lib/push/fcm_oauth_token_request.dart').readAsStringSync(),
+      contains('parseFcmOauthTokenResponse'),
+    );
+    expect(
+      File('lib/push/fcm_oauth_token_request.dart').readAsStringSync(),
+      isNot(contains('HttpClient')),
     );
 
     expect(

@@ -165,6 +165,9 @@ ApnsOpaqueRequest? buildApnsRequest({
     'apns-priority': '5',
     'apns-topic': kApnsTopic,
   };
+  if (wake.collapseId.isNotEmpty) {
+    headers['apns-collapse-id'] = wake.collapseId;
+  }
   final jwt = providerKey == null
       ? null
       : buildApnsProviderJwt(providerKey, iatSeconds: iatSeconds);

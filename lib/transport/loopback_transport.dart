@@ -6,6 +6,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart' show sha256;
+
 import '../attachments/path_attachment.dart';
 import '../replication/memory_journal.dart';
 import 'device_binding.dart';
@@ -169,6 +171,13 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
     if (file.path.isEmpty) {
       throw StateError('sendFile needs a path');
     }
+    if (file.path.contains('://')) {
+      throw StateError('sendFile refuses remote path');
+    }
+    if (file.protocol == 'attach-chunk') {
+      await _sendAttachChunkFile(peerId, file);
+      return;
+    }
     final onDisk = File(file.path);
     final digest = await sha256File(onDisk.path);
     final raf = await onDisk.open();
@@ -236,6 +245,55 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
       if (transferId != null) {
         _resumeWaiters.remove(transferId);
       }
+    }
+  }
+
+  Future<void> _sendAttachChunkFile(
+    String peerId,
+    TransportFileDescriptor file,
+  ) async {
+    final fileId = file.fileId ?? '';
+    if (fileId.isEmpty) {
+      throw StateError('attach-chunk needs fileId');
+    }
+    final onDisk = File(file.path);
+    final raf = await onDisk.open();
+    try {
+      final size = await raf.length();
+      var offset = file.resumeOffset;
+      if (offset < 0 || offset > size) {
+        throw StateError('sendFile resumeOffset out of range');
+      }
+      offset = (offset ~/ kFileChunkSize) * kFileChunkSize;
+      final startOffset = offset;
+      final chunk = Uint8List(kFileChunkSize);
+      while (offset < size) {
+        final sent = offset - startOffset;
+        if (debugFileSendBudget != null && sent >= debugFileSendBudget!) {
+          throw StateError('file-send interrupted');
+        }
+        await raf.setPosition(offset);
+        final remaining = size - offset;
+        final want = remaining < kFileChunkSize ? remaining : kFileChunkSize;
+        final n = await raf.readInto(chunk, 0, want);
+        if (n <= 0) break;
+        final ct = chunk.sublist(0, n);
+        await send(
+          peerId,
+          TransportChannel.attachment,
+          jsonPayload({
+            'type': 'attach-chunk',
+            'fileId': fileId,
+            'index': offset ~/ kFileChunkSize,
+            'offset': offset,
+            'hash': sha256.convert(ct).toString(),
+            'b64': base64Encode(ct),
+          }),
+        );
+        offset += n;
+      }
+    } finally {
+      await raf.close();
     }
   }
 

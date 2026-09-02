@@ -461,6 +461,39 @@ class DualStackBridge {
     );
   }
 
+  /// Chat `attach-chunk` from a local **ciphertext** path. Bare / loopback
+  /// `sendFile` reads the path; Dart does not send chunk `frameB64` over
+  /// IPC. [firstCipher] is the first 64 KiB for the journal. Never a
+  /// `fileKey` on the descriptor.
+  Future<bool> sendAttachmentCipherPath(
+    String peerId,
+    TransportFileDescriptor file, {
+    required List<int> firstCipher,
+    required int chunkCount,
+  }) async {
+    final norm = normalizePeerId(peerId);
+    if (isBlocked(norm) || !isNativeConnected(norm)) return false;
+    if (file.path.isEmpty || file.path.contains('://')) {
+      throw StateError('sendAttachmentCipherPath needs a local path');
+    }
+    if (file.protocol != 'attach-chunk') {
+      throw StateError('sendAttachmentCipherPath needs attach-chunk');
+    }
+    final fileId = file.fileId ?? '';
+    if (fileId.isEmpty) {
+      throw StateError('sendAttachmentCipherPath needs fileId');
+    }
+    if (firstCipher.isEmpty || chunkCount <= 0) return false;
+    await transport.sendFile(norm, file);
+    _journalAttachmentPublished(
+      norm,
+      firstCipher: List<int>.from(firstCipher),
+      chunkCount: chunkCount,
+      totalBytes: file.sizeBytes,
+    );
+    return true;
+  }
+
   Future<void> _sendAttachmentChunks(
     String peerId,
     List<AttachmentChunk> chunks, {

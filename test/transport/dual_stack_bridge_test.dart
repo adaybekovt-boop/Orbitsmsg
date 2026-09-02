@@ -14,6 +14,7 @@ import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/rooms/autobase_log.dart';
+import 'package:orbits_flutter/core/path_byte_stream.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
@@ -361,6 +362,78 @@ void main() {
         isNot(contains('fileKey')));
     expect(jsonEncode(a.journal.records.map((r) => r.fields).toList()),
         isNot(contains('fileKeyB64')));
+  });
+
+  test('attach-chunk via ciphertext path sendFile is not Dart frameB64', () async {
+    final (a, b, _) = await linked();
+    final drop = <Object>[];
+    b.onDrop = (peer, packet) => drop.add(packet);
+    final key = List<int>.generate(32, (i) => i + 6);
+    final plain = List<int>.generate(90, (i) => i + 2);
+    final dir = Directory.systemTemp.createTempSync('orbits-att-cipher-');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final src = File('${dir.path}${Platform.pathSeparator}plain.bin')
+      ..writeAsBytesSync(plain);
+    final write = await xorPlaintextPathToCipherFile(src.path, key);
+    expect(write, isNotNull);
+    addTearDown(write!.dispose);
+    expect(
+      await a.sendAttachmentCipherPath(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        TransportFileDescriptor(
+          path: write.path,
+          sizeBytes: write.sizeBytes,
+          protocol: 'attach-chunk',
+          fileId: 'chat-file-path',
+        ),
+        firstCipher: write.firstCipher,
+        chunkCount: write.chunkCount,
+      ),
+      isTrue,
+    );
+    Uint8List? got;
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(deadline)) {
+      got = b.decryptInboundAttachment(
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        'chat-file-path',
+        key,
+      );
+      if (got != null) break;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(got, Uint8List.fromList(plain));
+    expect(drop, isEmpty);
+    expect(
+      a.journal.records.any((r) => r.kind == ReplicationEventKind.attachmentPublished),
+      isTrue,
+    );
+    expect(jsonEncode(a.journal.records.map((r) => r.fields).toList()),
+        isNot(contains('fileKey')));
+    expect(jsonEncode(a.journal.records.map((r) => r.fields).toList()),
+        isNot(contains('fileKeyB64')));
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      isNot(contains("import 'dart:io'")),
+    );
+    expect(
+      File('lib/state/connections_notifier.dart').readAsStringSync(),
+      contains('xorPlaintextPathToCipherFile'),
+    );
+    expect(
+      File('lib/state/connections_notifier.dart').readAsStringSync(),
+      contains('sendAttachmentCipherPath'),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'protocol': file.protocol"),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      isNot(contains("'fileKey'")),
+    );
   });
 
   test('recipient reads mailbox after the sender is gone', () async {

@@ -13,3 +13,32 @@ int? localPathLength(String path) => impl.localPathLength(path);
 /// `File.openRead()` for a local existing path. Null on web or if refused.
 Stream<List<int>>? openLocalPathByteStream(String path) =>
     impl.openLocalPathByteStream(path);
+
+/// Ciphertext written to a temp path for Bare/loopback `sendFile`.
+/// [firstCipher] is the first 64 KiB for the journal only. [dispose]
+/// deletes the temp directory. Never holds `fileKey`.
+class CipherPathWrite {
+  const CipherPathWrite({
+    required this.path,
+    required this.sizeBytes,
+    required this.firstCipher,
+    required this.chunkCount,
+    this.dispose = _noopDispose,
+  });
+
+  final String path;
+  final int sizeBytes;
+  final List<int> firstCipher;
+  final int chunkCount;
+  final void Function() dispose;
+
+  static void _noopDispose() {}
+}
+
+/// XOR a local plaintext path onto a temp ciphertext file (64 KiB
+/// chunks). Null on web / refused paths.
+Future<CipherPathWrite?> xorPlaintextPathToCipherFile(
+  String plaintextPath,
+  List<int> fileKey,
+) =>
+    impl.xorPlaintextPathToCipherFile(plaintextPath, fileKey);

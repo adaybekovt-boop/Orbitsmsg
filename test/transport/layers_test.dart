@@ -51,6 +51,10 @@ void main() {
     expect(worklet, contains('fs.openSync(file.path'));
     expect(worklet, contains('fs.readSync'));
     expect(worklet, contains('sendFile takes a path, not bytes'));
+    expect(worklet, contains('sendFile refuses fileKey'));
+    expect(worklet, contains("file.protocol === 'attach-chunk'"));
+    expect(worklet, contains("type: 'attach-chunk'"));
+    expect(worklet, contains('sendFile refuses remote path'));
     expect(worklet, contains('resumeOffset'));
     expect(worklet, contains('harness-file-resume'));
     expect(worklet, contains('fs.writeSync'));
@@ -69,6 +73,18 @@ void main() {
     expect(
       File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
       contains("'resumeOffset': file.resumeOffset"),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'protocol': file.protocol"),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("'fileId': file.fileId"),
+    );
+    expect(
+      File('lib/transport/loopback_transport.dart').readAsStringSync(),
+      contains('_sendAttachChunkFile'),
     );
     expect(kHolepunchCorestoreAddonLinked, isFalse);
     expect(kCorestoreJsModuleOptional, isTrue);

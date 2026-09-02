@@ -5,6 +5,8 @@
 // Not identity-signing-v1, not the Hyperswarm Noise key, and not a
 // ratchet scalar. The assertion is the service-account RS256 JWT.
 
+import 'dart:convert';
+
 import 'fcm_service_account_jwt.dart';
 
 /// RFC 7523 grant used at [kFcmOauthTokenUri].
@@ -55,5 +57,47 @@ FcmOauthTokenRequest? buildFcmOauthTokenRequest({
       'content-type': 'application/x-www-form-urlencoded',
     },
     body: 'grant_type=$grant&assertion=$assertion',
+  );
+}
+
+class FcmOauthTokenResponse {
+  const FcmOauthTokenResponse({
+    required this.accessToken,
+    this.tokenType,
+    this.expiresIn,
+  });
+
+  final String accessToken;
+  final String? tokenType;
+  final int? expiresIn;
+}
+
+/// Parse a Google OAuth token JSON body. Does not POST. Null if the
+/// shape is unsafe or `access_token` is missing.
+FcmOauthTokenResponse? parseFcmOauthTokenResponse(String body) {
+  if (body.isEmpty) return null;
+  if (body.contains('peerId') ||
+      body.contains('opaqueWakeToken') ||
+      body.contains('rootKey') ||
+      body.contains('identity-signing-v1') ||
+      body.contains('fileKey')) {
+    return null;
+  }
+  Object? decoded;
+  try {
+    decoded = jsonDecode(body);
+  } catch (_) {
+    return null;
+  }
+  if (decoded is! Map) return null;
+  final token = decoded['access_token'];
+  if (token is! String || token.isEmpty) return null;
+  if (token.contains('://')) return null;
+  final type = decoded['token_type'];
+  final exp = decoded['expires_in'];
+  return FcmOauthTokenResponse(
+    accessToken: token,
+    tokenType: type is String ? type : null,
+    expiresIn: exp is num ? exp.toInt() : null,
   );
 }
