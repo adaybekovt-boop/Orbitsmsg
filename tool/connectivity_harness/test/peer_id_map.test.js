@@ -108,6 +108,7 @@ test('IPC disconnect removes peer and emits disconnected once', async () => {
   assert.equal(worklet._peers.has('ORBIT-AA'), false)
   const disconnected = worklet.events.filter((e) => e.name === 'disconnected')
   assert.equal(disconnected.length, 1)
-  assert.deepEqual(disconnected[0].payload, { peerId: 'ORBIT-AA' })
+  assert.equal(disconnected[0].payload.peerId, 'ORBIT-AA')
+  assert.equal(disconnected[0].payload.reason, 'local-disconnect')
   assert.equal(destroyed, 1)
 })

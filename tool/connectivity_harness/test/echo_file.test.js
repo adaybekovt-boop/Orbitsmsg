@@ -6,6 +6,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { createHash } = require('node:crypto')
+const { encodeMux } = require('../src/mux')
 const { Worklet, hashPath, FILE_CHUNK } = require('../src/worklet')
 
 async function pair() {
@@ -44,7 +45,14 @@ test('opaque wire-v4 frame is not interpreted', async () => {
     const prev = b._emit
     b._emit = (name, payload) => {
       prev(name, payload)
-      if (name === 'frame' && payload.channel === 'control') resolve(payload.body)
+      if (
+        name === 'frame' &&
+        payload.channel === 'control' &&
+        payload.body &&
+        payload.body.type === 'wireHello'
+      ) {
+        resolve(payload.body)
+      }
     }
   })
   await a.send(peerId, 'control', { type: 'wireHello', v: 4, pub: 'x', idPub: 'y', sig: 'z' })
@@ -242,13 +250,21 @@ test('inbound attach-chunk drops nested fileKey and does not write cipher', asyn
       }
     }
   })
-  await a.send(peerId, 'attachment', {
-    type: 'attach-chunk',
-    fileId: 'chat-nested',
-    offset: 0,
-    b64: Buffer.from('nested-cipher').toString('base64'),
-    meta: { fileKey: 'nope' },
-  })
+  const peer = a._peers.get(peerId)
+  peer.socket.write(
+    encodeMux(
+      'attachment',
+      Buffer.from(
+        JSON.stringify({
+          type: 'attach-chunk',
+          fileId: 'chat-nested',
+          offset: 0,
+          b64: Buffer.from('nested-cipher').toString('base64'),
+          meta: { fileKey: 'nope' },
+        }),
+      ),
+    ),
+  )
   // Same socket is ordered: echo after the chunk means ingest already ran.
   await a.send(peerId, 'message', { type: 'harness-echo', id: 'after-nested', text: 'after' })
   await echoed
