@@ -13,7 +13,6 @@ import '../calls/hyperswarm_signaling.dart';
 import '../core/path_byte_stream.dart';
 import '../core/feature_flags.dart';
 import '../core/peer_pins.dart';
-import '../core/identity_key.dart' as identity_key;
 import '../core/wire_crypto.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
@@ -1803,7 +1802,7 @@ class DualStackBridge {
       if (hook != null) {
         return await hook(own, canonical, sigBytes);
       }
-      return await identity_key.verifyWithRemoteSpki(own, canonical, sigBytes);
+      return await verifyIdentitySignedBytes(own, canonical, sigBytes);
     } catch (_) {
       return false;
     }

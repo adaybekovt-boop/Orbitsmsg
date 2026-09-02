@@ -878,7 +878,7 @@ Future<(DualStackBridge, DualStackBridge)> _linked({
     isBlocked: isBlockedA ?? (_) => false,
     tofuCheck: _allowTofu,
     ownIdentityPublicKey: () => _spkiA,
-    verifyRecord: verifyWithRemoteSpki,
+    verifyRecord: verifyIdentitySignedBytes,
     onReplicatedContactBlocked: onBlockedA,
     onReplicationAccepted: onProjectedA,
     onPacket: (_, __) async {},
@@ -958,7 +958,7 @@ Future<(DualStackBridge, DualStackBridge)> _ownDevicePair({
     tofuCheck: _allowTofu,
     ownIdentityPublicKey: () => _spkiA,
     signRecord: sign,
-    verifyRecord: verifyWithRemoteSpki,
+    verifyRecord: verifyIdentitySignedBytes,
     onReplicatedContactBlocked: (id, on) {
       if (blocked == null) return;
       if (on) {
@@ -980,7 +980,7 @@ Future<(DualStackBridge, DualStackBridge)> _ownDevicePair({
     tofuCheck: _allowTofu,
     ownIdentityPublicKey: () => _spkiA,
     signRecord: sign,
-    verifyRecord: verifyWithRemoteSpki,
+    verifyRecord: verifyIdentitySignedBytes,
     onPacket: (_, __) async {},
   )..attach();
   await pair.$1.connect(const PeerDescriptor(peerId: _peerA2));
