@@ -21,11 +21,14 @@
 // sites don't need typed DTOs up front. The UI layer will likely wrap
 // these into dataclasses once it lands (Phase 11).
 
+import 'dart:collection';
 import 'dart:convert';
 import 'dart:math';
 
 import 'package:drift/drift.dart';
 
+import '../attachments/resumable_blob.dart';
+import '../core/path_byte_stream.dart';
 import '../core/vault_kek.dart';
 import '../utils/common.dart';
 import 'database.dart';
@@ -97,7 +100,9 @@ String _ratchetRowKey(String peerId) => '$_ratchetIdPrefix$peerId';
 /// string; everything else is serialised verbatim via `row_codec.dart`.
 Future<bool> saveRatchetState(Map<String, Object?> snapshot) async {
   final peerId = snapshot['peerId'];
-  if (peerId is! String || peerId.isEmpty) return false;
+  if (peerId is! String || peerId.isEmpty || peerId.contains('://')) {
+    return false;
+  }
   final row = <String, Object?>{
     'id': _ratchetRowKey(peerId),
     ...snapshot,
@@ -116,7 +121,7 @@ Future<bool> saveRatchetState(Map<String, Object?> snapshot) async {
 }
 
 Future<Map<String, Object?>?> loadRatchetState(String peerId) async {
-  if (peerId.isEmpty) return null;
+  if (peerId.isEmpty || peerId.contains('://')) return null;
   final db = orbitsDb();
   final row = await (db.select(db.ratchetsTable)
         ..where((t) => t.id.equals(_ratchetRowKey(peerId))))
@@ -125,7 +130,7 @@ Future<Map<String, Object?>?> loadRatchetState(String peerId) async {
 }
 
 Future<bool> deleteRatchetState(String peerId) async {
-  if (peerId.isEmpty) return false;
+  if (peerId.isEmpty || peerId.contains('://')) return false;
   final db = orbitsDb();
   await (db.delete(db.ratchetsTable)
         ..where((t) => t.id.equals(_ratchetRowKey(peerId))))
@@ -229,7 +234,7 @@ Future<bool> saveVoiceBlob(
   int duration = 0,
   List<double>? waveform,
 }) async {
-  if (id.isEmpty) return false;
+  if (id.isEmpty || id.contains('://')) return false;
   // Defense-in-depth byte cap (audit finding 4): mirror the send-side raw cap
   // `_maxVoiceRawBytes` (6 MiB). A blob larger than any legitimate voice
   // message is a hostile/buggy peer — refuse rather than bloat the DB / risk
@@ -306,10 +311,10 @@ Future<bool> saveFileBlob(
   int height = 0,
   int duration = 0,
 }) async {
-  if (id.isEmpty) return false;
+  if (id.isEmpty || id.contains('://')) return false;
   // Defense-in-depth byte cap (audit finding 4): mirror the send-side raw cap
   // `_maxFileRawBytes` (12 MiB).
-  if (bytes.length > 12 * 1024 * 1024) return false;
+  if (bytes.length > kMaxPeerJsFileRawBytes) return false;
   // JS trims name to 200 chars — keep parity so inbound rows don't diverge.
   final trimmedName = _clipName(name ?? 'file');
   final db = orbitsDb();
@@ -334,13 +339,79 @@ Future<bool> saveFileBlob(
   return true;
 }
 
+/// Native chat attachment: persist a local plaintext path in KEK-wrapped
+/// `data`. Drift `bytes` stays an empty wrapped blob — never the file
+/// body. Refuses `://` paths.
+Future<bool> saveFileBlobFromPath(
+  String id,
+  String path, {
+  String? mime,
+  String? name,
+  int size = 0,
+  String kind = 'file',
+  List<int>? thumb,
+  int width = 0,
+  int height = 0,
+  int duration = 0,
+}) async {
+  if (id.isEmpty || id.contains('://')) return false;
+  final p = path.trim();
+  if (p.isEmpty ||
+      p.contains('://') ||
+      p.contains('fileKey') ||
+      p.contains('peerId') ||
+      p.contains('opaqueWakeToken')) {
+    return false;
+  }
+  final n = localPathLength(p);
+  if (n == null || n <= 0 || n > kMaxNativeAttachBytes) return false;
+  final trimmedName = _clipName(name ?? 'file');
+  final db = orbitsDb();
+  await db.into(db.fileBlobsTable).insertOnConflictUpdate(
+        FileBlobsTableCompanion.insert(
+          id: id,
+          mime: Value(mime ?? 'application/octet-stream'),
+          name: Value(trimmedName),
+          kind: Value(kind),
+          size: Value(size == 0 ? n : size),
+          width: Value(width),
+          height: Value(height),
+          duration: Value(duration),
+          createdAt: Value(_now()),
+          bytes: _secureBytesEncode(const <int>[]),
+          thumb: thumb == null
+              ? const Value.absent()
+              : Value(_secureBytesEncode(thumb)),
+          data: _secureEncode(<String, Object?>{'localPath': p}),
+        ),
+      );
+  return true;
+}
+
 Future<Map<String, Object?>?> getFileBlob(String id) async {
-  if (id.isEmpty) return null;
+  if (id.isEmpty || id.contains('://')) return null;
   final db = orbitsDb();
   final row = await (db.select(db.fileBlobsTable)
         ..where((t) => t.id.equals(id)))
       .getSingleOrNull();
   if (row == null) return null;
+  String? localPath;
+  try {
+    Map<String, Object?> extra;
+    try {
+      extra = _secureDecode(row.data);
+    } catch (_) {
+      extra = decodeRow(row.data);
+    }
+    final p = extra['localPath'];
+    if (p is String &&
+        p.isNotEmpty &&
+        !p.contains('://') &&
+        !p.contains('fileKey') &&
+        !p.contains('peerId')) {
+      localPath = p;
+    }
+  } catch (_) {}
   return <String, Object?>{
     'id': row.id,
     'mime': row.mime,
@@ -354,6 +425,7 @@ Future<Map<String, Object?>?> getFileBlob(String id) async {
     // See note in getVoiceBlob — map key stays 'blob' for caller contract.
     'blob': _secureBytesDecode(row.bytes),
     'thumb': row.thumb == null ? null : _secureBytesDecode(row.thumb!),
+    if (localPath != null) 'localPath': localPath,
   };
 }
 
@@ -404,7 +476,7 @@ Future<Map<String, Object?>?> getKeyPair() async {
 String _sessionRowId(String peerId) => 'session-$peerId';
 
 Future<bool> saveSessionKey(String peerId, String symmetricKeyB64) async {
-  if (peerId.isEmpty) return false;
+  if (peerId.isEmpty || peerId.contains('://')) return false;
   final now = _now();
   final row = <String, Object?>{
     'id': _sessionRowId(peerId),
@@ -446,7 +518,7 @@ Future<Map<String, Object?>?> getSessionKeyRecord(String peerId) async {
 
 Future<bool> savePeer(Map<String, Object?> peer) async {
   final id = (peer['id'] as String?) ?? '';
-  if (id.isEmpty) return false;
+  if (id.isEmpty || id.contains('://')) return false;
 
   final db = orbitsDb();
   // Merge semantics — partial updates must not wipe existing displayName /
@@ -647,12 +719,72 @@ Future<Map<String, Object?>?> _getPeerRaw(String peerId) async {
   return row == null ? null : _secureDecode(row.data);
 }
 
+// ─── Message payload persist gate ───────────────────────────────────
+//
+// Drift is a local read-model after decrypt. Message `payload` blobs must
+// never store ratchet / identity / discovery secrets or plaintext dumps.
+// The walk matches `replicationValueIsSafe` (cycle-safe Map / Iterable,
+// `List<int>` leaf) but **allows** outbox `fileKey` / `fileKeyB64` so a
+// retry cannot mint a second XOR key (`nativeAttachFileKeyFromPayload`).
+// Do not call `replicationValueIsSafe` on the whole payload — that helper
+// forbids those keys. Host-plaintext `text` / `b64` (rooms) and `peerId`
+// are allowed.
+
+const Set<String> _kForbiddenMessagePayloadFields = {
+  'plaintext',
+  'password',
+  'kek',
+  'vaultKek',
+  'rootKey',
+  'sendCk',
+  'recvCk',
+  'dhPriv',
+  'skipped',
+  'discoverySecret',
+  'sharedDiscoverySecret',
+  'attachmentBytes',
+  'privBytes',
+};
+
+/// Returns false if [payload] nests a ratchet / identity / discovery secret
+/// or plaintext dump at any depth.
+bool messagePayloadIsSafeToPersist(Object? payload) {
+  return _messagePayloadIsSafeToPersist(payload, HashSet<Object>.identity());
+}
+
+bool _messagePayloadIsSafeToPersist(Object? value, Set<Object> seen) {
+  if (value == null || value is bool || value is num || value is String) {
+    return true;
+  }
+  // Ciphertext / key bytes are leaves — do not walk them as Iterables.
+  if (value is List<int>) return true;
+  if (value is Map) {
+    if (!seen.add(value)) return true;
+    for (final key in value.keys) {
+      if (_kForbiddenMessagePayloadFields.contains('$key')) return false;
+    }
+    for (final nested in value.values) {
+      if (!_messagePayloadIsSafeToPersist(nested, seen)) return false;
+    }
+    return true;
+  }
+  if (value is Iterable) {
+    if (!seen.add(value)) return true;
+    for (final item in value) {
+      if (!_messagePayloadIsSafeToPersist(item, seen)) return false;
+    }
+    return true;
+  }
+  return true;
+}
+
 // ─── Messages ───────────────────────────────────────────────────────
 
 Future<bool> saveMessage(Map<String, Object?> message) async {
   final peerId = (message['peerId'] as String?) ?? '';
   final ts = (message['timestamp'] as num?)?.toInt() ?? _now();
   final id = (message['id'] as String?) ?? '$peerId-$ts';
+  if (id.contains('://') || peerId.contains('://')) return false;
   final direction = (message['direction'] as String?) ?? 'out';
   final status = _normalizeMessageStatus(message['status'], direction);
 
@@ -661,6 +793,8 @@ Future<bool> saveMessage(Map<String, Object?> message) async {
   // can page them by `channel_id`.
   final roomId = message['roomId'] as String?;
   final channelId = message['channelId'] as String?;
+  if (roomId is String && roomId.contains('://')) return false;
+  if (channelId is String && channelId.contains('://')) return false;
 
   final row = <String, Object?>{
     'id': id,
@@ -673,6 +807,8 @@ Future<bool> saveMessage(Map<String, Object?> message) async {
     if (roomId != null) 'roomId': roomId,
     if (channelId != null) 'channelId': channelId,
   };
+
+  if (!messagePayloadIsSafeToPersist(row['payload'])) return false;
 
   final db = orbitsDb();
   final existing = await (db.select(db.messagesTable)
@@ -711,12 +847,13 @@ Future<bool> saveMessage(Map<String, Object?> message) async {
 /// Room-message IDs live in a separate namespace from DM IDs so a host
 /// cannot overwrite a guest's 1:1 row by reusing the same wire id (R07).
 String scopedRoomMessageId(String roomId, String rawId) {
+  if (roomId.contains('://') || rawId.contains('://')) return '';
   if (rawId.startsWith('room:')) return rawId;
   return 'room:$roomId:$rawId';
 }
 
 Future<Map<String, Object?>?> getMessageById(String id) async {
-  if (id.isEmpty) return null;
+  if (id.isEmpty || id.contains('://')) return null;
   final db = orbitsDb();
   final row = await (db.select(db.messagesTable)
         ..where((t) => t.id.equals(id)))
@@ -725,7 +862,13 @@ Future<Map<String, Object?>?> getMessageById(String id) async {
 }
 
 Future<bool> updateMessage(String id, Map<String, Object?> patch) async {
-  if (id.isEmpty) return false;
+  if (id.isEmpty || id.contains('://')) return false;
+  // Fail closed: an unsafe payload patch must not merge secrets into the
+  // stored blob. Other fields in the same patch are also skipped.
+  if (patch.containsKey('payload') &&
+      !messagePayloadIsSafeToPersist(patch['payload'])) {
+    return false;
+  }
   final db = orbitsDb();
   return db.transaction(() async {
     final row = await (db.select(db.messagesTable)
@@ -923,7 +1066,7 @@ Future<int> clearPendingMessages({String? peerId}) async {
 // ─── Avatars ────────────────────────────────────────────────────────
 
 Future<bool> saveAvatar(String peerId, String avatarDataUrl) async {
-  if (peerId.isEmpty) return false;
+  if (peerId.isEmpty || peerId.contains('://')) return false;
   // Storage-layer gate (audit M3): an avatar is otherwise unbounded (unlike
   // name/bio, which are clamped) and a peer could push a multi-MB blob to
   // exhaust storage, or a non-image / SVG payload. Reuse the same allowlist +
@@ -943,7 +1086,7 @@ Future<bool> saveAvatar(String peerId, String avatarDataUrl) async {
 }
 
 Future<String?> getAvatar(String peerId) async {
-  if (peerId.isEmpty) return null;
+  if (peerId.isEmpty || peerId.contains('://')) return null;
   final db = orbitsDb();
   final row = await (db.select(db.avatarsTable)
         ..where((t) => t.peerId.equals(peerId)))
@@ -1030,7 +1173,13 @@ Stream<List<Map<String, Object?>>> watchMessagesForPeer(
 /// (e.g. a status flip) never duplicates channels.
 Future<void> saveRoom(Map<String, Object?> room) async {
   final id = (room['id'] as String?) ?? '';
-  if (id.isEmpty) return;
+  if (id.isEmpty || id.contains('://')) return;
+  final hostPeerId = room['hostPeerId'];
+  if (hostPeerId is String &&
+      hostPeerId.isNotEmpty &&
+      hostPeerId.contains('://')) {
+    return;
+  }
   final db = orbitsDb();
   final isHost = room['isHost'] == true ||
       (room['isHost'] is num && (room['isHost'] as num).toInt() != 0);
@@ -1064,7 +1213,9 @@ Future<void> saveRoom(Map<String, Object?> room) async {
 /// fields) so the host can broadcast a `room_channel_create` to guests.
 Future<Map<String, Object?>> createChannel(
     String roomId, String name, String type) async {
-  if (roomId.isEmpty) return const <String, Object?>{};
+  if (roomId.isEmpty || roomId.contains('://')) {
+    return const <String, Object?>{};
+  }
   final db = orbitsDb();
   final existing = await (db.select(db.roomChannelsTable)
         ..where((t) => t.roomId.equals(roomId)))
@@ -1115,6 +1266,7 @@ Future<void> saveRoomMember(Map<String, Object?> member) async {
   final roomId = (member['roomId'] as String?) ?? '';
   final peerId = (member['peerId'] as String?) ?? '';
   if (roomId.isEmpty || peerId.isEmpty) return;
+  if (roomId.contains('://') || peerId.contains('://')) return;
   final db = orbitsDb();
   final isOnline = member['isOnline'] == true ||
       (member['isOnline'] is num && (member['isOnline'] as num).toInt() != 0);
@@ -1180,6 +1332,7 @@ Future<void> upsertRoomChannel(Map<String, Object?> channel) async {
   final id = (channel['id'] as String?) ?? '';
   final roomId = (channel['roomId'] as String?) ?? '';
   if (id.isEmpty || roomId.isEmpty) return;
+  if (id.contains('://') || roomId.contains('://')) return;
   final db = orbitsDb();
   await db.into(db.roomChannelsTable).insertOnConflictUpdate(
         RoomChannelsTableCompanion.insert(
@@ -1220,14 +1373,14 @@ Future<void> replaceRoomMembers(
   String roomId,
   List<Map<String, Object?>> members,
 ) async {
-  if (roomId.isEmpty) return;
+  if (roomId.isEmpty || roomId.contains('://')) return;
   final db = orbitsDb();
   await db.transaction(() async {
     await (db.delete(db.roomMembersTable)..where((t) => t.roomId.equals(roomId)))
         .go();
     for (final m in members) {
       final peerId = (m['peerId'] as String?) ?? '';
-      if (peerId.isEmpty) continue;
+      if (peerId.isEmpty || peerId.contains('://')) continue;
       final name =
           (m['displayName'] as String?) ?? (m['name'] as String?) ?? '';
       final isOnline = m['isOnline'] == true ||

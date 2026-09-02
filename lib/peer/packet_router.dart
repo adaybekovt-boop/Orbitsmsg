@@ -35,6 +35,7 @@ import 'dart:typed_data';
 import '../core/orbits_drop.dart' show kMaxDropFrameBytes;
 import '../core/wire_crypto.dart';
 import '../messaging/message_protocol.dart';
+import '../transport/layers.dart';
 
 /// Packet types that belong to the file-transfer (drop) subsystem. Match
 /// the JS set 1:1 — adding or removing entries here will desync the two
@@ -154,6 +155,8 @@ bool _dropPermitted(String remoteId, PacketRouterCtx ctx) =>
 /// [reliableMiddleware]).
 bool dropMiddleware(String remoteId, Object? data, PacketRouterCtx ctx) {
   if (!isDropPacket(data)) return false;
+  // Nested secrets: consume and do not hand the map to Drop discovery.
+  if (!replicationValueIsSafe(data)) return true;
   if (!_dropPermitted(remoteId, ctx)) return true;
   ctx.dropHandlePacket
       ?.call(remoteId, Map<String, Object?>.from(data as Map));
@@ -186,6 +189,8 @@ Future<bool> ephemeralMiddleware(
 
   if (payload is! Map) return true;
   final mapPayload = Map<String, Object?>.from(payload);
+  // Typing / heartbeat / drop-beacon must not carry nested secrets.
+  if (!replicationValueIsSafe(mapPayload)) return true;
 
   // Drop-beacon packets can ride the ephemeral channel (lower latency for
   // discovery). Same short-circuit as the reliable drop middleware.
@@ -266,6 +271,9 @@ PacketHandler createPacketHandler(
     }
     // file-start / file-end / file-abort control maps → Drop engine.
     if (data is Map && _fileTransferTypes.contains(data['type'])) {
+      // Do not walk chat `msg` maps here — nested sticker secrets are
+      // dropped in the dispatcher so the rest of the message can persist.
+      if (!replicationValueIsSafe(data)) return;
       if (_dropPermitted(remoteId, ctx)) {
         ctx.dropInbound?.call(remoteId, data);
       }
@@ -274,6 +282,7 @@ PacketHandler createPacketHandler(
     // Room-protocol control maps → RoomManager. Checked before the generic
     // dispatcher so they don't fall through to the chat/wire handler.
     if (data is Map && isRoomPacket(data)) {
+      if (!replicationValueIsSafe(data)) return;
       ctx.roomInbound?.call(remoteId, Map<String, Object?>.from(data));
       return;
     }

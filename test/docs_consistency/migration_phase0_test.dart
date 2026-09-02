@@ -1,6 +1,7 @@
 // DOCS-CHECK, NOT A SECURITY TEST.
 // Phase 0 lock: migration ADRs exist and do not collapse layers.
 
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -29,12 +30,16 @@ void main() {
       'docs/migration/phase-status.md',
       'docs/migration/relay-runbook.md',
       'docs/migration/app-review-notes.md',
+      'docs/migration/store-data-safety.json',
       'docs/migration/test-strategy.md',
       'docs/migration/rollout.md',
       'docs/migration/phase13-group-e2e-review.md',
       'docs/migration/peerjs-support-window.md',
       'tool/connectivity_harness/BUNDLE.manifest',
+      'tool/connectivity_harness/BARE_MODULES.manifest',
       'tool/bare/BARE.manifest',
+      'tool/bare/addons/CORESTORE.manifest',
+      'tool/sbom/ORBITS.sbom.json',
     ]) {
       expect(File(rel).existsSync(), isTrue, reason: '$rel missing');
     }
@@ -70,5 +75,37 @@ void main() {
     expect(kCompletedMigrationPhase, 0);
     expect(isHyperswarmTransportEnabled(), isFalse);
     expect(hyperswarmRollout(), HyperswarmRollout.off);
+  });
+
+  test('store-review packet is not filed and stays honest', () {
+    final raw = jsonDecode(read('docs/migration/store-data-safety.json'));
+    expect(raw, isA<Map>());
+    final packet = Map<String, Object?>.from(raw as Map);
+    expect(packet['filed'], isFalse);
+    expect(packet['pwaOfficialMode'], 'compatibility-client-on-PeerJS');
+    expect(packet['pwaFinalFateChosen'], isFalse);
+    expect(packet['kRoomsApplicationE2eImplemented'], isFalse);
+    expect(packet['kLiveApnsGateway'], isFalse);
+    expect(packet['kLiveFcmGateway'], isFalse);
+    expect(packet['kLiveStorageFleet'], isFalse);
+    expect(packet['kLiveSignedRelayDirectory'], isFalse);
+    expect(packet['kBareBinaryShipped'], isFalse);
+    expect(packet['kHolepunchCorestoreAddonLinked'], isFalse);
+    expect(packet['voipBackgroundMode'], isFalse);
+    expect(packet['collectsMessageBodies'], isFalse);
+    expect(packet['defaultLivePath'], 'PeerJS');
+    final export = Map<String, Object?>.from(packet['encryptionExport'] as Map);
+    expect(export['customMilitaryClaims'], isFalse);
+    expect(export['usesStandardHttps'], isTrue);
+
+    final pwa = read('docs/migration/pwa-versioning-metrics.md');
+    expect(pwa, contains('compatibility client on PeerJS'));
+    expect(pwa, contains('pwaOfficialMode'));
+    expect(pwa, contains('pwaFinalFateChosen'));
+    expect(pwa, contains('**not** chosen'));
+    expect(
+      read('docs/migration/app-review-notes.md'),
+      contains('pwaOfficialMode'),
+    );
   });
 }

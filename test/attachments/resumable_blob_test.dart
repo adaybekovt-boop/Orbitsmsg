@@ -1,7 +1,15 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/attachments/resumable_blob.dart';
 
 void main() {
+  test('PeerJS stays 12 MiB; native path chat may use 50 MiB', () {
+    expect(kMaxPeerJsFileRawBytes, 12 * 1024 * 1024);
+    expect(kMaxNativeAttachBytes, 50 * 1024 * 1024);
+  });
+
   test('chunk, drop one piece, resume, then decrypt', () {
     final key = List<int>.generate(32, (i) => i + 1);
     final plain = List<int>.generate(70 * 1024, (i) => i % 251);
@@ -88,4 +96,73 @@ void main() {
     expect(resumed.isComplete, isTrue);
     expect(ResumableAttachment.decrypt(resumed.chunks, key), plain);
   }, timeout: const Timeout(Duration(minutes: 2)));
+
+  test('chunkFromByteStream matches chunk() without a single plaintext buffer',
+      () async {
+    final key = List<int>.generate(32, (i) => i + 7);
+    final plain = List<int>.generate(70 * 1024, (i) => i % 251);
+    final pieces = <List<int>>[];
+    for (var i = 0; i < plain.length; i += 8000) {
+      final end = i + 8000 > plain.length ? plain.length : i + 8000;
+      pieces.add(plain.sublist(i, end));
+    }
+    final streamed = await ResumableAttachment.chunkFromByteStream(
+      Stream<List<int>>.fromIterable(pieces),
+      key,
+    );
+    final bulk = ResumableAttachment.chunk(plain, key);
+    expect(streamed.length, bulk.length);
+    expect(ResumableAttachment.decrypt(streamed, key), plain);
+  });
+
+  test('chunkStream yields without collecting the caller list', () async {
+    final key = List<int>.generate(32, (i) => i + 9);
+    final plain = List<int>.generate(70 * 1024, (i) => i % 199);
+    var yielded = 0;
+    final out = <AttachmentChunk>[];
+    await for (final chunk in ResumableAttachment.chunkStream(
+      Stream<List<int>>.fromIterable(<List<int>>[plain]),
+      key,
+    )) {
+      yielded++;
+      out.add(chunk);
+    }
+    expect(yielded, 2);
+    expect(ResumableAttachment.decrypt(out, key), plain);
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('chunkStream'),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      isNot(contains('chunkFromByteStream(plaintext, fileKey)')),
+    );
+  });
+
+  test('native attach fileKey is reused from the pending payload', () {
+    final key = List<int>.generate(32, (i) => i + 4);
+    final b64 = base64Encode(key);
+    expect(
+      nativeAttachFileKeyFromPayload({'fileKeyB64': b64}),
+      key,
+    );
+    expect(
+      nativeAttachFileKeyFromPayload({'fileKeyB64': b64}),
+      nativeAttachFileKeyFromPayload({'fileKeyB64': b64}),
+    );
+    expect(nativeAttachFileKeyFromPayload(null), isNull);
+    expect(nativeAttachFileKeyFromPayload({'fileKeyB64': 'short'}), isNull);
+    expect(
+      nativeAttachFileKeyFromPayload({'fileKeyB64': 'https://evil.example/k'}),
+      isNull,
+    );
+    expect(
+      File('lib/state/messaging_notifier.dart').readAsStringSync(),
+      contains('nativeAttachFileKeyFromPayload'),
+    );
+    expect(
+      File('lib/state/messaging_notifier.dart').readAsStringSync(),
+      contains("unawaited(db.updateMessage(msgId, {'payload': payload}))"),
+    );
+  });
 }

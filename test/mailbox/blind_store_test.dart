@@ -82,5 +82,55 @@ void main() {
     );
     store.tombstone('cap-1', 'w', 3);
     expect(store.get(token: 'cap-1', writerKey: 'w'), isEmpty);
+    expect(store.pendingCount('w'), 0);
+    expect(store.usedBytes('w'), 0);
+  });
+
+  test('backlog threshold uses ciphertext size only', () {
+    final store = BlindMailboxStore();
+    store.grant(
+      MailboxCapability(
+        token: 'cap-1',
+        quotaBytes: 100,
+        retentionMs: 100000,
+        expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+      ),
+    );
+    store.put(
+      token: 'cap-1',
+      writerKey: 'w',
+      block: EncryptedBlock(
+        seq: 0,
+        bytes: const [1, 2, 3, 4],
+        storedAt: DateTime.now().millisecondsSinceEpoch,
+      ),
+    );
+    expect(store.isBacklogged('w', maxBytes: 4, maxCount: 100), isTrue);
+    expect(store.isBacklogged('w', maxBytes: 40, maxCount: 100), isFalse);
+  });
+
+  test('sweepExpired deletes ciphertext past retention', () {
+    final store = BlindMailboxStore();
+    store.grant(
+      MailboxCapability(
+        token: 'cap-1',
+        quotaBytes: 100,
+        retentionMs: 10,
+        expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+      ),
+    );
+    store.put(
+      token: 'cap-1',
+      writerKey: 'w',
+      block: const EncryptedBlock(
+        seq: 0,
+        bytes: [1, 2, 3],
+        storedAt: 1,
+      ),
+    );
+    expect(store.pendingCount('w'), 1);
+    expect(store.sweepExpired('cap-1', 'w'), 1);
+    expect(store.pendingCount('w'), 0);
+    expect(store.get(token: 'cap-1', writerKey: 'w'), isEmpty);
   });
 }

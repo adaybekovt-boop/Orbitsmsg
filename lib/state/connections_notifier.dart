@@ -30,11 +30,19 @@
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/attachment_store.dart';
+import '../core/path_byte_stream.dart';
 import '../core/bundle_cache.dart';
-import '../core/wire_crypto.dart' show initWireSession;
+import '../core/wire_crypto.dart'
+    show
+        decryptWirePayload,
+        initWireSession,
+        isWireCiphertext,
+        isWireReady,
+        teardownWireSession;
 import '../core/wire_session.dart' show isVerified;
 import '../messaging/message_protocol.dart';
 import '../core/orbits_drop.dart' show dropMaxBufferSize;
@@ -45,12 +53,22 @@ import '../peer/peerjs_client.dart';
 import '../calls/hyperswarm_signaling.dart';
 import '../core/feature_flags.dart';
 import '../peer/wire_transport.dart';
+import '../devices/device_link.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
+import '../mailbox/storage_peer_client.dart';
 import '../replication/file_journal.dart';
 import '../replication/memory_journal.dart';
+import '../replication/drift_projector.dart';
+import '../rooms/autobase_log.dart';
 import '../storage/db.dart' as db;
+import '../transport/replication_schema.dart';
+import '../transport/capabilities.dart';
+import '../transport/device_binding.dart';
 import '../transport/dual_stack_bridge.dart';
+import '../transport/hello_capabilities.dart';
+import '../transport/layers.dart';
+import '../transport/peerjs_window.dart';
 import '../transport/signed_capabilities.dart';
 import '../transport/transport_api.dart';
 import 'auth_notifier.dart';
@@ -185,6 +203,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   DualStackBridge? _dual;
   MemoryJournal? _nativeJournal;
   void Function(String from, CallSignal signal)? _callHandler;
+  void Function(String from, CallSignal signal)? _roomVoiceHandler;
 
   /// Keyed by `connKey(peerId, channel)`.
   final Map<String, _ConnBinding> _bindings = {};
@@ -230,9 +249,11 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     String deviceId = 'local-device',
     FileJournal? durableJournal,
     BlindMailboxStore? mailbox,
+    StoragePeerClient? storagePeer,
     String? mailboxToken,
     String? mailboxWriterKey,
     CapabilityRecord? localCapabilities,
+    DeviceBinding? localBinding,
     DeviceRegistry? devices,
   }) {
     _nativeJournal = journal ?? MemoryJournal(deviceId);
@@ -243,9 +264,11 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       selfDeviceId: deviceId,
       durableJournal: durableJournal,
       mailbox: mailbox,
+      storagePeer: storagePeer,
       mailboxToken: mailboxToken,
       mailboxWriterKey: mailboxWriterKey,
       localCapabilities: localCapabilities,
+      localBinding: localBinding,
       devices: devices ?? deviceRegistry,
       onPacket: _dispatchNativeInbound,
       isBlocked: (rid) => _messaging.isPeerBlocked(rid),
@@ -257,12 +280,168 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       }
       ..onCallSignal = (signal, from) {
         _lastCallSignal = (from: from, signal: signal);
+        if (signal.isRoomVoice) {
+          _roomVoiceHandler?.call(from, signal);
+          return;
+        }
         _callHandler?.call(from, signal);
       }
       ..onDrop = (peerId, packet) {
         _drop.handleInbound(peerId, packet);
       }
       ..attach();
+  }
+
+  /// Phase 10: revoke a linked device, journal it on the native carrier
+  /// when bound, and drop that device's own RatchetState only.
+  void revokeLinkedDevice(String deviceId) {
+    if (deviceId.isEmpty || deviceId.contains('://')) return;
+    final bridge = _dual;
+    if (bridge != null) {
+      bridge.revokeDevice(deviceId);
+      return;
+    }
+    final before = deviceRegistry.getDevice(deviceId);
+    deviceRegistry.revoke(deviceId);
+    for (final key in ratchetKeysForRevokedDevice(before)) {
+      unawaited(teardownWireSession(key));
+    }
+  }
+
+  /// Phase 10: authorize a linked device and journal `deviceAuthorized`
+  /// on the native carrier when bound. Derives a distinct transport
+  /// ORBIT id from the Noise public key when [AuthorizedDevice.transportPeerId]
+  /// is omitted. Does not invent keys or rebuild devices from journal events.
+  void authorizeLinkedDevice(AuthorizedDevice device) {
+    if (device.deviceId.isEmpty || device.deviceId.contains('://')) return;
+    if (device.ownerPeerId.isEmpty || device.ownerPeerId.contains('://')) {
+      return;
+    }
+    final existingTransport = device.transportPeerId ?? '';
+    if (existingTransport.contains('://')) return;
+
+    var resolved = device;
+    if (existingTransport.isEmpty && device.transportPublicKey.isNotEmpty) {
+      resolved = AuthorizedDevice(
+        deviceId: device.deviceId,
+        transportPublicKey: device.transportPublicKey,
+        hypercorePublicKey: device.hypercorePublicKey,
+        name: device.name,
+        kind: device.kind,
+        createdAt: device.createdAt,
+        status: device.status,
+        ownerPeerId: device.ownerPeerId,
+        transportPeerId:
+            transportPeerIdFromPublicKey(device.transportPublicKey),
+      );
+    }
+    final transportPeerId = resolved.transportPeerId ?? '';
+    if (transportPeerId.isEmpty || transportPeerId.contains('://')) return;
+
+    final bridge = _dual;
+    if (bridge != null) {
+      bridge.authorizeDevice(resolved);
+      return;
+    }
+    deviceRegistry.authorize(resolved);
+  }
+
+  /// Replay the native journal into Drift after decrypt. Block list runs
+  /// first. Drift is not the sync source of truth. Non-message kinds
+  /// (devices, block, attachment metadata, membership) never carry
+  /// fileKey / plaintext / ratchet scalars.
+  Future<int> restoreReadModelFromJournal() async {
+    final journal = _nativeJournal;
+    if (journal == null) return 0;
+    return projectJournalToReadModel(
+      journal: journal,
+      isBlocked: (id) => _messaging.isPeerBlocked(id),
+      decrypt: (enc, conv) async {
+        if (_messaging.isPeerBlocked(conv)) return null;
+        final text = String.fromCharCodes(enc);
+        if (!isWireCiphertext(text) || !isWireReady(conv)) return null;
+        try {
+          final obj = await decryptWirePayload(conv, text);
+          if (obj is Map && obj['text'] is String) {
+            return {'text': obj['text'] as String};
+          }
+        } catch (_) {}
+        return null;
+      },
+      persist: (msg) async {
+        if (msg.plaintext.isEmpty) return;
+        await db.saveMessage({
+          'id': msg.eventId,
+          'peerId': msg.conversationId,
+          'timestamp': msg.createdAt,
+          'payload': {'type': 'chat', 'text': msg.plaintext},
+          'direction':
+              msg.senderIdentity == _selfPeerId() ? 'out' : 'in',
+          'status': msg.status,
+        });
+      },
+      persistNonMessage: _persistProjectedNonMessage,
+    );
+  }
+
+  Future<void> _persistProjectedNonMessage(ProjectedNonMessage event) async {
+    switch (event.kind) {
+      case ReplicationEventKind.deviceRevoked:
+        final id = event.fields['deviceId'] as String?;
+        if (id == null || id.isEmpty || id.contains('://')) return;
+        deviceRegistry.revoke(id);
+      case ReplicationEventKind.deviceAuthorized:
+        // Journal has deviceId only — never reconstruct transport keys.
+        break;
+      case ReplicationEventKind.contactBlocked:
+        final peerId = (event.fields['peerId'] as String?) ??
+            (event.fields['conversationId'] as String?) ??
+            '';
+        if (peerId.isEmpty || peerId.contains('://')) return;
+        await db.setPeerBlocked(peerId, event.fields['blocked'] != false);
+      case ReplicationEventKind.attachmentPublished:
+        // Metadata only. Ciphertext is not a Drift chat row.
+        break;
+      case ReplicationEventKind.attachmentExpired:
+        final id = event.fields['eventId'] as String?;
+        if (id == null || id.isEmpty || id.contains('://')) return;
+        await db.deleteFileBlob(id);
+      case ReplicationEventKind.roomMembershipChanged:
+        final roomId = event.fields['roomId'] as String? ?? '';
+        final peerId = event.fields['peerId'] as String? ?? '';
+        if (roomId.isEmpty ||
+            peerId.isEmpty ||
+            roomId.contains('://') ||
+            peerId.contains('://')) {
+          return;
+        }
+        final action = event.fields['action'] as String? ?? 'join';
+        final online = action != 'leave' && action != 'kick';
+        await db.saveRoomMember({
+          'roomId': roomId,
+          'peerId': peerId,
+          'displayName': event.fields['displayName'] as String? ?? peerId,
+          'isOnline': online,
+        });
+      case ReplicationEventKind.messageEnvelopeCreated:
+      case ReplicationEventKind.deliveryAcknowledged:
+      case ReplicationEventKind.readAcknowledged:
+      case ReplicationEventKind.messageTombstoned:
+        break;
+    }
+  }
+
+  /// Persist the local block flag and, when the native journal is bound,
+  /// append `contactBlocked` so restore can replay it.
+  Future<void> setPeerBlockedAndJournal(String peerId, bool blocked) async {
+    await db.setPeerBlocked(peerId, blocked);
+    _dual?.journalContactBlocked(peerId: peerId, blocked: blocked);
+  }
+
+  Future<void> unbindNativeTransport() async {
+    await _dual?.detach();
+    _dual = null;
+    _nativeJournal = null;
   }
 
   ({String from, CallSignal signal})? _lastCallSignal;
@@ -275,15 +454,43 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   bool canUseNative(String peerId) => _dual?.canUseNative(peerId) == true;
 
+  /// Remote advertised DualStack room-voice (`room-voice-v1`). Missing
+  /// bit fail-closed so we do not send `rv-` offers to old clients.
+  bool remoteUnderstandsRoomVoice(String peerId) =>
+      _dual?.remoteUnderstandsRoomVoice(peerId) == true;
+
+  /// Remote advertised DualStack 1:1 call signaling (`call-v1`).
+  bool remoteUnderstandsNativeCall(String peerId) =>
+      _dual?.remoteUnderstandsNativeCall(peerId) == true;
+
+  /// Native is connected (DeviceBinding may still be in flight). DualStackBridge
+  /// waits for ADR-0001 auth before application traffic. Secrets required —
+  /// never HASH(peerId).
+  bool _nativeCarrierFor(String remoteId) {
+    final dual = _dual;
+    if (dual == null || !dual.nativeEnabled) return false;
+    if (dual.discoverySecretFor(remoteId) == null) return false;
+    return dual.canUseNative(remoteId) || dual.isNativeConnected(remoteId);
+  }
+
   void bindCallHandler(void Function(String from, CallSignal signal)? handler) {
     _callHandler = handler;
   }
 
+  void bindRoomVoiceHandler(
+    void Function(String from, CallSignal signal)? handler,
+  ) {
+    _roomVoiceHandler = handler;
+  }
+
   // ─── Public API ────────────────────────────────────────────────
 
-  /// Look up a live connection by peerId + channel. Null if never attached
-  /// or already torn down.
+  /// Look up a live connection by peerId + channel. Null if never attached,
+  /// already torn down, or isolation forbids PeerJS. Fail closed: leftover
+  /// `_bindings` must not leak a [PeerDataConnection] when native isolation
+  /// disallows PeerJS. Product [kPeerjsIsolationMode] stays default-live.
   PeerDataConnection? getConn(String remoteId, String channel) {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return null;
     final key = connKey(remoteId, channel);
     return _bindings[key]?.conn;
   }
@@ -291,22 +498,30 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// Resolve + encrypt + send on the reliable channel. Returns false if we
   /// don't have a reliable connection to this peer.
   Future<bool> sendEncrypted(String remoteId, Object? msg) async {
+    if (msg is Map && !outboundWireMapIsSendable(msg)) return false;
     final dual = _dual;
     if (dual != null && dual.nativeEnabled) {
-      if (dual.canUseNative(remoteId)) {
+      final known = dual.discoverySecretFor(remoteId) != null;
+      if (known &&
+          (dual.canUseNative(remoteId) ||
+              dual.isNativeConnected(remoteId) ||
+              dual.hasMailbox)) {
         try {
           return await dual.sendEncrypted(remoteId, msg);
         } catch (_) {
-          if (!isPeerjsFallbackEnabled()) return false;
-        }
-      } else if (dual.mailbox != null && dual.secrets.get(remoteId) != null) {
-        try {
-          return await dual.sendEncrypted(remoteId, msg);
-        } catch (_) {
-          if (!isPeerjsFallbackEnabled()) return false;
+          // PeerJS fallback only if BOTH the fallback flag and isolation
+          // allow it. Product default-live keeps both true.
+          if (!isPeerjsFallbackEnabled() ||
+              !peerjsAllowedOnNative(isWeb: kIsWeb)) {
+            return false;
+          }
         }
       }
     }
+    // Isolation fail-closed: web-only/removed must not use PeerJS even
+    // when `_dual` is unbound. Rollout off does not auto-start Hyperswarm.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
+    _notePeerjsDowngrade(remoteId);
     final conn = getConn(remoteId, 'reliable');
     if (conn == null) return false;
     return _wire.sendEncryptedOn(conn, remoteId, msg);
@@ -314,14 +529,20 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   /// Same on the ephemeral channel (typing / heartbeat).
   Future<bool> sendEphemeral(String remoteId, Object? msg) async {
+    if (msg is Map && !outboundWireMapIsSendable(msg)) return false;
     final dual = _dual;
-    if (dual != null && dual.canUseNative(remoteId)) {
+    if (dual != null && _nativeCarrierFor(remoteId)) {
       try {
         return await dual.sendEphemeral(remoteId, msg);
       } catch (_) {
-        if (!isPeerjsFallbackEnabled()) return false;
+        if (!isPeerjsFallbackEnabled() ||
+            !peerjsAllowedOnNative(isWeb: kIsWeb)) {
+          return false;
+        }
       }
     }
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
+    _notePeerjsDowngrade(remoteId);
     final conn = getConn(remoteId, 'ephemeral');
     if (conn == null) return false;
     return _wire.sendEphemeralOn(conn, remoteId, msg);
@@ -330,9 +551,56 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// Whether a reliable channel to [remoteId] is open (used by Drop to gate
   /// the peer picker / send button).
   bool hasReliable(String remoteId) {
-    if (_dual?.isNativeConnected(remoteId) == true) return true;
+    if (_nativeCarrierFor(remoteId)) return true;
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
     final conn = getConn(remoteId, 'reliable');
     return conn != null && conn.open;
+  }
+
+  /// Whether a native mailbox can take an encrypted envelope while the
+  /// peer is offline. Default rollout is off, so this is false in product.
+  bool canDepositMailbox(String remoteId) {
+    final dual = _dual;
+    if (dual == null || !dual.nativeEnabled) return false;
+    if (dual.discoverySecretFor(remoteId) == null) return false;
+    return dual.hasMailbox;
+  }
+
+  /// Native chat attachment path. XOR happens in Dart; Bare/loopback
+  /// `sendFile` reads the ciphertext path. PeerJS chat still uses base64
+  /// in [MessagingNotifier.sendFile]. Rooms stay host-plaintext bytes.
+  Future<bool> sendChatAttachmentFromPath(
+    String remoteId,
+    String path, {
+    required List<int> fileKey,
+    required String fileId,
+  }) async {
+    if (path.isEmpty ||
+        path.contains('://') ||
+        fileId.contains('://') ||
+        fileId.isEmpty ||
+        fileKey.isEmpty) {
+      return false;
+    }
+    final dual = _dual;
+    if (dual == null || !_nativeCarrierFor(remoteId)) return false;
+    final cipher = await xorPlaintextPathToCipherFile(path, fileKey);
+    if (cipher == null) return false;
+    try {
+      return await dual.sendAttachmentCipherPath(
+        remoteId,
+        TransportFileDescriptor(
+          path: cipher.path,
+          sizeBytes: cipher.sizeBytes,
+          protocol: 'attach-chunk',
+          fileId: fileId,
+        ),
+        firstCipher: cipher.firstCipher,
+        chunkCount: cipher.chunkCount,
+      );
+    } finally {
+      cipher.dispose();
+    }
   }
 
   /// Send a raw Orbits-Drop packet on the reliable channel — a control [Map]
@@ -340,14 +608,31 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// design (chunks are framed binary, protected in transit by the DataChannel
   /// DTLS layer). Returns false if no open reliable connection exists.
   bool sendDrop(String remoteId, Object packet) {
+    if (packet is Map && !replicationValueIsSafe(packet)) return false;
     final dual = _dual;
-    if (dual != null && dual.canUseNative(remoteId)) {
+    if (dual != null && _nativeCarrierFor(remoteId)) {
       unawaited(dual.sendDrop(remoteId, packet));
       return true;
     }
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
+    _notePeerjsDowngrade(remoteId);
     final conn = getConn(remoteId, 'reliable');
     if (conn == null || !conn.open) return false;
     return conn.send(packet);
+  }
+
+  /// Native large-file path. PeerJS Drop streams from the same path via
+  /// [DropNotifier.sendFileFromPath] (ranged reads, not a Dart byte array).
+  Future<bool> sendFileFromPath(
+    String remoteId,
+    TransportFileDescriptor file,
+  ) async {
+    if (file.path.isEmpty || file.path.contains('://')) return false;
+    final dual = _dual;
+    if (dual != null && _nativeCarrierFor(remoteId)) {
+      return dual.sendFileFromPath(remoteId, file);
+    }
+    return false;
   }
 
   /// Send a plaintext room-protocol control [packet] on the reliable channel.
@@ -358,13 +643,14 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// no open reliable connection exists.
   bool sendRoomPacket(String remoteId, Map<String, Object?> packet) {
     final dual = _dual;
-    if (dual != null && dual.canUseNative(remoteId)) {
+    if (dual != null && _nativeCarrierFor(remoteId)) {
       return sendGuardedRoomPacket(
         packet,
         connected: true,
         send: (p) => dual.sendRoomPacket(remoteId, p),
       );
     }
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
     final conn = getConn(remoteId, 'reliable');
     return sendGuardedRoomPacket(
       packet,
@@ -373,9 +659,21 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     );
   }
 
-  Future<void> sendCallSignal(String remoteId, CallSignal signal) async {
+  Future<bool> sendAutobaseEvent(String remoteId, RoomEvent event) async {
+    if (event.writerId.contains('://') || event.kind.contains('://')) {
+      return false;
+    }
+    if (!replicationValueIsSafe(event.payload)) return false;
     final dual = _dual;
-    if (dual != null && dual.canUseNative(remoteId)) {
+    if (dual == null || !_nativeCarrierFor(remoteId)) return false;
+    return dual.sendAutobaseEvent(remoteId, event);
+  }
+
+  Future<void> sendCallSignal(String remoteId, CallSignal signal) async {
+    if (!replicationValueIsSafe(signal.toJson())) return;
+    if (signal.callId.isEmpty || signal.callId.contains('://')) return;
+    final dual = _dual;
+    if (dual != null && _nativeCarrierFor(remoteId)) {
       await dual.sendCallSignal(remoteId, signal);
     }
   }
@@ -385,6 +683,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// `bufferedAmount`. Capped (~10s) so a wedged channel can't hang the loop —
   /// the next `conn.send` will then surface the dead channel.
   Future<void> waitForDropDrain(String remoteId) async {
+    // Isolation-disallowed modes have no PeerJS DataConnection to drain
+    // and no native bufferedAmount API — don't invent a drain.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
     final dc = getConn(remoteId, 'reliable')?.dataChannel;
     if (dc == null) return;
     for (var i = 0; i < 200; i++) {
@@ -433,6 +734,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     if (reliable) {
       unawaited(_dual?.dial(normalized));
     }
+    // Phase 14 isolation: native-only modes must not open PeerJS.
+    // Product mode stays default-live, so this is a no-op until the
+    // support window closes in writing.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      return;
+    }
     final peer = _boundPeer;
     if (peer == null || peer.destroyed || !peer.open) {
       // PeerJS not ready yet (cold-boot race: user taps chat row faster
@@ -478,6 +785,15 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// accepted [PeerDataConnection]. Idempotent: if a different connection
   /// already holds the same key, glare resolution decides which to keep.
   Future<void> attachConn(PeerDataConnection conn, String channel) async {
+    // Isolation fail-closed: a leftover PeerDataConnection must not wire
+    // onOpen/onData, insert `_bindings`, or mark the peer online.
+    // Product [kPeerjsIsolationMode] stays default-live.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      try {
+        unawaited(conn.close());
+      } catch (_) {}
+      return;
+    }
     final remoteId = normalizePeerId(conn.peer);
     if (remoteId.isEmpty) return;
     if (_messaging.isPeerBlocked(remoteId)) {
@@ -680,6 +996,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         },
         queueAckStatus: (id, status) =>
             _messaging.queueAckStatus(id, status),
+        onDeliveryAcked: (rid, id) {
+          _dual?.journalDeliveryAcknowledged(
+            eventId: id,
+            conversationId: rid,
+          );
+        },
         // The ReliableInboundCtx field fixes `remoteId` up-front via closure
         // (it's a per-peer ctx), so the dispatched callback takes just the
         // payload map. Our local `sendEncrypted` helper still takes both
@@ -701,6 +1023,19 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
           // Same — sound cue hooks live in a future audio slice.
         },
         isAppInForeground: () => true,
+        assembleNativeAttachment: (rid, fileId, key) async {
+          final dual = _dual;
+          if (dual == null) return null;
+          return dual.decryptInboundAttachment(rid, fileId, key);
+        },
+        assembleNativeAttachmentPath: (rid, fileId, key) async {
+          final dual = _dual;
+          if (dual == null) return null;
+          final decrypted =
+              await dual.decryptInboundAttachmentPath(rid, fileId, key);
+          if (decrypted == null || decrypted.isEmpty) return null;
+          return persistLocalAttachmentPath(decrypted);
+        },
     );
   }
 
@@ -718,7 +1053,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         },
       ),
       dropInbound: (rid, packet) => _drop.handleInbound(rid, packet),
-      dropAllowed: (rid) => isVerified(rid) && !_messaging.isPeerBlocked(rid),
+      // PeerJS DataConnection router only. Native inbound drop uses DualStack
+      // onDrop → DropBridge, not this callback.
+      dropAllowed: (rid) =>
+          peerjsAllowedOnNative(isWeb: kIsWeb) &&
+          isVerified(rid) &&
+          !_messaging.isPeerBlocked(rid),
       isBlocked: (rid) => _messaging.isPeerBlocked(rid),
       roomInbound: (rid, packet) => _room.handleInbound(rid, packet),
     );
@@ -794,13 +1134,48 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     final bridge = _messaging;
     unawaited(bridge.loadPendingForPeer(remoteId));
     unawaited(bridge.flushOutboxForPeer(remoteId));
+    unawaited(sendEncrypted(
+      remoteId,
+      {'type': 'profile_req', 'nonce': now()},
+    ));
+    try {
+      final cached = await getCachedBundle(remoteId);
+      if (cached == null) {
+        unawaited(sendEncrypted(
+          remoteId,
+          {'type': 'bundle_req', 'nonce': now()},
+        ));
+      }
+    } catch (_) {
+      // Bundle cache is a read-through cache — missing row is fine.
+    }
+  }
+
+  /// Live native→PeerJS downgrade. No-op while rollout is off.
+  void _notePeerjsDowngrade(String remoteId) {
+    final cached = remoteCapabilityCache.get(remoteId);
+    final binding = _dual?.remoteBindings[normalizePeerId(remoteId)];
+    final remoteIsPwa =
+        cached?.capabilities.contains(TransportCapability.webPwaV1) == true ||
+            binding?.capabilities.contains(TransportCapability.webPwaV1.wireName) ==
+                true;
+    recordTransportDowngrade(
+      selected: TransportRoute.peerjs,
+      preferHyperswarm: isHyperswarmTransportEnabled(),
+      localIsPwa: kIsWeb,
+      remoteIsPwa: remoteIsPwa,
+    );
   }
 
   void _refreshConnectedIds() {
     final next = <String>{};
-    for (final b in _bindings.values) {
-      if (b.channel == 'reliable' && b.conn.open) {
-        next.add(normalizePeerId(b.conn.peer));
+    // Isolation fail-closed: leftover PeerJS bindings must not light the
+    // green dot. Native DualStack presence is still valid.
+    if (peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      for (final b in _bindings.values) {
+        if (b.channel == 'reliable' && b.conn.open) {
+          next.add(normalizePeerId(b.conn.peer));
+        }
       }
     }
     next.addAll(_dual?.connected ?? const <String>{});
@@ -830,7 +1205,20 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     _boundPeer = current;
     if (current == null) return;
 
+    // Phase 14 isolation: fail closed *before* attaching PeerJS listeners.
+    // Isolation already closes inbound connections inside the listener,
+    // but bind must not subscribe onConnection / onOpen / onCall — or
+    // flush pending PeerJS dials — when native isolation disallows
+    // PeerJS. Product [kPeerjsIsolationMode] stays default-live.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      return;
+    }
+
     _peerSubs.add(current.onConnection.listen((conn) {
+      if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+        unawaited(conn.close());
+        return;
+      }
       final ch = (conn.metadata['channel'] as String?) == 'ephemeral'
           ? 'ephemeral'
           : 'reliable';
@@ -867,6 +1255,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// `_openChannel` (e.g. the peer goes back to not-ready in the middle of
   /// the loop) can't cause an infinite re-entry.
   void _flushPendingReliable() {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      _pendingReliableTargets.clear();
+      return;
+    }
     if (_pendingReliableTargets.isEmpty) return;
     final targets = List<String>.from(_pendingReliableTargets);
     _pendingReliableTargets.clear();

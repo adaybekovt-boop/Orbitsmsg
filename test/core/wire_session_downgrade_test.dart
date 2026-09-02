@@ -5,6 +5,7 @@
 // legacy escape hatch enabled, an already-pinned peer must never be allowed to
 // downgrade to v2.
 
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -71,5 +72,17 @@ void main() {
         throwsStateError,
       );
     });
+  });
+
+  test('_saveRatchetSnapshot source-scan refuses :// peerId before wrap', () {
+    final src = File('lib/core/wire_session.dart').readAsStringSync();
+    final fn = src.indexOf('Future<void> _saveRatchetSnapshot');
+    expect(fn, greaterThanOrEqualTo(0));
+    final wrap = src.indexOf('_maybeWrap', fn);
+    expect(wrap, greaterThan(fn));
+    expect(
+      src.substring(fn, wrap),
+      contains("session.peerId.contains('://')"),
+    );
   });
 }

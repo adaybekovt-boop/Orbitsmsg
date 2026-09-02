@@ -5,7 +5,11 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'fleet_status.dart';
 import 'signed_capabilities.dart';
+
+/// Every remaining sound relay at or above this RTT is a blow-up.
+const int kRelayBlowUpRttMs = 8000;
 
 enum DirectoryPeerKind { bootstrap, relay, storage }
 
@@ -18,6 +22,8 @@ class DirectoryPeer {
     required this.region,
     this.rttMs = 0,
     this.unsound = false,
+    this.protocol = '',
+    this.publicKey = '',
   });
 
   final String id;
@@ -28,6 +34,28 @@ class DirectoryPeer {
   final int rttMs;
   final bool unsound;
 
+  /// `hyperdht` for bootstrap rows that may join a swarm; `http` for
+  /// health / storage / lab HTTP. Empty means bootstrap→hyperdht,
+  /// other kinds→http. Relay rows may be `hyperdht` when they carry a
+  /// DHT node public key for Hyperswarm `relayThrough`.
+  final String protocol;
+
+  /// 32-byte HyperDHT node public key as hex. Empty for HTTP-only rows.
+  /// Not an identity key.
+  final String publicKey;
+
+  String get wireProtocol => protocol.isNotEmpty
+      ? protocol
+      : (kind == DirectoryPeerKind.bootstrap ? 'hyperdht' : 'http');
+
+  bool get isHyperdhtBootstrap =>
+      kind == DirectoryPeerKind.bootstrap && wireProtocol != 'http';
+
+  bool get isHyperdhtRelay =>
+      kind == DirectoryPeerKind.relay &&
+      wireProtocol != 'http' &&
+      isHyperdhtPublicKeyHex(publicKey);
+
   Map<String, Object?> toJson() => <String, Object?>{
         'id': id,
         'kind': kind.name,
@@ -36,6 +64,8 @@ class DirectoryPeer {
         'region': region,
         'rttMs': rttMs,
         'unsound': unsound,
+        'protocol': wireProtocol,
+        if (publicKey.isNotEmpty) 'publicKey': publicKey,
       };
 
   static DirectoryPeer fromJson(Map<String, Object?> json) {
@@ -47,15 +77,37 @@ class DirectoryPeer {
         orElse: () => DirectoryPeerKind.relay,
       ),
       host: json['host'] as String? ?? '',
-      port: json['port'] as int? ?? 0,
+      port: json['port'] is int
+          ? json['port'] as int
+          : (json['port'] as num?)?.toInt() ?? 0,
       region: json['region'] as String? ?? '',
-      rttMs: json['rttMs'] as int? ?? 0,
+      rttMs: json['rttMs'] is int
+          ? json['rttMs'] as int
+          : (json['rttMs'] as num?)?.toInt() ?? 0,
       unsound: json['unsound'] == true,
+      protocol: json['protocol'] as String? ?? '',
+      publicKey: json['publicKey'] as String? ?? '',
     );
   }
 }
 
+/// 32-byte HyperDHT node public key as lowercase/upper hex. Not identity.
+bool isHyperdhtPublicKeyHex(String value) {
+  if (value.length != 64) return false;
+  for (var i = 0; i < value.length; i++) {
+    final c = value.codeUnitAt(i);
+    final hex = (c >= 48 && c <= 57) ||
+        (c >= 97 && c <= 102) ||
+        (c >= 65 && c <= 70);
+    if (!hex) return false;
+  }
+  return true;
+}
+
 const String kRelayDirectoryInfo = 'orbits-relay-directory-v1';
+
+/// No public signed directory is deployed. Tests sign local fixtures only.
+const bool kLiveSignedRelayDirectory = false;
 
 class RelayDirectory {
   const RelayDirectory({
@@ -93,9 +145,23 @@ class RelayDirectory {
   }
 
   bool get meetsFleetMinimum =>
-      pick(DirectoryPeerKind.bootstrap).length >= 3 &&
-      pick(DirectoryPeerKind.relay).length >= 2 &&
-      pick(DirectoryPeerKind.storage).length >= 2;
+      pick(DirectoryPeerKind.bootstrap).length >= kFleetMinBootstrap &&
+      pick(DirectoryPeerKind.relay).length >= kFleetMinRelay &&
+      pick(DirectoryPeerKind.storage).length >= kFleetMinStorage;
+
+  /// Operational collapse of a configured relay set. An empty directory
+  /// (no public fleet) is not a blow-up.
+  bool get relayBlownUp {
+    final allRelays =
+        peers.where((p) => p.kind == DirectoryPeerKind.relay).toList();
+    if (allRelays.isEmpty) return false;
+    final live = pick(DirectoryPeerKind.relay);
+    if (live.isEmpty) return true;
+    if (live.length < kFleetMinRelay && allRelays.length >= kFleetMinRelay) {
+      return true;
+    }
+    return live.every((p) => p.rttMs >= kRelayBlowUpRttMs);
+  }
 }
 
 Future<RelayDirectory> issueRelayDirectory({

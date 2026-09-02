@@ -22,4 +22,8 @@ The window has **not started**. Default live path is PeerJS.
 | `removed` | No PeerJS in any artifact |
 
 Do not set `removed` or `web-only` from this tree until the window
-closes in writing.
+closes in writing. Isolation stays `default-live` (`kPeerjsIsolationMode`).
+Helpers in `lib/transport/peerjs_window.dart` encode the table so a later
+mode change is explicit; they must not override `HyperswarmRollout.off`.
+`decideDualStack` accepts an `isolationMode` argument for tests. The live
+constant `kPeerjsIsolationMode` stays `default-live`.

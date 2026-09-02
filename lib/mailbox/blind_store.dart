@@ -29,6 +29,19 @@ class EncryptedBlock {
   final int storedAt;
 }
 
+/// Local operator threshold. Not a public-fleet SLA.
+const int kMailboxBacklogRollbackBytes = 48 * 1024 * 1024;
+const int kMailboxBacklogRollbackCount = 4096;
+
+/// Amplification cap for one mailbox HTTP JSON body. Keep in sync with
+/// `MAX_BODY_BYTES` in `tool/storage_peer/server.js`.
+const int kMailboxHttpMaxBodyBytes = 256 * 1024;
+
+/// Per-token deposit budget. Keep in sync with `RATE_LIMIT` /
+/// `RATE_WINDOW_MS` in `tool/storage_peer/server.js`.
+const int kMailboxHttpRateLimit = 32;
+const int kMailboxHttpRateWindowMs = 10 * 1000;
+
 class BlindMailboxStore {
   BlindMailboxStore({this.maxAnonymous = false});
 
@@ -53,6 +66,7 @@ class BlindMailboxStore {
     if (cap == null || cap.isExpired) {
       throw StateError('mailbox capability rejected');
     }
+    sweepExpired(token, writerKey);
     final list = _cores.putIfAbsent(writerKey, () => <EncryptedBlock>[]);
     final used = list.fold<int>(0, (n, b) => n + b.bytes.length);
     if (used + block.bytes.length > cap.quotaBytes) {
@@ -70,10 +84,24 @@ class BlindMailboxStore {
     if (cap == null || cap.isExpired) {
       throw StateError('mailbox capability rejected');
     }
-    final now = DateTime.now().millisecondsSinceEpoch;
+    sweepExpired(token, writerKey);
     return (_cores[writerKey] ?? const <EncryptedBlock>[])
-        .where((b) => b.seq >= fromSeq && now - b.storedAt <= cap.retentionMs)
+        .where((b) => b.seq >= fromSeq)
         .toList(growable: false);
+  }
+
+  /// Drop ciphertext whose retention window has elapsed. Returns the
+  /// number of blocks removed. Called from get/put so GC is not only a
+  /// filter on read.
+  int sweepExpired(String token, String writerKey) {
+    final cap = _caps[token];
+    if (cap == null) return 0;
+    final list = _cores[writerKey];
+    if (list == null || list.isEmpty) return 0;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final before = list.length;
+    list.removeWhere((b) => now - b.storedAt > cap.retentionMs);
+    return before - list.length;
   }
 
   /// Crypto-erasure: drop ciphertext so it cannot be fetched again.
@@ -83,5 +111,21 @@ class BlindMailboxStore {
     final list = _cores[writerKey];
     if (list == null) return;
     list.removeWhere((b) => b.seq == seq);
+  }
+
+  int usedBytes(String writerKey) =>
+      (_cores[writerKey] ?? const <EncryptedBlock>[])
+          .fold<int>(0, (n, b) => n + b.bytes.length);
+
+  int pendingCount(String writerKey) =>
+      (_cores[writerKey] ?? const <EncryptedBlock>[]).length;
+
+  bool isBacklogged(
+    String writerKey, {
+    int maxBytes = kMailboxBacklogRollbackBytes,
+    int maxCount = kMailboxBacklogRollbackCount,
+  }) {
+    return usedBytes(writerKey) >= maxBytes ||
+        pendingCount(writerKey) >= maxCount;
   }
 }

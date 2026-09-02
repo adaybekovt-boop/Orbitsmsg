@@ -1,6 +1,8 @@
 // Phase 6: WebRTC signaling payloads on the Hyperswarm `call` channel.
 // Media still uses flutter_webrtc. This is not TURN.
 
+import '../transport/layers.dart';
+
 enum CallSignalType {
   offer,
   answer,
@@ -34,18 +36,36 @@ class CallSignal {
         if (media != null) 'media': media,
       };
 
+  /// Room-voice mesh signals ride the Hyperswarm `call` channel with
+  /// `media.channel == 'room-voice'` and a `rv-` callId. 1:1 calls must
+  /// ignore them so a room join does not open the personal overlay.
+  bool get isRoomVoice =>
+      media?['channel'] == 'room-voice' ||
+      (callId.startsWith('rv-') && !callId.contains('://'));
+
   static CallSignal fromJson(Map<String, Object?> json) {
     final typeName = json['type'] as String? ?? '';
     final type = CallSignalType.values.firstWhere(
       (v) => v.name == typeName,
       orElse: () => throw FormatException('bad call signal $typeName'),
     );
+    final candidate = (json['candidate'] as Map?)?.cast<String, Object?>();
+    final media = (json['media'] as Map?)?.cast<String, Object?>();
+    if (!replicationValueIsSafe(json) ||
+        !replicationValueIsSafe(candidate) ||
+        !replicationValueIsSafe(media)) {
+      throw FormatException('call signal contains forbidden fields');
+    }
+    final callId = json['callId'] as String? ?? '';
+    if (callId.isEmpty || callId.contains('://')) {
+      throw FormatException('call signal contains forbidden fields');
+    }
     return CallSignal(
       type: type,
-      callId: json['callId'] as String? ?? '',
+      callId: callId,
       sdp: json['sdp'] as String?,
-      candidate: (json['candidate'] as Map?)?.cast<String, Object?>(),
-      media: (json['media'] as Map?)?.cast<String, Object?>(),
+      candidate: candidate,
+      media: media,
     );
   }
 }
@@ -53,12 +73,14 @@ class CallSignal {
 /// Offer / answer / ICE / hangup without PeerJS MediaConnection types.
 /// Media still uses flutter_webrtc after these signals land.
 class NativeCallSession {
-  NativeCallSession({required this.send});
+  NativeCallSession({required this.send, this.defaultMedia});
 
   final Future<void> Function(CallSignal signal) send;
+  final Map<String, Object?>? defaultMedia;
   CallSignalType? lastApplied;
   String? callId;
   String? remoteSdp;
+  Map<String, Object?>? remoteMedia;
   final List<Map<String, Object?>> remoteIce = <Map<String, Object?>>[];
   bool closed = false;
 
@@ -73,14 +95,21 @@ class NativeCallSession {
         type: CallSignalType.offer,
         callId: callId,
         sdp: sdp,
-        media: media,
+        media: media ?? defaultMedia,
       ),
     );
   }
 
   Future<void> accept({required String sdp}) {
     final id = callId ?? '';
-    return send(CallSignal(type: CallSignalType.answer, callId: id, sdp: sdp));
+    return send(
+      CallSignal(
+        type: CallSignalType.answer,
+        callId: id,
+        sdp: sdp,
+        media: defaultMedia,
+      ),
+    );
   }
 
   Future<void> addIce(Map<String, Object?> candidate) {
@@ -89,6 +118,7 @@ class NativeCallSession {
         type: CallSignalType.iceCandidate,
         callId: callId ?? '',
         candidate: candidate,
+        media: defaultMedia,
       ),
     );
   }
@@ -96,7 +126,34 @@ class NativeCallSession {
   Future<void> hangup() async {
     closed = true;
     await send(
-      CallSignal(type: CallSignalType.hangup, callId: callId ?? ''),
+      CallSignal(
+        type: CallSignalType.hangup,
+        callId: callId ?? '',
+        media: defaultMedia,
+      ),
+    );
+  }
+
+  /// Mute / camera / screen-share flags on the Hyperswarm `call` channel.
+  /// Track `enabled` still flips locally; this is for the remote overlay.
+  Future<void> publishMediaState({
+    required bool micEnabled,
+    required bool videoEnabled,
+    required bool screenSharing,
+  }) {
+    final id = callId ?? '';
+    if (id.isEmpty || id.contains('://')) return Future<void>.value();
+    return send(
+      CallSignal(
+        type: CallSignalType.mediaState,
+        callId: id,
+        media: <String, Object?>{
+          ...?defaultMedia,
+          'mic': micEnabled,
+          'video': videoEnabled,
+          'screen': screenSharing,
+        },
+      ),
     );
   }
 
@@ -113,8 +170,9 @@ class NativeCallSession {
       case CallSignalType.hangup:
       case CallSignalType.reject:
         closed = true;
-      case CallSignalType.accept:
       case CallSignalType.mediaState:
+        remoteMedia = signal.media;
+      case CallSignalType.accept:
         break;
     }
   }

@@ -8,13 +8,21 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/orbits_drop.dart';
 import '../peer/helpers.dart';
 import '../storage/db.dart' as db;
+import '../transport/layers.dart';
+import '../transport/peerjs_window.dart';
+import '../transport/transport_api.dart';
 import 'auth_notifier.dart';
 import 'connections_notifier.dart';
+import 'drop_path_send_stub.dart'
+    if (dart.library.io) 'drop_path_send_io.dart' as drop_path_send;
+import 'drop_store_factory_stub.dart'
+    if (dart.library.io) 'drop_store_factory_io.dart' as drop_store;
 
 enum DropStatus { queued, sent, received, completed, failed }
 
@@ -31,6 +39,7 @@ class DropTransfer {
     this.status = DropStatus.queued,
     this.error,
     this.blobId,
+    this.localPath,
   });
 
   final String id;
@@ -46,6 +55,9 @@ class DropTransfer {
   /// `fileBlobs` row id once a received file has been saved (null otherwise).
   final String? blobId;
 
+  /// Native path-streamed receive: verified file on disk, not Drift bytes.
+  final String? localPath;
+
   double get progress =>
       size == 0 ? 1.0 : (transferred / size).clamp(0.0, 1.0).toDouble();
 
@@ -54,6 +66,7 @@ class DropTransfer {
     DropStatus? status,
     String? error,
     String? blobId,
+    String? localPath,
   }) =>
       DropTransfer(
         id: id,
@@ -66,6 +79,7 @@ class DropTransfer {
         status: status ?? this.status,
         error: error ?? this.error,
         blobId: blobId ?? this.blobId,
+        localPath: localPath ?? this.localPath,
       );
 }
 
@@ -79,6 +93,37 @@ class DropState {
       DropState(transfers: transfers ?? this.transfers);
 }
 
+/// True when a native `harness-file-*` packet may be upserted or patched.
+///
+/// Walks nested maps with [replicationValueIsSafe] ([kForbiddenReplicationFields]).
+/// For `harness-file-received`, also refuses a remote URL / scheme and path
+/// strings that embed `fileKey` or `opaqueWakeToken`.
+/// For `harness-file-start`, `harness-file-chunk`, `harness-file-received`,
+/// `harness-file-end`, and `harness-file-resume`, refuses a missing/empty `id`
+/// or a String `id` that contains `://`. Non-harness types skip the `id` gate.
+bool harnessFilePacketIsSafe(Map packet) {
+  if (!replicationValueIsSafe(packet)) return false;
+  if (packet['type'] == 'harness-file-received') {
+    final path = packet['path'];
+    if (path is String &&
+        (path.contains('://') ||
+            path.contains('fileKey') ||
+            path.contains('opaqueWakeToken'))) {
+      return false;
+    }
+  }
+  switch (packet['type']) {
+    case 'harness-file-start':
+    case 'harness-file-chunk':
+    case 'harness-file-received':
+    case 'harness-file-end':
+    case 'harness-file-resume':
+      final id = packet['id'];
+      if (id is! String || id.isEmpty || id.contains('://')) return false;
+  }
+  return true;
+}
+
 class DropNotifier extends StateNotifier<DropState> {
   DropNotifier(this._ref) : super(const DropState()) {
     _engine = DropEngine(
@@ -88,6 +133,8 @@ class DropNotifier extends StateNotifier<DropState> {
       onFailed: _onFailed,
       onOutgoingSent: _onOutgoingSent,
       persistIncoming: _persistIncoming,
+      persistIncomingPath: _persistIncomingPath,
+      openIncomingStore: drop_store.openPeerJsDropStore,
       onReply: (peerId, packet) {
         _ref.read(connectionsNotifierProvider.notifier).sendDrop(peerId, packet);
       },
@@ -100,6 +147,9 @@ class DropNotifier extends StateNotifier<DropState> {
           DropBridge(
             handleInbound: (remoteId, packet) {
               _pendingInboundPeer = remoteId;
+              if (_handleNativePathPacket(remoteId, packet)) return;
+              final conns = _ref.read(connectionsNotifierProvider.notifier);
+              if (_isolationBlocksPeerjsDrop(conns, remoteId)) return;
               unawaited(_engine.handleInbound(packet, peerId: remoteId));
             },
             resetPeer: (remoteId) => _engine.resetPeer(remoteId),
@@ -122,6 +172,32 @@ class DropNotifier extends StateNotifier<DropState> {
 
   // ── Outbound ──────────────────────────────────────────────────
 
+  /// Isolation fail-closed: PeerJS is forbidden and DualStack cannot take
+  /// the file. Product [kPeerjsIsolationMode] stays default-live, so this
+  /// is false until the support window closes in writing.
+  bool _isolationBlocksPeerjsDrop(ConnectionsNotifier conns, String pid) =>
+      !peerjsAllowedOnNative(isWeb: kIsWeb) && !conns.canUseNative(pid);
+
+  String _failOutboundIsolated({
+    required String peerId,
+    required String name,
+    required String mime,
+    required int size,
+  }) {
+    final id = dropNewFileId();
+    _upsert(DropTransfer(
+      id: id,
+      name: name,
+      size: size,
+      mime: mime,
+      peerId: peerId,
+      direction: DropDirection.outgoing,
+      status: DropStatus.failed,
+      error: 'Нет активного P2P-соединения',
+    ));
+    return id;
+  }
+
   /// Send [bytes] to [peerId]. Opens the reliable channel if needed and waits
   /// briefly for it. Returns the transfer id, or null if the channel never
   /// came up.
@@ -133,6 +209,15 @@ class DropNotifier extends StateNotifier<DropState> {
   }) async {
     final pid = normalizePeerId(peerId);
     final conns = _ref.read(connectionsNotifierProvider.notifier);
+
+    if (_isolationBlocksPeerjsDrop(conns, pid)) {
+      return _failOutboundIsolated(
+        peerId: pid,
+        name: name,
+        mime: mime,
+        size: bytes.length,
+      );
+    }
 
     if (!conns.hasReliable(pid)) {
       conns.openReliable(pid);
@@ -160,6 +245,182 @@ class DropNotifier extends StateNotifier<DropState> {
         waitForDrain: () => conns.waitForDropDrain(pid),
         peerId: pid,
       );
+    } catch (e) {
+      _patch(id, (t) => t.copyWith(status: DropStatus.failed, error: '$e'));
+    }
+    return id;
+  }
+
+  /// Web picker `readStream`: hash while sending. Never one Dart `Uint8List`
+  /// of the whole file. Native Drop still uses [sendFileFromPath].
+  Future<String?> sendFileFromStream(
+    String peerId,
+    Stream<List<int>> incoming, {
+    required String name,
+    required String mime,
+    required int sizeBytes,
+  }) async {
+    if (sizeBytes <= 0) return null;
+    final pid = normalizePeerId(peerId);
+    final conns = _ref.read(connectionsNotifierProvider.notifier);
+
+    if (_isolationBlocksPeerjsDrop(conns, pid)) {
+      return _failOutboundIsolated(
+        peerId: pid,
+        name: name,
+        mime: mime,
+        size: sizeBytes,
+      );
+    }
+
+    if (!conns.hasReliable(pid)) {
+      conns.openReliable(pid);
+      final ok = await _waitForReliable(pid);
+      if (!ok) return null;
+    }
+
+    final id = dropNewFileId();
+    _upsert(DropTransfer(
+      id: id,
+      name: name,
+      size: sizeBytes,
+      mime: mime,
+      peerId: pid,
+      direction: DropDirection.outgoing,
+    ));
+
+    try {
+      await _engine.sendFileFromIncomingStream(
+        incoming: incoming,
+        size: sizeBytes,
+        name: name,
+        mime: mime,
+        fileId: id,
+        send: (packet) => conns.sendDrop(pid, packet),
+        waitForDrain: () => conns.waitForDropDrain(pid),
+        peerId: pid,
+      );
+    } catch (e) {
+      _patch(id, (t) => t.copyWith(status: DropStatus.failed, error: '$e'));
+    }
+    return id;
+  }
+
+  /// Native carrier first. If Hyperswarm is off, stream the same path over
+  /// PeerJS Drop without reading the file into a Dart `Uint8List`.
+  Future<String?> sendFileFromPath(
+    String peerId, {
+    required String path,
+    required String name,
+    required String mime,
+    required int sizeBytes,
+    int resumeOffset = 0,
+  }) async {
+    if (path.isEmpty) return null;
+    if (path.contains('://')) return null;
+    final pid = normalizePeerId(peerId);
+    final conns = _ref.read(connectionsNotifierProvider.notifier);
+
+    if (_isolationBlocksPeerjsDrop(conns, pid)) {
+      return _failOutboundIsolated(
+        peerId: pid,
+        name: name,
+        mime: mime,
+        size: sizeBytes,
+      );
+    }
+
+    // Native path-stream does not need a PeerJS reliable channel. Only
+    // open one when isolation still allows PeerJS (product default-live).
+    if (peerjsAllowedOnNative(isWeb: kIsWeb) && !conns.hasReliable(pid)) {
+      conns.openReliable(pid);
+      final ok = await _waitForReliable(pid);
+      if (!ok) return null;
+    }
+
+    final id = dropNewFileId();
+    try {
+      final ok = await conns.sendFileFromPath(
+        pid,
+        TransportFileDescriptor(
+          path: path,
+          sizeBytes: sizeBytes,
+          fileName: name,
+          mime: mime,
+          resumeOffset: resumeOffset,
+        ),
+      );
+      if (ok) {
+        _upsert(DropTransfer(
+          id: id,
+          name: name,
+          size: sizeBytes,
+          mime: mime,
+          peerId: pid,
+          direction: DropDirection.outgoing,
+          transferred: sizeBytes,
+          status: DropStatus.completed,
+        ));
+        return id;
+      }
+    } on StateError catch (e) {
+      _upsert(DropTransfer(
+        id: id,
+        name: name,
+        size: sizeBytes,
+        mime: mime,
+        peerId: pid,
+        direction: DropDirection.outgoing,
+        status: DropStatus.failed,
+        error: e.message,
+      ));
+      return id;
+    }
+
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      _upsert(DropTransfer(
+        id: id,
+        name: name,
+        size: sizeBytes,
+        mime: mime,
+        peerId: pid,
+        direction: DropDirection.outgoing,
+        status: DropStatus.failed,
+        error: 'Нет активного P2P-соединения',
+      ));
+      return id;
+    }
+
+    _upsert(DropTransfer(
+      id: id,
+      name: name,
+      size: sizeBytes,
+      mime: mime,
+      peerId: pid,
+      direction: DropDirection.outgoing,
+    ));
+    try {
+      final sent = await drop_path_send.sendDropFileFromFilesystem(
+        engine: _engine,
+        path: path,
+        name: name,
+        mime: mime,
+        sizeBytes: sizeBytes,
+        fileId: id,
+        peerId: pid,
+        resumeOffset: resumeOffset,
+        send: (packet) => conns.sendDrop(pid, packet),
+        waitForDrain: () => conns.waitForDropDrain(pid),
+      );
+      if (sent == null) {
+        _patch(
+          id,
+          (t) => t.copyWith(
+            status: DropStatus.failed,
+            error: 'Не удалось прочитать файл',
+          ),
+        );
+      }
     } catch (e) {
       _patch(id, (t) => t.copyWith(status: DropStatus.failed, error: '$e'));
     }
@@ -223,6 +484,66 @@ class DropNotifier extends StateNotifier<DropState> {
     _patch(fileId, (t) => t.copyWith(status: DropStatus.failed, error: reason));
   }
 
+  bool _handleNativePathPacket(String peerId, Object packet) {
+    if (packet is! Map) return false;
+    if (!harnessFilePacketIsSafe(packet)) return true;
+    final type = packet['type'];
+    if (type == 'harness-file-start') {
+      final id = packet['id'] as String? ?? '';
+      if (id.isEmpty || id.contains('://')) return true;
+      _upsert(DropTransfer(
+        id: id,
+        name: sanitizeDropFileName(packet['name'] as String?),
+        size: (packet['size'] as num?)?.toInt() ?? 0,
+        mime: (packet['mime'] as String?) ?? 'application/octet-stream',
+        peerId: peerId,
+        direction: DropDirection.incoming,
+      ));
+      return true;
+    }
+    if (type == 'harness-file-chunk') {
+      final id = packet['id'] as String? ?? '';
+      if (id.isEmpty || id.contains('://')) return true;
+      final offset = (packet['offset'] as num?)?.toInt() ?? 0;
+      _patch(id, (t) => t.copyWith(transferred: offset));
+      return true;
+    }
+    if (type == 'harness-file-end' || type == 'harness-file-resume') {
+      return true;
+    }
+    if (type == 'harness-file-received') {
+      final id = packet['id'] as String? ?? '';
+      final localPath = packet['path'] as String? ?? '';
+      final size = (packet['size'] as num?)?.toInt() ?? 0;
+      if (id.isEmpty || id.contains('://')) return true;
+      final existing = state.transfers.where((t) => t.id == id);
+      if (existing.isEmpty) {
+        _upsert(DropTransfer(
+          id: id,
+          name: sanitizeDropFileName(packet['name'] as String?),
+          size: size,
+          mime: 'application/octet-stream',
+          peerId: peerId,
+          direction: DropDirection.incoming,
+          transferred: size,
+          status: DropStatus.completed,
+          localPath: localPath,
+        ));
+      } else {
+        _patch(
+          id,
+          (t) => t.copyWith(
+            transferred: size == 0 ? t.size : size,
+            status: DropStatus.completed,
+            localPath: localPath,
+          ),
+        );
+      }
+      return true;
+    }
+    return false;
+  }
+
   Future<bool> _persistIncoming(DropFileMeta meta, Uint8List bytes) async {
     _patch(meta.fileId, (t) => t.copyWith(status: DropStatus.received));
     final blobId = 'drop-${meta.fileId}';
@@ -251,6 +572,18 @@ class DropNotifier extends StateNotifier<DropState> {
         transferred: t.size,
         status: DropStatus.completed,
         blobId: blobId,
+      ),
+    );
+    return true;
+  }
+
+  Future<bool> _persistIncomingPath(DropFileMeta meta, String path) async {
+    _patch(
+      meta.fileId,
+      (t) => t.copyWith(
+        transferred: t.size,
+        status: DropStatus.completed,
+        localPath: path,
       ),
     );
     return true;
