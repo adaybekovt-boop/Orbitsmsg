@@ -163,6 +163,7 @@ class Worklet {
           b64: chunk.toString('base64'),
         })
         offset += n
+        await new Promise((resolve) => setImmediate(resolve))
         persistTransferState(statePath, {
           id,
           path: resolved,
