@@ -174,6 +174,26 @@ void main() {
       contains('_waitAuthenticated'),
     );
     expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('_ensureNativeSendReady'),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('_flushPendingInbound'),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('_flushReplication'),
+    );
+    expect(
+      File('lib/transport/worklet_orbits_transport_io.dart').readAsStringSync(),
+      contains("case 'authenticated'"),
+    );
+    expect(
+      File('lib/state/connections_notifier.dart').readAsStringSync(),
+      contains('canUseNative'),
+    );
+    expect(
       File('lib/transport/native_transport_host.dart').readAsStringSync(),
       contains('localBinding: issuedBinding'),
     );

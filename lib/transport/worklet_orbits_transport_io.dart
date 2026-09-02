@@ -297,6 +297,21 @@ class WorkletOrbitsTransport implements OrbitsTransport {
     switch (name) {
       case 'connected':
         _events.add(TransportConnected(payload['peerId'] as String? ?? ''));
+      case 'authenticated':
+        final peerId = payload['peerId'] as String? ?? '';
+        final bindingJson = payload['binding'];
+        if (peerId.isNotEmpty && bindingJson is Map) {
+          try {
+            _events.add(
+              TransportAuthenticated(
+                peerId,
+                DeviceBinding.fromWire(
+                  Map<String, Object?>.from(bindingJson),
+                ),
+              ),
+            );
+          } catch (_) {}
+        }
       case 'disconnected':
         _events.add(TransportDisconnected(payload['peerId'] as String? ?? ''));
       case 'suspended':

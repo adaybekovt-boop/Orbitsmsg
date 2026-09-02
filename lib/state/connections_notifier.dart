@@ -402,7 +402,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// Whether a reliable channel to [remoteId] is open (used by Drop to gate
   /// the peer picker / send button).
   bool hasReliable(String remoteId) {
-    if (_dual?.isNativeConnected(remoteId) == true) return true;
+    if (_dual?.canUseNative(remoteId) == true) return true;
     final conn = getConn(remoteId, 'reliable');
     return conn != null && conn.open;
   }

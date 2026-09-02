@@ -95,6 +95,10 @@ class DualStackBridge {
   final Set<String> authenticated = <String>{};
   final Map<String, DeviceBinding> remoteBindings = <String, DeviceBinding>{};
   final Map<String, String> bindingFailures = <String, String>{};
+  final Map<String, List<_QueuedInbound>> _pendingInbound =
+      <String, List<_QueuedInbound>>{};
+  static const int _maxPendingInboundFrames = 1024;
+  static const int _maxPendingInboundBytes = 4 * 1024 * 1024;
   final List<CapabilityRecord> remoteCapabilities = <CapabilityRecord>[];
   StreamSubscription<TransportEvent>? _sub;
   void Function(CallSignal signal, String from)? onCallSignal;
@@ -114,6 +118,7 @@ class DualStackBridge {
     authenticated.clear();
     remoteBindings.clear();
     bindingFailures.clear();
+    _pendingInbound.clear();
   }
 
   bool get nativeEnabled => isHyperswarmTransportEnabled();
@@ -160,10 +165,7 @@ class DualStackBridge {
   Future<bool> _sendEncryptedOne(String peerId, Object? msg) async {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return false;
-    if (isNativeConnected(norm) && !authenticated.contains(norm)) {
-      await _waitAuthenticated(norm);
-    }
-    if (!isNativeConnected(norm) || !authenticated.contains(norm)) {
+    if (!await _ensureNativeSendReady(norm)) {
       if (msg is Map &&
           (msg['type'] == 'wireHello' || msg['type'] == 'wireRekey')) {
         return await depositMailbox(jsonPayload(Map<String, Object?>.from(msg)));
@@ -205,6 +207,17 @@ class DualStackBridge {
       await Future<void>.delayed(const Duration(milliseconds: 20));
     }
     return authenticated.contains(norm);
+  }
+
+  /// Native application traffic waits for ADR-0001 DeviceBinding checks.
+  /// Mailbox deposit stays immediate when the peer is **not** connected.
+  Future<bool> _ensureNativeSendReady(String peerId) async {
+    final norm = normalizePeerId(peerId);
+    if (isBlocked(norm)) return false;
+    if (isNativeConnected(norm) && !authenticated.contains(norm)) {
+      await _waitAuthenticated(norm);
+    }
+    return isNativeConnected(norm) && authenticated.contains(norm);
   }
 
   /// Offline deposit: encrypted bytes only. Used when the recipient is not
@@ -452,7 +465,8 @@ class DualStackBridge {
     List<int> plaintext,
     List<int> fileKey, {
     String fileId = '',
-  }) {
+  }) async {
+    if (!await _ensureNativeSendReady(peerId)) return;
     return _sendAttachmentChunks(
       peerId,
       ResumableAttachment.chunk(plaintext, fileKey),
@@ -471,7 +485,7 @@ class DualStackBridge {
     String fileId = '',
   }) async {
     final norm = normalizePeerId(peerId);
-    if (isBlocked(norm)) return;
+    if (!await _ensureNativeSendReady(norm)) return;
     final id = fileId.isEmpty
         ? 'att-${DateTime.now().millisecondsSinceEpoch}'
         : fileId;
@@ -505,7 +519,7 @@ class DualStackBridge {
     required int chunkCount,
   }) async {
     final norm = normalizePeerId(peerId);
-    if (isBlocked(norm) || !isNativeConnected(norm)) return false;
+    if (!await _ensureNativeSendReady(norm)) return false;
     if (file.path.isEmpty || file.path.contains('://')) {
       throw StateError('sendAttachmentCipherPath needs a local path');
     }
@@ -533,7 +547,7 @@ class DualStackBridge {
     String fileId = '',
   }) async {
     final norm = normalizePeerId(peerId);
-    if (isBlocked(norm)) return;
+    if (!await _ensureNativeSendReady(norm)) return;
     final id = fileId.isEmpty
         ? 'att-${DateTime.now().millisecondsSinceEpoch}'
         : fileId;
@@ -686,7 +700,9 @@ class DualStackBridge {
 
   Future<bool> sendEphemeral(String peerId, Object? msg) async {
     final norm = normalizePeerId(peerId);
-    if (isBlocked(norm) || !isWireReady(norm)) return false;
+    if (!await _ensureNativeSendReady(norm) || !isWireReady(norm)) {
+      return false;
+    }
     final wire = await encryptWirePayload(norm, msg);
     await transport.send(norm, TransportChannel.presence, utf8.encode(wire));
     return true;
@@ -703,10 +719,20 @@ class DualStackBridge {
       fallbackWriter: selfDeviceId,
     );
     if (event != null) _applyRoom(event);
-    unawaited(
-      transport.send(norm, TransportChannel.control, jsonPayload(framed)),
-    );
+    unawaited(_sendControlWhenReady(norm, framed));
     return true;
+  }
+
+  Future<void> _sendControlWhenReady(
+    String peerId,
+    Map<String, Object?> framed,
+  ) async {
+    if (!await _ensureNativeSendReady(peerId)) return;
+    await transport.send(
+      normalizePeerId(peerId),
+      TransportChannel.control,
+      jsonPayload(framed),
+    );
   }
 
   /// Phase 12 Autobase on the native carrier. Host-plaintext warning stays.
@@ -715,7 +741,7 @@ class DualStackBridge {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return false;
     _applyRoom(event);
-    if (!isNativeConnected(norm)) return false;
+    if (!await _ensureNativeSendReady(norm)) return false;
     await transport.send(
       norm,
       TransportChannel.control,
@@ -743,9 +769,11 @@ class DualStackBridge {
     hypercore.append(record);
   }
 
-  Future<void> sendCallSignal(String peerId, CallSignal signal) {
-    return transport.send(
-      normalizePeerId(peerId),
+  Future<void> sendCallSignal(String peerId, CallSignal signal) async {
+    final norm = normalizePeerId(peerId);
+    if (!await _ensureNativeSendReady(norm)) return;
+    await transport.send(
+      norm,
       TransportChannel.call,
       jsonPayload(signal.toJson()),
     );
@@ -753,7 +781,7 @@ class DualStackBridge {
 
   Future<bool> sendDrop(String peerId, Object packet) async {
     final norm = normalizePeerId(peerId);
-    if (isBlocked(norm) || !isNativeConnected(norm)) return false;
+    if (!await _ensureNativeSendReady(norm)) return false;
     if (packet is Map) {
       await transport.send(
         norm,
@@ -776,7 +804,7 @@ class DualStackBridge {
     TransportFileDescriptor file,
   ) async {
     final norm = normalizePeerId(peerId);
-    if (isBlocked(norm) || !isNativeConnected(norm)) return false;
+    if (!await _ensureNativeSendReady(norm)) return false;
     if (file.path.isEmpty) {
       throw StateError('sendFileFromPath needs a path');
     }
@@ -814,10 +842,30 @@ class DualStackBridge {
     );
     unawaited(_persistDurable(record));
     hypercore.append(record);
-    if (isNativeConnected(peerId)) {
+    _replicateRecord(peerId, record);
+  }
+
+  void _replicateRecord(String peerId, JournalRecord record) {
+    final norm = normalizePeerId(peerId);
+    if (!authenticated.contains(norm) || !connected.contains(norm)) return;
+    if (isBlocked(norm)) return;
+    unawaited(
+      transport.send(
+        norm,
+        TransportChannel.replication,
+        jsonPayload(hypercore.toReplicationFrame(record)),
+      ),
+    );
+  }
+
+  void _flushReplication(String peerId) {
+    final norm = normalizePeerId(peerId);
+    if (!authenticated.contains(norm) || !connected.contains(norm)) return;
+    if (isBlocked(norm)) return;
+    for (final record in hypercore.blocks) {
       unawaited(
         transport.send(
-          peerId,
+          norm,
           TransportChannel.replication,
           jsonPayload(hypercore.toReplicationFrame(record)),
         ),
@@ -852,6 +900,7 @@ class DualStackBridge {
       authenticated.remove(norm);
       remoteBindings.remove(norm);
       connected.remove(norm);
+      _pendingInbound.remove(norm);
       try {
         await transport.disconnect(norm);
       } catch (_) {}
@@ -867,6 +916,8 @@ class DualStackBridge {
         await setPin(norm, binding.identityPublicKey);
       } catch (_) {}
     }
+    _flushReplication(norm);
+    _flushPendingInbound(norm);
   }
 
   void _onEvent(TransportEvent event) {
@@ -900,15 +951,6 @@ class DualStackBridge {
             ),
           );
         }
-        for (final record in hypercore.blocks) {
-          unawaited(
-            transport.send(
-              normalizePeerId(peerId),
-              TransportChannel.replication,
-              jsonPayload(hypercore.toReplicationFrame(record)),
-            ),
-          );
-        }
       case TransportAuthenticated(:final peerId, :final binding):
         unawaited(_acceptRemoteBinding(peerId, binding));
       case TransportDisconnected(:final peerId):
@@ -916,6 +958,7 @@ class DualStackBridge {
         connected.remove(norm);
         authenticated.remove(norm);
         remoteBindings.remove(norm);
+        _pendingInbound.remove(norm);
         onPresence?.call(peerId, false);
       case TransportFrame(:final peerId, :final channel, :final bytes):
         _onFrame(peerId, channel, bytes);
@@ -928,7 +971,59 @@ class DualStackBridge {
     }
   }
 
+  bool _isConnectHandshakeFrame(TransportChannel channel, List<int> bytes) {
+    if (channel == TransportChannel.call ||
+        channel == TransportChannel.attachment ||
+        channel == TransportChannel.replication) {
+      return false;
+    }
+    if (bytes.isEmpty) return false;
+    try {
+      final decoded = decodeJsonPayload(bytes);
+      final type = decoded['type'];
+      return type == kDeviceBindingWireType || type == 'capabilities';
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _queueInbound(
+    String peerId,
+    TransportChannel channel,
+    List<int> bytes,
+  ) {
+    final queue = _pendingInbound.putIfAbsent(peerId, () => <_QueuedInbound>[]);
+    var total = 0;
+    for (final item in queue) {
+      total += item.bytes.length;
+    }
+    if (queue.length >= _maxPendingInboundFrames ||
+        total + bytes.length > _maxPendingInboundBytes) {
+      return;
+    }
+    queue.add(_QueuedInbound(channel, List<int>.from(bytes)));
+  }
+
+  void _flushPendingInbound(String peerId) {
+    final queued = _pendingInbound.remove(peerId);
+    if (queued == null || queued.isEmpty) return;
+    for (final item in queued) {
+      _dispatchFrame(peerId, item.channel, item.bytes);
+    }
+  }
+
   void _onFrame(String peerId, TransportChannel channel, List<int> bytes) {
+    final norm = normalizePeerId(peerId);
+    if (isBlocked(norm)) return;
+    if (!authenticated.contains(norm) &&
+        !_isConnectHandshakeFrame(channel, bytes)) {
+      _queueInbound(norm, channel, bytes);
+      return;
+    }
+    _dispatchFrame(norm, channel, bytes);
+  }
+
+  void _dispatchFrame(String peerId, TransportChannel channel, List<int> bytes) {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return;
     if (channel == TransportChannel.call) {
@@ -1007,4 +1102,11 @@ class DualStackBridge {
     }
     unawaited(onPacket(norm, data));
   }
+}
+
+class _QueuedInbound {
+  _QueuedInbound(this.channel, this.bytes);
+
+  final TransportChannel channel;
+  final List<int> bytes;
 }

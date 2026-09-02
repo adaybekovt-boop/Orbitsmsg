@@ -1601,6 +1601,132 @@ void main() {
     await b.detach();
   });
 
+  test('native calls, drop, and inbound frames wait for DeviceBinding auth',
+      () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(await _bind('a'));
+    await pair.$2.publish(await _bind('b'));
+    final seen = <Object?>[];
+    DualStackBridge make(LoopbackOrbitsTransport t, String self, String device) {
+      return DualStackBridge(
+        transport: t,
+        journal: MemoryJournal(device),
+        selfPeerId: () => self,
+        selfDeviceId: device,
+        secrets: secrets,
+        isBlocked: (_) => false,
+        tofuCheck: (peer, spki) async {
+          await Future<void>.delayed(const Duration(milliseconds: 80));
+          return _allowTofu(peer, spki);
+        },
+        onPacket: (peer, data) async => seen.add(data),
+      )..attach();
+    }
+
+    final a = make(pair.$1, 'ORBIT-AAAAAAAAAAAAAAAA', 'dev-a');
+    final b = make(pair.$2, 'ORBIT-BBBBBBBBBBBBBBBB', 'dev-b');
+    CallSignal? hangup;
+    final dropped = <Object>[];
+    b.onCallSignal = (signal, from) => hangup = signal;
+    b.onDrop = (peer, packet) => dropped.add(packet);
+    await pair.$1.connect(
+      const PeerDescriptor(peerId: 'ORBIT-BBBBBBBBBBBBBBBB'),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+    expect(a.isNativeConnected('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    expect(a.authenticated.contains('ORBIT-BBBBBBBBBBBBBBBB'), isFalse);
+    expect(b.authenticated.contains('ORBIT-AAAAAAAAAAAAAAAA'), isFalse);
+
+    await a.transport.send(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      TransportChannel.message,
+      utf8.encode('v2:pre-auth:bbb:ccc'),
+    );
+    final dropFuture = a.sendDrop('ORBIT-BBBBBBBBBBBBBBBB', {
+      'type': 'file-start',
+      'name': 'x.bin',
+      'size': 1,
+    });
+    final callFuture = a.sendCallSignal(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      const CallSignal(type: CallSignalType.hangup, callId: 'c-auth'),
+    );
+    final autoFuture = a.sendAutobaseEvent(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      const RoomEvent(
+        writerId: 'a',
+        seq: 0,
+        kind: 'membership',
+        payload: {
+          'peerId': 'ORBIT-AAAAAAAAAAAAAAAA',
+          'action': 'join',
+          'displayName': 'A',
+        },
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(
+      seen.whereType<String>().any((p) => p.contains('pre-auth')),
+      isFalse,
+    );
+    expect(hangup, isNull);
+    expect(dropped, isEmpty);
+    expect(b.rooms.state.members['ORBIT-AAAAAAAAAAAAAAAA'], isNull);
+
+    expect(await dropFuture, isTrue);
+    await callFuture;
+    expect(await autoFuture, isTrue);
+    expect(a.authenticated.contains('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    await _awaitAuth(a, b);
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(
+      seen.whereType<String>().any((p) => p.contains('pre-auth')),
+      isTrue,
+    );
+    expect(hangup?.type, CallSignalType.hangup);
+    expect(
+      dropped.whereType<Map>().any((m) => m['type'] == 'file-start'),
+      isTrue,
+    );
+    expect(b.rooms.state.members['ORBIT-AAAAAAAAAAAAAAAA'], 'A');
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('_ensureNativeSendReady'),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('_flushPendingInbound'),
+    );
+    expect(
+      File('lib/state/connections_notifier.dart').readAsStringSync(),
+      contains('canUseNative'),
+    );
+    final hasReliable = File('lib/state/connections_notifier.dart')
+        .readAsStringSync()
+        .split('bool hasReliable')[1]
+        .split('bool canDepositMailbox')[0];
+    expect(hasReliable, contains('canUseNative'));
+    expect(hasReliable, isNot(contains('isNativeConnected')));
+    await a.detach();
+    await b.detach();
+  });
+
   test('inbound device binding is verified and remembered', () async {
     final (a, b, _) = await linked();
     expect(a.authenticated.contains('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
