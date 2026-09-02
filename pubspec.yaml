@@ -134,6 +134,12 @@ dependencies:
   url_launcher: ^6.3.2
   package_info_plus: ^9.0.1
 
+  # Federated Bare/Hyperswarm transport plugin. Default live path stays
+  # PeerJS; this package is the native-internal boundary when rollout
+  # permits it.
+  orbits_transport:
+    path: packages/orbits_transport
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

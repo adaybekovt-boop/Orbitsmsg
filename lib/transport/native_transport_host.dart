@@ -1,12 +1,13 @@
 // Starts the native carrier and binds it into ConnectionsNotifier.
 // Default product path stays PeerJS until rollout != off.
 
-import 'dart:typed_data';
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:orbits_transport/orbits_transport.dart';
 
 import '../core/feature_flags.dart';
 import '../devices/device_registry.dart';
+import '../devices/local_device_material.dart';
 import '../mailbox/blind_store.dart';
 import '../push/opaque_wake.dart';
 import '../push/wake_service.dart';
@@ -17,8 +18,9 @@ import 'capabilities.dart';
 import 'device_binding.dart';
 import 'discovery_secret_store.dart';
 import 'journal_file_io.dart' if (dart.library.html) 'journal_file_stub.dart';
-import 'loopback_transport.dart';
+import 'local_worklet_platform.dart';
 import 'native_backend_policy.dart';
+import 'plugin_orbits_transport.dart';
 import 'signed_capabilities.dart';
 import 'transport_api.dart';
 import 'transport_lifecycle.dart';
@@ -70,12 +72,15 @@ class NativeTransportHost {
     await discoverySecretStore.hydrate();
     await deviceRegistry.hydrate();
 
+    _ensurePluginBoundary();
     final chosen = await _chooseTransport();
     if (chosen == null) return;
 
     transport = chosen;
 
-    final journal = await openLocalFileJournal('local-device');
+    final material = await loadOrCreateLocalDeviceMaterial();
+    await authorizeLocalDevice(material);
+    final journal = await openLocalFileJournal(material.deviceId);
     final secret = discoverySecretStore.getOrCreateLocal();
     await transport!.start(
       TransportLocalConfiguration(
@@ -84,38 +89,30 @@ class NativeTransportHost {
       ),
     );
 
-    CapabilityRecord? caps;
-    try {
-      caps = await issueLocalCapabilityRecord(
-        peerId: auth.user.peerId,
-        deviceId: 'local-device',
-        capabilities: {
-          TransportCapability.hyperswarmV1,
-          TransportCapability.peerjsV4,
-          TransportCapability.mailboxV1,
-          TransportCapability.hypercoreV1,
-          TransportCapability.multiDeviceV1,
-        },
-        issuedAt: DateTime.now().millisecondsSinceEpoch,
-        expiresAt: DateTime.now().millisecondsSinceEpoch + 86400000 * 30,
-      );
-    } catch (_) {}
-
-    try {
-      await transport!.publish(
-        DeviceBinding(
-          version: kDeviceBindingVersion,
-          identityPublicKey: caps?.identityPublicKey ?? Uint8List(0),
-          deviceId: 'local-device',
-          transportPublicKey: Uint8List.fromList(List<int>.filled(32, 1)),
-          hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 2)),
-          capabilities: const ['hyperswarm-v1', 'peerjs-v4'],
-          createdAt: DateTime.now().millisecondsSinceEpoch,
-          expiresAt: DateTime.now().millisecondsSinceEpoch + 86400000 * 30,
-          signatureByIdentityKey: caps?.signature ?? Uint8List(0),
-        ),
-      );
-    } catch (_) {}
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final caps = await issueLocalCapabilityRecord(
+      peerId: auth.user.peerId,
+      deviceId: material.deviceId,
+      capabilities: {
+        TransportCapability.hyperswarmV1,
+        TransportCapability.peerjsV4,
+        TransportCapability.mailboxV1,
+        TransportCapability.hypercoreV1,
+        TransportCapability.multiDeviceV1,
+      },
+      issuedAt: now,
+      expiresAt: now + 86400000 * 30,
+    );
+    final binding = await issueLocalDeviceBinding(
+      material: material,
+      capabilities: const ['hyperswarm-v1', 'peerjs-v4'],
+      createdAt: now,
+      expiresAt: now + 86400000 * 30,
+    );
+    if (!deviceBindingClockIsValid(binding, nowMs: now)) {
+      throw StateError('local device binding is not valid');
+    }
+    await transport!.publish(binding);
 
     final mailbox = BlindMailboxStore()
       ..grant(
@@ -123,7 +120,7 @@ class NativeTransportHost {
           token: 'local-mailbox',
           quotaBytes: 64 * 1024 * 1024,
           retentionMs: 30 * 24 * 3600 * 1000,
-          expiresAt: DateTime.now().millisecondsSinceEpoch + 86400000 * 30,
+          expiresAt: now + 86400000 * 30,
         ),
       );
 
@@ -131,8 +128,8 @@ class NativeTransportHost {
         .read(connectionsNotifierProvider.notifier)
         .bindNativeTransport(
           transport!,
-          journal: MemoryJournal('local-device'),
-          deviceId: 'local-device',
+          journal: MemoryJournal(material.deviceId),
+          deviceId: material.deviceId,
           durableJournal: journal,
           mailbox: mailbox,
           mailboxToken: 'local-mailbox',
@@ -154,20 +151,35 @@ class NativeTransportHost {
     attached = true;
   }
 
+  void _ensurePluginBoundary() {
+    final current = OrbitsTransportPlatform.instance;
+    if (current is InProcessOrbitsTransportPlatform) return;
+    if (current is LocalWorkletPlatform) return;
+    if (kReleaseMode) return;
+    OrbitsTransportPlatform.instance = LocalWorkletPlatform(
+      spawnWorklet: spawnWorklet,
+      allowNodeFallback: true,
+    );
+  }
+
   Future<OrbitsTransport?> _chooseTransport() async {
-    WorkletOrbitsTransport? hyperswarm;
-    var moduleAvailable = false;
-    var started = false;
-    try {
-      hyperswarm = await spawnWorklet(backend: 'hyperswarm');
-      moduleAvailable = hyperswarm != null;
-      started = hyperswarm != null;
-    } catch (_) {
-      moduleAvailable = false;
-      started = false;
+    final inProcess =
+        OrbitsTransportPlatform.instance is InProcessOrbitsTransportPlatform;
+    var moduleAvailable = inProcess;
+    var started = inProcess;
+    if (!inProcess) {
+      try {
+        final probe = await spawnWorklet(backend: 'hyperswarm');
+        moduleAvailable = probe != null;
+        started = probe != null;
+        await probe?.stop();
+      } catch (_) {
+        moduleAvailable = false;
+        started = false;
+      }
     }
 
-    var decision = selectNativeBackend(
+    final decision = selectNativeBackend(
       rollout: hyperswarmRollout(),
       peerjsFallbackEnabled: isPeerjsFallbackEnabled(),
       contactForbidsFallback: contactForbidsFallback,
@@ -176,48 +188,16 @@ class NativeTransportHost {
         hyperswarmStarted: started,
       ),
     );
+    lastDecision = decision;
 
-    if (decision.backend == NativeBackendKind.hyperswarm &&
-        hyperswarm != null) {
-      lastDecision = decision;
-      backend = 'hyperswarm';
-      return hyperswarm;
-    }
-
-    if (decision.failure == NativeBackendFailure.fallbackForbidden) {
-      lastDecision = decision;
-      backend = 'none';
+    if (decision.backend == NativeBackendKind.none ||
+        decision.backend == NativeBackendKind.peerjs) {
+      backend = decision.backend.name;
       return null;
     }
 
-    if (decision.backend == NativeBackendKind.peerjs) {
-      lastDecision = decision;
-      backend = 'peerjs';
-      return null;
-    }
-
-    try {
-      final loopback = await spawnWorklet(backend: 'loopback');
-      lastDecision = decision;
-      backend = loopback != null ? 'worklet' : 'loopback';
-      return loopback ?? LoopbackOrbitsTransport();
-    } catch (_) {
-      lastDecision = selectNativeBackend(
-        rollout: hyperswarmRollout(),
-        peerjsFallbackEnabled: isPeerjsFallbackEnabled(),
-        contactForbidsFallback: contactForbidsFallback,
-        probe: const NativeBackendProbe(
-          hyperswarmModuleAvailable: true,
-          hyperswarmStarted: false,
-        ),
-      );
-      if (contactForbidsFallback) {
-        backend = 'none';
-        return null;
-      }
-      backend = 'loopback';
-      return LoopbackOrbitsTransport();
-    }
+    backend = decision.backend.name;
+    return PluginOrbitsTransport(backend: backend);
   }
 
   Future<void> recoverAfterCrash() async {

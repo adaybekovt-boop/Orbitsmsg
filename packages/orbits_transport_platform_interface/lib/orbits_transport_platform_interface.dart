@@ -51,6 +51,9 @@ abstract class OrbitsTransportPlatform extends PlatformInterface {
   Future<void> suspend();
   Future<void> resume();
   Future<void> refreshNetwork();
+
+  /// Privacy-safe structured events. Default is empty.
+  Stream<Map<String, Object?>> get events => const Stream.empty();
 }
 
 class _UnimplementedTransport extends OrbitsTransportPlatform {
