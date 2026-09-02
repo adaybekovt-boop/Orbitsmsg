@@ -1,7 +1,6 @@
 // Distinct per-device transport and Hypercore public material.
 // Never reuse identity/Noise/ratchet keys. Never log private bytes.
 
-import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
