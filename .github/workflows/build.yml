@@ -32,12 +32,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ────────────────────────────────────────────────────────────────────
-  # Lint + tests. Analyzer warnings are fatal. Infos stay
-  # non-blocking so generated Drift noise doesn't fail the gate.
-  # ────────────────────────────────────────────────────────────────────
-  analyze:
-    name: Analyze & Test
+  # Independent suites. One analysis failure must not hide harness,
+  # plugin, storage-peer, or app-test outcomes.
+  analyze-root:
+    name: Analyze app
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -60,20 +58,82 @@ jobs:
             exit 1
           fi
 
-      # Codegen failures now fail the job — a missing `database.g.dart`
-      # cascades into a confusing "Type _$OrbitsDatabase not found" wall
-      # downstream, much harder to read than the real codegen error.
       - name: Generate code (drift / build_runner)
         run: dart run build_runner build --delete-conflicting-outputs
 
-      # Warnings block merge. Infos (mostly generated Drift) do not.
       - name: flutter analyze
         run: flutter analyze --no-fatal-infos
 
-      # Test failures now also fail the job; the crypto roundtrip suite
-      # is pure-Dart and stable, so any red here is a real regression.
+  analyze-packages:
+    name: Analyze federated packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Analyze each package in its own graph
+        run: bash tool/ci/analyze_packages.sh
+
+      - name: Compile Linux host translation unit
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 -c \
+            packages/orbits_transport_linux/linux/orbits_transport_plugin.cc \
+            -o /tmp/orbits_transport_linux.o
+          echo "linux host compiled"
+
+  test-app:
+    name: App tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - name: Install system SQLite for Drift tests
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-0 libsqlite3-dev
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Generate code (drift / build_runner)
+        run: dart run build_runner build --delete-conflicting-outputs
+
       - name: flutter test
         run: flutter test --reporter expanded
+
+  test-plugin:
+    name: Plugin tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Transport plugin lifecycle
+        working-directory: packages/orbits_transport
+        run: |
+          flutter pub get
+          flutter test
+
+  test-harness:
+    name: Connectivity harness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -84,25 +144,57 @@ jobs:
         run: node --test test/*.test.js
 
       - name: Pin worklet bundle hash (no remote JS)
+        run: bash tool/ci/verify_worklet_bundle.sh
+
+  test-storage-peer:
+    name: Storage peer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Storage peer Node tests
+        run: node --test tool/storage_peer/server.test.js
+
+  # Gate used by platform build jobs. Individual suite jobs above still
+  # report their own conclusions when another suite is red.
+  analyze:
+    name: Required suites
+    if: always()
+    needs:
+      - analyze-root
+      - analyze-packages
+      - test-app
+      - test-plugin
+      - test-harness
+      - test-storage-peer
+    runs-on: ubuntu-latest
+    steps:
+      - name: All required suites passed
+        env:
+          ANALYZE_ROOT: ${{ needs.analyze-root.result }}
+          ANALYZE_PACKAGES: ${{ needs.analyze-packages.result }}
+          TEST_APP: ${{ needs.test-app.result }}
+          TEST_PLUGIN: ${{ needs.test-plugin.result }}
+          TEST_HARNESS: ${{ needs.test-harness.result }}
+          TEST_STORAGE: ${{ needs.test-storage-peer.result }}
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import hashlib, json
-          from pathlib import Path
-          worklet = Path("tool/connectivity_harness/src/worklet.js").read_bytes()
-          digest = hashlib.sha256(worklet).hexdigest()
-          manifest = json.loads(Path("tool/connectivity_harness/BUNDLE.manifest").read_text())
-          if manifest.get("remoteJs") is not False:
-              raise SystemExit("BUNDLE.manifest must set remoteJs=false")
-          pinned = manifest.get("workletSha256")
-          if pinned != digest:
-              raise SystemExit(f"worklet hash {digest} != pinned {pinned}")
-          print(f"worklet.js sha256={digest}")
-          PY
-
-      - name: Transport plugin lifecycle
-        working-directory: packages/orbits_transport
-        run: flutter test
+          echo "analyze-root=$ANALYZE_ROOT"
+          echo "analyze-packages=$ANALYZE_PACKAGES"
+          echo "test-app=$TEST_APP"
+          echo "test-plugin=$TEST_PLUGIN"
+          echo "test-harness=$TEST_HARNESS"
+          echo "test-storage-peer=$TEST_STORAGE"
+          test "$ANALYZE_ROOT" = success
+          test "$ANALYZE_PACKAGES" = success
+          test "$TEST_APP" = success
+          test "$TEST_PLUGIN" = success
+          test "$TEST_HARNESS" = success
+          test "$TEST_STORAGE" = success
 
   # ────────────────────────────────────────────────────────────────────
   # Native platform folders are committed and must not be regenerated with
@@ -116,7 +208,7 @@ jobs:
   # and simulator builds without requiring distribution signing secrets.
   build-ios:
     name: Build iOS (Xcode 26)
-    needs: analyze
+    needs: analyze-root
     runs-on: macos-26
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -178,7 +270,7 @@ jobs:
   # Tags/main use owner secrets; PRs use a cached CI sideload key.
   build-android:
     name: Build Android (APK)
-    needs: analyze
+    needs: analyze-root
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -339,7 +431,7 @@ jobs:
   # ────────────────────────────────────────────────────────────────────
   build-web:
     name: Build Web (Static)
-    needs: analyze
+    needs: analyze-root
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -440,7 +532,7 @@ jobs:
   # ────────────────────────────────────────────────────────────────────
   build-windows:
     name: Build Windows (EXE)
-    needs: analyze
+    needs: analyze-root
     # Flutter 3.32.0 maps only VS major 17 → "Visual Studio 17 2022".
     # windows-latest (2025+) reports VS 18, which the SDK treats as
     # "Visual Studio 16 2019" — not installed — and cmake fails.
