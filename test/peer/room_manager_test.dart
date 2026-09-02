@@ -454,6 +454,8 @@ void main() {
     expect(startVoice, contains('canUseNative'));
     expect(startVoice, contains('_offerNativeVoice'));
     expect(startVoice, contains('willNative'));
+    expect(startVoice, contains('roomVoiceUsesNativeLeg'));
+    expect(startVoice, contains('callPeer'));
     expect(
       startVoice.indexOf('canUseNative'),
       lessThan(voiceUiIdx),

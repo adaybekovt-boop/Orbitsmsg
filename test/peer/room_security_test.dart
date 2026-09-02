@@ -347,6 +347,20 @@ void main() {
       expect(ab.contains('://'), isFalse);
       expect(shouldOfferNativeRoomVoice('ORBIT-AA', 'ORBIT-BB'), isTrue);
       expect(shouldOfferNativeRoomVoice('ORBIT-BB', 'ORBIT-AA'), isFalse);
+      expect(roomVoiceUsesNativeLeg(canUseNative: true), isTrue);
+      expect(roomVoiceUsesNativeLeg(canUseNative: false), isFalse);
+      expect(
+        roomVoiceUsesPeerJsLeg(peerJsAllowed: true, canUseNative: false),
+        isTrue,
+      );
+      expect(
+        roomVoiceUsesPeerJsLeg(peerJsAllowed: true, canUseNative: true),
+        isFalse,
+      );
+      expect(
+        roomVoiceUsesPeerJsLeg(peerJsAllowed: false, canUseNative: true),
+        isFalse,
+      );
       final offer = CallSignal(
         type: CallSignalType.offer,
         callId: ab,

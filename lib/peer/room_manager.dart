@@ -179,6 +179,17 @@ Map<String, Object?> roomVoiceMedia({
 bool shouldOfferNativeRoomVoice(String selfPeerId, String remotePeerId) =>
     selfPeerId.compareTo(remotePeerId) < 0;
 
+/// Native DualStack takes the voice leg when the member is already
+/// authenticated on the carrier. PeerJS stays for everyone else, and
+/// for the default-live product path when native is down.
+bool roomVoiceUsesNativeLeg({required bool canUseNative}) => canUseNative;
+
+bool roomVoiceUsesPeerJsLeg({
+  required bool peerJsAllowed,
+  required bool canUseNative,
+}) =>
+    peerJsAllowed && !canUseNative;
+
 class _NativeVoiceLeg {
   _NativeVoiceLeg({required this.session, required this.media});
 
@@ -2350,7 +2361,7 @@ class RoomManager extends StateNotifier<RoomState> {
 
     final peer = _rawPeer;
     final willPeerJs = peerJsOk && peer != null;
-    final willNative = !peerJsOk && nativeOk;
+    final willNative = nativeOk;
     if (!willPeerJs && !willNative) {
       debugPrint('[room] voice: no PeerJS client available');
       return;
@@ -2376,6 +2387,11 @@ class RoomManager extends StateNotifier<RoomState> {
       _incomingCallSub?.cancel();
       _incomingCallSub = livePeer.onCall.listen(_handleIncomingRoomCall);
       for (final t in targets) {
+        if (roomVoiceUsesNativeLeg(
+          canUseNative: _connections.canUseNative(t),
+        )) {
+          continue;
+        }
         try {
           final mc = await livePeer.callPeer(t, stream, metadata: {
             'channel': 'room-voice',
@@ -2392,7 +2408,11 @@ class RoomManager extends StateNotifier<RoomState> {
     }
     if (willNative) {
       for (final t in targets) {
-        if (!_connections.canUseNative(t)) continue;
+        if (!roomVoiceUsesNativeLeg(
+          canUseNative: _connections.canUseNative(t),
+        )) {
+          continue;
+        }
         if (!shouldOfferNativeRoomVoice(selfId, t)) continue;
         try {
           await _offerNativeVoice(
@@ -2417,6 +2437,10 @@ class RoomManager extends StateNotifier<RoomState> {
     // Mesh start is gated earlier in [_startVoiceMesh] (before voice UI /
     // getUserMedia / callPeer). Keep this inbound fail-closed close().
     if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      unawaited(call.close().catchError((_) {}));
+      return;
+    }
+    if (_nativeVoice.containsKey(call.peer)) {
       unawaited(call.close().catchError((_) {}));
       return;
     }
@@ -2657,6 +2681,13 @@ class RoomManager extends StateNotifier<RoomState> {
     }
     if (_nativeVoice.containsKey(from)) {
       await _closeNativeLeg(from);
+    }
+    final leftoverPeerJs = _voiceConns.remove(from);
+    if (leftoverPeerJs != null) {
+      _spatialAudio.detachPeer(from);
+      try {
+        await leftoverPeerJs.close();
+      } catch (_) {}
     }
     final channelId = state.activeChannelId ?? '';
     if (channelId.isEmpty || channelId.contains('://')) return;
