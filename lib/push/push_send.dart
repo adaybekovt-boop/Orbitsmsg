@@ -243,6 +243,7 @@ FcmOpaqueRequest? buildFcmRequest({
         'android': <String, Object?>{
           'priority': 'normal',
           'ttl': kFcmAndroidTtl,
+          if (wake.collapseId.isNotEmpty) 'collapse_key': wake.collapseId,
         },
         'data': <String, String>{
           for (final e in payload.entries) e.key: '${e.value}',

@@ -8,6 +8,8 @@
   "kLiveFcmGateway": false,
   "kLiveStorageFleet": false,
   "kLiveSignedRelayDirectory": false,
+  "kBareBinaryShipped": false,
+  "kHolepunchCorestoreAddonLinked": false,
   "voipBackgroundMode": false,
   "tracking": false,
   "collectsMessageBodies": false,

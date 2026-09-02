@@ -489,6 +489,8 @@ class RoomManager extends StateNotifier<RoomState> {
               'локальные соединения.';
         case SelfHostFailure.unsupported:
           return kServerHostDesktopOnlyMessage;
+        case SelfHostFailure.peerjsIsolation:
+          return 'Встроенный PeerJS-сервер комнат отключён режимом изоляции.';
       }
     }
     if (e is TimeoutException) {

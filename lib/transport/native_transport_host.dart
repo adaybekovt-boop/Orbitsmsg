@@ -49,8 +49,9 @@ class NativeTransportHost {
   final PushRegistration pushRegistration = PushRegistration();
 
   Future<void> ensureStarted() async {
-    if (!isHyperswarmTransportEnabled()) return;
     if (attached) return;
+    directory = await loadRelayDirectoryFromEnv();
+    if (!isHyperswarmTransportEnabled()) return;
     final auth = _ref.read(authNotifierProvider);
     if (auth is! AuthAuthed) return;
 
@@ -58,7 +59,6 @@ class NativeTransportHost {
     await deviceRegistry.hydrate();
     await transportNoiseSeedStore.hydrate();
 
-    directory = await loadRelayDirectoryFromEnv();
     if (directory != null && directory!.relayBlownUp) {
       rollbackNativeToPeerjs(
         reason: NativeRollbackReason.relayBlowUp,

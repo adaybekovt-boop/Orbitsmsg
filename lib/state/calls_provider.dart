@@ -38,6 +38,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../calls/hyperswarm_signaling.dart';
+import '../calls/native_call_media.dart';
 import '../calls/system_calling.dart';
 import '../core/feature_flags.dart';
 import '../peer/peerjs_client.dart';
@@ -176,6 +177,7 @@ class CallsNotifier extends StateNotifier<CallState> {
   /// leaks the notifier and can fire after dispose (audit M7).
   MediaStreamTrack? _shareTrack;
   NativeCallSession? _nativeSession;
+  NativeCallMedia? _nativeMedia;
 
   // ─── Public API ───────────────────────────────────────────────
 
@@ -229,17 +231,15 @@ class CallsNotifier extends StateNotifier<CallState> {
       _nativeSession = NativeCallSession(
         send: (signal) => conns.sendCallSignal(remotePeerId, signal),
       );
+      _nativeSession!.callId = remotePeerId;
+      _nativeMedia = NativeCallMedia(
+        session: _nativeSession!,
+        onRemoteStream: _onNativeRemoteStream,
+      );
       String sdp = 'v=0';
       try {
-        final pc = await createPeerConnection(<String, dynamic>{
-          'sdpSemantics': 'unified-plan',
-        });
-        for (final track in local.getTracks()) {
-          await pc.addTrack(track, local);
-        }
-        final offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        sdp = offer.sdp ?? sdp;
+        await _nativeMedia!.attachLocal(local);
+        sdp = await _nativeMedia!.createOfferSdp();
       } catch (_) {
         // Signaling still proceeds; media attach can use PeerJS fallback.
       }
@@ -321,15 +321,16 @@ class CallsNotifier extends StateNotifier<CallState> {
     if (_nativeSession != null) {
       String sdp = 'v=0';
       try {
-        final pc = await createPeerConnection(<String, dynamic>{
-          'sdpSemantics': 'unified-plan',
-        });
-        for (final track in local.getTracks()) {
-          await pc.addTrack(track, local);
+        _nativeMedia ??= NativeCallMedia(
+          session: _nativeSession!,
+          onRemoteStream: _onNativeRemoteStream,
+        );
+        await _nativeMedia!.attachLocal(local);
+        for (final ice in _nativeSession!.remoteIce) {
+          await _nativeMedia!.addRemoteIce(ice);
         }
-        final answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        sdp = answer.sdp ?? sdp;
+        final offer = _nativeSession!.remoteSdp ?? '';
+        sdp = await _nativeMedia!.createAnswerSdp(offer);
       } catch (_) {}
       await _nativeSession!.accept(sdp: sdp);
       if (!isPeerjsFallbackEnabled() ||
@@ -496,6 +497,11 @@ class CallsNotifier extends StateNotifier<CallState> {
       unawaited(systemCalling.endCall(remote));
     }
     _nativeSession = null;
+    final nativeMedia = _nativeMedia;
+    _nativeMedia = null;
+    if (nativeMedia != null) {
+      unawaited(nativeMedia.close());
+    }
     _cameraTrackBackup = null;
     try {
       _shareTrack?.onEnded = null;
@@ -531,9 +537,9 @@ class CallsNotifier extends StateNotifier<CallState> {
 
   Future<void> _replaceVideoTrack(
       MediaStreamTrack newTrack, MediaStream stream) async {
-    final conn = _conn;
-    if (conn == null) return;
-    final senders = await conn.peerConnection.getSenders();
+    final pc = _conn?.peerConnection ?? _nativeMedia?.peerConnection;
+    if (pc == null) return;
+    final senders = await pc.getSenders();
     final videoSender = senders.firstWhere(
       (s) => s.track?.kind == 'video',
       orElse: () => senders.first,
@@ -570,12 +576,26 @@ class CallsNotifier extends StateNotifier<CallState> {
     state = const CallState.idle().copyWith(lastError: message);
   }
 
+  void _onNativeRemoteStream(MediaStream remote) {
+    if (!mounted) return;
+    state = state.copyWith(
+      status: CallStatus.inCall,
+      remoteStream: remote,
+    );
+  }
+
   void _onNativeCallSignal(String from, CallSignal signal) {
     _nativeSession ??= NativeCallSession(
       send: (next) =>
           _ref.read(connectionsNotifierProvider.notifier).sendCallSignal(from, next),
     );
     _nativeSession!.applyRemote(signal);
+    if (signal.type == CallSignalType.iceCandidate && signal.candidate != null) {
+      unawaited(_nativeMedia?.addRemoteIce(signal.candidate!));
+    }
+    if (signal.type == CallSignalType.answer && signal.sdp != null) {
+      unawaited(_nativeMedia?.setRemoteAnswer(signal.sdp!));
+    }
     if (!mounted) return;
     if (signal.type == CallSignalType.hangup ||
         signal.type == CallSignalType.reject) {
@@ -595,10 +615,6 @@ class CallsNotifier extends StateNotifier<CallState> {
           video: signal.media?['video'] == true,
         ),
       );
-    }
-    if (signal.type == CallSignalType.answer &&
-        state.status == CallStatus.calling) {
-      state = state.copyWith(status: CallStatus.inCall);
     }
   }
 
@@ -651,7 +667,7 @@ class CallsNotifier extends StateNotifier<CallState> {
     } catch (_) {}
     // Best-effort: tear down any active call on dispose. We don't
     // await — the provider container is going away regardless.
-    if (_conn != null || state.localStream != null) {
+    if (_conn != null || _nativeMedia != null || state.localStream != null) {
       unawaited(hangUp());
     }
     super.dispose();

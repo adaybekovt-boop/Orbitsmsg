@@ -47,6 +47,10 @@ void main() {
     expect(src, contains('rememberPublished'));
     expect(src, isNot(contains('List<int>.filled(32, 1)')));
     expect(src, contains('spawnWorkletTransport(backend: preferred)'));
+    final loadAt = src.indexOf('directory = await loadRelayDirectoryFromEnv()');
+    final gateAt = src.indexOf('if (!isHyperswarmTransportEnabled()) return;');
+    expect(loadAt, greaterThanOrEqualTo(0));
+    expect(gateAt, greaterThan(loadAt));
     expect(src, contains("backend == 'hyperswarm'"));
     expect(src, contains('httpStoragePeerClient'));
     expect(src, contains('advertisedLocalCapabilities'));

@@ -215,5 +215,6 @@ void main() {
     expect(await errorFor(SelfHostFailure.bind), contains('порт'));
     expect(await errorFor(SelfHostFailure.noLanAddress), contains('LAN'));
     expect(await errorFor(SelfHostFailure.clientTimeout), contains('таймаут'));
+    expect(await errorFor(SelfHostFailure.peerjsIsolation), contains('изоляции'));
   }, timeout: const Timeout(Duration(seconds: 20)));
 }

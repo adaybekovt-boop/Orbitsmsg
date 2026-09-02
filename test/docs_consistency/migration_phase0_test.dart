@@ -87,6 +87,8 @@ void main() {
     expect(packet['kLiveFcmGateway'], isFalse);
     expect(packet['kLiveStorageFleet'], isFalse);
     expect(packet['kLiveSignedRelayDirectory'], isFalse);
+    expect(packet['kBareBinaryShipped'], isFalse);
+    expect(packet['kHolepunchCorestoreAddonLinked'], isFalse);
     expect(packet['voipBackgroundMode'], isFalse);
     expect(packet['collectsMessageBodies'], isFalse);
     expect(packet['defaultLivePath'], 'PeerJS');

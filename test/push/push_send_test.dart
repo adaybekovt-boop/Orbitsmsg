@@ -111,6 +111,7 @@ void main() {
     final android = (fcm.body['message'] as Map)['android'] as Map;
     expect(android['priority'], 'normal');
     expect(android['ttl'], kFcmAndroidTtl);
+    expect(android['collapse_key'], 'c1');
 
     expect(
       buildApnsRequest(

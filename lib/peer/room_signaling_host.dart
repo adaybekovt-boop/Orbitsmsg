@@ -64,6 +64,9 @@ enum SelfHostFailure {
   /// Hosting was requested on a platform that can't host (defensive — the UI
   /// blocks this earlier).
   unsupported,
+
+  /// Phase 14 isolation forbids constructing a PeerJS signaling listener.
+  peerjsIsolation,
 }
 
 /// A self-host startup failure carrying a [SelfHostFailure] reason and an
@@ -155,6 +158,9 @@ class RoomSignalingHost {
   /// [SelfHostException] tagged with a specific [SelfHostFailure] reason so the
   /// caller can show a clear diagnostic instead of a generic error.
   Future<RoomInvite> start({required String roomId, String key = 'peerjs'}) async {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      throw SelfHostException(SelfHostFailure.peerjsIsolation);
+    }
     if (!canHostSignalingServer) {
       throw SelfHostException(SelfHostFailure.unsupported);
     }
