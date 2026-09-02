@@ -4,9 +4,8 @@
 import 'memory_journal.dart';
 import '../transport/replication_schema.dart';
 
-typedef EnvelopeDecrypt = Future<Map<String, Object?>?> Function(
-  List<int> encryptedEnvelope,
-);
+typedef EnvelopeDecrypt =
+    Future<Map<String, Object?>?> Function(List<int> encryptedEnvelope);
 
 class ProjectedMessage {
   const ProjectedMessage({
@@ -26,19 +25,25 @@ class ProjectedMessage {
   final String status;
 
   ProjectedMessage copyWith({String? status}) => ProjectedMessage(
-        eventId: eventId,
-        conversationId: conversationId,
-        senderIdentity: senderIdentity,
-        senderDeviceId: senderDeviceId,
-        plaintext: plaintext,
-        status: status ?? this.status,
-      );
+    eventId: eventId,
+    conversationId: conversationId,
+    senderIdentity: senderIdentity,
+    senderDeviceId: senderDeviceId,
+    plaintext: plaintext,
+    status: status ?? this.status,
+  );
 }
 
 class JournalProjector {
-  JournalProjector({required this.decrypt});
+  JournalProjector({
+    required this.decrypt,
+    this.revokedWriters = const <String>{},
+    this.maxEventVersion = kReplicationEventVersion,
+  });
 
   final EnvelopeDecrypt decrypt;
+  final Set<String> revokedWriters;
+  final int maxEventVersion;
   final Map<String, ProjectedMessage> messages = <String, ProjectedMessage>{};
   final Set<String> seenEventIds = <String>{};
   int cursor = 0;
@@ -50,7 +55,31 @@ class JournalProjector {
     }
   }
 
+  Future<void> applyInTransaction(Iterable<JournalRecord> records) async {
+    final snapshot = Map<String, ProjectedMessage>.from(messages);
+    final seen = Set<String>.from(seenEventIds);
+    final savedCursor = cursor;
+    try {
+      for (final record in records) {
+        await apply(record);
+        cursor = record.seq + 1;
+      }
+    } catch (_) {
+      messages
+        ..clear()
+        ..addAll(snapshot);
+      seenEventIds
+        ..clear()
+        ..addAll(seen);
+      cursor = savedCursor;
+      rethrow;
+    }
+  }
+
   Future<void> apply(JournalRecord record) async {
+    if (revokedWriters.contains(record.writerDeviceId)) return;
+    final version = record.fields['eventVersion'];
+    if (version is int && version > maxEventVersion) return;
     switch (record.kind) {
       case ReplicationEventKind.messageEnvelopeCreated:
         final id = record.fields['eventId'] as String?;
@@ -72,7 +101,8 @@ class JournalProjector {
         final ackId = record.fields['eventId'] as String?;
         if (ackId == null) return;
         final acked = messages[ackId];
-        if (acked != null) messages[ackId] = acked.copyWith(status: 'delivered');
+        if (acked != null)
+          messages[ackId] = acked.copyWith(status: 'delivered');
       case ReplicationEventKind.readAcknowledged:
         final readId = record.fields['eventId'] as String?;
         if (readId == null) return;
