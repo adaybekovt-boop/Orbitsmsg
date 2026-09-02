@@ -347,6 +347,16 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   bool canUseNative(String peerId) => _dual?.canUseNative(peerId) == true;
 
+  /// Native is connected (DeviceBinding may still be in flight). DualStackBridge
+  /// waits for ADR-0001 auth before application traffic. Secrets required —
+  /// never HASH(peerId).
+  bool _nativeCarrierFor(String remoteId) {
+    final dual = _dual;
+    if (dual == null || !dual.nativeEnabled) return false;
+    if (dual.secrets.get(remoteId) == null) return false;
+    return dual.canUseNative(remoteId) || dual.isNativeConnected(remoteId);
+  }
+
   void bindCallHandler(void Function(String from, CallSignal signal)? handler) {
     _callHandler = handler;
   }
@@ -365,13 +375,11 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   Future<bool> sendEncrypted(String remoteId, Object? msg) async {
     final dual = _dual;
     if (dual != null && dual.nativeEnabled) {
-      if (dual.canUseNative(remoteId)) {
-        try {
-          return await dual.sendEncrypted(remoteId, msg);
-        } catch (_) {
-          if (!isPeerjsFallbackEnabled()) return false;
-        }
-      } else if (dual.hasMailbox && dual.secrets.get(remoteId) != null) {
+      final known = dual.secrets.get(remoteId) != null;
+      if (known &&
+          (dual.canUseNative(remoteId) ||
+              dual.isNativeConnected(remoteId) ||
+              dual.hasMailbox)) {
         try {
           return await dual.sendEncrypted(remoteId, msg);
         } catch (_) {
@@ -387,7 +395,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// Same on the ephemeral channel (typing / heartbeat).
   Future<bool> sendEphemeral(String remoteId, Object? msg) async {
     final dual = _dual;
-    if (dual != null && dual.canUseNative(remoteId)) {
+    if (dual != null && _nativeCarrierFor(remoteId)) {
       try {
         return await dual.sendEphemeral(remoteId, msg);
       } catch (_) {
@@ -402,7 +410,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// Whether a reliable channel to [remoteId] is open (used by Drop to gate
   /// the peer picker / send button).
   bool hasReliable(String remoteId) {
-    if (_dual?.canUseNative(remoteId) == true) return true;
+    if (_nativeCarrierFor(remoteId)) return true;
     final conn = getConn(remoteId, 'reliable');
     return conn != null && conn.open;
   }
@@ -426,7 +434,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     required String fileId,
   }) async {
     final dual = _dual;
-    if (dual == null || !dual.canUseNative(remoteId)) return false;
+    if (dual == null || !_nativeCarrierFor(remoteId)) return false;
     if (fileKey.isEmpty || fileId.isEmpty) return false;
     final cipher = await xorPlaintextPathToCipherFile(path, fileKey);
     if (cipher == null) return false;
@@ -453,7 +461,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// DTLS layer). Returns false if no open reliable connection exists.
   bool sendDrop(String remoteId, Object packet) {
     final dual = _dual;
-    if (dual != null && dual.canUseNative(remoteId)) {
+    if (dual != null && _nativeCarrierFor(remoteId)) {
       unawaited(dual.sendDrop(remoteId, packet));
       return true;
     }
@@ -469,7 +477,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     TransportFileDescriptor file,
   ) async {
     final dual = _dual;
-    if (dual != null && dual.canUseNative(remoteId)) {
+    if (dual != null && _nativeCarrierFor(remoteId)) {
       return dual.sendFileFromPath(remoteId, file);
     }
     return false;
@@ -483,7 +491,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// no open reliable connection exists.
   bool sendRoomPacket(String remoteId, Map<String, Object?> packet) {
     final dual = _dual;
-    if (dual != null && dual.canUseNative(remoteId)) {
+    if (dual != null && _nativeCarrierFor(remoteId)) {
       return sendGuardedRoomPacket(
         packet,
         connected: true,
@@ -500,13 +508,13 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   Future<bool> sendAutobaseEvent(String remoteId, RoomEvent event) async {
     final dual = _dual;
-    if (dual == null || !dual.canUseNative(remoteId)) return false;
+    if (dual == null || !_nativeCarrierFor(remoteId)) return false;
     return dual.sendAutobaseEvent(remoteId, event);
   }
 
   Future<void> sendCallSignal(String remoteId, CallSignal signal) async {
     final dual = _dual;
-    if (dual != null && dual.canUseNative(remoteId)) {
+    if (dual != null && _nativeCarrierFor(remoteId)) {
       await dual.sendCallSignal(remoteId, signal);
     }
   }

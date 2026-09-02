@@ -191,7 +191,19 @@ void main() {
     );
     expect(
       File('lib/state/connections_notifier.dart').readAsStringSync(),
-      contains('canUseNative'),
+      contains('_nativeCarrierFor'),
+    );
+    expect(
+      File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
+      contains('_noiseToPeerId'),
+    );
+    expect(
+      File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
+      contains('_rememberOrbitPeer'),
+    );
+    expect(
+      File('tool/connectivity_harness/src/worklet.js').readAsStringSync(),
+      contains('_resolvePeerId'),
     );
     expect(
       File('lib/transport/native_transport_host.dart').readAsStringSync(),

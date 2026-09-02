@@ -99,8 +99,47 @@ class Worklet {
     this._attachFiles = new Map()
     this._resumeOffsets = new Map()
     this._resumeWaiters = new Map()
+    this._noiseToPeerId = new Map()
     this.fileSendBudget = null
     this._emit = opts.emit || ((name, payload) => this.events.push({ name, payload }))
+  }
+
+  /// Map a Hyperswarm Noise public key to the contact ORBIT id from Dart
+  /// `connect({ peerId, noisePublicKey })`. Discovery topics stay
+  /// HASH("orbits-contact-discovery-v1" || sharedSecret). Noise is not
+  /// the identity key.
+  _rememberOrbitPeer(orbitId, noiseHex) {
+    if (typeof orbitId !== 'string' || typeof noiseHex !== 'string') return
+    const id = orbitId.trim()
+    const hex = noiseHex.trim().toLowerCase()
+    if (!id || id.includes('://')) return
+    if (!/^[0-9a-f]+$/.test(hex) || hex.length < 64) return
+    this._noiseToPeerId.set(hex, id)
+    for (const [key, peer] of this._peers) {
+      if (key === id) continue
+      const pk =
+        peer.info && peer.info.publicKey
+          ? Buffer.from(peer.info.publicKey).toString('hex').toLowerCase()
+          : ''
+      if (pk !== hex && key.toLowerCase() !== hex) continue
+      this._peers.delete(key)
+      peer.peerId = id
+      this._peers.set(id, peer)
+      this._emit('connected', {
+        peerId: id,
+        path: (peer.info && peer.info.path) || 'direct',
+      })
+    }
+  }
+
+  _resolvePeerId(info) {
+    const pk =
+      info && info.publicKey
+        ? Buffer.from(info.publicKey).toString('hex').toLowerCase()
+        : ''
+    if (pk && this._noiseToPeerId.has(pk)) return this._noiseToPeerId.get(pk)
+    if (info && typeof info.id === 'string' && info.id.length > 0) return info.id
+    return pk
   }
 
   async start(config) {
@@ -158,11 +197,15 @@ class Worklet {
 
   async connect(peer) {
     if (this._suspended) throw new Error('suspended')
+    const noise =
+      peer && peer.noisePublicKey != null ? String(peer.noisePublicKey) : ''
+    const orbitId = peer && peer.peerId != null ? String(peer.peerId) : ''
+    this._rememberOrbitPeer(orbitId, noise)
     if (this.backend === 'loopback') {
       if (peer.port == null) throw new Error('loopback connect needs port')
       await this._loop.connect(peer.port)
-    } else if (this._swarm && peer.noisePublicKey) {
-      this._swarm.swarm.joinPeer(Buffer.from(peer.noisePublicKey, 'hex'))
+    } else if (this._swarm && noise) {
+      this._swarm.swarm.joinPeer(Buffer.from(noise, 'hex'))
     }
   }
 
@@ -314,23 +357,25 @@ class Worklet {
       // journal already closed
     }
     this._started = false
+    this._noiseToPeerId.clear()
   }
 
   _onConn(socket, info) {
-    const peerId = info.id || info.publicKey.toString('hex')
+    const peerId = this._resolvePeerId(info)
     const decoder = new MuxDecoder()
-    this._peers.set(peerId, { socket, info, decoder })
+    const peer = { socket, info, decoder, peerId }
+    this._peers.set(peerId, peer)
     this._emit('connected', { peerId, path: info.path || 'unknown' })
     this._emit('pathChanged', { peerId, path: info.path || 'direct' })
     socket.on('data', (chunk) => {
       for (const frame of decoder.add(chunk)) {
-        this._onFrame(peerId, frame.channel, frame.payload)
+        this._onFrame(peer.peerId, frame.channel, frame.payload)
       }
     })
     socket.on('error', () => {})
     socket.on('close', () => {
-      this._peers.delete(peerId)
-      this._emit('disconnected', { peerId })
+      this._peers.delete(peer.peerId)
+      this._emit('disconnected', { peerId: peer.peerId })
     })
   }
 

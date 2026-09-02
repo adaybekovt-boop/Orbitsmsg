@@ -1721,8 +1721,12 @@ void main() {
         .readAsStringSync()
         .split('bool hasReliable')[1]
         .split('bool canDepositMailbox')[0];
-    expect(hasReliable, contains('canUseNative'));
+    expect(hasReliable, contains('_nativeCarrierFor'));
     expect(hasReliable, isNot(contains('isNativeConnected')));
+    expect(
+      File('lib/state/connections_notifier.dart').readAsStringSync(),
+      contains('_nativeCarrierFor'),
+    );
     await a.detach();
     await b.detach();
   });
