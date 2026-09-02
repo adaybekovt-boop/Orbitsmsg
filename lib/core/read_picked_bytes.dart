@@ -43,3 +43,33 @@ Future<PickedBytesResult> readPickedBytes(
   required int maxRawBytes,
 }) =>
     impl.readPickedBytes(file, maxRawBytes: maxRawBytes);
+
+/// Local path for native `sendFileFromPath`. Reuses [file.path] when
+/// present; otherwise streams/bytes onto a temp file under [maxBytes].
+/// Null [path] on web or if nothing could be materialized.
+class MaterializedPick {
+  const MaterializedPick({
+    this.path,
+    required this.tooLarge,
+    required this.sizeBytes,
+  });
+
+  const MaterializedPick.ok(String path, int sizeBytes)
+      : this(path: path, tooLarge: false, sizeBytes: sizeBytes);
+
+  const MaterializedPick.tooLarge(int sizeBytes)
+      : this(path: null, tooLarge: true, sizeBytes: sizeBytes);
+
+  const MaterializedPick.empty()
+      : this(path: null, tooLarge: false, sizeBytes: 0);
+
+  final String? path;
+  final bool tooLarge;
+  final int sizeBytes;
+}
+
+Future<MaterializedPick> materializePickedLocalPath(
+  PlatformFile file, {
+  required int maxBytes,
+}) =>
+    impl.materializePickedLocalPath(file, maxBytes: maxBytes);

@@ -16,3 +16,9 @@ Future<PickedBytesResult> readPickedBytes(
   }
   return PickedBytesResult.ok(bytes);
 }
+
+Future<MaterializedPick> materializePickedLocalPath(
+  PlatformFile file, {
+  required int maxBytes,
+}) async =>
+    const MaterializedPick.empty();

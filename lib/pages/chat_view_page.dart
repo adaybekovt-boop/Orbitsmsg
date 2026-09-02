@@ -27,7 +27,6 @@ import 'package:image/image.dart' as img;
 import 'package:mime/mime.dart';
 
 import '../attachments/resumable_blob.dart';
-import '../core/path_byte_stream.dart';
 import '../core/read_picked_bytes.dart';
 import '../state/calls_provider.dart';
 import '../state/chat_prefs_provider.dart';
@@ -296,6 +295,7 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
         type: FileType.any,
         allowMultiple: false,
         withData: kIsWeb,
+        withReadStream: !kIsWeb,
       );
     } catch (_) {
       if (!mounted) return;
@@ -318,26 +318,17 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
     final mime = lookupMimeType(name) ?? 'application/octet-stream';
     final kind = _classifyKind(mime);
     final notifier = ref.read(messagingNotifierProvider.notifier);
-    final nativePath = pf.path;
     if (!kIsWeb &&
-        nativePath != null &&
-        nativePath.isNotEmpty &&
         ref
             .read(connectionsNotifierProvider.notifier)
             .canUseNative(widget.peerId)) {
-      final size = localPathLength(nativePath);
-      if (size == null) {
+      final material = await materializePickedLocalPath(
+        pf,
+        maxBytes: kMaxNativeAttachBytes,
+      );
+      if (material.tooLarge) {
         if (!mounted) return;
-        ScaffoldMessenger.of(context)
-          ..clearSnackBars()
-          ..showSnackBar(
-            const SnackBar(content: Text('Не удалось прочитать файл')),
-          );
-        return;
-      }
-      if (size > kMaxNativeAttachBytes) {
-        if (!mounted) return;
-        final mb = (size / (1024 * 1024)).ceil();
+        final mb = (material.sizeBytes / (1024 * 1024)).ceil();
         ScaffoldMessenger.of(context)
           ..clearSnackBars()
           ..showSnackBar(
@@ -347,6 +338,16 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
               ),
               duration: const Duration(seconds: 3),
             ),
+          );
+        return;
+      }
+      final nativePath = material.path;
+      if (nativePath == null || nativePath.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(
+            const SnackBar(content: Text('Не удалось прочитать файл')),
           );
         return;
       }
