@@ -3341,7 +3341,7 @@ void main() {
         .split('void authorizeDevice')[1]
         .split('void journalContactBlocked')[0];
     expect(authorize, contains('_replicateToAuthenticated'));
-    expect(authorize, contains('unawaited(dial'));
+    expect(authorize, contains('await dial(rememberId)'));
     final remember = src
         .split('Future<void> rememberKnownPeers')[1]
         .split('List<int>? discoverySecretFor')[0];
