@@ -28,6 +28,13 @@ test('journal stores encrypted envelopes and rejects plaintext', async () => {
     /secret field/,
   )
   await assert.rejects(
+    () => journal.append({
+      kind: 'attachmentPublished',
+      fields: { fileKey: 'nope', encryptedEnvelope: 'x' },
+    }),
+    /secret field/,
+  )
+  await assert.rejects(
     () => journal.append({ fields: { kek: 'nope' } }),
     /secret field|encryptedEnvelope/,
   )

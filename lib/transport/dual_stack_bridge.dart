@@ -413,11 +413,35 @@ class DualStackBridge {
     String peerId,
     List<int> plaintext,
     List<int> fileKey,
+  ) {
+    return _sendAttachmentChunks(
+      peerId,
+      ResumableAttachment.chunk(plaintext, fileKey),
+    );
+  }
+
+  /// Chunk plaintext from a stream (path `openRead`) so a large file
+  /// never becomes one Dart `Uint8List`. [fileKey] stays local — it is
+  /// not journaled.
+  Future<void> sendAttachmentStream(
+    String peerId,
+    Stream<List<int>> plaintext,
+    List<int> fileKey,
   ) async {
-    final chunks = ResumableAttachment.chunk(plaintext, fileKey);
+    final chunks =
+        await ResumableAttachment.chunkFromByteStream(plaintext, fileKey);
+    await _sendAttachmentChunks(peerId, chunks);
+  }
+
+  Future<void> _sendAttachmentChunks(
+    String peerId,
+    List<AttachmentChunk> chunks,
+  ) async {
+    final norm = normalizePeerId(peerId);
+    if (isBlocked(norm)) return;
     for (final chunk in chunks) {
       await transport.send(
-        normalizePeerId(peerId),
+        norm,
         TransportChannel.attachment,
         jsonPayload({
           'type': 'attach-chunk',
@@ -428,6 +452,24 @@ class DualStackBridge {
         }),
       );
     }
+    if (chunks.isEmpty) return;
+    var total = 0;
+    for (final chunk in chunks) {
+      total += chunk.ciphertext.length;
+    }
+    final record = journal.append(
+      ReplicationEventKind.attachmentPublished,
+      <String, Object?>{
+        'eventId':
+            '${DateTime.now().millisecondsSinceEpoch}-$norm-att-${chunks.length}',
+        'conversationId': norm,
+        'encryptedEnvelope': List<int>.from(chunks.first.ciphertext),
+        'chunkCount': chunks.length,
+        'totalBytes': total,
+      },
+    );
+    unawaited(_persistDurable(record));
+    hypercore.append(record);
   }
 
   Future<bool> sendEphemeral(String peerId, Object? msg) async {

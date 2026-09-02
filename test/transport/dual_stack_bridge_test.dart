@@ -280,6 +280,58 @@ void main() {
     );
   });
 
+  test('attachment chunks journal ciphertext and never the fileKey', () async {
+    final (a, b, _) = await linked();
+    final key = List<int>.generate(32, (i) => i + 3);
+    final plain = List<int>.generate(80, (i) => i);
+    await a.sendAttachmentChunks('ORBIT-BBBBBBBBBBBBBBBB', plain, key);
+    List<Map<String, Object?>> rows = const [];
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(deadline)) {
+      rows = await a.transport.listJournal();
+      if (rows.any((row) => row['kind'] == 'attachmentPublished')) break;
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(
+      rows.any((row) => row['kind'] == 'attachmentPublished'),
+      isTrue,
+    );
+    expect(jsonEncode(rows), isNot(contains('fileKey')));
+    expect(jsonEncode(rows), isNot(contains('plaintext')));
+    expect(jsonEncode(rows), isNot(contains('attachmentBytes')));
+    expect(
+      a.journal.records.any((r) {
+        final enc = r.fields['encryptedEnvelope'];
+        return r.kind == ReplicationEventKind.attachmentPublished &&
+            enc is List<int> &&
+            enc.isNotEmpty;
+      }),
+      isTrue,
+    );
+
+    final dir = Directory.systemTemp.createTempSync('orbits-att-stream-');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final file = File('${dir.path}${Platform.pathSeparator}blob.bin')
+      ..writeAsBytesSync(plain);
+    await a.sendAttachmentStream(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      file.openRead(),
+      key,
+    );
+    expect(
+      a.journal.records
+          .where((r) => r.kind == ReplicationEventKind.attachmentPublished)
+          .length,
+      greaterThanOrEqualTo(2),
+    );
+    expect(
+      a.journal.records.every((r) => !r.fields.containsKey('fileKey')),
+      isTrue,
+    );
+  });
+
   test('recipient reads mailbox after the sender is gone', () async {
     final store = BlindMailboxStore()
       ..grant(

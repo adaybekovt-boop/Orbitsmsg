@@ -30,6 +30,7 @@ const Set<String> kForbiddenReplicationFields = <String>{
   'discoverySecret',
   'sharedDiscoverySecret',
   'attachmentBytes',
+  'fileKey',
   'privBytes',
 };
 

@@ -111,6 +111,8 @@ void main() {
     expect(replicationFieldsAreSafe(['encryptedEnvelope', 'rootKey']), isFalse);
     expect(replicationFieldsAreSafe(['vaultKek']), isFalse);
     expect(replicationFieldsAreSafe(['plaintext']), isFalse);
+    expect(replicationFieldsAreSafe(['fileKey']), isFalse);
+    expect(replicationFieldsAreSafe(['attachmentBytes']), isFalse);
   });
 
   test('MessageEnvelopeCreated only exposes allowed journal keys', () {
