@@ -4248,7 +4248,7 @@ void main() {
   test('inbound device binding is verified and remembered', () async {
     final (a, b, _) = await linked();
     expect(a.authenticated.contains('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
-    expect(a.remoteBindings['ORBIT-BBBBBBBBBBBBBBBB']?.deviceId, 'b');
+    expect(a.remoteBindings['ORBIT-BBBBBBBBBBBBBBBB']?.deviceId, 'dev-b');
     expect(
       File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
       contains('kDeviceBindingWireType'),

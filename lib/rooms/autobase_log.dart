@@ -243,9 +243,8 @@ bool _liveRoomEventAuthorized({
   final host = (roomId != null && roomId.isNotEmpty)
       ? roomHostFor?.call(roomId)
       : null;
-  final isHost = host != null &&
-      host.isNotEmpty &&
-      (host == authenticatedPeer || host == authenticatedDeviceId);
+  if (host == null || host.isEmpty) return true;
+  final isHost = host == authenticatedPeer || host == authenticatedDeviceId;
   if (isHost) return true;
   final writerOk = claimedWriter == authenticatedPeer ||
       (authenticatedDeviceId != null &&

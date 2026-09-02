@@ -33,6 +33,8 @@ late Uint8List _spkiB;
 const _peerA = 'ORBIT-AAAAAAAAAAAAAAAA';
 const _peerB = 'ORBIT-BBBBBBBBBBBBBBBB';
 const _peerC = 'ORBIT-CCCCCCCCCCCCCCCC';
+const _peerA2 = 'ORBIT-A2A2A2A2A2A2A2A2';
+final _bindTransport = List<int>.generate(32, (i) => i + 1);
 
 Future<DeviceBinding> _bind(
   String id, {
@@ -42,9 +44,7 @@ Future<DeviceBinding> _bind(
   return issueDeviceBinding(
     identityPublicKey: spki,
     deviceId: id,
-    transportPublicKey: Uint8List.fromList(
-      List<int>.generate(32, (i) => i + 1),
-    ),
+    transportPublicKey: Uint8List.fromList(_bindTransport),
     hypercorePublicKey: Uint8List.fromList(
       List<int>.generate(32, (i) => i + 2),
     ),
@@ -415,7 +415,7 @@ void main() {
         ..authorize(
           AuthorizedDevice(
             deviceId: 'dev-a',
-            transportPublicKey: List<int>.generate(32, (i) => 3),
+            transportPublicKey: List<int>.from(_bindTransport),
             hypercorePublicKey: List<int>.generate(32, (i) => 4),
             name: 'phone',
             kind: 'phone',
@@ -428,14 +428,14 @@ void main() {
         ..authorize(
           AuthorizedDevice(
             deviceId: 'dev-a2',
-            transportPublicKey: List<int>.generate(32, (i) => 5),
+            transportPublicKey: List<int>.from(_bindTransport),
             hypercorePublicKey: List<int>.generate(32, (i) => 6),
             name: 'tablet',
             kind: 'tablet',
             createdAt: 1,
             status: DeviceStatus.active,
             ownerPeerId: _peerA,
-            transportPeerId: 'ORBIT-A2A2A2A2A2A2A2A2',
+            transportPeerId: _peerA2,
           ),
         )
         ..authorize(
@@ -912,7 +912,7 @@ Future<(DualStackBridge, DualStackBridge)> _ownDevicePair({
         ..authorize(
           AuthorizedDevice(
             deviceId: 'dev-a',
-            transportPublicKey: List<int>.generate(32, (i) => 3),
+            transportPublicKey: List<int>.from(_bindTransport),
             hypercorePublicKey: List<int>.generate(32, (i) => 4),
             name: 'phone',
             kind: 'phone',
@@ -925,27 +925,24 @@ Future<(DualStackBridge, DualStackBridge)> _ownDevicePair({
         ..authorize(
           AuthorizedDevice(
             deviceId: 'dev-a2',
-            transportPublicKey: List<int>.generate(32, (i) => 5),
+            transportPublicKey: List<int>.from(_bindTransport),
             hypercorePublicKey: List<int>.generate(32, (i) => 6),
             name: 'tablet',
             kind: 'tablet',
             createdAt: 1,
             status: DeviceStatus.active,
             ownerPeerId: _peerA,
-            transportPeerId: 'ORBIT-A2A2A2A2A2A2A2A2',
+            transportPeerId: _peerA2,
           ),
         ));
   final secrets = DiscoverySecretStore()
     ..put(_peerA, localSecret)
-    ..put('ORBIT-A2A2A2A2A2A2A2A2', localSecret);
+    ..put(_peerA2, localSecret);
   await pair.$1.start(
     TransportLocalConfiguration(peerId: _peerA, discoverySecret: localSecret),
   );
   await pair.$2.start(
-    TransportLocalConfiguration(
-      peerId: 'ORBIT-A2A2A2A2A2A2A2A2',
-      discoverySecret: localSecret,
-    ),
+    TransportLocalConfiguration(peerId: _peerA2, discoverySecret: localSecret),
   );
   await pair.$1.publish(await _bind('dev-a', spki: _spkiA, pair: _idA));
   await pair.$2.publish(await _bind('dev-a2', spki: _spkiA, pair: _idA));
@@ -975,7 +972,7 @@ Future<(DualStackBridge, DualStackBridge)> _ownDevicePair({
   final tablet = DualStackBridge(
     transport: pair.$2,
     journal: MemoryJournal('dev-a2'),
-    selfPeerId: () => 'ORBIT-A2A2A2A2A2A2A2A2',
+    selfPeerId: () => _peerA2,
     selfDeviceId: 'dev-a2',
     secrets: secrets,
     devices: registry,
@@ -986,13 +983,17 @@ Future<(DualStackBridge, DualStackBridge)> _ownDevicePair({
     verifyRecord: verifyWithRemoteSpki,
     onPacket: (_, __) async {},
   )..attach();
-  await pair.$1.connect(const PeerDescriptor(peerId: 'ORBIT-A2A2A2A2A2A2A2A2'));
+  await pair.$1.connect(const PeerDescriptor(peerId: _peerA2));
   for (var i = 0; i < 80; i++) {
-    if (phone.authenticated.contains('ORBIT-A2A2A2A2A2A2A2A2') &&
+    if (phone.authenticated.contains(_peerA2) &&
         tablet.authenticated.contains(_peerA)) {
-      break;
+      return (phone, tablet);
     }
     await Future<void>.delayed(const Duration(milliseconds: 15));
   }
-  return (phone, tablet);
+  throw StateError(
+    'own-device pair did not authenticate: '
+    'phone=${phone.authenticated} tablet=${tablet.authenticated} '
+    'fail=${phone.bindingFailures} / ${tablet.bindingFailures}',
+  );
 }
