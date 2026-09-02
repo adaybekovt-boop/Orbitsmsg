@@ -220,4 +220,58 @@ void main() {
       isFalse,
     );
   });
+
+  test('append refuses URL writerDeviceId without writing', () async {
+    final durable = FileJournal.memory('dev-a');
+    expect(
+      () => durable.append(
+        const JournalRecord(
+          seq: 0,
+          writerDeviceId: 'https://evil',
+          kind: ReplicationEventKind.deviceRevoked,
+          fields: <String, Object?>{'deviceId': 'gone'},
+        ),
+      ),
+      throwsArgumentError,
+    );
+    final replayed = await durable.replay();
+    expect(replayed.length, 0);
+  });
+
+  test('replay skips URL writer line and keeps a later legit line', () async {
+    final lines = <String>[
+      jsonEncode(<String, Object?>{
+        'seq': 1,
+        'writerDeviceId': 'https://evil',
+        'kind': ReplicationEventKind.deviceRevoked.name,
+        'fields': <String, Object?>{'deviceId': 'gone'},
+      }),
+      jsonEncode(<String, Object?>{
+        'seq': 2,
+        'writerDeviceId': 'dev-a',
+        'kind': ReplicationEventKind.roomMembershipChanged.name,
+        'fields': <String, Object?>{
+          'roomId': 'room-1',
+          'peerId': 'guest-1',
+          'action': 'join',
+          'eventId': 'mem-1',
+        },
+      }),
+    ];
+    final journal = FileJournal(
+      writerDeviceId: 'dev-a',
+      writeLine: (line) async => lines.add(line),
+      readLines: () async => List<String>.from(lines),
+    );
+    final replayed = await journal.replay();
+    expect(replayed.length, 1);
+    expect(replayed.records.single.seq, 2);
+    expect(replayed.records.single.writerDeviceId, 'dev-a');
+    expect(replayed.records.single.kind, ReplicationEventKind.roomMembershipChanged);
+    expect(replayed.records.single.fields['eventId'], 'mem-1');
+    expect(
+      replayed.records.any((r) => r.writerDeviceId.contains('://')),
+      isFalse,
+    );
+  });
 }

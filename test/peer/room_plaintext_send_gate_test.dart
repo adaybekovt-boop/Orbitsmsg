@@ -131,6 +131,37 @@ void main() {
     expect(sent, isEmpty);
   });
 
+  test('sendRoomPacket refuses URL-shaped roomId', () {
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    final sent = <Map<String, Object?>>[];
+    expect(
+      sendGuardedRoomPacket(
+        {
+          'type': 'room_join',
+          'roomId': 'https://evil',
+          'guestPeerId': 'p1',
+        },
+        connected: true,
+        send: sent.add,
+      ),
+      isFalse,
+    );
+    expect(sent, isEmpty);
+    expect(
+      sendGuardedRoomPacket(
+        {
+          'type': 'room_join',
+          'roomId': 'r',
+          'guestPeerId': 'p1',
+        },
+        connected: true,
+        send: sent.add,
+      ),
+      isTrue,
+    );
+    expect(sent.single['roomId'], 'r');
+  });
+
   test('disconnected peer is not a silent ack bypass', () {
     kRoomPlaintextSessionAck.setAcknowledged(true);
     final sent = <Map<String, Object?>>[];

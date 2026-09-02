@@ -104,4 +104,87 @@ void main() {
       throwsArgumentError,
     );
   });
+
+  test('fromQrJson refuses URL-shaped deviceId value', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final link = await issueDeviceLink(
+      deviceId: 'phone-2',
+      transportPublicKey: Uint8List.fromList(List<int>.filled(32, 7)),
+      hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 8)),
+      createdAt: 1,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    expect(
+      () => DeviceLinkPayload.fromQrJson({
+        ...link.toQrJson(),
+        'deviceId': 'https://evil',
+      }),
+      throwsArgumentError,
+    );
+  });
+
+  test('fromQrJson refuses empty deviceId value', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final link = await issueDeviceLink(
+      deviceId: 'phone-2',
+      transportPublicKey: Uint8List.fromList(List<int>.filled(32, 7)),
+      hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 8)),
+      createdAt: 1,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    expect(
+      () => DeviceLinkPayload.fromQrJson({
+        ...link.toQrJson(),
+        'deviceId': '',
+      }),
+      throwsArgumentError,
+    );
+  });
+
+  test('issueDeviceLink refuses URL-shaped deviceId', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    var signed = false;
+    await expectLater(
+      issueDeviceLink(
+        deviceId: 'https://evil',
+        transportPublicKey: Uint8List.fromList(List<int>.filled(32, 7)),
+        hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 8)),
+        createdAt: 1,
+        identityPublicKey: spki,
+        sign: (payload) async {
+          signed = true;
+          return signP256Ecdsa(pair, payload);
+        },
+      ),
+      throwsArgumentError,
+    );
+    expect(signed, isFalse);
+  });
+
+  test('verifyDeviceLink is false for constructed :// deviceId', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final honest = await issueDeviceLink(
+      deviceId: 'phone-2',
+      transportPublicKey: Uint8List.fromList(List<int>.filled(32, 7)),
+      hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 8)),
+      createdAt: 1,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    final constructed = DeviceLinkPayload(
+      deviceId: 'https://evil',
+      transportPublicKey: honest.transportPublicKey,
+      hypercorePublicKey: honest.hypercorePublicKey,
+      createdAt: honest.createdAt,
+      signature: honest.signature,
+      identityPublicKey: honest.identityPublicKey,
+    );
+    expect(await verifyDeviceLink(constructed), isFalse);
+  });
 }

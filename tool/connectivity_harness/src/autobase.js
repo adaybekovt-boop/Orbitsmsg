@@ -163,6 +163,7 @@ function membershipEventFromJournalRow(row) {
     (typeof row.writerDeviceId === 'string' && row.writerDeviceId) ||
     (typeof row.writerId === 'string' && row.writerId) ||
     'journal'
+  if (typeof writer !== 'string' || writer.includes('://')) return null
   const seq = Number(fields.seq != null ? fields.seq : row.seq) || 0
   return {
     writerId: writer,
@@ -193,6 +194,7 @@ function fromWire(packet) {
   const writer = packet.writerId
   const kind = packet.kind
   if (typeof writer !== 'string' || typeof kind !== 'string') return null
+  if (writer.includes('://') || kind.includes('://')) return null
   const raw = packet.payload
   return {
     writerId: writer,
@@ -204,10 +206,16 @@ function fromWire(packet) {
 
 function roomEventFromNativePacket(packet, fallbackWriter) {
   if (!packet || typeof packet !== 'object') return null
+  if (typeof fallbackWriter === 'string' && fallbackWriter.includes('://')) {
+    return null
+  }
+  const abWriter = packet.abWriter
+  if (typeof abWriter === 'string' && abWriter.includes('://')) return null
   if (packet.type === 'autobase-event') return fromWire(packet)
-  const writer = packet.abWriter || fallbackWriter
+  const writer = abWriter || fallbackWriter
   const seq = Number(packet.abSeq) || 0
   if (typeof writer !== 'string' || !writer) return null
+  if (writer.includes('://')) return null
   switch (packet.type) {
     case 'room_join': {
       const peer = packet.guestPeerId || packet.peerId
@@ -313,6 +321,14 @@ class AutobaseProjection {
 
   apply(event) {
     if (!event || typeof event !== 'object') return
+    const writer = event.writerId
+    const kind = event.kind
+    if (
+      (typeof writer === 'string' && writer.includes('://')) ||
+      (typeof kind === 'string' && kind.includes('://'))
+    ) {
+      return
+    }
     const key = this.keyOf(event)
     if (this.state.applied.has(key)) return
     this.state.applied.add(key)

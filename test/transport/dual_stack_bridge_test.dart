@@ -1110,6 +1110,69 @@ void main() {
     await b.detach();
   });
 
+  test('sendRoomPacket refuses URL-shaped roomId before apply and send',
+      () async {
+    final (a, b, _) = await linked();
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    final rooms = <Map<String, Object?>>[];
+    b.onPacket = (peer, data) async {
+      if (data is Map) rooms.add(Map<String, Object?>.from(data));
+    };
+    expect(
+      a.sendRoomPacket('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'room_join',
+        'roomId': 'https://evil',
+        'guestPeerId': 'ORBIT-CCCCCCCCCCCCCCCC',
+        'guestName': 'Eve',
+      }),
+      isFalse,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(a.rooms.state.members.containsKey('ORBIT-CCCCCCCCCCCCCCCC'), isFalse);
+    expect(b.rooms.state.members.containsKey('ORBIT-CCCCCCCCCCCCCCCC'), isFalse);
+    expect(rooms, isEmpty);
+    expect(
+      a.sendRoomPacket('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'room_join',
+        'roomId': 'room-ok',
+        'guestPeerId': 'ORBIT-CCCCCCCCCCCCCCCC',
+        'guestName': 'Pat',
+      }),
+      isTrue,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(a.rooms.state.members['ORBIT-CCCCCCCCCCCCCCCC'], 'Pat');
+    kRoomPlaintextSessionAck.reset();
+    await a.detach();
+    await b.detach();
+  });
+
+  test('sendCallSignal refuses empty or URL-shaped callId before transport.send',
+      () async {
+    final (a, b, _) = await linked();
+    CallSignal? seen;
+    b.onCallSignal = (signal, from) => seen = signal;
+    await a.sendCallSignal(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      const CallSignal(type: CallSignalType.hangup, callId: 'https://evil'),
+    );
+    await a.sendCallSignal(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      const CallSignal(type: CallSignalType.hangup, callId: ''),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(seen, isNull);
+    await a.sendCallSignal(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      const CallSignal(type: CallSignalType.hangup, callId: 'c1'),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(seen?.callId, 'c1');
+    expect(seen?.type, CallSignalType.hangup);
+    await a.detach();
+    await b.detach();
+  });
+
   test(
       'inbound raw room_msg with nested fileKey is refused before Autobase and onPacket',
       () async {
@@ -2300,6 +2363,35 @@ void main() {
     expect(
       sendAutobase.indexOf('replicationValueIsSafe(event.toWire())'),
       lessThan(sendAutobase.indexOf('_applyRoom')),
+    );
+  });
+
+  test(
+      '_applyRoom and journal hydrate skip URL-shaped writers before persist',
+      () {
+    final src = File('lib/transport/dual_stack_bridge.dart').readAsStringSync();
+    expect(src, isNot(contains("import 'dart:io'")));
+    final apply = src.split('void _applyRoom')[1].split('Future<void> sendCallSignal')[0];
+    expect(apply, contains("writerId.contains('://')"));
+    expect(
+      apply.indexOf("writerId.contains('://')"),
+      lessThan(apply.indexOf('roomLog.add')),
+    );
+    final hydrate = src
+        .split('void hydrateHypercoreFromJournal')[1]
+        .split('void hydrateAutobaseFromJournal')[0];
+    expect(hydrate, contains("writerDeviceId.contains('://')"));
+    expect(
+      hydrate.indexOf("writerDeviceId.contains('://')"),
+      lessThan(hydrate.indexOf('hypercore.append')),
+    );
+    final membership = src
+        .split('RoomEvent? _membershipEventFromJournal')[1]
+        .split('Future<void> rememberKnownPeers')[0];
+    expect(membership, contains("writer.contains('://')"));
+    expect(
+      membership.indexOf("writer.contains('://')"),
+      lessThan(membership.indexOf('return RoomEvent')),
     );
   });
 

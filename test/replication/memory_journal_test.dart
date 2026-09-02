@@ -298,4 +298,70 @@ void main() {
     );
     expect(journal.length, 0);
   });
+
+  test('journalRecordFromWorklet returns null for URL writerDeviceId', () {
+    expect(
+      journalRecordFromWorklet({
+        'kind': 'deviceRevoked',
+        'writerDeviceId': 'https://evil',
+        'fields': {'deviceId': 'gone'},
+      }),
+      isNull,
+    );
+  });
+
+  test('journalRecordFromWorklet returns null for URL kind', () {
+    expect(
+      journalRecordFromWorklet({
+        'kind': 'https://evil',
+        'writerDeviceId': 'dev-a',
+        'fields': {'deviceId': 'gone'},
+      }),
+      isNull,
+    );
+  });
+
+  test('adopt and ingest refuse URL writerDeviceId without persisting', () {
+    const hostile = JournalRecord(
+      seq: 1,
+      writerDeviceId: 'https://evil',
+      kind: ReplicationEventKind.deviceRevoked,
+      fields: <String, Object?>{'deviceId': 'gone'},
+    );
+    final journal = MemoryJournal('dev-a');
+    expect(() => journal.adopt(hostile), throwsArgumentError);
+    expect(journal.length, 0);
+    expect(() => journal.ingest(hostile), throwsArgumentError);
+    expect(journal.length, 0);
+  });
+
+  test('honest fromWorklet plus ingest keeps ciphertext envelope', () {
+    final rec = journalRecordFromWorklet({
+      'kind': 'messageEnvelopeCreated',
+      'writerDeviceId': 'dev-a',
+      'seq': 1,
+      'fields': {
+        'eventId': 'e1',
+        'conversationId': 'c1',
+        'senderIdentity': 'alice',
+        'senderDeviceId': 'dev-a',
+        'logicalSequence': 1,
+        'createdAt': 1,
+        'encryptedEnvelope': base64Encode(const <int>[72, 105]),
+      },
+    });
+    expect(rec, isNotNull);
+    expect(rec!.writerDeviceId, 'dev-a');
+    expect(rec.fields['encryptedEnvelope'], const <int>[72, 105]);
+
+    final journal = MemoryJournal('dev-a');
+    expect(journal.ingest(rec), isNotNull);
+    expect(journal.length, 1);
+    expect(journal.records.single.writerDeviceId, 'dev-a');
+    expect(
+      journal.records.single.fields['encryptedEnvelope'],
+      const <int>[72, 105],
+    );
+    expect(journal.records.single.fields.containsKey('plaintext'), isFalse);
+  });
 }

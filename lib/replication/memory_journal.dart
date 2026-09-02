@@ -35,7 +35,7 @@ class MemoryJournal {
     ReplicationEventKind kind,
     Map<String, Object?> fields,
   ) {
-    if (!replicationValueIsSafe(fields)) {
+    if (!replicationValueIsSafe(fields) || writerDeviceId.contains('://')) {
       throw ArgumentError('refusing secret field in journal');
     }
     final record = JournalRecord(
@@ -59,7 +59,8 @@ class MemoryJournal {
   /// [record.writerDeviceId]. Live [append] is unchanged. Advances [_seq]
   /// past the adopted writer seq so the next local write continues it.
   JournalRecord? adopt(JournalRecord record) {
-    if (!replicationValueIsSafe(record.fields)) {
+    if (!replicationValueIsSafe(record.fields) ||
+        record.writerDeviceId.contains('://')) {
       throw ArgumentError('refusing secret field in journal');
     }
     if (_isDuplicate(record)) return null;
@@ -79,7 +80,8 @@ class MemoryJournal {
   /// Ingest a remote/carrier record. Skips duplicate envelope eventIds.
   /// Local seq is assigned here; use [adopt] to keep a Hypercore writer seq.
   JournalRecord? ingest(JournalRecord record) {
-    if (!replicationValueIsSafe(record.fields)) {
+    if (!replicationValueIsSafe(record.fields) ||
+        record.writerDeviceId.contains('://')) {
       throw ArgumentError('refusing secret field in journal');
     }
     if (_isDuplicate(record)) return null;
@@ -144,6 +146,9 @@ bool journalKindRequiresEnvelope(String kind) =>
 JournalRecord? journalRecordFromWorklet(Map<String, Object?> row) {
   final kindName = row['kind'] as String?;
   if (kindName == null || kindName.isEmpty) return null;
+  if (kindName.contains('://')) return null;
+  final writerDeviceId = row['writerDeviceId'] as String? ?? '';
+  if (writerDeviceId.isEmpty || writerDeviceId.contains('://')) return null;
   ReplicationEventKind? kind;
   for (final k in ReplicationEventKind.values) {
     if (k.name == kindName) {
@@ -180,7 +185,7 @@ JournalRecord? journalRecordFromWorklet(Map<String, Object?> row) {
           : 0;
   return JournalRecord(
     seq: seq,
-    writerDeviceId: row['writerDeviceId'] as String? ?? '',
+    writerDeviceId: writerDeviceId,
     kind: kind,
     fields: fields,
   );

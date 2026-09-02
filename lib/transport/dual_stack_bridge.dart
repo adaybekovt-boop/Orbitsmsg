@@ -239,6 +239,7 @@ class DualStackBridge {
   void hydrateHypercoreFromJournal() {
     for (final rec in journal.records) {
       if (!replicationValueIsSafe(rec.fields)) continue;
+      if (rec.writerDeviceId.contains('://')) continue;
       hypercore.append(rec);
     }
   }
@@ -260,6 +261,7 @@ class DualStackBridge {
     if (peerId == null || peerId.isEmpty) return null;
     final seq = (rec.fields['seq'] as num?)?.toInt() ?? rec.seq;
     final writer = rec.fields['writerId'] as String? ?? rec.writerDeviceId;
+    if (writer.contains('://')) return null;
     return RoomEvent(
       writerId: writer.isEmpty ? selfDeviceId : writer,
       seq: seq,
@@ -971,6 +973,8 @@ class DualStackBridge {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return false;
     if (!replicationValueIsSafe(packet)) return false;
+    final roomId = packet['roomId'];
+    if (roomId is String && roomId.contains('://')) return false;
     final framed = Map<String, Object?>.from(packet)
       ..putIfAbsent('abWriter', () => selfDeviceId)
       ..putIfAbsent('abSeq', () => _roomSeq++);
@@ -1021,6 +1025,7 @@ class DualStackBridge {
   }
 
   void _applyRoom(RoomEvent event, {bool persist = true}) {
+    if (event.writerId.contains('://') || event.kind.contains('://')) return;
     final key = '${event.writerId}:${event.seq}';
     if (roomLog.any((e) => '${e.writerId}:${e.seq}' == key)) return;
     roomLog.add(event);
@@ -1053,6 +1058,7 @@ class DualStackBridge {
     final norm = normalizePeerId(peerId);
     if (!await _ensureNativeSendReady(norm)) return;
     if (!replicationValueIsSafe(signal.toJson())) return;
+    if (signal.callId.isEmpty || signal.callId.contains('://')) return;
     await transport.send(
       norm,
       TransportChannel.call,

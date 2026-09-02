@@ -204,4 +204,112 @@ void main() {
       throwsArgumentError,
     );
   });
+
+  test('DeviceBinding.fromWire refuses URL-shaped deviceId', () {
+    final binding = DeviceBinding(
+      version: kDeviceBindingVersion,
+      identityPublicKey: Uint8List.fromList(List<int>.generate(32, (i) => i)),
+      deviceId: 'dev-1',
+      transportPublicKey:
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 1)),
+      hypercorePublicKey:
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 2)),
+      capabilities: const ['peerjs-v4'],
+      createdAt: 1,
+      expiresAt: 10,
+      signatureByIdentityKey:
+          Uint8List.fromList(List<int>.generate(64, (i) => i)),
+    );
+    final wire = binding.toWire();
+
+    expect(
+      () => DeviceBinding.fromWire({
+        ...wire,
+        'deviceId': 'https://evil',
+      }),
+      throwsArgumentError,
+    );
+  });
+
+  test('DeviceBinding.fromWire refuses empty or missing deviceId', () {
+    final binding = DeviceBinding(
+      version: kDeviceBindingVersion,
+      identityPublicKey: Uint8List.fromList(List<int>.generate(32, (i) => i)),
+      deviceId: 'dev-1',
+      transportPublicKey:
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 1)),
+      hypercorePublicKey:
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 2)),
+      capabilities: const ['peerjs-v4'],
+      createdAt: 1,
+      expiresAt: 10,
+      signatureByIdentityKey:
+          Uint8List.fromList(List<int>.generate(64, (i) => i)),
+    );
+    final wire = binding.toWire();
+
+    expect(
+      () => DeviceBinding.fromWire({
+        ...wire,
+        'deviceId': '',
+      }),
+      throwsArgumentError,
+    );
+    final missing = Map<String, Object?>.from(wire)..remove('deviceId');
+    expect(() => DeviceBinding.fromWire(missing), throwsArgumentError);
+  });
+
+  test('DeviceBinding.fromWire refuses URL-shaped capability names', () {
+    final binding = DeviceBinding(
+      version: kDeviceBindingVersion,
+      identityPublicKey: Uint8List.fromList(List<int>.generate(32, (i) => i)),
+      deviceId: 'dev-1',
+      transportPublicKey:
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 1)),
+      hypercorePublicKey:
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 2)),
+      capabilities: const ['peerjs-v4'],
+      createdAt: 1,
+      expiresAt: 10,
+      signatureByIdentityKey:
+          Uint8List.fromList(List<int>.generate(64, (i) => i)),
+    );
+    final wire = binding.toWire();
+
+    expect(
+      () => DeviceBinding.fromWire({
+        ...wire,
+        'capabilities': ['https://evil.example/cap'],
+      }),
+      throwsArgumentError,
+    );
+  });
+
+  test('DeviceBinding.fromWire accepts honest legit wire', () {
+    final binding = DeviceBinding(
+      version: kDeviceBindingVersion,
+      identityPublicKey: Uint8List.fromList(List<int>.generate(32, (i) => i)),
+      deviceId: 'dev-1',
+      transportPublicKey:
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 1)),
+      hypercorePublicKey:
+          Uint8List.fromList(List<int>.generate(32, (i) => i + 2)),
+      capabilities: const ['peerjs-v4'],
+      createdAt: 1,
+      expiresAt: 10,
+      signatureByIdentityKey:
+          Uint8List.fromList(List<int>.generate(64, (i) => i)),
+    );
+    final wire = binding.toWire();
+    expect(wire['deviceId'], 'dev-1');
+    expect(wire['capabilities'], ['peerjs-v4']);
+
+    final parsed = DeviceBinding.fromWire(wire);
+    expect(parsed.deviceId, 'dev-1');
+    expect(parsed.capabilities, ['peerjs-v4']);
+    expect(parsed.identityPublicKey, binding.identityPublicKey);
+    expect(parsed.transportPublicKey, binding.transportPublicKey);
+    expect(parsed.hypercorePublicKey, binding.hypercorePublicKey);
+    expect(parsed.signatureByIdentityKey, binding.signatureByIdentityKey);
+  });
 }

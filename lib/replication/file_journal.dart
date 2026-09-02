@@ -30,7 +30,8 @@ class FileJournal {
   final Future<List<String>> Function() _readLines;
 
   Future<void> append(JournalRecord record) async {
-    if (!replicationValueIsSafe(record.fields)) {
+    if (!replicationValueIsSafe(record.fields) ||
+        record.writerDeviceId.contains('://')) {
       throw ArgumentError('refusing secret field in journal');
     }
     final line = jsonEncode({
@@ -56,6 +57,7 @@ class FileJournal {
       final row = Map<String, Object?>.from(decoded);
       final kindName = row['kind'] as String?;
       if (kindName == null || kindName.isEmpty) continue;
+      if (kindName.contains('://')) continue;
       ReplicationEventKind? kind;
       for (final k in ReplicationEventKind.values) {
         if (k.name == kindName) {
@@ -78,6 +80,7 @@ class FileJournal {
       final writer = writerRaw is String && writerRaw.isNotEmpty
           ? writerRaw
           : writerDeviceId;
+      if (writer.contains('://')) continue;
       out.adopt(
         JournalRecord(
           seq: seq,

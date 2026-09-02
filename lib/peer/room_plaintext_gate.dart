@@ -45,6 +45,8 @@ bool sendGuardedRoomPacket(
   required void Function(Map<String, Object?>) send,
 }) {
   if (!replicationValueIsSafe(packet)) return false;
+  final roomId = packet['roomId'];
+  if (roomId is String && roomId.contains('://')) return false;
   if (!kRoomPlaintextSessionAck.allowsPacket(packet)) return false;
   if (!connected) return false;
   send(packet);

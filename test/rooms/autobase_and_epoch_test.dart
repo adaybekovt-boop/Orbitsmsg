@@ -657,6 +657,7 @@ void main() {
     expect(js, contains('vaultKek'));
     expect(js, contains('sendCk'));
     expect(js, contains('fileKey'));
+    expect(js, contains("includes('://')"));
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
 }

@@ -588,6 +588,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   }
 
   Future<bool> sendAutobaseEvent(String remoteId, RoomEvent event) async {
+    if (event.writerId.contains('://') || event.kind.contains('://')) {
+      return false;
+    }
     if (!replicationValueIsSafe(event.payload)) return false;
     final dual = _dual;
     if (dual == null || !_nativeCarrierFor(remoteId)) return false;
@@ -596,6 +599,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   Future<void> sendCallSignal(String remoteId, CallSignal signal) async {
     if (!replicationValueIsSafe(signal.toJson())) return;
+    if (signal.callId.isEmpty || signal.callId.contains('://')) return;
     final dual = _dual;
     if (dual != null && _nativeCarrierFor(remoteId)) {
       await dual.sendCallSignal(remoteId, signal);

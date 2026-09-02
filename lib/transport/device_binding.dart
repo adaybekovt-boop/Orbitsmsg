@@ -79,21 +79,28 @@ class DeviceBinding {
 
   static DeviceBinding fromWire(Map<String, Object?> json) {
     _refuseDeviceBindingSecrets(json, HashSet<Object>.identity());
+    final deviceId = json['deviceId'] as String? ?? '';
+    final capabilities = (json['capabilities'] as List? ?? const [])
+        .whereType<String>()
+        .toList();
+    if (deviceId.isEmpty ||
+        deviceId.contains('://') ||
+        capabilities.any((cap) => cap.contains('://'))) {
+      throw ArgumentError('device binding: refusing secret field');
+    }
     return DeviceBinding(
       version: json['version'] as int? ?? 0,
       identityPublicKey: Uint8List.fromList(
         base64Decode(json['identityPublicKey'] as String? ?? ''),
       ),
-      deviceId: json['deviceId'] as String? ?? '',
+      deviceId: deviceId,
       transportPublicKey: Uint8List.fromList(
         base64Decode(json['transportPublicKey'] as String? ?? ''),
       ),
       hypercorePublicKey: Uint8List.fromList(
         base64Decode(json['hypercorePublicKey'] as String? ?? ''),
       ),
-      capabilities: (json['capabilities'] as List? ?? const [])
-          .whereType<String>()
-          .toList(),
+      capabilities: capabilities,
       createdAt: json['createdAt'] as int? ?? 0,
       expiresAt: json['expiresAt'] as int? ?? 0,
       signatureByIdentityKey: Uint8List.fromList(

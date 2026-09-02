@@ -679,3 +679,78 @@ test('worklet control path refuses hostile fileKey membership', async () => {
     await worklet.stop()
   }
 })
+
+test('fromWire and apply refuse URL-shaped writerId and do not mark applied', () => {
+  assert.equal(
+    roomEventFromNativePacket(
+      {
+        type: 'autobase-event',
+        writerId: 'https://evil',
+        seq: 0,
+        kind: 'membership',
+        payload: { peerId: 'eve', action: 'join' },
+      },
+      'a',
+    ),
+    null,
+  )
+  assert.equal(
+    roomEventFromNativePacket(
+      {
+        type: 'room_join',
+        roomId: 'r1',
+        guestPeerId: 'p1',
+        guestName: 'Pat',
+        abWriter: 'https://evil',
+        abSeq: 0,
+      },
+      'a',
+    ),
+    null,
+  )
+  assert.equal(
+    roomEventFromNativePacket(
+      {
+        type: 'room_join',
+        roomId: 'r1',
+        guestPeerId: 'p1',
+        guestName: 'Pat',
+        abSeq: 0,
+      },
+      'https://evil',
+    ),
+    null,
+  )
+  assert.equal(
+    membershipEventFromJournalRow(
+      membershipRow(
+        { peerId: 'eve', action: 'join' },
+        { writerDeviceId: 'https://evil' },
+      ),
+    ),
+    null,
+  )
+  const proj = new AutobaseProjection()
+  proj.apply({
+    writerId: 'https://evil',
+    seq: 0,
+    kind: 'membership',
+    payload: { peerId: 'eve', action: 'join', displayName: 'Eve' },
+  })
+  assert.deepEqual(proj.state.members, {})
+  assert.equal(proj.state.applied.size, 0)
+  const join = roomEventFromNativePacket(
+    {
+      type: 'room_join',
+      roomId: 'r1',
+      guestPeerId: 'p1',
+      guestName: 'Pat',
+      abWriter: 'a',
+      abSeq: 0,
+    },
+    'x',
+  )
+  assert.equal(join.writerId, 'a')
+  proj.apply(join)
+  assert.equal(proj.state.members.p1, 'Pat')
+})

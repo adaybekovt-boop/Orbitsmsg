@@ -294,8 +294,13 @@ void main() {
     expect(sendAutobaseEvent, contains('replicationValueIsSafe'));
     expect(sendAutobaseEvent, contains('event.payload'));
     expect(sendAutobaseEvent, contains('_nativeCarrierFor'));
+    expect(sendAutobaseEvent, contains("writerId.contains('://')"));
     expect(
       sendAutobaseEvent.indexOf('replicationValueIsSafe'),
+      lessThan(sendAutobaseEvent.indexOf('dual.sendAutobaseEvent')),
+    );
+    expect(
+      sendAutobaseEvent.indexOf("writerId.contains('://')"),
       lessThan(sendAutobaseEvent.indexOf('dual.sendAutobaseEvent')),
     );
 
@@ -305,12 +310,17 @@ void main() {
     );
     expect(sendCallSignal, contains('replicationValueIsSafe'));
     expect(sendCallSignal, contains('signal.toJson()'));
+    expect(sendCallSignal, contains("callId.contains('://')"));
     expect(
       sendCallSignal.indexOf('replicationValueIsSafe'),
       lessThan(sendCallSignal.indexOf('dual.sendCallSignal')),
     );
     expect(
       sendCallSignal.indexOf('signal.toJson()'),
+      lessThan(sendCallSignal.indexOf('dual.sendCallSignal')),
+    );
+    expect(
+      sendCallSignal.indexOf("callId.contains('://')"),
       lessThan(sendCallSignal.indexOf('dual.sendCallSignal')),
     );
 

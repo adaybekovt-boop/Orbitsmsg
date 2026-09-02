@@ -52,8 +52,10 @@ class DeviceLinkPayload {
       throw FormatException('bad device-link version');
     }
     _refuseDeviceLinkSecrets(json, HashSet<Object>.identity());
+    final deviceId = json['deviceId'] as String? ?? '';
+    _refuseDeviceIdValue(deviceId);
     return DeviceLinkPayload(
-      deviceId: json['deviceId'] as String? ?? '',
+      deviceId: deviceId,
       transportPublicKey: Uint8List.fromList(
         base64Decode(json['transportPublicKey'] as String? ?? ''),
       ),
@@ -79,6 +81,7 @@ Future<DeviceLinkPayload> issueDeviceLink({
   required Uint8List identityPublicKey,
   required Future<Uint8List> Function(List<int> payload) sign,
 }) async {
+  _refuseDeviceIdValue(deviceId);
   final draft = DeviceLinkPayload(
     deviceId: deviceId,
     transportPublicKey: transportPublicKey,
@@ -98,7 +101,9 @@ Future<DeviceLinkPayload> issueDeviceLink({
 }
 
 Future<bool> verifyDeviceLink(DeviceLinkPayload link) {
-  if (link.deviceId.isEmpty || link.signature.isEmpty) {
+  if (link.deviceId.isEmpty ||
+      link.deviceId.contains('://') ||
+      link.signature.isEmpty) {
     return Future<bool>.value(false);
   }
   return verifyIdentitySignedBytes(
@@ -108,9 +113,18 @@ Future<bool> verifyDeviceLink(DeviceLinkPayload link) {
   );
 }
 
+/// Empty or URL-shaped (`://`) [DeviceLinkPayload.deviceId] *values* fail
+/// closed. Keys named `deviceId` stay allowed through the secret-key walk.
+void _refuseDeviceIdValue(String deviceId) {
+  if (deviceId.isEmpty || deviceId.contains('://')) {
+    throw ArgumentError('device link: refusing secret field');
+  }
+}
+
 /// Cycle-safe walk of nested [Map] / [Iterable]. Ciphertext [List<int>]
 /// is a leaf. Any forbidden / wake / URL-ish key at any depth fails closed.
-/// Top-level [DeviceLinkPayload.deviceId] is a public field and is not refused.
+/// Keys named `deviceId` are allowed; empty or `://` *values* are refused
+/// by [_refuseDeviceIdValue] after this walk in [DeviceLinkPayload.fromQrJson].
 void _refuseDeviceLinkSecrets(Object? value, Set<Object> seen) {
   if (value == null || value is bool || value is num || value is String) {
     return;

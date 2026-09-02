@@ -117,6 +117,72 @@ void main() {
     );
   });
 
+  test('CapabilityRecord.fromWire refuses URL-shaped or empty deviceId', () {
+    final record = CapabilityRecord(
+      peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+      deviceId: 'dev-1',
+      capabilities: {
+        TransportCapability.hyperswarmV1,
+        TransportCapability.peerjsV4,
+      },
+      issuedAt: 1,
+      expiresAt: 2,
+      signature: Uint8List.fromList(const [1]),
+      identityPublicKey: Uint8List.fromList(const [1]),
+    );
+    final wire = record.toWire();
+
+    final honest = CapabilityRecord.fromWire(Map<String, Object?>.from(wire));
+    expect(honest.deviceId, 'dev-1');
+    expect(honest.peerId, 'ORBIT-AAAAAAAAAAAAAAAA');
+
+    expect(
+      () => CapabilityRecord.fromWire({
+        ...wire,
+        'deviceId': 'https://evil',
+      }),
+      throwsA(
+        isA<ArgumentError>().having(
+          (e) => e.message,
+          'message',
+          'capability record: refusing secret field',
+        ),
+      ),
+    );
+    expect(
+      () => CapabilityRecord.fromWire({
+        ...wire,
+        'deviceId': '',
+      }),
+      throwsA(
+        isA<ArgumentError>().having(
+          (e) => e.message,
+          'message',
+          'capability record: refusing secret field',
+        ),
+      ),
+    );
+    final missingDeviceId = Map<String, Object?>.from(wire)..remove('deviceId');
+    expect(
+      () => CapabilityRecord.fromWire(missingDeviceId),
+      throwsA(
+        isA<ArgumentError>().having(
+          (e) => e.message,
+          'message',
+          'capability record: refusing secret field',
+        ),
+      ),
+    );
+
+    // peerId is a public field; URL-shaped values are still accepted.
+    final withUrlPeerId = CapabilityRecord.fromWire({
+      ...wire,
+      'peerId': 'https://not-a-secret.example/peer',
+    });
+    expect(withUrlPeerId.peerId, 'https://not-a-secret.example/peer');
+    expect(withUrlPeerId.deviceId, 'dev-1');
+  });
+
   test('PeerJS hello caps are verified separately from the hello blob', () async {
     remoteCapabilityCache.clear();
     final pair = await generateP256EcdsaKey();

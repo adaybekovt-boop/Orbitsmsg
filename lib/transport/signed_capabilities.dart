@@ -62,6 +62,13 @@ class CapabilityRecord {
 
   static CapabilityRecord fromWire(Map<String, Object?> json) {
     _refuseCapabilityRecordSecrets(json, HashSet<Object>.identity());
+    // deviceId is a binding identifier, not a locator. Empty or URL-shaped
+    // values fail closed. Top-level peerId is a public field and is not
+    // refused (see _refuseCapabilityRecordSecrets).
+    final deviceId = json['deviceId'] as String? ?? '';
+    if (deviceId.isEmpty || deviceId.contains('://')) {
+      throw ArgumentError('capability record: refusing secret field');
+    }
     final names = (json['capabilities'] as List? ?? const [])
         .whereType<String>()
         .map(TransportCapability.fromWireName)
@@ -69,7 +76,7 @@ class CapabilityRecord {
         .toSet();
     return CapabilityRecord(
       peerId: json['peerId'] as String? ?? '',
-      deviceId: json['deviceId'] as String? ?? '',
+      deviceId: deviceId,
       capabilities: names,
       issuedAt: json['issuedAt'] as int? ?? 0,
       expiresAt: json['expiresAt'] as int? ?? 0,

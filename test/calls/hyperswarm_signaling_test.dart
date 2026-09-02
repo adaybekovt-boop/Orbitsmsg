@@ -130,8 +130,13 @@ void main() {
         .split('Future<bool> sendDrop')[0];
     expect(method, contains('replicationValueIsSafe'));
     expect(method, contains('signal.toJson()'));
+    expect(method, contains("callId.contains('://')"));
     expect(
       method.indexOf('replicationValueIsSafe'),
+      lessThan(method.indexOf('transport.send')),
+    );
+    expect(
+      method.indexOf("callId.contains('://')"),
       lessThan(method.indexOf('transport.send')),
     );
   });
