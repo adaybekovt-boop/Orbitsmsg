@@ -4,6 +4,7 @@ const test = require('node:test')
 const assert = require('node:assert/strict')
 const { spawn } = require('node:child_process')
 const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
 const { REQUEST, RESPONSE, EVENT, encode, Decoder } = require('../src/ipc')
 
@@ -34,10 +35,10 @@ function attach(child) {
   let next = 1
   return {
     events,
-    request(method, params = {}) {
+    request(method, params = {}, timeoutMs = 15000) {
       const id = next++
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => reject(new Error('timeout ' + method)), 12000)
+        const timer = setTimeout(() => reject(new Error('timeout ' + method)), timeoutMs)
         pending.set(id, {
           resolve: (v) => {
             clearTimeout(timer)
@@ -51,7 +52,30 @@ function attach(child) {
         child.stdin.write(encode(REQUEST, { id, method, params }))
       })
     },
+    waitEvent(name, timeoutMs = 12000) {
+      const found = events.find((e) => e.name === name)
+      if (found) return Promise.resolve(found)
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('timeout event ' + name)), timeoutMs)
+        const started = events.length
+        const poll = setInterval(() => {
+          const match = events.slice(started).find((e) => e.name === name)
+          if (!match) return
+          clearInterval(poll)
+          clearTimeout(timer)
+          resolve(match)
+        }, 25)
+      })
+    },
   }
+}
+
+function spawnWorklet(bare, backend) {
+  return spawn(bare, [path.join(__dirname, '..', 'src', 'worklet.js')], {
+    cwd: path.join(__dirname, '..'),
+    env: { ...process.env, ORBITS_HARNESS_BACKEND: backend },
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
 }
 
 test('two official Bare worklets exchange a payload over loopback', async (t) => {
@@ -60,32 +84,49 @@ test('two official Bare worklets exchange a payload over loopback', async (t) =>
     t.skip('official Bare binary is not fetched')
     return
   }
-  const worklet = path.join(__dirname, '..', 'src', 'worklet.js')
-  const cwd = path.join(__dirname, '..')
-  const a = spawn(bare, [worklet], {
-    cwd,
-    env: { ...process.env, ORBITS_HARNESS_BACKEND: 'loopback' },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
-  const b = spawn(bare, [worklet], {
-    cwd,
-    env: { ...process.env, ORBITS_HARNESS_BACKEND: 'loopback' },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
+  const a = spawnWorklet(bare, 'loopback')
+  const b = spawnWorklet(bare, 'loopback')
   t.after(() => {
     a.kill()
     b.kill()
   })
   const ha = attach(a)
   const hb = attach(b)
-  const startedA = await ha.request('start', { peerId: 'ORBIT-A' })
-  await hb.request('start', { peerId: 'ORBIT-B' })
+  const dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'orbits-loop-a-'))
+  const dirB = fs.mkdtempSync(path.join(os.tmpdir(), 'orbits-loop-b-'))
+  const startedA = await ha.request('start', {
+    peerId: 'ORBIT-A',
+    storageDir: dirA,
+    requireRealCorestore: true,
+  })
+  await hb.request('start', {
+    peerId: 'ORBIT-B',
+    storageDir: dirB,
+    requireRealCorestore: true,
+  })
   assert.ok(startedA.port)
   await hb.request('connect', { port: startedA.port })
-  await new Promise((r) => setTimeout(r, 200))
+  const connected = await ha.waitEvent('connected')
+  assert.ok(connected.payload.peerId)
   await ha.request('send', {
-    peerId: [...ha.events].reverse().find((e) => e.name === 'connected')?.payload?.peerId,
+    peerId: connected.payload.peerId,
     channel: 'message',
     frame: { type: 'harness-echo', id: '1', text: 'hello-bare' },
-  }).catch(() => {})
+  })
+  const reply = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('echo timeout')), 12000)
+    const started = ha.events.length
+    const poll = setInterval(() => {
+      const frame = ha.events.slice(started).find(
+        (e) => e.name === 'frame' && e.payload && e.payload.body && e.payload.body.type === 'harness-echo-reply',
+      )
+      if (!frame) return
+      clearInterval(poll)
+      clearTimeout(timer)
+      resolve(frame.payload.body)
+    }, 25)
+  })
+  assert.equal(reply.text, 'hello-bare')
+  await ha.request('stop')
+  await hb.request('stop')
 })

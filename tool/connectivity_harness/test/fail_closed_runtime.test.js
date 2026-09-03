@@ -23,3 +23,25 @@ test('wrong worklet hash is rejected by the Dart/host contract', () => {
   assert.equal(manifest.ipc, 'orbits-bare-ipc-v1')
   assert.notEqual(manifest.workletSha256, '0'.repeat(64))
 })
+
+test('verify-runtime rejects a corrupt sidecar', () => {
+  const binary = path.join(__dirname, '..', '..', '..', 'build', 'orbits-bare', 'linux-x64', 'bare')
+  if (!fs.existsSync(binary)) {
+    assert.ok(true)
+    return
+  }
+  const result = spawnSync(
+    'bash',
+    ['tool/bare/verify-runtime.sh'],
+    {
+      cwd: path.join(__dirname, '..', '..', '..'),
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ORBITS_BARE_CACHE: fs.mkdtempSync(path.join(os.tmpdir(), 'orbits-empty-cache-')),
+      },
+    },
+  )
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr + result.stdout, /BARE_RUNTIME_MISSING/)
+})

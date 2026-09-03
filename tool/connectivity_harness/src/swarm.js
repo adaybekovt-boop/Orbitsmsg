@@ -14,15 +14,27 @@ async function createHyperswarmBackend(opts = {}) {
   } catch (err) {
     throw new Error('hyperswarm is not installed: ' + err.message)
   }
+  let dht = opts.dht
+  let ownedDht = false
+  if (!dht && opts.bootstrap) {
+    const DHT = require('hyperdht')
+    dht = new DHT({
+      bootstrap: opts.bootstrap,
+      firewalled: opts.firewalled === true,
+    })
+    await dht.ready()
+    ownedDht = true
+  }
   const swarm = new Hyperswarm({
     bootstrap: opts.bootstrap,
     keyPair: opts.keyPair,
     seed: opts.seed,
     firewall: opts.firewall || (() => false),
-    dht: opts.dht,
+    dht,
   })
   return {
     swarm,
+    dht,
     async join(topic) {
       const discovery = swarm.join(topic, { server: true, client: true })
       await swarm.flush()
@@ -45,6 +57,7 @@ async function createHyperswarmBackend(opts = {}) {
     },
     async destroy() {
       await swarm.destroy()
+      if (ownedDht && dht) await dht.destroy()
     },
     onConnection(fn) {
       swarm.on('connection', (conn, info) => {

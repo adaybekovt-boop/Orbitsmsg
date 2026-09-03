@@ -3,7 +3,7 @@
   "ipc": "orbits-bare-ipc-v1",
   "transportFrame": "orbits-transport-v1",
   "remoteJs": false,
-  "workletSha256": "8fd89b67d14d147162e1790163cdb41aa18da77f070e9f0aa9d4d99c535b27d9",
+  "workletSha256": "46560fe892d954b8b3a5e34e8b9358aca39b510cb9925a46d218fb0313a0364d",
   "note": "Production Bare must ship this tree hashed with the app. Do not fetch executable JS.",
   "files": {
     "bare_compat.js": "1c7991f9fd0a7c52be690ffaf198969c09353fef1644ce8542dc23eb07104f0f",
@@ -13,7 +13,7 @@
     "loopback.js": "6b2081f568921bfe1d05c13f523665f04bd018b64d90ee1e940b43116b258c95",
     "mux.js": "3c43488c57c23913c4fc980ad81eda25645db70280cf8c74d7acc2461132afb6",
     "stand.js": "ff42515080cde2b80c160dd037f20dffea7f2bb89b62fe0f0c7ff3f7a677bece",
-    "swarm.js": "6f6d6fb5aa93dd732dd9ca37d63794e0976437daca88835e8b9c3525955f6e7a",
-    "worklet.js": "8fd89b67d14d147162e1790163cdb41aa18da77f070e9f0aa9d4d99c535b27d9"
+    "swarm.js": "30fa6099300ceb0f28436a43e243c1a754ba1e1f278ed2221549e6251e6b057c",
+    "worklet.js": "46560fe892d954b8b3a5e34e8b9358aca39b510cb9925a46d218fb0313a0364d"
   }
 }

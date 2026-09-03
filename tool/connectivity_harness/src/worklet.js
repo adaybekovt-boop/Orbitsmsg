@@ -38,6 +38,10 @@ class Worklet {
     this._topic = null
     this.events = []
     this._journal = null
+    this._dht = null
+    this._dhtServer = null
+    this._bootstrapper = null
+    this._dhtSockets = []
     this._emit = opts.emit || ((name, payload) => this.events.push({ name, payload }))
   }
 
@@ -83,7 +87,92 @@ class Worklet {
       await this._loop.connect(peer.port)
     } else if (this._swarm && peer.noisePublicKey) {
       this._swarm.swarm.joinPeer(Buffer.from(peer.noisePublicKey, 'hex'))
+      if (typeof this._swarm.swarm.flush === 'function') {
+        await this._swarm.swarm.flush()
+      }
     }
+  }
+
+  noisePublicKey() {
+    const key = this._swarm && this._swarm.swarm && this._swarm.swarm.keyPair
+    return key && key.publicKey ? key.publicKey.toString('hex') : null
+  }
+
+  async dhtBootstrap(params = {}) {
+    const DHT = require('hyperdht')
+    if (this._bootstrapper) {
+      const addr = this._bootstrapper.address()
+      return { bootstrap: [{ host: '127.0.0.1', port: addr.port }] }
+    }
+    const bindPort = Number(params.port)
+    if (!Number.isInteger(bindPort) || bindPort <= 0) {
+      throw new Error('dht.bootstrap needs a positive port')
+    }
+    if (typeof DHT.bootstrapper === 'function') {
+      this._bootstrapper = DHT.bootstrapper(bindPort, '127.0.0.1')
+    } else {
+      this._bootstrapper = new DHT({
+        ephemeral: false,
+        bootstrap: [],
+        host: '127.0.0.1',
+        firewalled: false,
+      })
+    }
+    await this._bootstrapper.ready()
+    const addr = this._bootstrapper.address()
+    return { bootstrap: [{ host: '127.0.0.1', port: addr.port }] }
+  }
+
+  async dhtListen(params = {}) {
+    const DHT = require('hyperdht')
+    if (!this._dht) {
+      this._dht = new DHT({
+        bootstrap: params.bootstrap,
+        firewalled: params.firewalled === true,
+      })
+      await this._dht.ready()
+    }
+    this._dhtServer = this._dht.createServer({ firewall: () => false })
+    this._dhtServer.on('connection', (sock) => {
+      sock.on('error', () => {})
+      this._dhtSockets.push(sock)
+      this._emit('dht.connection', {
+        publicKey: sock.remotePublicKey && sock.remotePublicKey.toString('hex'),
+      })
+      sock.on('data', (chunk) => {
+        this._emit('dht.data', { text: chunk.toString(), bytes: chunk.length })
+      })
+    })
+    await this._dhtServer.listen()
+    return { publicKey: this._dhtServer.publicKey.toString('hex') }
+  }
+
+  async dhtConnect(params = {}) {
+    const DHT = require('hyperdht')
+    if (!this._dht) {
+      this._dht = new DHT({
+        bootstrap: params.bootstrap,
+        firewalled: params.firewalled === true,
+      })
+      await this._dht.ready()
+    }
+    if (!params.publicKey) throw new Error('dht.connect needs publicKey')
+    const sock = this._dht.connect(Buffer.from(params.publicKey, 'hex'))
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('dht connect timeout')), 12000)
+      sock.on('error', (err) => {
+        clearTimeout(timer)
+        reject(err)
+      })
+      sock.on('open', () => {
+        clearTimeout(timer)
+        resolve()
+      })
+    })
+    sock.on('error', () => {})
+    this._dhtSockets.push(sock)
+    if (params.payload) sock.write(params.payload)
+    return { ok: true }
   }
 
   async send(peerId, channel, frame) {
@@ -238,6 +327,26 @@ class Worklet {
   async stop() {
     for (const peer of this._peers.values()) peer.socket.destroy()
     this._peers.clear()
+    for (const sock of this._dhtSockets) {
+      try {
+        sock.destroy()
+      } catch {
+        // already closed
+      }
+    }
+    this._dhtSockets = []
+    if (this._dhtServer) {
+      await this._dhtServer.close()
+      this._dhtServer = null
+    }
+    if (this._dht) {
+      await this._dht.destroy()
+      this._dht = null
+    }
+    if (this._bootstrapper) {
+      await this._bootstrapper.destroy()
+      this._bootstrapper = null
+    }
     if (this._swarm) await this._swarm.destroy()
     await this._loop.destroy()
     if (this._journal && typeof this._journal.close === 'function') {
@@ -289,7 +398,13 @@ async function handleIpcRequest(worklet, body) {
   switch (method) {
     case 'start':
       await worklet.start(params)
-      return { port: worklet._loop.port }
+      return { port: worklet._loop.port, noisePublicKey: worklet.noisePublicKey() }
+    case 'dht.bootstrap':
+      return await worklet.dhtBootstrap(params)
+    case 'dht.listen':
+      return await worklet.dhtListen(params)
+    case 'dht.connect':
+      return await worklet.dhtConnect(params)
     case 'stop':
       await worklet.stop()
       return {}
