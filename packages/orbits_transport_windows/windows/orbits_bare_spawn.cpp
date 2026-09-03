@@ -29,6 +29,18 @@ static bool read_sidecar(const char* binary, char* hex, size_t hex_len) {
   return strlen(hex) == 64;
 }
 
+static bool module_dir(char* out, size_t out_len) {
+  char exe[MAX_PATH];
+  const DWORD n = GetModuleFileNameA(nullptr, exe, MAX_PATH);
+  if (n == 0 || n >= MAX_PATH) return false;
+  char* slash = strrchr(exe, '\\');
+  if (slash == nullptr) slash = strrchr(exe, '/');
+  if (slash == nullptr) return false;
+  slash[1] = '\0';
+  snprintf(out, out_len, "%s", exe);
+  return true;
+}
+
 int orbits_bare_try_launch(OrbitsBareHost* host) {
   if (host == nullptr) return kOrbitsHostMalformed;
   const char* env = getenv("ORBITS_BARE_RUNTIME");
@@ -36,19 +48,41 @@ int orbits_bare_try_launch(OrbitsBareHost* host) {
   if (env && env[0] && file_exists(env)) {
     snprintf(runtime, sizeof(runtime), "%s", env);
   } else {
-    return kOrbitsHostBareMissing;
+    char dir[4096] = {0};
+    char cand[4096] = {0};
+    if (module_dir(dir, sizeof(dir))) {
+      snprintf(cand, sizeof(cand), "%sbare.exe", dir);
+      if (file_exists(cand)) {
+        snprintf(runtime, sizeof(runtime), "%s", cand);
+      } else {
+        snprintf(cand, sizeof(cand), "%slib\\bare.exe", dir);
+        if (file_exists(cand)) {
+          snprintf(runtime, sizeof(runtime), "%s", cand);
+        }
+      }
+    }
+    if (runtime[0] == '\0') return kOrbitsHostBareMissing;
   }
   char expected[80];
   if (!read_sidecar(runtime, expected, sizeof(expected))) {
     return kOrbitsHostRuntimeTampered;
   }
+  char worklet_buf[4096] = {0};
   const char* worklet = getenv("ORBITS_WORKLET_JS");
   if (worklet == nullptr || worklet[0] == '\0') {
     if (file_exists("tool/connectivity_harness/src/worklet.js")) {
       worklet = "tool/connectivity_harness/src/worklet.js";
     } else {
-      return kOrbitsHostBundleMissing;
+      char dir[4096] = {0};
+      if (module_dir(dir, sizeof(dir))) {
+        snprintf(worklet_buf, sizeof(worklet_buf),
+                 "%sdata\\orbits-worklet\\src\\worklet.js", dir);
+        if (file_exists(worklet_buf)) worklet = worklet_buf;
+      }
     }
+  }
+  if (worklet == nullptr || worklet[0] == '\0') {
+    return kOrbitsHostBundleMissing;
   }
   STARTUPINFOA si;
   PROCESS_INFORMATION pi;

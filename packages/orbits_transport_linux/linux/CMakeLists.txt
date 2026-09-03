@@ -27,10 +27,19 @@ if(NOT EXISTS "${_orbits_bare_bin}")
   set(_orbits_bare_bin "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/orbits-bare/linux-arm64/bare")
 endif()
 if(EXISTS "${_orbits_bare_bin}")
-  set(orbits_transport_linux_bundled_libraries
-    "${_orbits_bare_bin}"
-    PARENT_SCOPE
-  )
+  set(_orbits_bare_side "${_orbits_bare_bin}.sha256")
+  if(EXISTS "${_orbits_bare_side}")
+    set(orbits_transport_linux_bundled_libraries
+      "${_orbits_bare_bin}"
+      "${_orbits_bare_side}"
+      PARENT_SCOPE
+    )
+  else()
+    set(orbits_transport_linux_bundled_libraries
+      ""
+      PARENT_SCOPE
+    )
+  endif()
 else()
   set(orbits_transport_linux_bundled_libraries
     ""

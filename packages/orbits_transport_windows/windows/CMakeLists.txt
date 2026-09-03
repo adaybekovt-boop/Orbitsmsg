@@ -22,7 +22,19 @@ target_include_directories(${PLUGIN_NAME} INTERFACE
   "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter flutter_wrapper_plugin)
 
-set(orbits_transport_windows_bundled_libraries
-  ""
-  PARENT_SCOPE
-)
+set(_orbits_bare_bin "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/orbits-bare/win32-x64/bare.exe")
+if(NOT EXISTS "${_orbits_bare_bin}")
+  set(_orbits_bare_bin "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/orbits-bare/win32-arm64/bare.exe")
+endif()
+if(EXISTS "${_orbits_bare_bin}" AND EXISTS "${_orbits_bare_bin}.sha256")
+  set(orbits_transport_windows_bundled_libraries
+    "${_orbits_bare_bin}"
+    "${_orbits_bare_bin}.sha256"
+    PARENT_SCOPE
+  )
+else()
+  set(orbits_transport_windows_bundled_libraries
+    ""
+    PARENT_SCOPE
+  )
+endif()

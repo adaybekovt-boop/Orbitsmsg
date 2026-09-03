@@ -126,3 +126,31 @@ if(NOT CMAKE_BUILD_TYPE MATCHES "Debug")
   install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
     COMPONENT Runtime)
 endif()
+
+# Official Bare worklet tree (src + npm modules) next to the bundle data
+# directory so the spawned `bare` CLI can require('corestore'). Copied only
+# when the build machine has already run `npm ci` in the harness.
+set(_orbits_bare_linux "${CMAKE_CURRENT_SOURCE_DIR}/../build/orbits-bare/linux-x64/bare")
+if(NOT EXISTS "${_orbits_bare_linux}")
+  set(_orbits_bare_linux "${CMAKE_CURRENT_SOURCE_DIR}/../build/orbits-bare/linux-arm64/bare")
+endif()
+if(EXISTS "${_orbits_bare_linux}" AND EXISTS "${_orbits_bare_linux}.sha256")
+  install(FILES "${_orbits_bare_linux}" "${_orbits_bare_linux}.sha256"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+endif()
+
+set(_orbits_harness "${CMAKE_CURRENT_SOURCE_DIR}/../tool/connectivity_harness")
+if(EXISTS "${_orbits_harness}/src/worklet.js" AND EXISTS "${_orbits_harness}/node_modules/corestore")
+  install(DIRECTORY "${_orbits_harness}/src"
+    DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/orbits-worklet"
+    COMPONENT Runtime)
+  install(DIRECTORY "${_orbits_harness}/node_modules"
+    DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/orbits-worklet"
+    COMPONENT Runtime)
+  if(EXISTS "${_orbits_harness}/BUNDLE.manifest")
+    install(FILES "${_orbits_harness}/BUNDLE.manifest"
+      DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/orbits-worklet"
+      COMPONENT Runtime)
+  endif()
+endif()

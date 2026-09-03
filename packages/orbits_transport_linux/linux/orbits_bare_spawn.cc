@@ -40,27 +40,37 @@ static int read_hex_sidecar(const char* binary, char* hex, size_t hex_len) {
   return (int)strlen(hex) == 64;
 }
 
+static int copy_if_file(const char* path, char* out, size_t out_len) {
+  if (!file_exists(path)) return 0;
+  snprintf(out, out_len, "%s", path);
+  return 1;
+}
+
+static int exe_dir(char* out, size_t out_len) {
+  char exe[4096];
+  const ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+  if (n <= 0) return 0;
+  exe[n] = '\0';
+  char* slash = strrchr(exe, '/');
+  if (slash == NULL) return 0;
+  slash[1] = '\0';
+  snprintf(out, out_len, "%s", exe);
+  return 1;
+}
+
 int orbits_bare_find_runtime(char* out, size_t out_len) {
   const char* env = getenv("ORBITS_BARE_RUNTIME");
   if (env && env[0] == '/' && file_exists(env)) {
     snprintf(out, out_len, "%s", env);
     return 1;
   }
-  char exe[4096];
-  const ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
-  if (n > 0) {
-    exe[n] = '\0';
-    char* slash = strrchr(exe, '/');
-    if (slash != NULL) {
-      slash[1] = '\0';
-      char cand[4096];
-      snprintf(cand, sizeof(cand), "%sbare", exe);
-      if (file_exists(cand)) {
-        snprintf(out, out_len, "%s", cand);
-        return 1;
-      }
-    }
-  }
+  char dir[4096];
+  if (!exe_dir(dir, sizeof(dir))) return 0;
+  char cand[5120];
+  snprintf(cand, sizeof(cand), "%sbare", dir);
+  if (copy_if_file(cand, out, out_len)) return 1;
+  snprintf(cand, sizeof(cand), "%slib/bare", dir);
+  if (copy_if_file(cand, out, out_len)) return 1;
   return 0;
 }
 
@@ -74,6 +84,15 @@ int orbits_bare_find_worklet(char* out, size_t out_len) {
     snprintf(out, out_len, "%s", "tool/connectivity_harness/src/worklet.js");
     return 1;
   }
+  char dir[4096];
+  if (!exe_dir(dir, sizeof(dir))) return 0;
+  char cand[5120];
+  snprintf(cand, sizeof(cand), "%sdata/orbits-worklet/src/worklet.js", dir);
+  if (copy_if_file(cand, out, out_len)) return 1;
+  snprintf(
+      cand, sizeof(cand),
+      "%sdata/flutter_assets/tool/connectivity_harness/src/worklet.js", dir);
+  if (copy_if_file(cand, out, out_len)) return 1;
   return 0;
 }
 
