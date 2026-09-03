@@ -46,6 +46,10 @@ if [[ -d "$MACOS_SRC" ]]; then
   test -d "$MACOS_DIR/BareKit.xcframework"
 fi
 
+if [[ -d "$ROOT/tool/connectivity_harness/node_modules/udx-native" ]]; then
+  bash "$ROOT/tool/bare/assemble-mobile-worklet.sh"
+fi
+
 echo "linked official BareKit into plugin trees"
 echo "  $ANDROID_LIBS/bare-kit"
 echo "  $IOS_DIR/BareKit.xcframework"

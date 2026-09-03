@@ -102,6 +102,17 @@ if [[ "$MODE" == "ios" ]]; then
     find "$app" -iname '*worklet*' -o -iname '*hyperswarm*' | head || true
     exit 1
   fi
+  # F-06: Ensure no native .bare or .dylib Mach-O binaries exist inside the packaged worklet zip
+  # which would be extracted into writable storage at runtime.
+  for zip_cand in $(find "$app" -name 'orbits-worklet-modules.zip' 2>/dev/null); do
+    if unzip -l "$zip_cand" | grep -E '\.bare$|\.dylib$' >/dev/null; then
+      echo "BARE_WORKLET_FAILED: F-06 violation - packaged zip contains native binaries destined for writable storage" >&2
+      exit 1
+    fi
+  done
+  if [[ -d "$app/Frameworks/udx-native.framework" || -f "$app/Frameworks/udx-native.framework/udx-native" ]]; then
+    echo "ok signed udx-native.framework in Runner.app/Frameworks"
+  fi
   echo "ok packaged BareKit in $app"
   exit 0
 fi

@@ -407,6 +407,10 @@ enum OrbitsBareRuntime {
     for dir in dirs where fm.fileExists(atPath: dir.path) {
       if let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
         for item in items {
+          let ext = item.pathExtension.lowercased()
+          if ext == "bare" || ext == "dylib" || ext == "so" || ext == "node" {
+            continue
+          }
           let target = dest.appendingPathComponent(item.lastPathComponent)
           try? fm.removeItem(at: target)
           try? fm.copyItem(at: item, to: target)

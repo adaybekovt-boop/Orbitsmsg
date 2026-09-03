@@ -8,6 +8,21 @@ enum ZipExtract {
     let bytes = [UInt8](data)
     var offset = 0
     let fm = FileManager.default
+
+    let maxEntries = 10_000
+    let maxSingleFileSize = 50 * 1024 * 1024
+    let maxTotalSize = 150 * 1024 * 1024
+
+    var entryCount = 0
+    var totalExpandedSize = 0
+    var seenEntries = Set<String>()
+
+    let tempDir = fm.temporaryDirectory.appendingPathComponent("worklet-unzip-\(UUID().uuidString)", isDirectory: true)
+    try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: tempDir) }
+
+    let destCanonical = dest.standardizedFileURL.path
+
     while offset + 30 <= bytes.count {
       let sig = readU32(bytes, offset)
       if sig == 0x02014B50 || sig == 0x06054B50 {
@@ -16,6 +31,11 @@ enum ZipExtract {
       guard sig == 0x04034B50 else {
         throw HostError.workletFailed
       }
+      entryCount += 1
+      if entryCount > maxEntries {
+        throw HostError.workletFailed
+      }
+
       let method = Int(readU16(bytes, offset + 8))
       let compSize = Int(readU32(bytes, offset + 18))
       let uncompSize = Int(readU32(bytes, offset + 22))
@@ -29,16 +49,42 @@ enum ZipExtract {
       }
       let name = String(bytes: bytes[nameStart..<nameEnd], encoding: .utf8) ?? ""
       offset = dataStart + compSize
-      if name.isEmpty || name.contains("..") {
+
+      // F-06: Never extract Mach-O binaries (.bare / .dylib / .node / .so) into writable storage
+      if name.hasSuffix(".bare") || name.hasSuffix(".dylib") || name.hasSuffix(".so") || name.hasSuffix(".node") {
         continue
       }
+
+      // F-23: Segment-level path traversal validation
+      if name.isEmpty ||
+        name.contains("\0") ||
+        name.hasPrefix("/") ||
+        name.hasPrefix("\\") ||
+        name.contains(":") ||
+        name.split(separator: "/").contains("..") ||
+        name.split(separator: "\\").contains("..") {
+        throw HostError.workletFailed
+      }
+
+      if !seenEntries.insert(name).inserted {
+        throw HostError.workletFailed
+      }
+
+      if uncompSize > maxSingleFileSize {
+        throw HostError.workletFailed
+      }
+
+      let outURL = tempDir.appendingPathComponent(name)
+      let canonicalOut = outURL.standardizedFileURL.path
+      guard canonicalOut.hasPrefix(tempDir.standardizedFileURL.path + "/") || canonicalOut == tempDir.standardizedFileURL.path else {
+        throw HostError.workletFailed
+      }
+
       if name.hasSuffix("/") {
-        try fm.createDirectory(
-          at: dest.appendingPathComponent(name),
-          withIntermediateDirectories: true
-        )
+        try fm.createDirectory(at: outURL, withIntermediateDirectories: true)
         continue
       }
+
       let payload = Data(bytes[dataStart..<(dataStart + compSize)])
       let out: Data
       if method == 0 {
@@ -51,9 +97,23 @@ enum ZipExtract {
       } else {
         throw HostError.workletFailed
       }
-      let outURL = dest.appendingPathComponent(name)
+
+      totalExpandedSize += out.count
+      if totalExpandedSize > maxTotalSize {
+        throw HostError.workletFailed
+      }
+
       try fm.createDirectory(at: outURL.deletingLastPathComponent(), withIntermediateDirectories: true)
       try out.write(to: outURL, options: .atomic)
+    }
+
+    // Atomically copy extracted files into destination
+    if let items = try? fm.contentsOfDirectory(at: tempDir, includingPropertiesForKeys: nil) {
+      for item in items {
+        let target = dest.appendingPathComponent(item.lastPathComponent)
+        try? fm.removeItem(at: target)
+        try fm.copyItem(at: item, to: target)
+      }
     }
   }
 

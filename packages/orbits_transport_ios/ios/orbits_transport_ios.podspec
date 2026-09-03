@@ -23,10 +23,18 @@ Pod::Spec.new do |s|
 
   kit_root = ENV['ORBITS_BARE_KIT']
   local = File.join(__dir__, 'BareKit.xcframework')
+  udx_local = File.join(__dir__, 'udx-native.xcframework')
   # CocoaPods requires a relative vendored_frameworks path. The official
   # XCFramework is linked into this plugin directory by tool/bare/link-official-kit.sh.
+  vendored = []
   if File.directory?(local)
-    s.vendored_frameworks = 'BareKit.xcframework'
+    vendored << 'BareKit.xcframework'
+  end
+  if File.directory?(udx_local)
+    vendored << 'udx-native.xcframework'
+  end
+  if !vendored.empty?
+    s.vendored_frameworks = vendored
   elsif kit_root && !kit_root.empty?
     # Keep the ORBITS_BARE_KIT hook for verify-kit-hooks; linking happens before pod install.
     _ = File.join(kit_root, 'ios', 'BareKit.xcframework')
