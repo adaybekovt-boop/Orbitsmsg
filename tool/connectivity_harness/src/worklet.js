@@ -61,11 +61,15 @@ class Worklet {
     this.backend = opts.backend || 'loopback'
     this._loop = new LoopbackBackend()
     this._swarm = null
+    this._connections = new Set()
     this._peers = new Map()
     this._started = false
     this._suspended = false
     this._config = null
-    this._topic = null
+    this._publishedTopic = null
+    this._publishedDiscovery = null
+    this._peerTopics = new Map()
+    this._discoveryHandles = new Map()
     this.events = []
     this._journal = null
     this._dht = null
@@ -73,7 +77,6 @@ class Worklet {
     this._bootstrapper = null
     this._dhtSockets = []
     this._connWaiters = []
-    this._pendingPeerId = null
     this._argvStorage = opts.storageDir || null
     this._emit = opts.emit || ((name, payload) => this.events.push({ name, payload }))
   }
@@ -114,105 +117,146 @@ class Worklet {
 
   async publish(binding) {
     const secret = secretToBuffer(this._config.discoverySecret)
-    this._topic = contactDiscoveryTopic(secret)
-    if (this._swarm) await this._swarm.join(this._topic)
-    this._emit('published', { topicHex: this._topic.toString('hex'), binding })
+    const topic = contactDiscoveryTopic(secret)
+    this._publishedTopic = topic
+    const topicHex = topic.toString('hex')
+    if (this._swarm) {
+      let handle = this._discoveryHandles.get(topicHex)
+      if (!handle) {
+        handle = await this._swarm.join(topic)
+        this._discoveryHandles.set(topicHex, handle)
+      }
+      this._publishedDiscovery = handle
+    }
+    this._emit('published', { topicHex, binding })
   }
 
   async unpublish() {
-    if (this._swarm && this._topic) await this._swarm.leave(this._topic)
+    if (!this._publishedTopic) return
+    const topicBuf = this._publishedTopic
+    const pubHex = topicBuf.toString('hex')
+    this._publishedTopic = null
+    this._publishedDiscovery = null
+
+    if (!this._peerTopicsHasTopic(pubHex) && this._swarm) {
+      await this._swarm.leave(topicBuf)
+      const handle = this._discoveryHandles.get(pubHex)
+      if (handle && typeof handle.destroy === 'function') {
+        try { await handle.destroy() } catch {}
+      }
+      this._discoveryHandles.delete(pubHex)
+    }
   }
 
-  async connect(peer) {
+  _peerTopicsHasTopic(topicHex) {
+    for (const hex of this._peerTopics.values()) {
+      if (hex === topicHex) return true
+    }
+    return false
+  }
+
+  async connect(peer = {}) {
     if (this._suspended) throw new Error('suspended')
     if (!this._started) throw new Error('not started')
-    if (peer && peer.peerId) this._pendingPeerId = String(peer.peerId)
+
+    const targetPeerId = peer && peer.peerId ? String(peer.peerId) : null
+
     if (this.backend === 'loopback') {
       if (peer.port == null) throw new Error('loopback connect needs port')
       await this._loop.connect(peer.port)
+      if (targetPeerId && this._peers.has(targetPeerId)) {
+        return { peerId: targetPeerId }
+      }
+    } else if (this.backend === 'hyperswarm') {
+      if (!this._swarm) throw new Error('swarm not started')
+      let topicJoined = false
+      if (peer && peer.discoverySecret) {
+        const topic = contactDiscoveryTopic(secretToBuffer(peer.discoverySecret))
+        const topicHex = topic.toString('hex')
+        if (targetPeerId) {
+          this._peerTopics.set(targetPeerId, topicHex)
+        }
+        if (!this._discoveryHandles.has(topicHex)) {
+          const handle = await this._swarm.join(topic)
+          this._discoveryHandles.set(topicHex, handle)
+        }
+        topicJoined = true
+      }
+      if (peer && peer.noisePublicKey) {
+        const key = Buffer.from(String(peer.noisePublicKey), 'hex')
+        if (key.length !== 32) throw new Error('noisePublicKey must be 32 bytes hex')
+        this._swarm.swarm.joinPeer(key)
+      } else if (!topicJoined && !this._publishedTopic) {
+        throw new Error('publish or noisePublicKey required before connect')
+      }
+    } else {
+      throw new Error('unknown backend ' + this.backend)
+    }
+
+    if (targetPeerId && this._peers.has(targetPeerId)) {
+      const existing = this._peers.get(targetPeerId)
+      if (existing && existing.socket && !existing.socket.destroyed && !existing.closed) {
+        return { peerId: targetPeerId }
+      }
+    }
+
+    if (!targetPeerId && this._peers.size > 0) {
       return { peerId: this._firstPeerId() }
     }
-    if (!this._swarm) throw new Error('swarm not started')
-    if (peer && peer.discoverySecret) {
-      this._topic = contactDiscoveryTopic(secretToBuffer(peer.discoverySecret))
-      await this._swarm.join(this._topic)
-    }
-    if (peer && peer.noisePublicKey) {
-      const key = Buffer.from(String(peer.noisePublicKey), 'hex')
-      if (key.length !== 32) throw new Error('noisePublicKey must be 32 bytes hex')
-      this._swarm.swarm.joinPeer(key)
-    } else if (!this._topic) {
-      throw new Error('publish or noisePublicKey required before connect')
-    }
-    if (this._peers.size > 0) return { peerId: this._firstPeerId() }
+
     const timeoutMs = Number(peer && peer.timeoutMs) || 45000
-    const peerId = await new Promise((resolve, reject) => {
+    return new Promise((resolve, reject) => {
+      let timer = null
       const waiter = {
+        targetPeerId,
         resolve: (id) => {
-          clearTimeout(timer)
-          resolve(id)
+          if (timer) clearTimeout(timer)
+          this._removeWaiter(waiter)
+          resolve({ peerId: id })
+        },
+        reject: (err) => {
+          if (timer) clearTimeout(timer)
+          this._removeWaiter(waiter)
+          reject(err)
         },
       }
-      const timer = setTimeout(() => {
-        this._connWaiters = this._connWaiters.filter((w) => w !== waiter)
-        reject(new Error('connect timeout'))
+      timer = setTimeout(() => {
+        waiter.reject(new Error('connect timeout'))
       }, timeoutMs)
       this._connWaiters.push(waiter)
-      if (this._peers.size > 0) {
-        this._connWaiters = this._connWaiters.filter((w) => w !== waiter)
-        waiter.resolve(this._firstPeerId())
-      }
     })
-    return { peerId }
+  }
+
+  _removeWaiter(waiter) {
+    this._connWaiters = this._connWaiters.filter((w) => w !== waiter)
   }
 
   async disconnect(peerId) {
     const id = String(peerId || '')
-    const peer = this._peers.get(id)
-    if (!peer) return
-    try {
-      peer.socket.destroy()
-    } catch {
-      // already closed
+    const connRecord = this._peers.get(id)
+    if (connRecord) {
+      this._handlePeerDisconnect(connRecord, null)
     }
-    this._peers.delete(id)
-    this._emit('disconnected', { peerId: id })
+
+    if (this._peerTopics.has(id)) {
+      const topicHex = this._peerTopics.get(id)
+      this._peerTopics.delete(id)
+      const isPubTopic = this._publishedTopic && this._publishedTopic.toString('hex') === topicHex
+      const otherPeerUses = this._peerTopicsHasTopic(topicHex)
+      if (!isPubTopic && !otherPeerUses && this._swarm) {
+        const topicBuf = Buffer.from(topicHex, 'hex')
+        await this._swarm.leave(topicBuf)
+        const handle = this._discoveryHandles.get(topicHex)
+        if (handle && typeof handle.destroy === 'function') {
+          try { await handle.destroy() } catch {}
+        }
+        this._discoveryHandles.delete(topicHex)
+      }
+    }
   }
 
   _firstPeerId() {
     return this._peers.keys().next().value || null
-  }
-
-  _announceIdentity(peerId) {
-    const localId = this._config && this._config.peerId
-    if (!localId) return
-    const peer = this._peers.get(peerId)
-    if (!peer || !peer.socket) return
-    try {
-      peer.socket.write(
-        encodeMux(
-          'control',
-          Buffer.from(
-            JSON.stringify({ type: 'orbits-identity', peerId: localId }),
-            'utf8',
-          ),
-        ),
-      )
-    } catch {
-      // peer already closed
-    }
-  }
-
-  _remapPeer(fromId, toId) {
-    if (!fromId || !toId || fromId === toId) return toId
-    if (this._peers.has(toId)) return toId
-    const rec = this._peers.get(fromId)
-    if (!rec) return toId
-    this._peers.delete(fromId)
-    this._peers.set(toId, rec)
-    this._emit('disconnected', { peerId: fromId })
-    this._emit('connected', { peerId: toId, path: (rec.info && rec.info.path) || 'unknown' })
-    return toId
   }
 
   noisePublicKey() {
@@ -447,32 +491,71 @@ class Worklet {
   }
 
   async stop() {
-    for (const peer of this._peers.values()) peer.socket.destroy()
+    // 1. Reject all pending connection waiters
+    const waiters = this._connWaiters.splice(0)
+    for (const w of waiters) {
+      try {
+        w.reject(new Error('worklet stopped'))
+      } catch {}
+    }
+
+    // 2. Destroy and cleanup all active peer connections
+    for (const connRecord of Array.from(this._connections)) {
+      this._handlePeerDisconnect(connRecord, null)
+    }
+    this._connections.clear()
     this._peers.clear()
+
+    // 3. Destroy all DHT sockets
     for (const sock of this._dhtSockets) {
       try {
         sock.destroy()
-      } catch {
-        // already closed
-      }
+      } catch {}
     }
     this._dhtSockets = []
+
+    // 4. Destroy DHT server
     if (this._dhtServer) {
       await this._dhtServer.close()
       this._dhtServer = null
     }
+
+    // 5. Destroy DHT instance
     if (this._dht) {
       await this._dht.destroy()
       this._dht = null
     }
+
+    // 6. Destroy bootstrapper
     if (this._bootstrapper) {
       await this._bootstrapper.destroy()
       this._bootstrapper = null
     }
-    if (this._swarm) await this._swarm.destroy()
+
+    // 7. Destroy all discovery handles exactly once
+    for (const [topicHex, handle] of this._discoveryHandles) {
+      if (handle && typeof handle.destroy === 'function') {
+        try { await handle.destroy() } catch {}
+      }
+    }
+    this._discoveryHandles.clear()
+    this._publishedTopic = null
+    this._publishedDiscovery = null
+    this._peerTopics.clear()
+
+    // 8. Destroy swarm and loopback
+    if (this._swarm) {
+      if (typeof this._swarm.destroy === 'function') {
+        await this._swarm.destroy()
+      }
+      this._swarm = null
+    }
     await this._loop.destroy()
+
+    // 9. Close journal
     if (this._journal && typeof this._journal.close === 'function') {
       await this._journal.close()
+      this._journal = null
     }
     this._started = false
   }
@@ -484,51 +567,160 @@ class Worklet {
           ? info.publicKey.toString('hex')
           : String(info.publicKey)
         : null
-    const assigned = this._pendingPeerId
-    this._pendingPeerId = null
-    const peerId = assigned || info.id || noise
+
     const decoder = new MuxDecoder()
-    this._peers.set(peerId, { socket, info, decoder, noise })
-    this._emit('connected', { peerId, path: (info && info.path) || 'unknown' })
-    this._emit('pathChanged', { peerId, path: (info && info.path) || 'direct' })
-    const waiters = this._connWaiters.splice(0)
-    for (const waiter of waiters) waiter.resolve(peerId)
+    const connRecord = {
+      socket,
+      info,
+      decoder,
+      noise,
+      logicalPeerId: null,
+      emittedConnected: false,
+      closed: false,
+    }
+    this._connections.add(connRecord)
+
+    // Wire socket error handling (F-02)
+    socket.on('error', (err) => {
+      // NoiseSecretStream or Bare socket error on remote close (ECONNRESET, etc.)
+      this._handlePeerDisconnect(connRecord, err)
+    })
+
+    socket.on('close', () => {
+      this._handlePeerDisconnect(connRecord, null)
+    })
+
     socket.on('data', (chunk) => {
-      const currentId = this._idForSocket(socket) || peerId
-      for (const frame of decoder.add(chunk)) {
-        this._onFrame(currentId, frame.channel, frame.payload)
+      if (connRecord.closed) return
+      let frames
+      try {
+        frames = decoder.add(chunk)
+      } catch (err) {
+        // Bad mux chunk
+        this._handlePeerDisconnect(connRecord, err)
+        return
+      }
+      for (const frame of frames) {
+        this._onFrame(connRecord, frame.channel, frame.payload)
       }
     })
-    socket.on('close', () => {
-      const currentId = this._idForSocket(socket) || peerId
-      this._peers.delete(currentId)
-      this._emit('disconnected', { peerId: currentId })
-    })
-    this._announceIdentity(peerId)
-  }
 
-  _idForSocket(socket) {
-    for (const [id, rec] of this._peers) {
-      if (rec.socket === socket) return id
+    // If loopback backend, record info.id as an alias in _peers for backwards compatibility
+    if (this.backend === 'loopback' && info && info.id) {
+      connRecord.alias = info.id
+      this._peers.set(info.id, connRecord)
+      this._assignLogicalPeer(connRecord, info.id)
     }
-    return null
+
+    // Always announce our own identity immediately on connect
+    this._announceIdentityToConn(connRecord)
   }
 
-  _onFrame(peerId, channel, payload) {
+  _announceIdentityToConn(connRecord) {
+    const localId = this._config && this._config.peerId
+    if (!localId || connRecord.closed || !connRecord.socket) return
+    try {
+      connRecord.socket.write(
+        encodeMux(
+          'control',
+          Buffer.from(
+            JSON.stringify({ type: 'orbits-identity', peerId: localId }),
+            'utf8',
+          ),
+        ),
+      )
+    } catch {
+      // socket already closed
+    }
+  }
+
+  _assignLogicalPeer(connRecord, logicalPeerId) {
+    if (connRecord.closed) return
+    if (connRecord.logicalPeerId === logicalPeerId) return
+
+    connRecord.logicalPeerId = logicalPeerId
+    this._peers.set(logicalPeerId, connRecord)
+
+    if (!connRecord.emittedConnected) {
+      connRecord.emittedConnected = true
+      this._emit('connected', {
+        peerId: logicalPeerId,
+        path: (connRecord.info && connRecord.info.path) || 'unknown',
+      })
+      this._emit('pathChanged', {
+        peerId: logicalPeerId,
+        path: (connRecord.info && connRecord.info.path) || 'direct',
+      })
+    }
+
+    // Resolve matching connection waiters (F-07)
+    for (let i = this._connWaiters.length - 1; i >= 0; i--) {
+      const waiter = this._connWaiters[i]
+      if (!waiter.targetPeerId || waiter.targetPeerId === logicalPeerId) {
+        this._connWaiters.splice(i, 1)
+        waiter.resolve(logicalPeerId)
+      }
+    }
+  }
+
+  _handlePeerDisconnect(connRecord, err) {
+    if (connRecord.closed) return
+    connRecord.closed = true
+
+    this._connections.delete(connRecord)
+
+    try {
+      connRecord.socket.destroy()
+    } catch {}
+
+    if (connRecord.alias) {
+      this._peers.delete(connRecord.alias)
+    }
+
+    const logicalId = connRecord.logicalPeerId
+    if (logicalId) {
+      if (this._peers.get(logicalId) === connRecord) {
+        this._peers.delete(logicalId)
+      }
+      if (connRecord.emittedConnected) {
+        connRecord.emittedConnected = false
+        this._emit('disconnected', { peerId: logicalId })
+      }
+
+      // Reject any pending waiters specifically targeted at this peer (F-07)
+      for (let i = this._connWaiters.length - 1; i >= 0; i--) {
+        const waiter = this._connWaiters[i]
+        if (waiter.targetPeerId === logicalId) {
+          this._connWaiters.splice(i, 1)
+          waiter.reject(new Error('peer disconnected: ' + logicalId))
+        }
+      }
+    }
+  }
+
+  _onFrame(connRecord, channel, payload) {
+    if (connRecord.closed) return
     const frameB64 = payload.toString('base64')
     let body
     try {
       body = JSON.parse(payload.toString('utf8'))
     } catch {
-      this._emit('frame', { peerId, channel, frameB64 })
+      if (connRecord.logicalPeerId) {
+        this._emit('frame', { peerId: connRecord.logicalPeerId, channel, frameB64 })
+      }
       return
     }
+
     if (channel === 'control' && body && body.type === 'orbits-identity' && body.peerId) {
-      const looksNoise = /^[0-9a-f]{64}$/i.test(String(peerId))
-      if (looksNoise || this.backend === 'hyperswarm') {
-        peerId = this._remapPeer(peerId, String(body.peerId))
-      }
+      this._assignLogicalPeer(connRecord, String(body.peerId))
     }
+
+    const peerId = connRecord.logicalPeerId
+    if (!peerId) {
+      // Logical identity not yet known, wait until orbits-identity frame arrives (F-13)
+      return
+    }
+
     if (channel === 'message' && body.type === 'harness-echo') {
       this.send(peerId, 'message', {
         type: 'harness-echo-reply',
@@ -601,7 +793,7 @@ async function handleIpcRequest(worklet, body) {
         version: 'orbits-bare-ipc-v1',
         started: worklet._started === true,
         suspended: worklet._suspended === true,
-        published: Boolean(worklet._topic),
+        published: Boolean(worklet._publishedTopic),
         peerCount: worklet._peers.size,
         noisePublicKey: worklet.noisePublicKey(),
       }

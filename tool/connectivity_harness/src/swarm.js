@@ -16,21 +16,24 @@ async function createHyperswarmBackend(opts = {}) {
   }
   let dht = opts.dht
   let ownedDht = false
-  if (!dht && opts.bootstrap) {
+  if (!dht) {
     const DHT = require('hyperdht')
-    dht = new DHT({
-      bootstrap: opts.bootstrap,
-      firewalled: opts.firewalled === true,
-    })
+    const dhtOpts = {}
+    if (opts.bootstrap) dhtOpts.bootstrap = opts.bootstrap
+    if (opts.firewalled !== undefined) dhtOpts.firewalled = Boolean(opts.firewalled)
+    if (opts.port) dhtOpts.port = opts.port
+    if (opts.host) dhtOpts.host = opts.host
+    dht = new DHT(dhtOpts)
     await dht.ready()
     ownedDht = true
   }
+  // Note: Hyperswarm constructor does not support a firewalled option (it belongs to HyperDHT).
+  // Passing firewalled directly to Hyperswarm was dead configuration.
   const swarm = new Hyperswarm({
-    bootstrap: opts.bootstrap,
     keyPair: opts.keyPair,
     seed: opts.seed,
     firewall: opts.firewall || (() => false),
-    firewalled: opts.firewalled === true,
+    maxPeers: opts.maxPeers,
     dht,
   })
   return {
@@ -60,7 +63,12 @@ async function createHyperswarmBackend(opts = {}) {
       await swarm.resume()
     },
     async refresh() {
-      for (const topic of swarm.topics ? swarm.topics.keys() : []) {
+      const keys = swarm.topics
+        ? swarm.topics.keys()
+        : swarm._discovery
+          ? swarm._discovery.keys()
+          : []
+      for (const topic of keys) {
         const st = swarm.status(topic)
         if (st) await st.refresh({ client: true, server: true })
       }
@@ -106,4 +114,21 @@ async function createLocalBootstrap(port) {
   }
 }
 
-module.exports = { createHyperswarmBackend, createLocalBootstrap }
+async function createLocalTestnet(size = 3, opts = {}) {
+  let testnet
+  try {
+    testnet = require('hyperdht/testnet')
+  } catch (err) {
+    throw new Error('hyperdht/testnet is not available: ' + err.message)
+  }
+  const tn = await testnet(size, { host: '127.0.0.1', ...opts })
+  return {
+    nodes: tn.nodes,
+    bootstrap: tn.bootstrap,
+    async destroy() {
+      await tn.destroy()
+    },
+  }
+}
+
+module.exports = { createHyperswarmBackend, createLocalBootstrap, createLocalTestnet }

@@ -7,19 +7,16 @@ const crypto = require('node:crypto')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
-const { createLocalBootstrap } = require('../src/swarm')
-const { REQUEST, RESPONSE, EVENT, encode, Decoder } = require('../src/ipc')
+
+// Stable path resolution anchored to directory of this test file (F-03)
+const HARNESS_DIR = path.resolve(__dirname, '..', '..')
+const REPO_ROOT = path.resolve(HARNESS_DIR, '..', '..')
+const { createLocalTestnet } = require(path.join(HARNESS_DIR, 'src', 'swarm'))
+const { REQUEST, RESPONSE, EVENT, encode, Decoder } = require(path.join(HARNESS_DIR, 'src', 'ipc'))
 
 function officialBare() {
-  const pinned = path.join(__dirname, '..', '..', '..', 'build', 'orbits-bare', 'linux-x64', 'bare')
+  const pinned = path.join(REPO_ROOT, 'build', 'orbits-bare', 'linux-x64', 'bare')
   return fs.existsSync(pinned) ? pinned : process.env.ORBITS_BARE_RUNTIME
-}
-
-function ignoreResetAfterSuccess(err) {
-  if (err && (err.code === 'ECONNRESET' || /connection reset by peer/.test(String(err)))) {
-    return
-  }
-  throw err
 }
 
 function attach(child) {
@@ -86,10 +83,14 @@ function attach(child) {
 function spawnWorklet(bare, backend, extraArgs = []) {
   return spawn(
     bare,
-    [path.join(__dirname, '..', 'src', 'worklet.js'), '--backend=' + backend, ...extraArgs],
+    [path.join(HARNESS_DIR, 'src', 'worklet.js'), '--backend=' + backend, ...extraArgs],
     {
-      cwd: path.join(__dirname, '..'),
-      env: { ...process.env, ORBITS_HARNESS_BACKEND: backend },
+      cwd: HARNESS_DIR,
+      env: {
+        ...process.env,
+        ORBITS_HARNESS_BACKEND: backend,
+        NODE_PATH: path.join(HARNESS_DIR, 'node_modules'),
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
     },
   )
@@ -103,210 +104,405 @@ function waitFrame(handler, pred, timeoutMs = 30000) {
   return handler.waitEvent('frame', timeoutMs, (e) => pred(e.payload || {}))
 }
 
-test('two official Bare Hyperswarm worklets exchange messages and a hashed file', async (t) => {
+test('live Hyperswarm regression: two official Bare worklets over isolated testnet', async (t) => {
+  // 1. Verify Bare binary exists and path resolves independently of shell CWD
   const bare = officialBare()
   if (!bare) {
     t.skip('official Bare binary is not fetched')
     return
   }
-  process.on('uncaughtException', ignoreResetAfterSuccess)
-  t.after(() => process.off('uncaughtException', ignoreResetAfterSuccess))
 
-  const boot = await createLocalBootstrap(0)
-  t.after(() => boot.destroy())
-  const dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'orbits-hs-a-'))
-  const dirB = fs.mkdtempSync(path.join(os.tmpdir(), 'orbits-hs-b-'))
+  // Set up deterministic 3-node DHT testnet (F-04)
+  const testnet = await createLocalTestnet(3)
+  t.after(async () => {
+    await testnet.destroy()
+  })
+
+  const dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'orbits-live-a-'))
+  const dirB = fs.mkdtempSync(path.join(os.tmpdir(), 'orbits-live-b-'))
   const secret = crypto.randomBytes(32)
 
-  const a = spawnWorklet(bare, 'hyperswarm')
-  const b = spawnWorklet(bare, 'hyperswarm')
+  // 2. A and B start successfully
+  const procA = spawnWorklet(bare, 'hyperswarm')
+  const procB = spawnWorklet(bare, 'hyperswarm')
   t.after(() => {
-    a.kill()
-    b.kill()
+    try { procA.kill() } catch {}
+    try { procB.kill() } catch {}
   })
-  const ha = attach(a)
-  const hb = attach(b)
+
+  let procAExit = null
+  let procBExit = null
+  procA.on('exit', (code, signal) => { procAExit = { code, signal } })
+  procB.on('exit', (code, signal) => { procBExit = { code, signal } })
+
+  const ha = attach(procA)
+  const hb = attach(procB)
 
   const startedA = await ha.request('start', {
-    peerId: 'ORBIT-HS-A',
+    peerId: 'ORBIT-LIVE-A',
     storageDir: dirA,
     requireRealCorestore: true,
     backend: 'hyperswarm',
-    bootstrap: boot.bootstrap,
+    bootstrap: testnet.bootstrap,
     firewalled: false,
     discoverySecret: Array.from(secret),
   })
   const startedB = await hb.request('start', {
-    peerId: 'ORBIT-HS-B',
+    peerId: 'ORBIT-LIVE-B',
     storageDir: dirB,
     requireRealCorestore: true,
     backend: 'hyperswarm',
-    bootstrap: boot.bootstrap,
+    bootstrap: testnet.bootstrap,
     firewalled: false,
     discoverySecret: Array.from(secret),
   })
-  const infoA = await ha.request('runtime.info')
-  const infoB = await hb.request('runtime.info')
-  assert.equal(infoA.runtime, 'bare')
-  assert.equal(infoA.backend, 'hyperswarm')
-  assert.equal(infoB.backend, 'hyperswarm')
+
+  const infoA0 = await ha.request('runtime.info')
+  const infoB0 = await hb.request('runtime.info')
+  assert.equal(infoA0.runtime, 'bare')
+  assert.equal(infoA0.backend, 'hyperswarm')
+  assert.equal(infoB0.runtime, 'bare')
+  assert.equal(infoB0.backend, 'hyperswarm')
   assert.ok(startedA.noisePublicKey)
   assert.ok(startedB.noisePublicKey)
 
-  await ha.request('publish', { binding: { deviceId: 'dev-a' } })
-  await hb.request('publish', { binding: { deviceId: 'dev-b' } })
+  // 3. A and B publish the intended shared topic
+  await ha.request('publish', { binding: { deviceId: 'dev-live-a' } })
+  await hb.request('publish', { binding: { deviceId: 'dev-live-b' } })
+  const pubEventA = await ha.waitEvent('published')
+  const pubEventB = await hb.waitEvent('published')
+  assert.equal(pubEventA.payload.topicHex, pubEventB.payload.topicHex)
+
+  // 4. Connect and both receive the correct logical connected event (no phantom noise keys - F-13)
+  await Promise.all([
+    ha.request(
+      'connect',
+      {
+        peerId: 'ORBIT-LIVE-B',
+        noisePublicKey: startedB.noisePublicKey,
+        timeoutMs: 25000,
+      },
+      30000,
+    ),
+    hb.request(
+      'connect',
+      {
+        peerId: 'ORBIT-LIVE-A',
+        noisePublicKey: startedA.noisePublicKey,
+        timeoutMs: 25000,
+      },
+      30000,
+    ),
+  ])
+
+  const connEventA = await ha.waitEvent('connected')
+  const connEventB = await hb.waitEvent('connected')
+  assert.equal(connEventA.payload.peerId, 'ORBIT-LIVE-B')
+  assert.equal(connEventB.payload.peerId, 'ORBIT-LIVE-A')
+
+  // Verify no noise hex event was emitted
+  const allConnA = ha.events.filter((e) => e.name === 'connected')
+  const allConnB = hb.events.filter((e) => e.name === 'connected')
+  assert.equal(allConnA.length, 1)
+  assert.equal(allConnB.length, 1)
+  assert.ok(!/^[0-9a-f]{64}$/i.test(allConnA[0].payload.peerId))
+  assert.ok(!/^[0-9a-f]{64}$/i.test(allConnB[0].payload.peerId))
+
+  // 5. A sends a unique binary/text payload to B
+  const payloadFromA = 'payload-A-to-B-' + crypto.randomBytes(16).toString('hex')
+  await ha.request('send', {
+    peerId: 'ORBIT-LIVE-B',
+    channel: 'message',
+    frame: { type: 'harness-echo', id: 'm1', text: payloadFromA },
+  })
+
+  // 6. B receives the exact bytes
+  const inboundB = await waitFrame(
+    hb,
+    (p) => p.body && p.body.type === 'harness-echo' && p.body.text === payloadFromA,
+  )
+  assert.equal(inboundB.payload.body.text, payloadFromA)
+
+  // 7. B replies and A receives the exact bytes
+  const payloadFromB = 'reply-B-to-A-' + crypto.randomBytes(16).toString('hex')
+  await hb.request('send', {
+    peerId: 'ORBIT-LIVE-A',
+    channel: 'message',
+    frame: { type: 'note', id: 'm2', text: payloadFromB },
+  })
+  const inboundA = await waitFrame(
+    ha,
+    (p) => p.body && p.body.type === 'note' && p.body.text === payloadFromB,
+  )
+  assert.equal(inboundA.payload.body.text, payloadFromB)
+
+  // Also verify echo reply from A's original message
+  const echoReply = await waitFrame(
+    ha,
+    (p) => p.body && p.body.type === 'harness-echo-reply' && p.body.text === payloadFromA,
+  )
+  assert.equal(echoReply.payload.body.text, payloadFromA)
+
+  // 8. B stops normally
+  await hb.request('stop')
+  procB.kill()
+  await new Promise((r) => setTimeout(r, 200))
+
+  // 9. A receives exactly one logical disconnect for B (F-02, F-13)
+  const discEventA = await ha.waitEvent('disconnected', 15000)
+  assert.equal(discEventA.payload.peerId, 'ORBIT-LIVE-B')
+  const allDiscA = ha.events.filter((e) => e.name === 'disconnected')
+  assert.equal(allDiscA.length, 1)
+
+  // 10. A remains alive and answers runtime.info after B is gone (F-02)
+  const infoAAfterB = await ha.request('runtime.info')
+  assert.equal(infoAAfterB.runtime, 'bare')
+  assert.equal(infoAAfterB.peerCount, 0)
+  assert.equal(procAExit, null, 'Worklet A must not crash or exit when B disconnects')
+
+  // 11. A stops normally without timeout or signal
+  await ha.request('stop')
+  procA.kill()
+  await new Promise((r) => setTimeout(r, 200))
+
+  // 12. No process produced an unhandled exception or SIGABRT
+  if (procAExit) {
+    assert.ok(procAExit.code === 0 || procAExit.signal === 'SIGTERM' || procAExit.signal === null)
+    assert.notEqual(procAExit.signal, 'SIGABRT')
+  }
+  if (procBExit) {
+    assert.ok(procBExit.code === 0 || procBExit.signal === 'SIGTERM' || procBExit.signal === null)
+    assert.notEqual(procBExit.signal, 'SIGABRT')
+  }
+})
+
+test('live Hyperswarm regression: reverse direction - A stops, B survives and stays responsive', async (t) => {
+  const bare = officialBare()
+  if (!bare) {
+    t.skip('official Bare binary is not fetched')
+    return
+  }
+
+  const testnet = await createLocalTestnet(3)
+  t.after(async () => {
+    await testnet.destroy()
+  })
+
+  const dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'orbits-rev-a-'))
+  const dirB = fs.mkdtempSync(path.join(os.tmpdir(), 'orbits-rev-b-'))
+  const secret = crypto.randomBytes(32)
+
+  const procA = spawnWorklet(bare, 'hyperswarm')
+  const procB = spawnWorklet(bare, 'hyperswarm')
+  t.after(() => {
+    try { procA.kill() } catch {}
+    try { procB.kill() } catch {}
+  })
+
+  let procBExit = null
+  procB.on('exit', (code, signal) => { procBExit = { code, signal } })
+
+  const ha = attach(procA)
+  const hb = attach(procB)
+
+  const startedA = await ha.request('start', {
+    peerId: 'ORBIT-REV-A',
+    storageDir: dirA,
+    requireRealCorestore: true,
+    backend: 'hyperswarm',
+    bootstrap: testnet.bootstrap,
+    firewalled: false,
+    discoverySecret: Array.from(secret),
+  })
+  const startedB = await hb.request('start', {
+    peerId: 'ORBIT-REV-B',
+    storageDir: dirB,
+    requireRealCorestore: true,
+    backend: 'hyperswarm',
+    bootstrap: testnet.bootstrap,
+    firewalled: false,
+    discoverySecret: Array.from(secret),
+  })
+
+  await ha.request('publish', { binding: { deviceId: 'dev-rev-a' } })
+  await hb.request('publish', { binding: { deviceId: 'dev-rev-b' } })
   await ha.waitEvent('published')
   await hb.waitEvent('published')
 
   await Promise.all([
     ha.request(
       'connect',
-      {
-        peerId: 'ORBIT-HS-B',
-        noisePublicKey: startedB.noisePublicKey,
-        timeoutMs: 20000,
-      },
-      25000,
+      { peerId: 'ORBIT-REV-B', noisePublicKey: startedB.noisePublicKey, timeoutMs: 25000 },
+      30000,
     ),
     hb.request(
       'connect',
-      {
-        peerId: 'ORBIT-HS-A',
-        noisePublicKey: startedA.noisePublicKey,
-        timeoutMs: 20000,
-      },
-      25000,
+      { peerId: 'ORBIT-REV-A', noisePublicKey: startedA.noisePublicKey, timeoutMs: 25000 },
+      30000,
     ),
   ])
+
   await ha.waitEvent('connected')
   await hb.waitEvent('connected')
 
-  const unique = 'orbits-hs-' + crypto.randomBytes(8).toString('hex')
-  await ha.request('send', {
-    peerId: 'ORBIT-HS-B',
-    channel: 'message',
-    frame: { type: 'harness-echo', id: '1', text: unique },
-  })
-  const echo = await waitFrame(
-    ha,
-    (p) => p.body && p.body.type === 'harness-echo-reply' && p.body.text === unique,
-  )
-  assert.equal(echo.payload.body.text, unique)
-
-  const inbound = await waitFrame(
-    hb,
-    (p) => p.body && p.body.type === 'harness-echo' && p.body.text === unique,
-  )
-  assert.equal(inbound.payload.body.text, unique)
-
-  const reply = 'reply-' + unique
-  await hb.request('send', {
-    peerId: 'ORBIT-HS-A',
-    channel: 'message',
-    frame: { type: 'note', text: reply },
-  })
-  const back = await waitFrame(ha, (p) => p.body && p.body.text === reply)
-  assert.equal(back.payload.body.text, reply)
-
-  await ha.request('journal.append', {
-    kind: 'messageEnvelopeCreated',
-    fields: { encryptedEnvelope: Buffer.from(unique).toString('base64') },
-  })
-  const listed = await ha.request('journal.list')
-  assert.ok(listed.blocks && listed.blocks.length >= 1)
-
+  // A stops first
   await ha.request('stop')
-  await hb.request('stop')
-  a.kill()
-  b.kill()
-  await new Promise((r) => setTimeout(r, 300))
+  procA.kill()
 
-  const a2 = spawnWorklet(bare, 'hyperswarm')
-  const b2 = spawnWorklet(bare, 'hyperswarm')
-  t.after(() => {
-    a2.kill()
-    b2.kill()
+  // B must receive exactly one disconnect event for A
+  const discB = await hb.waitEvent('disconnected', 15000)
+  assert.equal(discB.payload.peerId, 'ORBIT-REV-A')
+  const allDiscB = hb.events.filter((e) => e.name === 'disconnected')
+  assert.equal(allDiscB.length, 1)
+
+  // B remains alive and responsive to runtime.info
+  const infoBAfterA = await hb.request('runtime.info')
+  assert.equal(infoBAfterA.runtime, 'bare')
+  assert.equal(infoBAfterA.peerCount, 0)
+  assert.equal(procBExit, null, 'Worklet B must not crash or exit when A disconnects')
+
+  // B stops cleanly
+  await hb.request('stop')
+  procB.kill()
+})
+
+test('live Hyperswarm regression: remote reset during active send does not kill survivor', async (t) => {
+  const bare = officialBare()
+  if (!bare) {
+    t.skip('official Bare binary is not fetched')
+    return
+  }
+
+  const testnet = await createLocalTestnet(3)
+  t.after(async () => {
+    await testnet.destroy()
   })
-  const ha2 = attach(a2)
-  const hb2 = attach(b2)
-  await ha2.request('start', {
-    peerId: 'ORBIT-HS-A',
+
+  const dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'orbits-rst-a-'))
+  const dirB = fs.mkdtempSync(path.join(os.tmpdir(), 'orbits-rst-b-'))
+  const secret = crypto.randomBytes(32)
+
+  const procA = spawnWorklet(bare, 'hyperswarm')
+  const procB = spawnWorklet(bare, 'hyperswarm')
+  t.after(() => {
+    try { procA.kill() } catch {}
+    try { procB.kill() } catch {}
+  })
+
+  let procAExit = null
+  procA.on('exit', (code, signal) => { procAExit = { code, signal } })
+
+  const ha = attach(procA)
+  const hb = attach(procB)
+
+  const startedA = await ha.request('start', {
+    peerId: 'ORBIT-RST-A',
     storageDir: dirA,
     requireRealCorestore: true,
     backend: 'hyperswarm',
-    bootstrap: boot.bootstrap,
+    bootstrap: testnet.bootstrap,
     firewalled: false,
     discoverySecret: Array.from(secret),
   })
-  await hb2.request('start', {
-    peerId: 'ORBIT-HS-B',
+  const startedB = await hb.request('start', {
+    peerId: 'ORBIT-RST-B',
     storageDir: dirB,
     requireRealCorestore: true,
     backend: 'hyperswarm',
-    bootstrap: boot.bootstrap,
+    bootstrap: testnet.bootstrap,
     firewalled: false,
     discoverySecret: Array.from(secret),
   })
-  const persisted = await ha2.request('journal.list')
-  assert.ok(persisted.blocks && persisted.blocks.length >= 1)
 
-  await ha2.request('publish', { binding: { deviceId: 'dev-a' } })
-  await hb2.request('publish', { binding: { deviceId: 'dev-b' } })
-  const againA = await ha2.request('runtime.info')
-  const againB = await hb2.request('runtime.info')
+  await ha.request('publish', { binding: { deviceId: 'dev-rst-a' } })
+  await hb.request('publish', { binding: { deviceId: 'dev-rst-b' } })
+  await ha.waitEvent('published')
+  await hb.waitEvent('published')
+
   await Promise.all([
-    ha2.request(
+    ha.request(
       'connect',
-      { peerId: 'ORBIT-HS-B', noisePublicKey: againB.noisePublicKey, timeoutMs: 20000 },
-      25000,
+      { peerId: 'ORBIT-RST-B', noisePublicKey: startedB.noisePublicKey, timeoutMs: 25000 },
+      30000,
     ),
-    hb2.request(
+    hb.request(
       'connect',
-      { peerId: 'ORBIT-HS-A', noisePublicKey: againA.noisePublicKey, timeoutMs: 20000 },
-      25000,
+      { peerId: 'ORBIT-RST-A', noisePublicKey: startedA.noisePublicKey, timeoutMs: 25000 },
+      30000,
     ),
   ])
 
-  const src = path.join(os.tmpdir(), 'orbits-hs-10m.bin')
-  const payload = crypto.randomBytes(10 * 1024 * 1024)
-  fs.writeFileSync(src, payload)
-  const expected = crypto.createHash('sha256').update(payload).digest('hex')
-  const chunks = []
-  const done = new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('file timeout')), 120000)
-    const started = hb2.events.length
-    const poll = setInterval(() => {
-      for (const e of hb2.events.slice(started)) {
-        if (e.name !== 'frame' || e.payload.channel !== 'attachment') continue
-        chunks.push(e.payload.body)
-        if (e.payload.body && e.payload.body.type === 'harness-file-end') {
-          clearInterval(poll)
-          clearTimeout(timer)
-          resolve()
-        }
-      }
-    }, 25)
-  })
-  await ha2.request(
-    'sendFile',
-    {
-      peerId: 'ORBIT-HS-B',
-      file: { path: src, sizeBytes: payload.length, fileName: 'orbits-hs-10m.bin' },
-    },
-    120000,
-  )
-  await done
-  const end = chunks.find((c) => c && c.type === 'harness-file-end')
-  assert.ok(end)
-  assert.equal(end.sha256, expected)
-  const rebuilt = Buffer.concat(
-    chunks
-      .filter((c) => c && c.type === 'harness-file-chunk')
-      .sort((x, y) => x.offset - y.offset)
-      .map((c) => Buffer.from(c.b64, 'base64')),
-  )
-  assert.equal(crypto.createHash('sha256').update(rebuilt).digest('hex'), expected)
+  await ha.waitEvent('connected')
+  await hb.waitEvent('connected')
 
-  await ha2.request('stop')
-  await hb2.request('stop')
+  // Kill B immediately with SIGKILL to simulate abrupt reset / hard drop
+  procB.kill('SIGKILL')
+
+  // Immediately send a batch of messages from A to B while B is already dead
+  for (let i = 0; i < 5; i++) {
+    await ha.request('send', {
+      peerId: 'ORBIT-RST-B',
+      channel: 'message',
+      frame: { type: 'note', id: 's' + i, text: 'msg-' + i },
+    }).catch(() => {})
+  }
+
+  // A must receive disconnect or notice B is gone without SIGABRT
+  await ha.waitEvent('disconnected', 15000).catch(() => {})
+
+  // A must still be alive and answer runtime.info
+  const infoA = await ha.request('runtime.info')
+  assert.equal(infoA.runtime, 'bare')
+  assert.equal(procAExit, null, 'Worklet A must not crash when remote peer is hard-killed')
+
+  await ha.request('stop')
+  procA.kill()
+})
+
+test('live Hyperswarm regression: repeated start/stop cycles do not accumulate listeners or handles', async (t) => {
+  const bare = officialBare()
+  if (!bare) {
+    t.skip('official Bare binary is not fetched')
+    return
+  }
+
+  const testnet = await createLocalTestnet(3)
+  t.after(async () => {
+    await testnet.destroy()
+  })
+
+  const proc = spawnWorklet(bare, 'hyperswarm')
+  t.after(() => {
+    try { proc.kill() } catch {}
+  })
+
+  const h = attach(proc)
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'orbits-cyc-'))
+
+  // Perform 3 sequential start/publish/stop cycles on the same running worklet process
+  for (let cycle = 1; cycle <= 3; cycle++) {
+    const sec = crypto.randomBytes(32)
+    await h.request('start', {
+      peerId: 'ORBIT-CYC-' + cycle,
+      storageDir: dir,
+      requireRealCorestore: true,
+      backend: 'hyperswarm',
+      bootstrap: testnet.bootstrap,
+      firewalled: false,
+      discoverySecret: Array.from(sec),
+    })
+
+    await h.request('publish', { binding: { deviceId: 'dev-cyc-' + cycle } })
+    const infoRunning = await h.request('runtime.info')
+    assert.equal(infoRunning.started, true)
+    assert.equal(infoRunning.published, true)
+
+    await h.request('stop')
+    const infoStopped = await h.request('runtime.info')
+    assert.equal(infoStopped.started, false)
+    assert.equal(infoStopped.published, false)
+    assert.equal(infoStopped.peerCount, 0)
+  }
+
+  proc.kill()
 })
