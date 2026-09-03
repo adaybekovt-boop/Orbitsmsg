@@ -10,6 +10,7 @@ set(PLUGIN_NAME "orbits_transport_linux_plugin")
 add_library(${PLUGIN_NAME} SHARED
   "orbits_transport_plugin.cc"
   "orbits_transport_plugin_registrar.cc"
+  "orbits_bare_spawn.cc"
 )
 
 apply_standard_settings(${PLUGIN_NAME})
@@ -21,7 +22,18 @@ target_include_directories(${PLUGIN_NAME} INTERFACE
 target_link_libraries(${PLUGIN_NAME} PRIVATE flutter)
 target_link_libraries(${PLUGIN_NAME} PRIVATE PkgConfig::GTK)
 
-set(orbits_transport_linux_bundled_libraries
-  ""
-  PARENT_SCOPE
-)
+set(_orbits_bare_bin "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/orbits-bare/linux-x64/bare")
+if(NOT EXISTS "${_orbits_bare_bin}")
+  set(_orbits_bare_bin "${CMAKE_CURRENT_SOURCE_DIR}/../../../build/orbits-bare/linux-arm64/bare")
+endif()
+if(EXISTS "${_orbits_bare_bin}")
+  set(orbits_transport_linux_bundled_libraries
+    "${_orbits_bare_bin}"
+    PARENT_SCOPE
+  )
+else()
+  set(orbits_transport_linux_bundled_libraries
+    ""
+    PARENT_SCOPE
+  )
+endif()

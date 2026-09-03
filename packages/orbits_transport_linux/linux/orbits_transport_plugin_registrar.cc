@@ -102,6 +102,15 @@ static FlMethodResponse* reply_host(int code) {
       return FL_METHOD_RESPONSE(fl_method_error_response_new(
           "BARE_RUNTIME_MISSING", "linked Bare runtime is not shipped",
           nullptr));
+    case kOrbitsHostRuntimeTampered:
+      return FL_METHOD_RESPONSE(fl_method_error_response_new(
+          "BUNDLE_TAMPERED", "local runtime hash mismatch", nullptr));
+    case kOrbitsHostTimeout:
+      return FL_METHOD_RESPONSE(fl_method_error_response_new(
+          "TIMEOUT", "bare host startup timed out", nullptr));
+    case kOrbitsHostCrashed:
+      return FL_METHOD_RESPONSE(
+          fl_method_error_response_new("CRASHED", "bare host crashed", nullptr));
     default:
       return FL_METHOD_RESPONSE(fl_method_error_response_new(
           "HOST_ERROR", "transport host rejected the request", nullptr));

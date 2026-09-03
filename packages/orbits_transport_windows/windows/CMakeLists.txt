@@ -12,6 +12,7 @@ add_library(${PLUGIN_NAME} SHARED
   "orbits_transport_host.h"
   "orbits_transport_plugin.cpp"
   "orbits_transport_plugin_registrar.cpp"
+  "orbits_bare_spawn.cpp"
 )
 
 apply_standard_settings(${PLUGIN_NAME})

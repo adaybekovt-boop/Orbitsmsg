@@ -117,8 +117,11 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
       result.error("BUNDLE_TAMPERED", "local bundle hash mismatch", null)
       return
     }
-    // A linked Bare binary is not shipped in this tree. Success would
-    // be a false send path. Fail closed until the artifact exists.
+    if (OrbitsBareRuntime.tryStart(call)) {
+      started = true
+      result.success(null)
+      return
+    }
     result.error(
       "BARE_RUNTIME_MISSING",
       "linked Bare runtime is not shipped",

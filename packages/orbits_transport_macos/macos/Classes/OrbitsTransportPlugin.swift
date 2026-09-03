@@ -101,6 +101,11 @@ public class OrbitsTransportPlugin: NSObject, FlutterPlugin {
       result(FlutterError(code: "BUNDLE_TAMPERED", message: "local bundle hash mismatch", details: nil))
       return
     }
+    if OrbitsBareRuntime.tryStart() {
+      started = true
+      result(nil)
+      return
+    }
     result(
       FlutterError(
         code: "BARE_RUNTIME_MISSING",

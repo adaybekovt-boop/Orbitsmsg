@@ -36,6 +36,10 @@ class BareHostMachine {
   bool suspended = false;
   bool published = false;
   bool crashed = false;
+  bool ready = false;
+  int restartCount = 0;
+  int restartBudget = 3;
+  Duration startupTimeout = const Duration(seconds: 8);
   String? lastError;
   final List<String> calls = <String>[];
 
@@ -45,6 +49,7 @@ class BareHostMachine {
     _assertIpcVersion(config);
     calls.add('start');
     started = true;
+    ready = true;
     suspended = false;
     crashed = false;
     lastError = null;
@@ -53,6 +58,7 @@ class BareHostMachine {
   void stop() {
     calls.add('stop');
     started = false;
+    ready = false;
     published = false;
     suspended = false;
     crashed = false;
@@ -129,6 +135,7 @@ class BareHostMachine {
     calls.add('crash');
     crashed = true;
     started = false;
+    ready = false;
     published = false;
     suspended = false;
     lastError = 'startup_failed';
@@ -136,6 +143,13 @@ class BareHostMachine {
 
   void recover(Map<String, Object?> config) {
     calls.add('recover');
+    if (restartCount >= restartBudget) {
+      throw BareHostException(
+        kBareErrorRuntimeMissing,
+        'restart budget exceeded',
+      );
+    }
+    restartCount += 1;
     start(config);
   }
 

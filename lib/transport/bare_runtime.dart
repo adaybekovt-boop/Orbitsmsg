@@ -60,12 +60,28 @@ BareRuntimeLaunch resolveBareRuntime(
 }
 
 File? _localBareBinary() {
-  final names = Platform.isWindows
-      ? const ['tool/bare/bare.exe', 'tool/bare/bare']
-      : const ['tool/bare/bare', 'tool/bare/bare.exe'];
+  final names = <String>[
+    if (Platform.isLinux) ...[
+      'build/orbits-bare/linux-x64/bare',
+      'build/orbits-bare/linux-arm64/bare',
+    ],
+    if (Platform.isMacOS) ...[
+      'build/orbits-bare/darwin-arm64/bare',
+      'build/orbits-bare/darwin-x64/bare',
+    ],
+    if (Platform.isWindows) ...[
+      'build/orbits-bare/win32-x64/bare.exe',
+      'build/orbits-bare/win32-arm64/bare.exe',
+    ],
+    if (Platform.isWindows) 'tool/bare/bare.exe' else 'tool/bare/bare',
+    if (Platform.isWindows) 'tool/bare/bare' else 'tool/bare/bare.exe',
+  ];
   for (final name in names) {
     final file = File(name);
-    if (file.existsSync()) return file;
+    if (!file.existsSync()) continue;
+    final sidecar = File('${file.path}.sha256');
+    if (!sidecar.existsSync()) continue;
+    return file;
   }
   return null;
 }

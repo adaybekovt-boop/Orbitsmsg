@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "orbits_bare_spawn.h"
 #include "orbits_transport_host.h"
 
 static bool looks_remote(const char* url) {
@@ -46,11 +47,17 @@ int orbits_bare_host_start(OrbitsBareHost* host, bool remote_js,
       strcmp(expected_sha, actual_sha) != 0) {
     return kOrbitsHostBundleTampered;
   }
-  return kOrbitsHostBareMissing;  // linked Bare runtime is not shipped
+  const int launched = orbits_bare_try_launch(host);
+  if (launched != kOrbitsHostOk) {
+    return launched;
+  }
+  host->started = true;
+  return kOrbitsHostOk;
 }
 
 int orbits_bare_host_stop(OrbitsBareHost* host) {
   if (host == nullptr) return kOrbitsHostMalformed;
+  orbits_bare_host_kill(host);
   host->started = false;
   host->suspended = false;
   host->published = false;

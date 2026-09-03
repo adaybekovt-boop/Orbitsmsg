@@ -17,12 +17,19 @@ enum OrbitsHostCode {
   kOrbitsHostAbiMismatch = -9,
   kOrbitsHostMalformed = -10,
   kOrbitsHostBareMissing = -11,
+  kOrbitsHostRuntimeTampered = -12,
+  kOrbitsHostTimeout = -13,
+  kOrbitsHostCrashed = -14,
 };
 
 struct OrbitsBareHost {
   int started;
   int suspended;
   int published;
+  int child_pid;
+  int stdin_fd;
+  int stdout_fd;
+  int restart_count;
 };
 
 int orbits_transport_start(int remote_js, const char* remote_js_url);
