@@ -5,15 +5,13 @@
  * Does not load remote executable JS.
  */
 
-const fs = require('node:fs')
-const os = require('node:os')
-const path = require('node:path')
-const { createHash } = require('node:crypto')
+const { fs, os, path, crypto, process, ipcChannel, isBare } = require('./bare_compat')
+const { createHash } = crypto
 const { encodeMux, MuxDecoder } = require('./mux')
 const { contactDiscoveryTopic } = require('./discovery')
 const { LoopbackBackend } = require('./loopback')
 const { REQUEST, RESPONSE, EVENT, encode, Decoder } = require('./ipc')
-const { CorestoreJournal } = require('./corestore_journal')
+const { openJournal } = require('./corestore_journal')
 
 const FILE_CHUNK = 64 * 1024
 
@@ -39,13 +37,23 @@ class Worklet {
     this._config = null
     this._topic = null
     this.events = []
-    this._journal = new CorestoreJournal('local-device')
+    this._journal = null
     this._emit = opts.emit || ((name, payload) => this.events.push({ name, payload }))
   }
 
   async start(config) {
     this._config = config
     this._started = true
+    const storageDir =
+      config.storageDir ||
+      (isBare || config.requireRealCorestore
+        ? path.join(os.tmpdir(), 'orbits-corestore', config.peerId || 'local')
+        : undefined)
+    this._journal = await openJournal({
+      writerDeviceId: config.writerDeviceId || config.peerId || 'local-device',
+      storageDir,
+      requireReal: config.requireRealCorestore === true || isBare,
+    })
     if (this.backend === 'loopback') {
       await this._loop.listen()
       this._loop.on('connection', (sock, info) => this._onConn(sock, info))
@@ -232,6 +240,9 @@ class Worklet {
     this._peers.clear()
     if (this._swarm) await this._swarm.destroy()
     await this._loop.destroy()
+    if (this._journal && typeof this._journal.close === 'function') {
+      await this._journal.close()
+    }
     this._started = false
   }
 
@@ -314,30 +325,46 @@ async function handleIpcRequest(worklet, body) {
       await worklet.refreshNetwork()
       return {}
     case 'journal.append':
-      return worklet._journal.append(params)
+      return await worklet._journal.append(params)
     case 'journal.list':
-      return { blocks: worklet._journal.list() }
+      return { blocks: await worklet._journal.list() }
+    case 'runtime.info':
+      return {
+        runtime: isBare ? 'bare' : 'node',
+        backend: worklet.backend,
+        journal: worklet._journal && worklet._journal.backend,
+        version: 'orbits-bare-ipc-v1',
+      }
     default:
       throw new Error('unknown method ' + method)
   }
 }
 
-if (require.main === module) {
+function isMain() {
+  if (typeof require !== 'undefined' && require.main === module) return true
+  if (isBare && process.argv && process.argv[1] && String(process.argv[1]).endsWith('worklet.js')) {
+    return true
+  }
+  return false
+}
+
+if (isMain()) {
+  const channel = ipcChannel()
   const worklet = new Worklet({
-    backend: process.env.ORBITS_HARNESS_BACKEND || 'loopback',
+    backend: (process.env && process.env.ORBITS_HARNESS_BACKEND) || 'loopback',
     emit: (name, payload) => {
-      process.stdout.write(encode(EVENT, { name, payload }))
+      channel.write(encode(EVENT, { name, payload }))
     },
   })
   const decoder = new Decoder()
-  process.stdin.on('data', async (chunk) => {
+  channel.onData(async (chunk) => {
     for (const msg of decoder.add(chunk)) {
       if (msg.type !== REQUEST) continue
       try {
         const result = await handleIpcRequest(worklet, msg.body)
-        process.stdout.write(encode(RESPONSE, { id: msg.body.id, ok: true, result }))
+        channel.write(encode(RESPONSE, { id: msg.body.id, ok: true, result }))
       } catch (err) {
-        process.stdout.write(
+        channel.write(
           encode(RESPONSE, { id: msg.body.id, ok: false, error: String(err.message || err) }),
         )
       }

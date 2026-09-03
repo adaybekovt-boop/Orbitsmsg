@@ -18,7 +18,8 @@ async function createHyperswarmBackend(opts = {}) {
     bootstrap: opts.bootstrap,
     keyPair: opts.keyPair,
     seed: opts.seed,
-    firewall: opts.firewall,
+    firewall: opts.firewall || (() => false),
+    dht: opts.dht,
   })
   return {
     swarm,
@@ -47,7 +48,11 @@ async function createHyperswarmBackend(opts = {}) {
     },
     onConnection(fn) {
       swarm.on('connection', (conn, info) => {
-        const relayed = Boolean(info && (info.relayed || info.client === false && conn.rawStream && conn.rawStream.relayed))
+        const relayed = Boolean(
+          info &&
+            (info.relayed ||
+              (info.client === false && conn.rawStream && conn.rawStream.relayed)),
+        )
         fn(conn, {
           publicKey: info.publicKey,
           path: relayed ? 'relay' : 'direct',
@@ -58,14 +63,20 @@ async function createHyperswarmBackend(opts = {}) {
   }
 }
 
-async function createLocalBootstrap() {
+async function createLocalBootstrap(port) {
   const DHT = require('hyperdht')
-  const node = new DHT({ ephemeral: true, bootstrap: [] })
+  const bindPort = port || 0
+  let node
+  if (bindPort && typeof DHT.bootstrapper === 'function') {
+    node = DHT.bootstrapper(bindPort, '127.0.0.1')
+  } else {
+    node = new DHT({ ephemeral: false, bootstrap: [], host: '127.0.0.1', firewalled: false })
+  }
   await node.ready()
-  const { host, port } = node.address()
+  const addr = node.address()
   return {
     node,
-    bootstrap: [{ host: host || '127.0.0.1', port }],
+    bootstrap: [{ host: '127.0.0.1', port: addr.port }],
     async destroy() {
       await node.destroy()
     },

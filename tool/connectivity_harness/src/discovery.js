@@ -1,6 +1,7 @@
 'use strict'
 
-const { createHash } = require('node:crypto')
+const { crypto } = require('./bare_compat')
+const { createHash } = crypto
 
 const CONTACT_INFO = 'orbits-contact-discovery-v1'
 const ROOM_INFO = 'orbits-room-discovery-v1'
