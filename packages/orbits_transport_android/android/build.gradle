@@ -22,6 +22,28 @@ rootProject.allprojects {
 apply plugin: "com.android.library"
 apply plugin: "kotlin-android"
 
+def orbitsBareKitAndroid = {
+    def candidates = []
+    def fromEnv = System.getenv("ORBITS_BARE_KIT")
+    if (fromEnv != null && !fromEnv.isEmpty()) {
+        candidates.add(file("${fromEnv}/android/bare-kit"))
+        candidates.add(file(fromEnv))
+    }
+    def cache = System.getenv("ORBITS_BARE_CACHE")
+    if (cache != null && !cache.isEmpty()) {
+        candidates.add(file("${cache}/bare-kit/android/bare-kit"))
+    }
+    def cur = project.projectDir
+    while (cur != null) {
+        if (file("${cur}/tool/bare/pins.json").isFile()) {
+            candidates.add(file("${cur}/build/orbits-bare/bare-kit/android/bare-kit"))
+            break
+        }
+        cur = cur.parentFile
+    }
+    return candidates.find { it.directory && file("${it}/classes.jar").isFile() }
+}()
+
 android {
     namespace = "app.orbits.transport"
     compileSdk = 36
@@ -34,9 +56,15 @@ android {
     }
     sourceSets {
         main.java.srcDirs += "src/main/kotlin"
+        if (orbitsBareKitAndroid != null && file("${orbitsBareKitAndroid}/jni").directory) {
+            main.jniLibs.srcDirs += file("${orbitsBareKitAndroid}/jni")
+        }
     }
 }
 
 dependencies {
     implementation("androidx.annotation:annotation:1.9.1")
+    if (orbitsBareKitAndroid != null) {
+        implementation files("${orbitsBareKitAndroid}/classes.jar")
+    }
 }

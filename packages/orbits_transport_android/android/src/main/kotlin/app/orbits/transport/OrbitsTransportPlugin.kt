@@ -5,21 +5,25 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
 /// Android Bare host. The worklet bundle is embedded at build time.
-/// Production must not fetch remote JS. The Bare binary is not linked
-/// in this tree yet — start succeeds only for a local bundle.
+/// Production must not fetch remote JS. Official BareKit is linked
+/// only when a verified local classes.jar is present; otherwise start
+/// stays fail-closed.
 class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
   private lateinit var channel: MethodChannel
+  private var engineBinding: FlutterPlugin.FlutterPluginBinding? = null
   private var started = false
   private var suspended = false
   private var published = false
 
   override fun onAttachedToEngine(binding: FlutterPlugin.FlutterPluginBinding) {
+    engineBinding = binding
     channel = MethodChannel(binding.binaryMessenger, "app.orbits/transport")
     channel.setMethodCallHandler(this)
   }
 
   override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
     channel.setMethodCallHandler(null)
+    engineBinding = null
     started = false
     suspended = false
     published = false
@@ -117,7 +121,7 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
       result.error("BUNDLE_TAMPERED", "local bundle hash mismatch", null)
       return
     }
-    if (OrbitsBareRuntime.tryStart(call)) {
+    if (OrbitsBareRuntime.tryStart(call, engineBinding)) {
       started = true
       result.success(null)
       return

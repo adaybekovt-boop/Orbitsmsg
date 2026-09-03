@@ -79,6 +79,9 @@ jobs:
       - name: Analyze each package in its own graph
         run: bash tool/ci/analyze_packages.sh
 
+      - name: Verify BareKit mobile hooks (no prebuilds download)
+        run: bash tool/bare/verify-kit-hooks.sh
+
       - name: Compile and run fail-closed host translation units
         run: |
           set -euo pipefail

@@ -172,17 +172,97 @@ for key in wanted:
     print(f"verified {key} {binary} sha256={actual}")
 
 if only == "--kit":
+    import shutil
+    import zipfile
+
     kit = pins["bareKit"]["prebuilds"]
     url = kit["url"]
     dest = cache_root / "bare-kit"
     dest.mkdir(parents=True, exist_ok=True)
     zpath = dest / "prebuilds.zip"
-    download(url, zpath, timeout=300)
-    digest = sha256_file(zpath)
     pinned = kit.get("sha256")
+    if not pinned:
+        raise SystemExit(
+            "BARE_RUNTIME_MISSING: pins.json bareKit.prebuilds.sha256 is null"
+        )
+    if not zpath.is_file() or sha256_file(zpath) != pinned:
+        download(url, zpath, timeout=900)
+    digest = sha256_file(zpath)
     sidecar = dest / "prebuilds.zip.sha256"
     sidecar.write_text(digest + "\n")
-    if pinned and digest != pinned:
+    if digest != pinned:
+        zpath.unlink(missing_ok=True)
         raise SystemExit(f"prebuilds.zip sha256 {digest} != pinned {pinned}")
+
+    extract_root = dest / "extract"
+    if extract_root.exists():
+        shutil.rmtree(extract_root)
+    extract_root.mkdir(parents=True, exist_ok=True)
+
+    extracted = []
+    with zipfile.ZipFile(zpath) as zf:
+        for info in zf.infolist():
+            name = info.filename.replace("\\", "/")
+            if name.startswith("android/bare-kit/") or name == "android/bare-kit":
+                zf.extract(info, extract_root)
+                extracted.append(name)
+            elif name.startswith("ios/BareKit.xcframework/") or name == "ios/BareKit.xcframework":
+                zf.extract(info, extract_root)
+                extracted.append(name)
+            elif name.startswith("macos/BareKit.xcframework/") or name == "macos/BareKit.xcframework":
+                zf.extract(info, extract_root)
+                extracted.append(name)
+            elif name in {"LICENSE", "NOTICE"} or name.endswith("/LICENSE") or name.endswith("/NOTICE"):
+                zf.extract(info, extract_root)
+                extracted.append(name)
+    if not extracted:
+        raise SystemExit("BARE_RUNTIME_MISSING: prebuilds.zip had no android/ios BareKit tree")
+
+    android_src = extract_root / "android" / "bare-kit"
+    ios_src = extract_root / "ios" / "BareKit.xcframework"
+    macos_src = extract_root / "macos" / "BareKit.xcframework"
+    android_dst = dest / "android" / "bare-kit"
+    ios_dst = dest / "ios" / "BareKit.xcframework"
+    macos_dst = dest / "macos" / "BareKit.xcframework"
+    if android_src.is_dir():
+        if android_dst.exists():
+            shutil.rmtree(android_dst)
+        shutil.copytree(android_src, android_dst)
+    if ios_src.is_dir():
+        if ios_dst.exists():
+            shutil.rmtree(ios_dst)
+        shutil.copytree(ios_src, ios_dst)
+    if macos_src.is_dir():
+        if macos_dst.exists():
+            shutil.rmtree(macos_dst)
+        shutil.copytree(macos_src, macos_dst)
+
+    license_src = next(extract_root.rglob("LICENSE"), None)
+    if license_src and license_src.is_file():
+        (dest / "LICENSE").write_bytes(license_src.read_bytes())
+    notice_src = next(extract_root.rglob("NOTICE"), None)
+    if notice_src and notice_src.is_file():
+        (dest / "NOTICE").write_bytes(notice_src.read_bytes())
+
+    layout = {
+        "sha256": digest,
+        "android": str(android_dst) if android_dst.is_dir() else None,
+        "ios": str(ios_dst) if ios_dst.is_dir() else None,
+        "macos": str(macos_dst) if macos_dst.is_dir() else None,
+        "classesJar": str(android_dst / "classes.jar")
+        if (android_dst / "classes.jar").is_file()
+        else None,
+    }
+    (dest / "layout.json").write_text(json.dumps(layout, indent=2) + "\n")
+    if not layout["classesJar"] and not layout["ios"]:
+        raise SystemExit(
+            "BARE_RUNTIME_MISSING: extracted tree missing classes.jar and BareKit.xcframework"
+        )
     print(f"verified bare-kit prebuilds.zip sha256={digest}")
+    if layout["android"]:
+        print(f"extracted android/bare-kit -> {android_dst}")
+    if layout["ios"]:
+        print(f"extracted ios/BareKit.xcframework -> {ios_dst}")
+    if layout["macos"]:
+        print(f"extracted macos/BareKit.xcframework -> {macos_dst}")
 PY

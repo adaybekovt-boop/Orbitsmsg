@@ -12,9 +12,12 @@ PeerJS remains the live default. Rooms stay host-plaintext.
   before `flutter build`. The worklet tree (`src` + `node_modules`) is
   installed to `data/orbits-worklet` when `npm ci` has run.
 - Official `bare-kit` 2.4.3 host APIs on Android/iOS (`canImport` /
-  reflection). The 396MB `prebuilds.zip` is fetched only with
-  `tool/bare/fetch-official-runtime.sh --kit` and is **not** in the
-  default mobile CI path.
+  reflection against `Worklet` / `BareWorklet`). Gradle and the iOS
+  podspec consume a **local** verified `android/bare-kit` (`classes.jar`
+  + `jni`) or `BareKit.xcframework` when
+  `tool/bare/fetch-official-runtime.sh --kit` has extracted them under
+  `build/orbits-bare/bare-kit/`. The 396MB `prebuilds.zip` sha256 is
+  pinned in `pins.json`. Default mobile CI does **not** download it.
 - The existing `orbits-bare-ipc-v1` worklet runs **inside** the official
   `bare` CLI. Production journal uses official `corestore` 7.12.2.
   Two local Bare processes exchange an encrypted HyperDHT payload

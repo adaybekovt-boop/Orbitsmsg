@@ -14,6 +14,13 @@ downloaded by a running application.
 Pinned SHA-256 digests for every official `bare-runtime` platform tarball
 live in `pins.json`. The fetch script refuses a mismatched digest.
 
+`bare-kit` 2.4.3 `prebuilds.zip` is pinned to GitHub's published release
+asset digest `e152c1e186251e2fc944cb7c3e7508899d5de3acb1568e1a922e0ed96a135af3`
+(asset 512910035, 415705249 bytes). Byte verification happens when a
+human or cached CI job runs `bash tool/bare/fetch-official-runtime.sh --kit`.
+Default PR CI does not download that archive. The zip and extracted
+`classes.jar` / `BareKit.xcframework` stay out of git.
+
 NOTICE from the official linux-x64 tarball:
 
 ```

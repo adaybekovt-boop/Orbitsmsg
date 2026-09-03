@@ -23,6 +23,37 @@ def host_key():
         raise SystemExit(f"unsupported {machine}")
     return f"{os_name}-{arch}"
 
+if only == "--kit":
+    kit = pins["bareKit"]["prebuilds"]
+    pinned = kit.get("sha256")
+    dest = cache / "bare-kit"
+    zpath = dest / "prebuilds.zip"
+    sidecar = dest / "prebuilds.zip.sha256"
+    android = dest / "android" / "bare-kit" / "classes.jar"
+    ios = dest / "ios" / "BareKit.xcframework"
+    if not pinned:
+        raise SystemExit("BARE_RUNTIME_MISSING: pins.json bareKit.prebuilds.sha256 is null")
+    if not zpath.is_file() and not android.is_file() and not ios.is_dir():
+        raise SystemExit(
+            "BARE_RUNTIME_MISSING: run bash tool/bare/fetch-official-runtime.sh --kit"
+        )
+    if zpath.is_file():
+        digest = hashlib.sha256(zpath.read_bytes()).hexdigest()
+        if digest != pinned:
+            raise SystemExit(f"BUNDLE_TAMPERED: {digest} != pinned {pinned}")
+        if sidecar.is_file():
+            expected = sidecar.read_text().strip().split()[0]
+            if digest != expected:
+                raise SystemExit(f"BUNDLE_TAMPERED: {digest} != {expected}")
+        print(f"ok bare-kit prebuilds.zip sha256={digest}")
+    if android.is_file():
+        print(f"ok android classes.jar {android}")
+    if ios.is_dir():
+        print(f"ok ios BareKit.xcframework {ios}")
+    if pins.get("remoteFetchAtRuntime") is not False:
+        raise SystemExit("pins allow runtime fetch")
+    raise SystemExit(0)
+
 key = only or host_key()
 spec = pins["bareRuntime"]["artifacts"][key]
 name = spec.get("binaryName", "bare")

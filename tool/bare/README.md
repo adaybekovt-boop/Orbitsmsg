@@ -15,6 +15,25 @@ Writes verified files under `build/orbits-bare/<platform>/` (gitignored):
 - `bare.sha256`
 - extracted `LICENSE` / `NOTICE`
 
+Android/iOS official BareKit (optional, ~396MB, **not** default CI):
+
+```bash
+bash tool/bare/fetch-official-runtime.sh --kit
+bash tool/bare/verify-runtime.sh --kit
+```
+
+That verifies the pinned `prebuilds.zip` sha256, then extracts only
+`android/bare-kit` (`classes.jar` + `jni`) and `ios/BareKit.xcframework`
+into `build/orbits-bare/bare-kit/`. Gradle and the iOS/macOS podspecs
+consume those local paths when present. The application never downloads
+them. If the extract is absent, hosts return `BARE_RUNTIME_MISSING`.
+
+```bash
+bash tool/bare/verify-kit-hooks.sh
+```
+
+checks the pin and the local-path hooks without downloading.
+
 ## Source rebuild (optional)
 
 ```bash

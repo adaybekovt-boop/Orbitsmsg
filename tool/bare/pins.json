@@ -106,8 +106,15 @@
     "prebuilds": {
       "asset": "prebuilds.zip",
       "url": "https://github.com/holepunchto/bare-kit/releases/download/v2.4.3/prebuilds.zip",
-      "sha256": null,
-      "note": "Optional 396MB Apple/Android XCFramework+AAR archive. Fetch records sha256 into the local cache sidecar. Not required for linux-x64 CLI embedding."
+      "sha256": "e152c1e186251e2fc944cb7c3e7508899d5de3acb1568e1a922e0ed96a135af3",
+      "sha256Source": "github-release-asset-digest",
+      "releaseAssetId": 512910035,
+      "sizeBytes": 415705249,
+      "androidPath": "android/bare-kit",
+      "iosPath": "ios/BareKit.xcframework",
+      "androidConsume": "classes.jar + jni/ (official bare-android fileTree, not Maven)",
+      "iosConsume": "BareKit.xcframework (official bare-ios vendored framework)",
+      "note": "Optional ~396MB Apple/Android archive. Default CI must not download it. Fetch only with tool/bare/fetch-official-runtime.sh --kit, which verifies this sha256 then extracts android/bare-kit and ios/BareKit.xcframework into build/orbits-bare/bare-kit/. Do not commit the zip or extracted binaries."
     }
   },
   "workletModules": {

@@ -6,13 +6,16 @@ public class OrbitsTransportPlugin: NSObject, FlutterPlugin {
   private var started = false
   private var suspended = false
   private var published = false
+  private var registrar: FlutterPluginRegistrar?
 
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(
       name: "app.orbits/transport",
       binaryMessenger: registrar.messenger
     )
-    registrar.addMethodCallDelegate(OrbitsTransportPlugin(), channel: channel)
+    let instance = OrbitsTransportPlugin()
+    instance.registrar = registrar
+    registrar.addMethodCallDelegate(instance, channel: channel)
   }
 
   public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
@@ -101,7 +104,7 @@ public class OrbitsTransportPlugin: NSObject, FlutterPlugin {
       result(FlutterError(code: "BUNDLE_TAMPERED", message: "local bundle hash mismatch", details: nil))
       return
     }
-    if OrbitsBareRuntime.tryStart() {
+    if OrbitsBareRuntime.tryStart(registrar: registrar) {
       started = true
       result(nil)
       return

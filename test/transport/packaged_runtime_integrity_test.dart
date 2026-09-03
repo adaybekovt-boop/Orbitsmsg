@@ -27,6 +27,21 @@ void main() {
       File('tool/bare/PROVENANCE.md').readAsStringSync(),
       contains('Apache-2.0'),
     );
+    final prebuilds = pins['bareKit']['prebuilds'] as Map;
+    expect((prebuilds['sha256'] as String).length, 64);
+    expect(prebuilds['sha256Source'], 'github-release-asset-digest');
+    expect(prebuilds['androidPath'], 'android/bare-kit');
+    expect(prebuilds['iosPath'], 'ios/BareKit.xcframework');
+  });
+
+  test('BareKit mobile hooks verify without downloading prebuilds.zip', () {
+    final result = Process.runSync('bash', ['tool/bare/verify-kit-hooks.sh']);
+    expect(result.exitCode, 0, reason: '${result.stdout}${result.stderr}');
+    expect(result.stdout.toString(), contains('ok BareKit mobile hooks'));
+    expect(
+      result.stdout.toString(),
+      contains('bash tool/bare/fetch-official-runtime.sh --kit'),
+    );
   });
 
   test('fetched linux-x64 runtime matches the pinned binary digest', () {
