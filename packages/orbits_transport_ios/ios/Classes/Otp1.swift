@@ -33,37 +33,62 @@ enum Otp1 {
 final class Otp1Decoder {
   private var buffer = Data()
 
+  func reset() {
+    buffer.removeAll()
+  }
+
+  func bufferedBytes() -> Int {
+    return buffer.count
+  }
+
   func add(_ chunk: Data) throws -> [Otp1Message] {
-    buffer.append(chunk)
+    if !chunk.isEmpty {
+      buffer.append(chunk)
+    }
     var out: [Otp1Message] = []
     var offset = 0
-    while offset + 10 <= buffer.count {
-      let magic = readUInt32(buffer, offset)
-      if magic != Otp1.magic {
-        throw HostError.worklet("bad IPC magic")
+    do {
+      while offset + 10 <= buffer.count {
+        let magic = readUInt32(buffer, offset)
+        if magic != Otp1.magic {
+          reset()
+          throw HostError.worklet("bad IPC magic")
+        }
+        let version = buffer[offset + 4]
+        if version != Otp1.version {
+          reset()
+          throw HostError.worklet("unsupported IPC version")
+        }
+        let type = buffer[offset + 5]
+        let len = Int(readUInt32(buffer, offset + 6))
+        if len < 0 || len > Otp1.maxPayload {
+          reset()
+          throw HostError.worklet("IPC_FRAME")
+        }
+        if offset + 10 + len > buffer.count { break }
+        let payload = buffer.subdata(in: (offset + 10)..<(offset + 10 + len))
+        let json: Any
+        do {
+          json = try JSONSerialization.jsonObject(with: payload, options: [])
+        } catch {
+          reset()
+          throw HostError.worklet("malformed JSON payload")
+        }
+        guard let body = json as? [String: Any] else {
+          reset()
+          throw HostError.worklet("IPC payload must be a JSON object")
+        }
+        out.append(Otp1Message(type: type, body: body))
+        offset += 10 + len
       }
-      let version = buffer[offset + 4]
-      if version != Otp1.version {
-        throw HostError.worklet("unsupported IPC version")
+      if offset > 0 {
+        buffer.removeSubrange(0..<offset)
       }
-      let type = buffer[offset + 5]
-      let len = Int(readUInt32(buffer, offset + 6))
-      if len > Otp1.maxPayload {
-        throw HostError.worklet("IPC_FRAME")
-      }
-      if offset + 10 + len > buffer.count { break }
-      let payload = buffer.subdata(in: (offset + 10)..<(offset + 10 + len))
-      let json = try JSONSerialization.jsonObject(with: payload, options: [])
-      guard let body = json as? [String: Any] else {
-        throw HostError.worklet("IPC payload must be a JSON object")
-      }
-      out.append(Otp1Message(type: type, body: body))
-      offset += 10 + len
+      return out
+    } catch {
+      reset()
+      throw error
     }
-    if offset > 0 {
-      buffer.removeSubrange(0..<offset)
-    }
-    return out
   }
 }
 

@@ -13,9 +13,13 @@ enum OrbitsBareRuntime {
 #if canImport(BareKit)
   private static var worklet: BareWorklet?
   private static var ipc: BareIPC?
+  private static var writeQueue: [Data] = []
+  private static var totalQueuedBytes = 0
+  private static var isPumpingWrites = false
 #endif
   private static var decoder = Otp1Decoder()
   private static var pending: [Int: (Result<[String: Any], Error>) -> Void] = [:]
+  private static var earlyEvents: [[String: Any]] = []
   private static var nextId = 1
   private static let lock = NSLock()
   static var eventSink: (([String: Any]) -> Void)?
@@ -26,6 +30,19 @@ enum OrbitsBareRuntime {
 #else
     return false
 #endif
+  }
+
+  static func setEventSink(_ sink: (([String: Any]) -> Void)?) {
+    lock.lock()
+    eventSink = sink
+    let buffered = earlyEvents
+    earlyEvents.removeAll()
+    lock.unlock()
+    if let s = sink {
+      for ev in buffered {
+        s(ev)
+      }
+    }
   }
 
   static func tryStart(registrar: FlutterPluginRegistrar? = nil) -> Bool {
@@ -122,7 +139,9 @@ enum OrbitsBareRuntime {
     lock.lock()
     pending[id] = { result in box.finish(result) }
     lock.unlock()
-    _ = pipe.write(frame)
+
+    try writeFrame(frame, pipe: pipe)
+
     let result = box.wait(timeoutMs: timeoutMs)
     lock.lock()
     pending.removeValue(forKey: id)
@@ -139,6 +158,54 @@ enum OrbitsBareRuntime {
     throw HostError.runtimeMissing
 #endif
   }
+
+#if canImport(BareKit)
+  private static func writeFrame(_ frame: Data, pipe: BareIPC) throws {
+    lock.lock()
+    if writeQueue.count >= 64 || totalQueuedBytes + frame.count > 2 * 1024 * 1024 {
+      lock.unlock()
+      throw HostError.backpressure
+    }
+    writeQueue.append(frame)
+    totalQueuedBytes += frame.count
+    lock.unlock()
+    pumpWrites(pipe)
+  }
+
+  private static func pumpWrites(_ pipe: BareIPC) {
+    lock.lock()
+    if isPumpingWrites || writeQueue.isEmpty {
+      lock.unlock()
+      return
+    }
+    isPumpingWrites = true
+    let frame = writeQueue.removeFirst()
+    totalQueuedBytes -= frame.count
+    lock.unlock()
+
+    pipe.write(frame) { error in
+      if let error = error {
+        lock.lock()
+        for (_, waiter) in pending {
+          waiter(.failure(error))
+        }
+        pending.removeAll()
+        writeQueue.removeAll()
+        totalQueuedBytes = 0
+        isPumpingWrites = false
+        lock.unlock()
+        return
+      }
+      lock.lock()
+      isPumpingWrites = false
+      let hasMore = !writeQueue.isEmpty
+      lock.unlock()
+      if hasMore {
+        pumpWrites(pipe)
+      }
+    }
+  }
+#endif
 
   static func runtimeInfo() throws -> [String: Any] {
     return try request("runtime.info", timeoutMs: 8_000)
@@ -160,7 +227,7 @@ enum OrbitsBareRuntime {
 
   static func stopSession() {
 #if canImport(BareKit)
-    _ = try? request("stop", timeoutMs: 8_000)
+    _ = try? request("stop", timeoutMs: 2_000)
     ipc?.close()
     worklet?.terminate()
     ipc = nil
@@ -170,8 +237,11 @@ enum OrbitsBareRuntime {
       waiter(.failure(HostError.closed))
     }
     pending.removeAll()
+    writeQueue.removeAll()
+    totalQueuedBytes = 0
+    isPumpingWrites = false
+    decoder.reset()
     lock.unlock()
-    decoder = Otp1Decoder()
 #endif
   }
 
@@ -190,11 +260,27 @@ enum OrbitsBareRuntime {
             waiter?(.success(msg.body["result"] as? [String: Any] ?? [:]))
           }
         } else if msg.type == Otp1.event {
-          eventSink?(flattenEvent(msg.body))
+          let flat = flattenEvent(msg.body)
+          lock.lock()
+          let sink = eventSink
+          if sink == nil && earlyEvents.count < 64 {
+            earlyEvents.append(flat)
+          }
+          lock.unlock()
+          sink?(flat)
         }
       }
     } catch {
-      // keep decoder; next frame may resynchronize
+      decoder.reset()
+      let errEvent: [String: Any] = [
+        "name": "error",
+        "code": "DECODE_ERROR",
+        "message": error.localizedDescription,
+      ]
+      lock.lock()
+      let sink = eventSink
+      lock.unlock()
+      sink?(errEvent)
     }
   }
 #endif
@@ -203,12 +289,17 @@ enum OrbitsBareRuntime {
     let payload = body["payload"] as? [String: Any] ?? [:]
     var out: [String: Any] = [
       "name": body["name"] as Any,
-      "peerId": payload["peerId"] as Any,
-      "channel": payload["channel"] as Any,
-      "path": payload["path"] as Any,
-      "frameB64": payload["frameB64"] as Any,
+      "peerId": payload["peerId"] ?? body["peerId"] as Any,
+      "channel": payload["channel"] ?? body["channel"] as Any,
+      "path": payload["path"] ?? body["path"] as Any,
+      "frameB64": payload["frameB64"] ?? body["frameB64"] as Any,
+      "code": payload["code"] ?? body["code"] as Any,
+      "message": payload["message"] ?? body["message"] as Any,
+      "detail": payload["detail"] ?? body["detail"] as Any,
+      "state": payload["state"] ?? body["state"] as Any,
+      "requestId": payload["requestId"] ?? body["requestId"] as Any,
     ]
-    if let b64 = payload["frameB64"] as? String, !b64.isEmpty,
+    if let b64 = (payload["frameB64"] ?? body["frameB64"]) as? String, !b64.isEmpty,
        let bytes = Data(base64Encoded: b64) {
       out["bytes"] = FlutterStandardTypedData(bytes: bytes)
     }

@@ -39,9 +39,12 @@ class PluginOrbitsTransport implements OrbitsTransport {
 
   @override
   Future<void> stop() async {
-    await plugin.stop();
     await _sub?.cancel();
-    await _events.close();
+    _sub = null;
+    await plugin.stop();
+    if (!_events.isClosed) {
+      await _events.close();
+    }
   }
 
   @override
@@ -94,6 +97,7 @@ class PluginOrbitsTransport implements OrbitsTransport {
   Future<void> refreshNetwork() => plugin.refreshNetwork();
 
   void _onPlatformEvent(Map<String, Object?> event) {
+    if (_events.isClosed) return;
     final name = event['name'] as String? ?? '';
     final peerId = event['peerId'] as String? ?? '';
     switch (name) {

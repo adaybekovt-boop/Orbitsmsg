@@ -7,11 +7,16 @@ import 'package:orbits_transport_platform_interface/orbits_transport_platform_in
 /// binary. This class refuses remote JS before the channel is invoked.
 class MethodChannelOrbitsTransport extends OrbitsTransportPlatform {
   MethodChannelOrbitsTransport({MethodChannel? channel})
-    : _channel = channel ?? const MethodChannel('app.orbits/transport');
+    : _channel = channel ?? const MethodChannel('app.orbits/transport') {
+    _events = StreamController<Map<String, Object?>>.broadcast(
+      onListen: _flushBufferedEvents,
+    );
+    _ensureIncoming();
+  }
 
   final MethodChannel _channel;
-  final StreamController<Map<String, Object?>> _events =
-      StreamController<Map<String, Object?>>.broadcast();
+  late final StreamController<Map<String, Object?>> _events;
+  final List<Map<String, Object?>> _bufferedEvents = [];
   bool _incomingAttached = false;
 
   @override
@@ -22,15 +27,34 @@ class MethodChannelOrbitsTransport extends OrbitsTransportPlatform {
 
   void _ensureIncoming() {
     if (_incomingAttached) return;
-    _incomingAttached = true;
-    _channel.setMethodCallHandler(_onIncoming);
+    try {
+      _channel.setMethodCallHandler(_onIncoming);
+      _incomingAttached = true;
+    } catch (_) {
+      // Defer attaching if BinaryMessenger is not yet initialized in test harness
+    }
+  }
+
+  void _flushBufferedEvents() {
+    while (_bufferedEvents.isNotEmpty) {
+      if (_events.isClosed) break;
+      _events.add(_bufferedEvents.removeAt(0));
+    }
   }
 
   Future<dynamic> _onIncoming(MethodCall call) async {
     if (call.method == 'event') {
       final raw = call.arguments;
       if (raw is Map) {
-        _events.add(Map<String, Object?>.from(raw));
+        final map = Map<String, Object?>.from(raw);
+        if (_events.isClosed) return;
+        if (!_events.hasListener) {
+          if (_bufferedEvents.length < 64) {
+            _bufferedEvents.add(map);
+          }
+        } else {
+          _events.add(map);
+        }
       }
     }
   }
@@ -43,7 +67,10 @@ class MethodChannelOrbitsTransport extends OrbitsTransportPlatform {
   }
 
   @override
-  Future<void> stop() => _channel.invokeMethod<void>('stop');
+  Future<void> stop() async {
+    _bufferedEvents.clear();
+    await _channel.invokeMethod<void>('stop');
+  }
 
   @override
   Future<void> publish(Map<String, Object?> binding) =>

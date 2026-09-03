@@ -34,41 +34,69 @@ internal object Otp1 {
     return out.toByteArray()
   }
 
+  class Otp1DecodeException(val code: String, message: String, cause: Throwable? = null) :
+    IllegalStateException(message, cause)
+
   class Decoder {
     private val buf = ByteArrayOutputStream()
 
+    @Synchronized
+    fun reset() {
+      buf.reset()
+    }
+
+    @Synchronized
+    fun bufferedBytes(): Int = buf.size()
+
+    @Synchronized
     fun add(chunk: ByteArray): List<Message> {
       if (chunk.isNotEmpty()) buf.write(chunk)
-      var data = buf.toByteArray()
+      val data = buf.toByteArray()
       val out = ArrayList<Message>()
       var offset = 0
-      while (offset + 10 <= data.size) {
-        val header = ByteBuffer.wrap(data, offset, 10).order(ByteOrder.BIG_ENDIAN)
-        val magic = header.int
-        if (magic != MAGIC) {
-          throw IllegalStateException("bad IPC magic")
+      try {
+        while (offset + 10 <= data.size) {
+          val header = ByteBuffer.wrap(data, offset, 10).order(ByteOrder.BIG_ENDIAN)
+          val magic = header.int
+          if (magic != MAGIC) {
+            reset()
+            throw Otp1DecodeException("BAD_MAGIC", "bad IPC magic: 0x" + Integer.toHexString(magic))
+          }
+          val version = header.get().toInt() and 0xff
+          if (version != VERSION) {
+            reset()
+            throw Otp1DecodeException("BAD_VERSION", "unsupported IPC version: $version")
+          }
+          val type = header.get().toInt() and 0xff
+          val len = header.int
+          if (len < 0 || len > MAX_PAYLOAD) {
+            reset()
+            throw Otp1DecodeException("OVERSIZE_FRAME", "IPC frame length out of bounds: $len")
+          }
+          if (offset + 10 + len > data.size) break
+          val payload = String(data, offset + 10, len, Charsets.UTF_8)
+          val json = try {
+            JSONObject(payload)
+          } catch (e: Exception) {
+            reset()
+            throw Otp1DecodeException("MALFORMED_JSON", "malformed JSON payload: ${e.message}", e)
+          }
+          out.add(Message(type, jsonToMap(json)))
+          offset += 10 + len
         }
-        val version = header.get().toInt() and 0xff
-        if (version != VERSION) {
-          throw IllegalStateException("unsupported IPC version")
+        if (offset > 0) {
+          val remain = if (offset < data.size) data.copyOfRange(offset, data.size) else ByteArray(0)
+          buf.reset()
+          if (remain.isNotEmpty()) buf.write(remain)
         }
-        val type = header.get().toInt() and 0xff
-        val len = header.int
-        if (len > MAX_PAYLOAD) {
-          throw IllegalStateException("IPC_FRAME")
-        }
-        if (offset + 10 + len > data.size) break
-        val payload = String(data, offset + 10, len, Charsets.UTF_8)
-        val json = JSONObject(payload)
-        out.add(Message(type, jsonToMap(json)))
-        offset += 10 + len
+        return out
+      } catch (e: Otp1DecodeException) {
+        reset()
+        throw e
+      } catch (e: Exception) {
+        reset()
+        throw Otp1DecodeException("DECODE_ERROR", e.message ?: "decode error", e)
       }
-      if (offset > 0) {
-        val remain = if (offset < data.size) data.copyOfRange(offset, data.size) else ByteArray(0)
-        buf.reset()
-        if (remain.isNotEmpty()) buf.write(remain)
-      }
-      return out
     }
   }
 

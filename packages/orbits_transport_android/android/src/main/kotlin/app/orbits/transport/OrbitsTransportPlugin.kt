@@ -20,12 +20,10 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Ac
   private lateinit var channel: MethodChannel
   private var engineBinding: FlutterPlugin.FlutterPluginBinding? = null
   private val main = Handler(Looper.getMainLooper())
-  private val io = Executors.newSingleThreadExecutor { r ->
-    Thread(r, "orbits-bare-ipc").apply { isDaemon = true }
-  }
   private var started = false
   private var suspended = false
   private var hostActivity: Activity? = null
+
   private val activityCallbacks = object : Application.ActivityLifecycleCallbacks {
     override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {}
     override fun onActivityStarted(activity: Activity) {}
@@ -35,23 +33,15 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Ac
 
     override fun onActivityPaused(activity: Activity) {
       if (activity !== hostActivity || !started || suspended) return
-      io.execute {
-        try {
-          OrbitsBareRuntime.suspendRuntime()
-          suspended = true
-        } catch (_: Exception) {
-        }
+      OrbitsBareRuntime.suspendRuntime {
+        suspended = true
       }
     }
 
     override fun onActivityResumed(activity: Activity) {
       if (activity !== hostActivity || !started || !suspended) return
-      io.execute {
-        try {
-          OrbitsBareRuntime.resumeRuntime()
-          suspended = false
-        } catch (_: Exception) {
-        }
+      OrbitsBareRuntime.resumeRuntime {
+        suspended = false
       }
     }
   }
@@ -65,7 +55,7 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Ac
   override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
     channel.setMethodCallHandler(null)
     engineBinding = null
-    io.execute { OrbitsBareRuntime.stopSession() }
+    OrbitsBareRuntime.stopSession()
     started = false
     suspended = false
   }
@@ -99,23 +89,23 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Ac
 
   override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
     when (call.method) {
-      "start" -> runAsync(result) { start(call) }
-      "stop" -> runAsync(result) { stop() }
-      "publish" -> runAsync(result) { publish(call) }
-      "unpublish" -> runAsync(result) { ipc("unpublish") }
-      "connect" -> runAsync(result) { connect(call) }
-      "disconnect" -> runAsync(result) { disconnect(call) }
-      "send" -> runAsync(result) { send(call) }
-      "sendFile" -> runAsync(result) { sendFile(call) }
-      "suspend" -> runAsync(result) { suspendCall() }
-      "resume" -> runAsync(result) { resumeCall() }
-      "refreshNetwork" -> runAsync(result) { ipc("refreshNetwork") }
-      "runtimeInfo" -> runAsync(result) { runtimeInfo() }
+      "start" -> startAsync(call, result)
+      "stop" -> stopAsync(result)
+      "publish" -> publishAsync(call, result)
+      "unpublish" -> ipcAsync("unpublish", emptyMap(), 15_000, result)
+      "connect" -> connectAsync(call, result)
+      "disconnect" -> disconnectAsync(call, result)
+      "send" -> sendAsync(call, result)
+      "sendFile" -> sendFileAsync(call, result)
+      "suspend" -> suspendAsync(result)
+      "resume" -> resumeAsync(result)
+      "refreshNetwork" -> ipcAsync("refreshNetwork", emptyMap(), 15_000, result)
+      "runtimeInfo" -> runtimeInfoAsync(result)
       else -> result.notImplemented()
     }
   }
 
-  private fun start(call: MethodCall): Any? {
+  private fun startAsync(call: MethodCall, result: MethodChannel.Result) {
     val remoteJs = call.argument<Boolean>("remoteJs")
     val remoteJsUrl = call.argument<String>("remoteJsUrl")
     val bundleUrl = call.argument<String>("bundleUrl")
@@ -125,94 +115,114 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Ac
       looksRemote(bundleUrl) ||
       looksRemote(scriptUrl)
     ) {
-      throw HostError("REMOTE_JS", "production Bare must not fetch remote JS")
+      replyError(result, HostError("REMOTE_JS", "production Bare must not fetch remote JS"))
+      return
     }
     val ipcVersion = call.argument<String>("ipcVersion")
     if (!ipcVersion.isNullOrEmpty() && ipcVersion != "orbits-bare-ipc-v1") {
-      throw HostError("ABI_MISMATCH", "unsupported IPC version")
+      replyError(result, HostError("ABI_MISMATCH", "unsupported IPC version"))
+      return
     }
     if (call.argument<Boolean>("requireLocalBundle") == true &&
       call.argument<Boolean>("localBundlePresent") != true
     ) {
-      throw HostError("BUNDLE_MISSING", "local Bare bundle missing")
+      replyError(result, HostError("BUNDLE_MISSING", "local Bare bundle missing"))
+      return
     }
     val expected = call.argument<String>("expectedBundleSha256")
     val actual = call.argument<String>("localBundleSha256")
     if (!expected.isNullOrEmpty() && !actual.isNullOrEmpty() && expected != actual) {
-      throw HostError("BUNDLE_TAMPERED", "local bundle hash mismatch")
+      replyError(result, HostError("BUNDLE_TAMPERED", "local bundle hash mismatch"))
+      return
     }
-    @Suppress("UNCHECKED_CAST")
-    val args = (call.arguments as? Map<*, *>)
-    val startedInfo = try {
-      OrbitsBareRuntime.startSession(args, engineBinding)
-    } catch (err: Exception) {
-      val message = err.message ?: "linked Bare runtime is not shipped"
-      val code = when {
-        message.contains("BARE_RUNTIME_MISSING") -> "BARE_RUNTIME_MISSING"
-        message.contains("BARE_WORKLET_FAILED") -> "BARE_WORKLET_FAILED"
-        else -> "BARE_RUNTIME_MISSING"
-      }
-      throw HostError(code, message)
-    }
+
+    // Register event sink before completion so initial events are not missed
     OrbitsBareRuntime.setEventSink { event ->
       if (::channel.isInitialized) {
         channel.invokeMethod("event", event)
       }
     }
-    started = true
-    suspended = false
-    return startedInfo
+
+    val args = call.arguments as? Map<*, *>
+    OrbitsBareRuntime.startSessionAsync(args, engineBinding) { startRes ->
+      startRes.fold(
+        onSuccess = { info ->
+          started = true
+          suspended = false
+          replySuccess(result, info)
+        },
+        onFailure = { err ->
+          val message = err.message ?: "linked Bare runtime is not shipped"
+          val code = when {
+            message.contains("BARE_RUNTIME_MISSING") -> "BARE_RUNTIME_MISSING"
+            message.contains("BARE_WORKLET_FAILED") -> "BARE_WORKLET_FAILED"
+            else -> "BARE_RUNTIME_MISSING"
+          }
+          replyError(result, HostError(code, message))
+        },
+      )
+    }
   }
 
-  private fun stop(): Any? {
-    OrbitsBareRuntime.stopSession()
+  private fun stopAsync(result: MethodChannel.Result) {
     started = false
     suspended = false
-    return null
+    OrbitsBareRuntime.stopSession {
+      replySuccess(result, null)
+    }
   }
 
-  private fun publish(call: MethodCall): Any? {
-    requireStarted()
+  private fun publishAsync(call: MethodCall, result: MethodChannel.Result) {
+    if (!checkStarted(result)) return
     val deviceId = call.argument<String>("deviceId")
     if (deviceId.isNullOrEmpty()) {
-      throw HostError("MALFORMED", "publish needs deviceId")
+      replyError(result, HostError("MALFORMED", "publish needs deviceId"))
+      return
     }
     @Suppress("UNCHECKED_CAST")
     val binding = (call.arguments as? Map<String, Any?>) ?: emptyMap()
-    return OrbitsBareRuntime.request("publish", mapOf("binding" to binding), 30_000)
+    OrbitsBareRuntime.request("publish", mapOf("binding" to binding), 30_000) { res ->
+      replyResult(result, res)
+    }
   }
 
-  private fun connect(call: MethodCall): Any? {
-    requireLive()
+  private fun connectAsync(call: MethodCall, result: MethodChannel.Result) {
+    if (!checkLive(result)) return
     @Suppress("UNCHECKED_CAST")
     val peer = (call.arguments as? Map<String, Any?>) ?: emptyMap()
     if ((peer["peerId"] as? String).isNullOrEmpty() &&
       (peer["noisePublicKey"] as? String).isNullOrEmpty()
     ) {
-      throw HostError("MALFORMED", "connect needs peerId or noisePublicKey")
+      replyError(result, HostError("MALFORMED", "connect needs peerId or noisePublicKey"))
+      return
     }
-    return OrbitsBareRuntime.request("connect", peer, 45_000)
+    OrbitsBareRuntime.request("connect", peer, 45_000) { res ->
+      replyResult(result, res)
+    }
   }
 
-  private fun disconnect(call: MethodCall): Any? {
-    requireStarted()
+  private fun disconnectAsync(call: MethodCall, result: MethodChannel.Result) {
+    if (!checkStarted(result)) return
     val peerId = when (val raw = call.arguments) {
       is String -> raw
       is Map<*, *> -> raw["peerId"] as? String ?: ""
       else -> ""
     }
-    return OrbitsBareRuntime.request("disconnect", mapOf("peerId" to peerId), 10_000)
+    OrbitsBareRuntime.request("disconnect", mapOf("peerId" to peerId), 10_000) { res ->
+      replyResult(result, res)
+    }
   }
 
-  private fun send(call: MethodCall): Any? {
-    requireLive()
+  private fun sendAsync(call: MethodCall, result: MethodChannel.Result) {
+    if (!checkLive(result)) return
     val frame = call.argument<ByteArray>("frame") ?: ByteArray(0)
     if (frame.size > 256 * 1024) {
-      throw HostError("IPC_FRAME", "IPC frame exceeds cap")
+      replyError(result, HostError("IPC_FRAME", "IPC frame exceeds cap"))
+      return
     }
     val peerId = call.argument<String>("peerId") ?: ""
     val channelName = call.argument<String>("channel") ?: "message"
-    return OrbitsBareRuntime.request(
+    OrbitsBareRuntime.request(
       "send",
       mapOf(
         "peerId" to peerId,
@@ -220,21 +230,25 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Ac
         "frameB64" to android.util.Base64.encodeToString(frame, android.util.Base64.NO_WRAP),
       ),
       15_000,
-    )
+    ) { res ->
+      replyResult(result, res)
+    }
   }
 
-  private fun sendFile(call: MethodCall): Any? {
-    requireLive()
+  private fun sendFileAsync(call: MethodCall, result: MethodChannel.Result) {
+    if (!checkLive(result)) return
     val path = call.argument<String>("path") ?: ""
     val size = call.argument<Int>("sizeBytes") ?: 0
     if (path.isEmpty()) {
-      throw HostError("PATH_REQUIRED", "sendFile requires a path")
+      replyError(result, HostError("PATH_REQUIRED", "sendFile requires a path"))
+      return
     }
     if (size > 50 * 1024 * 1024) {
-      throw HostError("OVERSIZE", "attachment exceeds path-transfer cap")
+      replyError(result, HostError("OVERSIZE", "attachment exceeds path-transfer cap"))
+      return
     }
     val peerId = call.argument<String>("peerId") ?: ""
-    return OrbitsBareRuntime.request(
+    OrbitsBareRuntime.request(
       "sendFile",
       mapOf(
         "peerId" to peerId,
@@ -245,44 +259,56 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Ac
         ),
       ),
       10 * 60_000L,
-    )
+    ) { res ->
+      replyResult(result, res)
+    }
   }
 
-  private fun suspendCall(): Any? {
-    requireStarted()
-    OrbitsBareRuntime.suspendRuntime()
-    suspended = true
-    return null
+  private fun suspendAsync(result: MethodChannel.Result) {
+    if (!checkStarted(result)) return
+    OrbitsBareRuntime.suspendRuntime {
+      suspended = true
+      replySuccess(result, null)
+    }
   }
 
-  private fun resumeCall(): Any? {
-    requireStarted()
-    OrbitsBareRuntime.resumeRuntime()
-    suspended = false
-    return null
+  private fun resumeAsync(result: MethodChannel.Result) {
+    if (!checkStarted(result)) return
+    OrbitsBareRuntime.resumeRuntime {
+      suspended = false
+      replySuccess(result, null)
+    }
   }
 
-  private fun runtimeInfo(): Any? {
-    requireStarted()
-    return OrbitsBareRuntime.runtimeInfo()
+  private fun runtimeInfoAsync(result: MethodChannel.Result) {
+    if (!checkStarted(result)) return
+    OrbitsBareRuntime.request("runtime.info", emptyMap(), 8_000) { res ->
+      replyResult(result, res)
+    }
   }
 
-  private fun ipc(method: String): Any? {
-    requireLive()
-    return OrbitsBareRuntime.request(method, emptyMap(), 15_000)
+  private fun ipcAsync(method: String, params: Map<String, Any?>, timeoutMs: Long, result: MethodChannel.Result) {
+    if (!checkLive(result)) return
+    OrbitsBareRuntime.request(method, params, timeoutMs) { res ->
+      replyResult(result, res)
+    }
   }
 
-  private fun requireStarted() {
+  private fun checkStarted(result: MethodChannel.Result): Boolean {
     if (!started || !OrbitsBareRuntime.isLive()) {
-      throw HostError("NOT_STARTED", "not started")
+      replyError(result, HostError("NOT_STARTED", "not started"))
+      return false
     }
+    return true
   }
 
-  private fun requireLive() {
-    requireStarted()
+  private fun checkLive(result: MethodChannel.Result): Boolean {
+    if (!checkStarted(result)) return false
     if (suspended) {
-      throw HostError("SUSPENDED", "suspended")
+      replyError(result, HostError("SUSPENDED", "suspended"))
+      return false
     }
+    return true
   }
 
   private fun looksRemote(url: String?): Boolean {
@@ -290,27 +316,36 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Ac
     return url.startsWith("http://") || url.startsWith("https://")
   }
 
-  private fun runAsync(result: MethodChannel.Result, block: () -> Any?) {
-    io.execute {
-      try {
-        val value = block()
-        main.post { result.success(value) }
-      } catch (err: HostError) {
-        main.post { result.error(err.code, err.message, null) }
-      } catch (err: Exception) {
-        val message = err.message ?: "ipc error"
-        val code = when {
-          message.contains("NOT_STARTED") -> "NOT_STARTED"
-          message.contains("suspended") -> "SUSPENDED"
-          message.contains("timeout") -> "IPC_TIMEOUT"
-          message.contains("BARE_RUNTIME_MISSING") -> "BARE_RUNTIME_MISSING"
-          message.contains("BARE_WORKLET_FAILED") -> "BARE_WORKLET_FAILED"
-          message.contains("IPC_FRAME") -> "IPC_FRAME"
-          else -> "BARE_WORKLET_FAILED"
-        }
-        main.post { result.error(code, message, null) }
-      }
+  private fun replySuccess(result: MethodChannel.Result, value: Any?) {
+    main.post { result.success(value) }
+  }
+
+  private fun replyError(result: MethodChannel.Result, err: Throwable) {
+    val message = err.message ?: "ipc error"
+    val code = when {
+      err is HostError -> err.code
+      message.contains("NOT_STARTED") -> "NOT_STARTED"
+      message.contains("SUSPENDED") -> "SUSPENDED"
+      message.contains("IPC_TIMEOUT") -> "IPC_TIMEOUT"
+      message.contains("IPC_BACKPRESSURE") -> "IPC_BACKPRESSURE"
+      message.contains("BARE_RUNTIME_MISSING") -> "BARE_RUNTIME_MISSING"
+      message.contains("BARE_WORKLET_FAILED") -> "BARE_WORKLET_FAILED"
+      message.contains("IPC_FRAME") -> "IPC_FRAME"
+      message.contains("IPC_CLOSED") -> "IPC_CLOSED"
+      message.contains("BAD_MAGIC") -> "BAD_MAGIC"
+      message.contains("BAD_VERSION") -> "BAD_VERSION"
+      message.contains("OVERSIZE_FRAME") -> "OVERSIZE_FRAME"
+      message.contains("MALFORMED_JSON") -> "MALFORMED_JSON"
+      else -> "BARE_WORKLET_FAILED"
     }
+    main.post { result.error(code, message, null) }
+  }
+
+  private fun replyResult(result: MethodChannel.Result, res: Result<Map<String, Any?>>) {
+    res.fold(
+      onSuccess = { replySuccess(result, it) },
+      onFailure = { replyError(result, it) },
+    )
   }
 
   private class HostError(val code: String, message: String) : Exception(message)

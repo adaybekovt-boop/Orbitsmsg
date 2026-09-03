@@ -75,7 +75,27 @@ class NativeTransportHost {
     return backend;
   }
 
+  Completer<void>? _startCompleter;
+
   Future<void> ensureStarted() async {
+    if (attached) return;
+    if (_startCompleter != null) {
+      return _startCompleter!.future;
+    }
+    final completer = Completer<void>();
+    _startCompleter = completer;
+    try {
+      await _doEnsureStarted();
+      completer.complete();
+    } catch (err, st) {
+      completer.completeError(err, st);
+      rethrow;
+    } finally {
+      _startCompleter = null;
+    }
+  }
+
+  Future<void> _doEnsureStarted() async {
     final devBare = isDevBareTransportRequested();
     if (!isHyperswarmTransportEnabled() && !devBare) {
       lastDecision = selectNativeBackend(
