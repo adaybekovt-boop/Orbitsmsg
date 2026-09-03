@@ -84,12 +84,14 @@ jobs:
           set -euo pipefail
           g++ -std=c++17 \
             packages/orbits_transport_linux/linux/orbits_transport_plugin.cc \
+            packages/orbits_transport_linux/linux/orbits_bare_spawn.cc \
             packages/orbits_transport_linux/linux/orbits_transport_host_test.cc \
             -I packages/orbits_transport_linux/linux \
             -o /tmp/orbits_transport_linux_host_test
           /tmp/orbits_transport_linux_host_test
           g++ -std=c++17 \
             packages/orbits_transport_windows/windows/orbits_transport_plugin.cpp \
+            packages/orbits_transport_windows/windows/orbits_bare_spawn.cpp \
             packages/orbits_transport_windows/windows/orbits_transport_host_test.cpp \
             -I packages/orbits_transport_windows/windows \
             -o /tmp/orbits_transport_windows_host_test
@@ -148,12 +150,29 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Install harness dependencies
+        working-directory: tool/connectivity_harness
+        run: npm ci
+
+      - name: Fetch official pinned Bare runtime
+        run: bash tool/bare/fetch-official-runtime.sh
+
+      - name: Verify official Bare runtime
+        run: bash tool/bare/verify-runtime.sh
+
       - name: Connectivity harness (loopback, no hardware)
         working-directory: tool/connectivity_harness
         run: node --test test/*.test.js
 
+      - name: Official Bare worklet integration
+        working-directory: tool/connectivity_harness
+        run: node --test test/bare_runtime.test.js test/corestore_persist.test.js test/hyperswarm_dht.test.js
+
       - name: Pin worklet bundle hash (no remote JS)
         run: bash tool/ci/verify_worklet_bundle.sh
+
+      - name: Reproducible Bare packaging gate
+        run: bash tool/bare-reproducible-build.sh
 
   test-storage-peer:
     name: Storage peer
