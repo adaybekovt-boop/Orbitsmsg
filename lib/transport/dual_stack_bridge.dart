@@ -22,6 +22,7 @@ import '../replication/hypercore_store.dart';
 import '../replication/memory_journal.dart';
 import '../transport/replication_schema.dart';
 import 'dev_bare_transport.dart';
+import 'device_binding.dart';
 import 'discovery_secret_store.dart';
 import 'hello_capabilities.dart';
 import 'mux_frames.dart';
@@ -71,6 +72,7 @@ class DualStackBridge {
   final MailboxPump _mailboxPump = MailboxPump();
   void Function(String peerId, Object packet)? onDrop;
 
+  final Set<String> connecting = <String>{};
   final Set<String> connected = <String>{};
   final List<CapabilityRecord> remoteCapabilities = <CapabilityRecord>[];
   StreamSubscription<TransportEvent>? _sub;
@@ -84,6 +86,7 @@ class DualStackBridge {
   Future<void> detach() async {
     await _sub?.cancel();
     _sub = null;
+    connecting.clear();
     connected.clear();
   }
 
@@ -108,10 +111,17 @@ class DualStackBridge {
       return;
     }
     final norm = normalizePeerId(peerId);
-    await transport.connect(
-      PeerDescriptor(peerId: norm, discoverySecret: secret),
-    );
-    connected.add(norm);
+    connecting.add(norm);
+    try {
+      await transport.connect(
+        PeerDescriptor(peerId: norm, discoverySecret: secret),
+      );
+      // Yield to event loop so stream listeners process synchronous connected events
+      await Future<void>.delayed(Duration.zero);
+    } catch (_) {
+      connecting.remove(norm);
+      rethrow;
+    }
   }
 
   Future<bool> sendEncrypted(String peerId, Object? msg) async {
@@ -401,14 +411,19 @@ class DualStackBridge {
 
   void _onEvent(TransportEvent event) {
     switch (event) {
+      case TransportConnecting(:final peerId):
+        final norm = normalizePeerId(peerId);
+        connecting.add(norm);
       case TransportConnected(:final peerId):
-        connected.add(normalizePeerId(peerId));
+        final norm = normalizePeerId(peerId);
+        connecting.remove(norm);
+        connected.add(norm);
         onPresence?.call(peerId, true);
         final caps = localCapabilities;
         if (caps != null) {
           unawaited(
             transport.send(
-              normalizePeerId(peerId),
+              norm,
               TransportChannel.control,
               jsonPayload({'type': 'capabilities', ...caps.toWire()}),
             ),
@@ -417,14 +432,36 @@ class DualStackBridge {
         for (final record in hypercore.blocks) {
           unawaited(
             transport.send(
-              normalizePeerId(peerId),
+              norm,
               TransportChannel.replication,
               jsonPayload(hypercore.toReplicationFrame(record)),
             ),
           );
         }
+      case TransportAuthenticated(:final peerId, :final binding):
+        final norm = normalizePeerId(peerId);
+        unawaited(
+          verifyDeviceBinding(binding).then((valid) {
+            if (valid) {
+              devices?.authorize(
+                AuthorizedDevice(
+                  deviceId: binding.deviceId,
+                  transportPublicKey: binding.transportPublicKey,
+                  hypercorePublicKey: binding.hypercorePublicKey,
+                  name: 'remote-device',
+                  kind: 'remote',
+                  createdAt: binding.createdAt,
+                  status: DeviceStatus.active,
+                  ownerPeerId: norm,
+                ),
+              );
+            }
+          }),
+        );
       case TransportDisconnected(:final peerId):
-        connected.remove(normalizePeerId(peerId));
+        final norm = normalizePeerId(peerId);
+        connecting.remove(norm);
+        connected.remove(norm);
         onPresence?.call(peerId, false);
       case TransportFrame(:final peerId, :final channel, :final bytes):
         _onFrame(peerId, channel, bytes);
@@ -471,9 +508,18 @@ class DualStackBridge {
             decoded['type'] == 'wireHello') {
           try {
             if (decoded['type'] == 'capabilities') {
-              remoteCapabilities.add(CapabilityRecord.fromWire(decoded));
+              final record = CapabilityRecord.fromWire(decoded);
+              unawaited(
+                verifyCapabilityRecord(record).then((ok) {
+                  if (ok) {
+                    remoteCapabilities.add(record);
+                    unawaited(rememberHelloCapabilities(norm, decoded));
+                  }
+                }),
+              );
+            } else {
+              unawaited(rememberHelloCapabilities(norm, decoded));
             }
-            unawaited(rememberHelloCapabilities(norm, decoded));
           } catch (_) {}
         }
       }

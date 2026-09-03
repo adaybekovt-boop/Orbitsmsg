@@ -116,6 +116,7 @@ class Worklet {
   }
 
   async publish(binding) {
+    this._localBinding = binding || null
     const secret = secretToBuffer(this._config.discoverySecret)
     const topic = contactDiscoveryTopic(secret)
     this._publishedTopic = topic
@@ -132,6 +133,7 @@ class Worklet {
   }
 
   async unpublish() {
+    this._localBinding = null
     if (!this._publishedTopic) return
     const topicBuf = this._publishedTopic
     const pubHex = topicBuf.toString('hex')
@@ -619,14 +621,17 @@ class Worklet {
   _announceIdentityToConn(connRecord) {
     const localId = this._config && this._config.peerId
     if (!localId || connRecord.closed || !connRecord.socket) return
+    const msg = {
+      type: 'orbits-identity',
+      peerId: localId,
+      noisePublicKey: this.noisePublicKey(),
+      binding: this._localBinding || null,
+    }
     try {
       connRecord.socket.write(
         encodeMux(
           'control',
-          Buffer.from(
-            JSON.stringify({ type: 'orbits-identity', peerId: localId }),
-            'utf8',
-          ),
+          Buffer.from(JSON.stringify(msg), 'utf8'),
         ),
       )
     } catch {
@@ -634,7 +639,7 @@ class Worklet {
     }
   }
 
-  _assignLogicalPeer(connRecord, logicalPeerId) {
+  _assignLogicalPeer(connRecord, logicalPeerId, binding = null) {
     if (connRecord.closed) return
     if (connRecord.logicalPeerId === logicalPeerId) return
 
@@ -647,6 +652,12 @@ class Worklet {
         peerId: logicalPeerId,
         path: (connRecord.info && connRecord.info.path) || 'unknown',
       })
+      if (binding) {
+        this._emit('authenticated', {
+          peerId: logicalPeerId,
+          binding,
+        })
+      }
       this._emit('pathChanged', {
         peerId: logicalPeerId,
         path: (connRecord.info && connRecord.info.path) || 'direct',
@@ -712,7 +723,19 @@ class Worklet {
     }
 
     if (channel === 'control' && body && body.type === 'orbits-identity' && body.peerId) {
-      this._assignLogicalPeer(connRecord, String(body.peerId))
+      if (connRecord.noise && body.binding && body.binding.transportPublicKeyB64) {
+        try {
+          const transportHex = Buffer.from(body.binding.transportPublicKeyB64, 'base64').toString('hex')
+          if (transportHex !== connRecord.noise) {
+            this._handlePeerDisconnect(connRecord, new Error('NOISE_KEY_MISMATCH: transport public key does not match connection Noise key'))
+            return
+          }
+        } catch (err) {
+          this._handlePeerDisconnect(connRecord, err)
+          return
+        }
+      }
+      this._assignLogicalPeer(connRecord, String(body.peerId), body.binding || null)
     }
 
     const peerId = connRecord.logicalPeerId

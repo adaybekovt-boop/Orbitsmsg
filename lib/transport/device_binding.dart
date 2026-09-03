@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'layers.dart';
+import 'signed_capabilities.dart';
 
 const int kDeviceBindingVersion = 1;
 
@@ -92,6 +93,21 @@ bool noiseKeyMatchesBinding({
     mismatch |= connectionNoisePublicKey[i] ^ expected[i];
   }
   return mismatch == 0;
+}
+
+/// Verifies that the binding is within its validity window and signed by
+/// the user's identity public key.
+Future<bool> verifyDeviceBinding(
+  DeviceBinding binding, {
+  int? nowMs,
+}) async {
+  final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+  if (!deviceBindingClockIsValid(binding, nowMs: now)) return false;
+  return verifyIdentitySignedBytes(
+    binding.identityPublicKey,
+    binding.signedPayload(),
+    binding.signatureByIdentityKey,
+  );
 }
 
 List<int> _u64(int value) {

@@ -77,6 +77,11 @@ sealed class TransportEvent {
   const TransportEvent();
 }
 
+class TransportConnecting extends TransportEvent {
+  const TransportConnecting(this.peerId);
+  final String peerId;
+}
+
 class TransportConnected extends TransportEvent {
   const TransportConnected(this.peerId);
   final String peerId;

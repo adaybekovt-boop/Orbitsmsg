@@ -162,7 +162,7 @@ class NativeTransportHost {
     );
     final binding = await issueLocalDeviceBinding(
       material: material,
-      capabilities: const ['hyperswarm-v1', 'peerjs-v4'],
+      capabilities: caps.capabilities.map((c) => c.wireName).toList()..sort(),
       createdAt: now,
       expiresAt: now + 86400000 * 30,
     );

@@ -2,6 +2,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:orbits_transport/orbits_transport.dart';
 
@@ -101,8 +102,49 @@ class PluginOrbitsTransport implements OrbitsTransport {
     final name = event['name'] as String? ?? '';
     final peerId = event['peerId'] as String? ?? '';
     switch (name) {
+      case 'connecting':
+        _events.add(TransportConnecting(peerId));
       case 'connected':
         _events.add(TransportConnected(peerId));
+      case 'authenticated':
+        final rawBinding = event['binding'] as Map<String, Object?>?;
+        if (rawBinding != null) {
+          try {
+            final binding = DeviceBinding(
+              version: (rawBinding['version'] as num?)?.toInt() ?? 1,
+              identityPublicKey: Uint8List.fromList(
+                base64Decode(rawBinding['identityPublicKeyB64'] as String? ?? ''),
+              ),
+              deviceId: rawBinding['deviceId'] as String? ?? '',
+              transportPublicKey: Uint8List.fromList(
+                base64Decode(rawBinding['transportPublicKeyB64'] as String? ?? ''),
+              ),
+              hypercorePublicKey: Uint8List.fromList(
+                base64Decode(rawBinding['hypercorePublicKeyB64'] as String? ?? ''),
+              ),
+              capabilities: (rawBinding['capabilities'] as List?)
+                      ?.whereType<String>()
+                      .toList() ??
+                  const <String>[],
+              createdAt: (rawBinding['createdAt'] as num?)?.toInt() ?? 0,
+              expiresAt: (rawBinding['expiresAt'] as num?)?.toInt() ?? 0,
+              signatureByIdentityKey: Uint8List.fromList(
+                base64Decode(rawBinding['signatureB64'] as String? ?? ''),
+              ),
+            );
+            _events.add(TransportAuthenticated(peerId, binding));
+          } catch (_) {}
+        }
+      case 'pathChanged':
+        final pathStr = event['path'] as String? ?? 'unknown';
+        final path = switch (pathStr) {
+          'direct' => TransportPath.direct,
+          'relay' => TransportPath.relay,
+          _ => TransportPath.unknown,
+        };
+        _events.add(TransportPathChanged(peerId, path));
+      case 'networkChanged':
+        _events.add(TransportNetworkChanged(event['detail'] as String? ?? ''));
       case 'disconnected':
         _events.add(TransportDisconnected(peerId));
       case 'suspended':

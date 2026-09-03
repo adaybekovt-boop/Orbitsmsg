@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/spki_codec.dart';
 import 'package:orbits_flutter/transport/capabilities.dart';
+import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/hello_capabilities.dart';
 import 'package:orbits_flutter/transport/signed_capabilities.dart';
 
@@ -94,4 +95,69 @@ void main() {
       expect(remoteCapabilityCache.get('ORBIT-BBBBBBBBBBBBBBBB'), isNull);
     },
   );
+
+  test('F-14: verifyDeviceBinding validates signature and clock window', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final transportKey = Uint8List.fromList(List<int>.generate(32, (i) => i));
+    final draft = DeviceBinding(
+      version: kDeviceBindingVersion,
+      identityPublicKey: spki,
+      deviceId: 'dev-x',
+      transportPublicKey: transportKey,
+      hypercorePublicKey: Uint8List.fromList(List<int>.generate(32, (i) => 32 - i)),
+      capabilities: const ['hyperswarm-v1', 'peerjs-v4', 'multi-device-v1'],
+      createdAt: now,
+      expiresAt: now + 3600000,
+      signatureByIdentityKey: Uint8List(0),
+    );
+    final sig = await signP256Ecdsa(pair, draft.signedPayload());
+    final validBinding = DeviceBinding(
+      version: draft.version,
+      identityPublicKey: draft.identityPublicKey,
+      deviceId: draft.deviceId,
+      transportPublicKey: draft.transportPublicKey,
+      hypercorePublicKey: draft.hypercorePublicKey,
+      capabilities: draft.capabilities,
+      createdAt: draft.createdAt,
+      expiresAt: draft.expiresAt,
+      signatureByIdentityKey: sig,
+    );
+    expect(await verifyDeviceBinding(validBinding, nowMs: now), isTrue);
+
+    // Expired binding fails
+    expect(await verifyDeviceBinding(validBinding, nowMs: now + 4000000), isFalse);
+
+    // Tampered payload fails
+    final tampered = DeviceBinding(
+      version: validBinding.version,
+      identityPublicKey: validBinding.identityPublicKey,
+      deviceId: 'dev-impostor',
+      transportPublicKey: validBinding.transportPublicKey,
+      hypercorePublicKey: validBinding.hypercorePublicKey,
+      capabilities: validBinding.capabilities,
+      createdAt: validBinding.createdAt,
+      expiresAt: validBinding.expiresAt,
+      signatureByIdentityKey: validBinding.signatureByIdentityKey,
+    );
+    expect(await verifyDeviceBinding(tampered, nowMs: now), isFalse);
+
+    // Noise key binding matches
+    expect(
+      noiseKeyMatchesBinding(
+        connectionNoisePublicKey: transportKey,
+        binding: validBinding,
+      ),
+      isTrue,
+    );
+    // Impostor Noise key rejected
+    expect(
+      noiseKeyMatchesBinding(
+        connectionNoisePublicKey: List<int>.filled(32, 0),
+        binding: validBinding,
+      ),
+      isFalse,
+    );
+  });
 }
