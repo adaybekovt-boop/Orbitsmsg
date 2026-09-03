@@ -70,6 +70,16 @@ File? _resolveWorklet({required bool releaseMode}) {
     }
     return file;
   }
+  final exeDir = File(Platform.resolvedExecutable).parent.path;
+  final packagedCandidates = <String>[
+    '$exeDir${Platform.pathSeparator}data${Platform.pathSeparator}flutter_assets${Platform.pathSeparator}tool${Platform.pathSeparator}connectivity_harness${Platform.pathSeparator}src${Platform.pathSeparator}worklet.js',
+    '$exeDir${Platform.pathSeparator}flutter_assets${Platform.pathSeparator}tool${Platform.pathSeparator}connectivity_harness${Platform.pathSeparator}src${Platform.pathSeparator}worklet.js',
+    '$exeDir${Platform.pathSeparator}orbits-worklet${Platform.pathSeparator}worklet.js',
+  ];
+  for (final c in packagedCandidates) {
+    final f = File(c);
+    if (f.existsSync()) return f;
+  }
   const relative = 'tool/connectivity_harness/src/worklet.js';
   if (File(relative).existsSync()) return File(relative);
   return null;
@@ -129,7 +139,11 @@ class WorkletOrbitsTransport implements OrbitsTransport {
     } catch (_) {}
     await _sub.cancel();
     await _client.close();
-    _proc.kill();
+    try {
+      _proc.kill(ProcessSignal.sigterm);
+    } catch (_) {
+      _proc.kill();
+    }
     await _events.close();
   }
 

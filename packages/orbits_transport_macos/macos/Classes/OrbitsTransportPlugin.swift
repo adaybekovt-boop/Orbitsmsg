@@ -39,30 +39,8 @@ public class OrbitsTransportPlugin: NSObject, FlutterPlugin {
     case "unpublish":
       published = false
       result(nil)
-    case "connect", "disconnect", "refreshNetwork":
-      guard requireLive(result) else { return }
-      result(nil)
-    case "send":
-      guard requireLive(result) else { return }
-      let frame = args["frame"] as? FlutterStandardTypedData
-      if let frame, frame.data.count > 256 * 1024 {
-        result(FlutterError(code: "IPC_FRAME", message: "IPC frame exceeds cap", details: nil))
-        return
-      }
-      result(nil)
-    case "sendFile":
-      guard requireLive(result) else { return }
-      let path = args["path"] as? String ?? ""
-      let size = args["sizeBytes"] as? Int ?? 0
-      if path.isEmpty {
-        result(FlutterError(code: "PATH_REQUIRED", message: "sendFile requires a path", details: nil))
-        return
-      }
-      if size > 50 * 1024 * 1024 {
-        result(FlutterError(code: "OVERSIZE", message: "attachment exceeds path-transfer cap", details: nil))
-        return
-      }
-      result(nil)
+    case "connect", "disconnect", "refreshNetwork", "send", "sendFile":
+      result(FlutterError(code: "BARE_RUNTIME_MISSING", message: "desktop native plugin does not implement OTP1 IPC; use LocalWorkletPlatform", details: nil))
     case "suspend":
       suspended = true
       result(nil)

@@ -3,6 +3,8 @@
 
 import 'dart:io';
 
+import 'package:crypto/crypto.dart' show sha256;
+
 class BareRuntimeLaunch {
   const BareRuntimeLaunch({
     required this.executable,
@@ -19,8 +21,9 @@ class BareRuntimeLaunch {
 
 /// Resolves how to start the bundled worklet. Order:
 /// 1. `ORBITS_BARE_BIN` (absolute local path)
-/// 2. `tool/bare/bare.exe` / `tool/bare/bare` next to the repo
-/// 3. `node` for CI / desktop harness
+/// 2. Executable/application bundle relative layout
+/// 3. Repository `build/orbits-bare/` / `tool/bare/` layout
+/// 4. `node` for CI / desktop harness
 BareRuntimeLaunch resolveBareRuntime(
   File worklet, {
   bool allowNode = true,
@@ -60,7 +63,20 @@ BareRuntimeLaunch resolveBareRuntime(
 }
 
 File? _localBareBinary() {
+  final exeDir = File(Platform.resolvedExecutable).parent.path;
   final names = <String>[
+    // 1. Executable/application bundle relative paths:
+    if (Platform.isWindows) ...[
+      '$exeDir${Platform.pathSeparator}bare.exe',
+      '$exeDir${Platform.pathSeparator}lib${Platform.pathSeparator}bare.exe',
+      '$exeDir${Platform.pathSeparator}bin${Platform.pathSeparator}bare.exe',
+    ],
+    if (Platform.isLinux || Platform.isMacOS) ...[
+      '$exeDir${Platform.pathSeparator}bare',
+      '$exeDir${Platform.pathSeparator}lib${Platform.pathSeparator}bare',
+      '$exeDir${Platform.pathSeparator}bin${Platform.pathSeparator}bare',
+    ],
+    // 2. Repository build tree:
     if (Platform.isLinux) ...[
       'build/orbits-bare/linux-x64/bare',
       'build/orbits-bare/linux-arm64/bare',
@@ -81,7 +97,20 @@ File? _localBareBinary() {
     if (!file.existsSync()) continue;
     final sidecar = File('${file.path}.sha256');
     if (!sidecar.existsSync()) continue;
-    return file;
+    try {
+      final expectedSha = sidecar
+          .readAsStringSync()
+          .trim()
+          .split(RegExp(r'\s+'))
+          .first
+          .toLowerCase();
+      if (expectedSha.length != 64) continue;
+      final actualSha =
+          sha256.convert(file.readAsBytesSync()).toString().toLowerCase();
+      if (expectedSha == actualSha) {
+        return file;
+      }
+    } catch (_) {}
   }
   return null;
 }

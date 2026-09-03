@@ -76,28 +76,21 @@ int orbits_bare_host_unpublish(OrbitsBareHost* host) {
   return kOrbitsHostOk;
 }
 
-int orbits_bare_host_connect(OrbitsBareHost* host) { return require_live(host); }
+int orbits_bare_host_connect(OrbitsBareHost* host) { return kOrbitsHostBareMissing; }
 int orbits_bare_host_disconnect(OrbitsBareHost* host) {
-  return require_live(host);
+  return kOrbitsHostBareMissing;
 }
 int orbits_bare_host_refresh_network(OrbitsBareHost* host) {
-  return require_live(host);
+  return kOrbitsHostBareMissing;
 }
 
 int orbits_bare_host_send(OrbitsBareHost* host, size_t frame_len) {
-  const int live = require_live(host);
-  if (live != kOrbitsHostOk) return live;
-  if (frame_len > 256 * 1024) return kOrbitsHostIpcFrame;
-  return kOrbitsHostOk;
+  return kOrbitsHostBareMissing;
 }
 
 int orbits_bare_host_send_file(OrbitsBareHost* host, const char* path,
                                int64_t size_bytes) {
-  const int live = require_live(host);
-  if (live != kOrbitsHostOk) return live;
-  if (path == NULL || path[0] == '\0') return kOrbitsHostPathRequired;
-  if (size_bytes > (int64_t)50 * 1024 * 1024) return kOrbitsHostOversize;
-  return kOrbitsHostOk;
+  return kOrbitsHostBareMissing;
 }
 
 int orbits_bare_host_suspend(OrbitsBareHost* host) {
