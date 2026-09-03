@@ -35,6 +35,10 @@ void main() {
     expect(File('tool/bare/link-official-kit.sh').existsSync(), isTrue);
     expect(File('tool/bare/verify-packaged-kit.sh').existsSync(), isTrue);
     expect(File('tool/bare/verify-kit-start.sh').existsSync(), isTrue);
+    expect(
+      File('tool/bare/verify-kit-start.sh').readAsStringSync(),
+      contains('uname -s'),
+    );
   });
 
   test('BareKit mobile hooks verify without downloading prebuilds.zip', () {

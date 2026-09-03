@@ -41,10 +41,16 @@ linux_syms="$(nm -D "$LINUX_SO")"
 grep -q 'bare_worklet_start' <<<"$linux_syms"
 echo "ok linux libbare-kit.so exports bare_worklet_start"
 
-PROBE_SRC="$(mktemp -t orbits-barekit-start-XXXXXX.c)"
-PROBE_BIN="$(mktemp -t orbits-barekit-start-XXXXXX)"
+if [[ "$(uname -s)" != "Linux" ]]; then
+  echo "skip official bare_worklet_start probe on $(uname -s) (linux/x64 .so)"
+  exit 0
+fi
+
+PROBE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/orbits-barekit-start.XXXXXX")"
+PROBE_SRC="$PROBE_DIR/kit_start.c"
+PROBE_BIN="$PROBE_DIR/kit_start"
 cleanup() {
-  rm -f "$PROBE_SRC" "$PROBE_BIN"
+  rm -rf "$PROBE_DIR"
 }
 trap cleanup EXIT
 
