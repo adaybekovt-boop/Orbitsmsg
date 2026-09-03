@@ -544,6 +544,23 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Build debug APKs for two-device Bare testing
+        run: |
+          set -euo pipefail
+          flutter build apk --debug --split-per-abi \
+            --dart-define=ORBITS_DEV_BARE_TRANSPORT=true
+          mkdir -p dist-dev
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk dist-dev/orbits-android-arm64-dev-bare.apk
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-debug.apk dist-dev/orbits-android-arm32-dev-bare.apk
+          bash tool/bare/verify-packaged-kit.sh apk dist-dev/orbits-android-arm64-dev-bare.apk
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: orbits-android-dev-bare
+          path: dist-dev/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
   # ────────────────────────────────────────────────────────────────────
   # Web. Static-site bundle, ship as a zip artifact. Two base-href
   # variants are produced:

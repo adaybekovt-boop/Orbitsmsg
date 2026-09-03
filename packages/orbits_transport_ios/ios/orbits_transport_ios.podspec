@@ -12,7 +12,7 @@ Pod::Spec.new do |s|
   s.swift_version    = '5.0'
   s.static_framework = true
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
-  s.frameworks = 'Compression'
+  s.libraries = 'z', 'compression'
   s.resource_bundles = {
     'orbits_transport_ios_privacy' => ['Resources/PrivacyInfo.xcprivacy']
   }
