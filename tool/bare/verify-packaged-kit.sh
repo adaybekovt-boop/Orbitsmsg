@@ -50,8 +50,13 @@ if [[ "$MODE" == "apk" ]]; then
       exit 1
     fi
   done
+  if ! grep -q 'assets/orbits-worklet-modules.zip' <<<"$listing"; then
+    echo "BARE_WORKLET_FAILED: APK missing orbits-worklet-modules.zip" >&2
+    exit 1
+  fi
   echo "ok packaged BareKit in $apk"
   grep -E 'lib/.+/libbare-kit\.so' <<<"$listing" || true
+  grep -E 'orbits-worklet-modules.zip|worklet.js' <<<"$listing" || true
   exit 0
 fi
 
