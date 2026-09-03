@@ -71,6 +71,8 @@ if 'start.invoke(worklet, "/orbits/worklet.js", source, null)' in kt:
     raise SystemExit("android host must not invent a 3-arg Worklet.start")
 if "UTF-8" not in kt:
     raise SystemExit("android host must use official start(filename, source, charset, args)")
+if "Redirect.DISCARD" in kt:
+    raise SystemExit("android host must not use Java 9 ProcessBuilder.Redirect.DISCARD")
 
 swift = swift_path.read_text()
 if "canImport(BareKit)" not in swift:

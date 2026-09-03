@@ -43,10 +43,16 @@ internal object OrbitsBareRuntime {
 
   private fun tryLaunchOfficial(binary: File): Boolean {
     return try {
-      ProcessBuilder(binary.absolutePath)
-        .redirectError(ProcessBuilder.Redirect.DISCARD)
-        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
-        .start()
+      // android.jar ProcessBuilder does not expose desktop Java 9 redirect sinks.
+      val process = ProcessBuilder(binary.absolutePath).start()
+      try {
+        process.inputStream.close()
+      } catch (_: Exception) {
+      }
+      try {
+        process.errorStream.close()
+      } catch (_: Exception) {
+      }
       true
     } catch (_: Exception) {
       false

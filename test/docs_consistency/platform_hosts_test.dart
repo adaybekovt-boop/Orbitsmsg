@@ -82,6 +82,7 @@ void main() {
     ).readAsStringSync();
     expect(android, contains('to.holepunch.bare.kit.Worklet'));
     expect(android, contains('UTF-8'));
+    expect(android, isNot(contains('Redirect.DISCARD')));
     expect(
       android,
       isNot(contains('start.invoke(worklet, "/orbits/worklet.js", source, null)')),
