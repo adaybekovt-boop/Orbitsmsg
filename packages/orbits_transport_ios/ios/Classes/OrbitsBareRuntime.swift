@@ -83,6 +83,7 @@ enum OrbitsBareRuntime {
       "relayForced": args["relayForced"] as? Bool ?? false,
       "backend": backend,
       "requireRealCorestore": true,
+      "firewalled": false,
       "storageDir": storage.path,
       "writerDeviceId": args["deviceId"] ?? args["peerId"] as Any,
     ]

@@ -117,9 +117,6 @@ class Worklet {
       const key = Buffer.from(String(peer.noisePublicKey), 'hex')
       if (key.length !== 32) throw new Error('noisePublicKey must be 32 bytes hex')
       this._swarm.swarm.joinPeer(key)
-      if (typeof this._swarm.swarm.flush === 'function') {
-        await this._swarm.swarm.flush()
-      }
     } else if (!this._topic) {
       throw new Error('publish or noisePublicKey required before connect')
     }

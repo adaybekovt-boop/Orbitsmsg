@@ -104,6 +104,7 @@ internal object OrbitsBareRuntime {
     startParams["relayForced"] = args?.get("relayForced") == true
     startParams["backend"] = backend
     startParams["requireRealCorestore"] = true
+    startParams["firewalled"] = false
     startParams["storageDir"] = storage.absolutePath
     startParams["writerDeviceId"] = args?.get("deviceId") ?: args?.get("peerId")
     return created.request("start", startParams, 45_000)

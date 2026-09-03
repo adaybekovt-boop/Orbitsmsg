@@ -30,6 +30,7 @@ async function createHyperswarmBackend(opts = {}) {
     keyPair: opts.keyPair,
     seed: opts.seed,
     firewall: opts.firewall || (() => false),
+    firewalled: opts.firewalled === true,
     dht,
   })
   return {
