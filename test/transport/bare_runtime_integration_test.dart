@@ -16,7 +16,14 @@ void main() {
       expect(worklet.existsSync(), isTrue);
       inspectLocalWorkletBundle().assertSafeForProduction();
 
-      final launch = resolveBareRuntime(worklet, allowNode: !Platform.isLinux);
+      late final BareRuntimeLaunch launch;
+      try {
+        launch = resolveBareRuntime(worklet, allowNode: !Platform.isLinux);
+      } on StateError catch (error) {
+        // App-test CI fetches Bare; if the artifact is absent, stay fail-closed.
+        expect(error.message, contains('BARE_RUNTIME_MISSING'));
+        return;
+      }
       if (launch.kind != 'bare') {
         // Non-Linux CI hosts may not have fetched the official binary.
         expect(launch.kind, 'node');
