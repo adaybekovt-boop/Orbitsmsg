@@ -7,8 +7,9 @@ PeerJS remains the default. This path is unavailable in release builds.
 
 - Two phones (Android+Android, iOS+iOS, or mixed).
 - Debug builds from this branch. Release APKs ignore the test path.
-- The same Orbits identities you already use: create or import an
-  account on each device, then add each other as contacts via QR.
+- Two **disposable test identities**. Do not use real conversations,
+  production accounts, or contacts that already have chat history. Create
+  a fresh account on each device, then add each other as contacts via QR.
 
 ## Build
 
@@ -46,7 +47,9 @@ phones. Release builds hide the switch.
 
 ## Connect the two devices
 
-1. Create or import an identity on each phone (existing Orbits flow).
+1. Create a **new disposable identity** on each phone. Do not import a
+   real account and do not reuse a phone that already has production
+   chats. After the test, you can delete the accounts.
 2. Exchange QR codes so each phone has the other as a contact. That
    shared contact secret is the discovery topic
    `HASH("orbits-contact-discovery-v1" || secret)`.
