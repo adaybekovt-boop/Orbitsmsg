@@ -111,7 +111,11 @@ void main() {
       });
       final src = await fixture(dir, 200000, 5);
       var count = 0;
-      await for (final chunk in streamAttachmentPath(src.path, const [2])) {
+      await for (final chunk in streamAttachmentPath(
+        src.path,
+        const [2],
+        fileId: 'stream',
+      )) {
         count += 1;
         expect(chunk.ciphertext, isNotEmpty);
       }

@@ -124,13 +124,14 @@ void main() {
     var epoch = SenderKeyEpoch(
       epochId: 1,
       memberDeviceIds: {'d1', 'd2'},
-      epochKey: const [4, 5, 6],
+      epochKey: List<int>.generate(32, (i) => i + 4),
     );
-    epoch = epoch.rotateAfterRemoval('d2', const [7, 8, 9]);
+    epoch = epoch.rotateAfterRemoval('d2', List<int>.generate(32, (i) => i + 7));
     expect(epoch.canRecoverSkipped(1), isTrue);
     expect(epoch.canRecoverSkipped(1 - 10), isFalse);
-    final wrapped = epoch.wrapAttachmentKey(const [1, 2, 3]);
-    expect(epoch.unwrapAttachmentKey(wrapped, 'd1'), [1, 2, 3]);
+    final fileKey = List<int>.generate(32, (i) => 32 - i);
+    final wrapped = epoch.wrapAttachmentKey(fileKey);
+    expect(epoch.unwrapAttachmentKey(wrapped, 'd1'), fileKey);
     expect(() => epoch.unwrapAttachmentKey(wrapped, 'd2'), throwsStateError);
     expect(epoch.toPersistedJson().containsKey('epochKey'), isFalse);
     expect(kRoomsApplicationE2eImplemented, isFalse);

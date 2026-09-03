@@ -25,7 +25,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/error_reporter.dart';
+import '../attachments/temp_attachment.dart';
 import '../transport/dev_bare_transport.dart';
+import '../transport/transport_api.dart';
 import '../utils/heavy_codec.dart';
 
 import '../messaging/lost_inbound_ledger.dart';
@@ -1101,6 +1103,56 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     unawaited(db.savePeer({'id': normalized, 'lastSeenAt': now()}));
 
     if (!open) return msgId;
+
+    if (conns.canUseNative(normalized) || isDevBareTransportRequested()) {
+      final desc = await writeTempAttachment(
+        bytes: bytes,
+        name: safeName,
+        mime: mime,
+      );
+      if (desc == null) {
+        if (isDevBareTransportRequested()) {
+          unawaited(db.updateMessageStatus(msgId, 'pending'));
+          return msgId;
+        }
+      } else {
+        try {
+          await conns.sendFile(
+            normalized,
+            TransportFileDescriptor(
+              path: desc.path,
+              sizeBytes: desc.sizeBytes,
+              fileName: safeName,
+              mime: mime,
+              transferId: msgId.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_'),
+            ),
+          );
+          final metaOk = await conns.sendEncrypted(normalized, {
+            'type': 'msg',
+            'id': msgId,
+            'text': '',
+            'ts': ts,
+            'from': selfId,
+            'msgType': 'file',
+            'attachment': <String, Object?>{
+              ...attachmentRef,
+              'transferId': msgId,
+              'native': true,
+            },
+            if (sanitizedReply != null) 'replyTo': sanitizedReply,
+          });
+          if (metaOk) {
+            _sentAckGuard.arm(msgId);
+          } else {
+            unawaited(db.updateMessageStatus(msgId, 'pending'));
+          }
+          return msgId;
+        } catch (_) {
+          unawaited(db.updateMessageStatus(msgId, 'pending'));
+          if (isDevBareTransportRequested()) return msgId;
+        }
+      }
+    }
 
     final b64 = await b64EncodeHeavy(bytes);
     if (b64.length > _maxFileB64Len) {

@@ -30,6 +30,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import '../attachments/temp_attachment.dart';
 import '../core/bundle_cache.dart';
 import '../core/prekey_bundle.dart';
 import '../core/wire_crypto.dart';
@@ -657,6 +658,27 @@ Future<bool> dispatchReliablePlaintext(
           );
           attachmentRef = metaOut;
         } catch (_) {
+          attachmentRef = <String, Object?>{...metaOut, 'missing': true};
+        }
+      } else if (attachmentMeta['native'] == true) {
+        final incoming = await readIncomingTransfer(
+          transferId: attachmentMeta['transferId'] as String? ?? '',
+          name: name,
+        );
+        if (incoming != null && incoming.isNotEmpty) {
+          await db.saveFileBlob(
+            msgId,
+            incoming,
+            mime: mime,
+            name: name,
+            kind: kind,
+            size: incoming.length,
+            width: width,
+            height: height,
+            duration: duration,
+          );
+          attachmentRef = metaOut;
+        } else {
           attachmentRef = <String, Object?>{...metaOut, 'missing': true};
         }
       } else {

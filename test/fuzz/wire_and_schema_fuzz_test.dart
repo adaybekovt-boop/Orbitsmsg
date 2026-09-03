@@ -90,7 +90,12 @@ void main() {
   test('attachment metadata and room events stay deterministic under fuzz', () {
     final key = List<int>.filled(16, 7);
     for (final size in const [0, 1, 17, 1024, 65 * 1024]) {
-      final chunks = ResumableAttachment.chunk(bytes(size), key);
+      final chunks = ResumableAttachment.chunk(
+        bytes(size),
+        key,
+        fileId: 'f-$size',
+        totalBytes: size,
+      );
       final attachment = ResumableAttachment(
         fileId: 'f-$size',
         totalBytes: size,
@@ -107,7 +112,15 @@ void main() {
           ),
           hash: chunks.first.hash,
         );
-        expect(() => ResumableAttachment.decrypt([bad], key), throwsStateError);
+        expect(
+          () => ResumableAttachment.decrypt(
+            [bad],
+            key,
+            fileId: 'f-$size',
+            totalBytes: size,
+          ),
+          throwsStateError,
+        );
       }
     }
 

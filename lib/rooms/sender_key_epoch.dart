@@ -2,6 +2,12 @@
 // E2E. Do not flip kRoomsApplicationE2eImplemented. Do not add
 // room_crypto.dart that claims kick-rekey until an independent review.
 
+import 'dart:convert';
+import 'dart:math';
+import 'dart:typed_data';
+
+import 'package:pointycastle/export.dart' as pc;
+
 class SenderKeyEpoch {
   SenderKeyEpoch({
     required this.epochId,
@@ -52,24 +58,54 @@ class SenderKeyEpoch {
   }
 
   List<int> wrapAttachmentKey(List<int> fileKey) {
-    return [
-      for (var i = 0; i < fileKey.length; i++)
-        fileKey[i] ^ epochKey[i % epochKey.length],
-    ];
+    if (epochKey.length != 32 || fileKey.length != 32) {
+      throw ArgumentError('wrapAttachmentKey requires 32-byte keys');
+    }
+    final nonce = Uint8List(12);
+    final rng = Random.secure();
+    for (var i = 0; i < nonce.length; i++) {
+      nonce[i] = rng.nextInt(256);
+    }
+    final cipher = pc.GCMBlockCipher(pc.AESEngine())
+      ..init(
+        true,
+        pc.AEADParameters(
+          pc.KeyParameter(Uint8List.fromList(epochKey)),
+          128,
+          nonce,
+          utf8.encode('orbits-sender-key-wrap-v1'),
+        ),
+      );
+    return [...nonce, ...cipher.process(Uint8List.fromList(fileKey))];
   }
 
   List<int> unwrapAttachmentKey(List<int> wrapped, String deviceId) {
     if (!canUnwrap(deviceId)) {
       throw StateError('excluded device cannot unwrap attachment key');
     }
-    return wrapAttachmentKey(wrapped);
+    if (epochKey.length != 32 || wrapped.length < 28) {
+      throw ArgumentError('unwrapAttachmentKey: invalid wrap');
+    }
+    final nonce = Uint8List.fromList(wrapped.sublist(0, 12));
+    final sealed = Uint8List.fromList(wrapped.sublist(12));
+    final cipher = pc.GCMBlockCipher(pc.AESEngine())
+      ..init(
+        false,
+        pc.AEADParameters(
+          pc.KeyParameter(Uint8List.fromList(epochKey)),
+          128,
+          nonce,
+          utf8.encode('orbits-sender-key-wrap-v1'),
+        ),
+      );
+    return cipher.process(sealed);
   }
 
   Map<String, Object?> toPersistedJson() => <String, Object?>{
-    'epochId': epochId,
-    'memberDeviceIds': memberDeviceIds.toList()..sort(),
-    'maxSkip': maxSkip,
-    'parentEpochId': parentEpochId,
-    // epochKey is secret and must be vault-wrapped by the caller.
-  };
+        'epochId': epochId,
+        'memberDeviceIds': memberDeviceIds.toList()..sort(),
+        'maxSkip': maxSkip,
+        'parentEpochId': parentEpochId,
+        // epochKey is secret and must be vault-wrapped by the caller.
+      };
 }

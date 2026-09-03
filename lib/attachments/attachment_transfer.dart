@@ -63,7 +63,12 @@ class AttachmentTransfer {
     if (bytes.length != totalBytes) {
       throw StateError('attachment size mismatch');
     }
-    return ResumableAttachment.chunk(bytes, fileKey);
+    return ResumableAttachment.chunk(
+      bytes,
+      fileKey,
+      fileId: fileId,
+      totalBytes: totalBytes,
+    );
   }
 
   void acceptChunk(AttachmentChunk chunk, {required int maxOffset}) {
@@ -90,7 +95,12 @@ class AttachmentTransfer {
     if (received.length != expectedChunks) {
       throw StateError('attachment incomplete');
     }
-    return ResumableAttachment.decrypt(received.values.toList(), fileKey);
+    return ResumableAttachment.decrypt(
+      received.values.toList(),
+      fileKey,
+      fileId: fileId,
+      totalBytes: totalBytes,
+    );
   }
 
   Future<void> writeAssembled(String destPath) async {
@@ -115,6 +125,7 @@ class AttachmentTransfer {
 Stream<AttachmentChunk> streamAttachmentPath(
   String path,
   List<int> fileKey, {
+  required String fileId,
   int concurrency = 2,
 }) async* {
   final file = File(path);
@@ -131,7 +142,14 @@ Stream<AttachmentChunk> streamAttachmentPath(
           ? length
           : offset + kAttachmentChunkSize;
       final slice = await raf.read(end - offset);
-      final ct = encryptAttachmentChunk(slice, fileKey, index, offset: offset);
+      final ct = encryptAttachmentChunk(
+        slice,
+        fileKey,
+        index,
+        fileId: fileId,
+        totalBytes: length,
+        offset: offset,
+      );
       yield AttachmentChunk(
         index: index,
         offset: offset,
