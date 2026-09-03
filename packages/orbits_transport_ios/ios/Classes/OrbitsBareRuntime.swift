@@ -103,8 +103,15 @@ enum OrbitsBareRuntime {
       "firewalled": false,
       "storageDir": storage.path,
       "writerDeviceId": args["deviceId"] ?? args["peerId"] as Any,
+      "noiseSeed": args["noiseSeed"] as Any,
     ]
-    return try request("start", params: params, timeoutMs: 45_000)
+    let started = try request("start", params: params, timeoutMs: 45_000)
+    let info = try request("runtime.info", params: [:], timeoutMs: 8_000)
+    var combined = started
+    for (key, value) in info {
+      combined[key] = value
+    }
+    return combined
 #else
     _ = registrar
     _ = args
@@ -298,6 +305,9 @@ enum OrbitsBareRuntime {
       "detail": payload["detail"] ?? body["detail"] as Any,
       "state": payload["state"] ?? body["state"] as Any,
       "requestId": payload["requestId"] ?? body["requestId"] as Any,
+      "binding": payload["binding"] ?? body["binding"] as Any,
+      "connectionNoisePublicKey": payload["connectionNoisePublicKey"] ?? body["connectionNoisePublicKey"] as Any,
+      "ownerPeerId": payload["ownerPeerId"] ?? body["ownerPeerId"] as Any,
     ]
     if let b64 = (payload["frameB64"] ?? body["frameB64"]) as? String, !b64.isEmpty,
        let bytes = Data(base64Encoded: b64) {

@@ -34,6 +34,9 @@ internal object OrbitsBareRuntime {
   @Volatile
   private var session: Session? = null
 
+  @Volatile
+  private var pendingEventSink: ((Map<String, Any?>) -> Unit)? = null
+
   fun tryStart(
     call: io.flutter.plugin.common.MethodCall,
     binding: FlutterPlugin.FlutterPluginBinding? = null,
@@ -149,6 +152,7 @@ internal object OrbitsBareRuntime {
         val ipc = ipcCtor.newInstance(worklet)
 
         val created = Session(workletClass, ipcClass, worklet, ipc, thread, ipcHandler)
+        created.setEventSink(pendingEventSink)
         synchronized(this@OrbitsBareRuntime) {
           session = created
         }
@@ -162,6 +166,7 @@ internal object OrbitsBareRuntime {
         startParams["firewalled"] = false
         startParams["storageDir"] = storage.absolutePath
         startParams["writerDeviceId"] = args?.get("deviceId") ?: args?.get("peerId")
+        startParams["noiseSeed"] = args?.get("noiseSeed")
 
         // Explicit startup readiness: start() completes only after OTP1 response
         created.request("start", startParams, 45_000) { startRes ->
@@ -268,25 +273,24 @@ internal object OrbitsBareRuntime {
       callback?.invoke()
       return
     }
-    // Attempt stop notification then terminate immediately
-    live.request("stop", emptyMap(), 2_000) {
-      live.terminateQuiet()
-      callback?.invoke()
+    val once = AtomicBoolean(false)
+    val complete = Runnable {
+      if (once.compareAndSet(false, true)) {
+        live.terminateQuiet()
+        callback?.invoke()
+      }
     }
-    // Guarantee prompt termination within 2.5 seconds
-    live.ipcHandler.postDelayed({
-      live.terminateQuiet()
-      callback?.invoke()
-    }, 2500)
+    live.request("stop", emptyMap(), 2_000) {
+      complete.run()
+    }
+    live.ipcHandler.postDelayed(complete, 2500)
   }
 
   fun isLive(): Boolean = session?.isLive() == true
 
   fun setEventSink(sink: ((Map<String, Any?>) -> Unit)?) {
-    val live = session
-    if (live != null) {
-      live.setEventSink(sink)
-    }
+    pendingEventSink = sink
+    session?.setEventSink(sink)
   }
 
   internal class PendingRequest(
@@ -545,7 +549,9 @@ internal object OrbitsBareRuntime {
         synchronized(earlyEvents) {
           while (earlyEvents.isNotEmpty()) {
             val ev = earlyEvents.removeFirst()
-            main.post { sink(ev) }
+            main.post {
+          if (!closed.get()) sink(ev)
+        }
           }
         }
       }
@@ -555,7 +561,9 @@ internal object OrbitsBareRuntime {
       if (closed.get()) return
       val sink = eventSink
       if (sink != null) {
-        main.post { sink(event) }
+        main.post {
+          if (!closed.get()) sink(event)
+        }
       } else {
         synchronized(earlyEvents) {
           if (earlyEvents.size < 64) {
@@ -567,6 +575,8 @@ internal object OrbitsBareRuntime {
 
     fun terminateQuiet(cause: Throwable = IllegalStateException("ipc closed")) {
       if (!closed.compareAndSet(false, true)) return
+      _eventSink = null
+      synchronized(earlyEvents) { earlyEvents.clear() }
       writeQueue.clear()
       for ((_, req) in pending) {
         ipcHandler.removeCallbacks(req.timeoutRunnable)
@@ -600,6 +610,9 @@ internal object OrbitsBareRuntime {
     out["detail"] = payload["detail"] ?: body["detail"]
     out["state"] = payload["state"] ?: body["state"]
     out["requestId"] = payload["requestId"] ?: body["requestId"]
+    out["binding"] = payload["binding"] ?: body["binding"]
+    out["connectionNoisePublicKey"] = payload["connectionNoisePublicKey"] ?: body["connectionNoisePublicKey"]
+    out["ownerPeerId"] = payload["ownerPeerId"] ?: body["ownerPeerId"]
     val b64 = (payload["frameB64"] ?: body["frameB64"]) as? String
     if (!b64.isNullOrEmpty()) {
       out["bytes"] = android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
