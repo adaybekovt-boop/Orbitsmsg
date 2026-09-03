@@ -112,7 +112,7 @@ void main() {
       expiresAt: now + 3600000,
       signatureByIdentityKey: Uint8List(0),
     );
-    final sig = await signP256Ecdsa(pair, draft.signedPayload());
+    final sig = signP256Ecdsa(pair, draft.signedPayload());
     final validBinding = DeviceBinding(
       version: draft.version,
       identityPublicKey: draft.identityPublicKey,

@@ -47,21 +47,21 @@ if [[ ! -x "${ORBITS_BARE_BIN:-}" ]]; then
   HOST_BIN="$(python3 - <<PY
 import platform
 from pathlib import Path
-root = Path("$ROOT") / "build" / "orbits-bare"
+root = Path("build/orbits-bare")
 sysname = platform.system().lower()
 machine = platform.machine().lower()
 os_name = {"linux":"linux","darwin":"darwin","windows":"win32"}.get(sysname,"linux")
 arch = "x64" if machine in {"x86_64","amd64"} else "arm64"
 name = "bare.exe" if os_name == "win32" else "bare"
-print(root / f"{os_name}-{arch}" / name)
+print((root / f"{os_name}-{arch}" / name).as_posix())
 PY
 )"
-  if [[ -x "$HOST_BIN" ]]; then
+  if [[ -x "$HOST_BIN" || -f "$HOST_BIN" ]]; then
     export ORBITS_BARE_BIN="$HOST_BIN"
   fi
 fi
 
-if [[ ! -x "${ORBITS_BARE_BIN:-}" ]]; then
+if [[ ! -x "${ORBITS_BARE_BIN:-}" && ! -f "${ORBITS_BARE_BIN:-}" ]]; then
   echo "blocked: verified Bare binary is not executable" >&2
   exit 2
 fi
