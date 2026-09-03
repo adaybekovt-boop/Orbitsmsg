@@ -55,4 +55,11 @@ class MemoryJournal {
 
   List<JournalRecord> since(int cursor) =>
       _records.where((r) => r.seq >= cursor).toList(growable: false);
+
+  /// Returns records filtered by authorized conversation IDs (F-20).
+  List<JournalRecord> recordsForConversations(Set<String> authorizedConversations) =>
+      _records.where((r) {
+        final cid = r.fields['conversationId'] as String?;
+        return cid == null || authorizedConversations.contains(cid);
+      }).toList(growable: false);
 }

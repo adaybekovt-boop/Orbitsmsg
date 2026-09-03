@@ -194,6 +194,11 @@ fi
 
 echo "ok mobile worklet zip $(wc -c < "$ZIP") bytes -> $ZIP"
 echo "ok copied iOS worklet zip (binaries excluded) -> $IOS_ZIP"
-if [[ -d "$UDX_XCFRAMEWORK" ]]; then
-  echo "ok assembled udx-native.xcframework -> $UDX_XCFRAMEWORK"
+if [[ -f "$ROOT/tool/bare/assemble_ios_addons.py" ]]; then
+  PYTHON_BIN="python3"
+  if ! command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="python"
+  fi
+  "$PYTHON_BIN" "$ROOT/tool/bare/assemble_ios_addons.py"
 fi
+

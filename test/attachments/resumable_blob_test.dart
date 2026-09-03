@@ -39,6 +39,36 @@ void main() {
     );
   });
 
+  test('AEAD tag failure rejects modified ciphertext or altered offset', () {
+    final key = List<int>.generate(32, (i) => i + 1);
+    final plain = [10, 20, 30, 40, 50];
+    final ct = encryptAttachmentChunk(plain, key, 0, offset: 0);
+
+    // Decrypt succeeds with matching parameters
+    final decrypted = decryptAttachmentChunk(ct, key, 0, offset: 0);
+    expect(decrypted, plain);
+
+    // Tampered offset (AAD mismatch) throws StateError
+    expect(
+      () => decryptAttachmentChunk(ct, key, 0, offset: 100),
+      throwsStateError,
+    );
+
+    // Tampered chunk index throws StateError
+    expect(
+      () => decryptAttachmentChunk(ct, key, 1, offset: 0),
+      throwsStateError,
+    );
+
+    // Tampered ciphertext bit throws StateError
+    final corrupted = List<int>.from(ct);
+    corrupted[0] ^= 0x01;
+    expect(
+      () => decryptAttachmentChunk(corrupted, key, 0, offset: 0),
+      throwsStateError,
+    );
+  });
+
   test('10 MiB attachment survives a dropped middle chunk', () {
     final key = List<int>.generate(32, (i) => i + 3);
     final plain = List<int>.generate(10 * 1024 * 1024, (i) => i % 251);

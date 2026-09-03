@@ -131,7 +131,7 @@ Stream<AttachmentChunk> streamAttachmentPath(
           ? length
           : offset + kAttachmentChunkSize;
       final slice = await raf.read(end - offset);
-      final ct = cryptAttachmentChunk(slice, fileKey, index);
+      final ct = encryptAttachmentChunk(slice, fileKey, index, offset: offset);
       yield AttachmentChunk(
         index: index,
         offset: offset,

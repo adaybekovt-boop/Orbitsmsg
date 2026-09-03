@@ -3,6 +3,8 @@
 // The development-only Bare path never installs LocalWorkletPlatform on
 // Android/iOS and never falls back to PeerJS.
 
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:orbits_transport/orbits_transport.dart';

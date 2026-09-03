@@ -30,8 +30,9 @@ Pod::Spec.new do |s|
   if File.directory?(local)
     vendored << 'BareKit.xcframework'
   end
-  if File.directory?(udx_local)
-    vendored << 'udx-native.xcframework'
+  Dir.glob(File.join(__dir__, '*.xcframework')).each do |fw|
+    name = File.basename(fw)
+    vendored << name unless vendored.include?(name)
   end
   if !vendored.empty?
     s.vendored_frameworks = vendored

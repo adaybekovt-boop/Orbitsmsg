@@ -81,8 +81,7 @@ tool/connectivity_harness/node_modules/
 # Official BareKit prebuilds (fetch --kit only; never commit the zip
 # or extracted classes.jar / XCFramework).
 **/prebuilds.zip
-**/BareKit.xcframework/
-**/udx-native.xcframework/
+**/*.xcframework/
 packages/orbits_transport_android/android/libs/
 packages/orbits_transport_ios/ios/orbits-worklet-modules.zip
 packages/orbits_transport_ios/ios/orbits-worklet-modules/

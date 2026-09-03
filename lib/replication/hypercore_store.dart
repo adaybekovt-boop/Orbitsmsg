@@ -21,7 +21,25 @@ class HypercoreLocalStore {
     return record;
   }
 
-  Map<String, Object?> toReplicationFrame(JournalRecord record) {
+  /// Returns records filtered by authorized conversation IDs (F-20).
+  /// Enforces that replication does not expose events from another conversation.
+  List<JournalRecord> recordsForConversations(Set<String> authorizedConversations) {
+    return blocks.where((r) {
+      final cid = r.fields['conversationId'] as String?;
+      return cid == null || authorizedConversations.contains(cid);
+    }).toList(growable: false);
+  }
+
+  Map<String, Object?> toReplicationFrame(
+    JournalRecord record, {
+    Set<String>? authorizedConversations,
+  }) {
+    if (authorizedConversations != null) {
+      final cid = record.fields['conversationId'] as String?;
+      if (cid != null && !authorizedConversations.contains(cid)) {
+        throw StateError('refusing to replicate record for unauthorized conversation: $cid');
+      }
+    }
     return <String, Object?>{
       'type': 'repl-event',
       'info': kReplicationEventInfo,
@@ -35,7 +53,10 @@ class HypercoreLocalStore {
     };
   }
 
-  JournalRecord? applyRemote(Map<String, Object?> frame) {
+  JournalRecord? applyRemote(
+    Map<String, Object?> frame, {
+    Set<String>? authorizedConversations,
+  }) {
     if (frame['type'] != 'repl-event') return null;
     if (frame['info'] != kReplicationEventInfo) return null;
     final kindName = frame['kind'] as String?;
@@ -53,6 +74,15 @@ class HypercoreLocalStore {
       }
     });
     if (!replicationFieldsAreSafe(fields.keys)) return null;
+
+    final cid = fields['conversationId'] as String?;
+    if (authorizedConversations != null &&
+        cid != null &&
+        !authorizedConversations.contains(cid)) {
+      // F-20: Reject replication record from conversation not authorized for this peer session
+      return null;
+    }
+
     final record = JournalRecord(
       seq: frame['seq'] as int? ?? blocks.length,
       writerDeviceId: frame['writerDeviceId'] as String? ?? '',

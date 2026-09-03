@@ -39,7 +39,14 @@ public class OrbitsTransportPlugin: NSObject, FlutterPlugin {
     case "unpublish":
       published = false
       result(nil)
-    case "connect", "disconnect", "refreshNetwork", "send", "sendFile":
+    case "connect", "disconnect", "refreshNetwork", "send":
+      result(FlutterError(code: "BARE_RUNTIME_MISSING", message: "desktop native plugin does not implement OTP1 IPC; use LocalWorkletPlatform", details: nil))
+    case "sendFile":
+      let path = args["path"] as? String ?? ""
+      if path.isEmpty {
+        result(FlutterError(code: "PATH_REQUIRED", message: "sendFile requires a path", details: nil))
+        return
+      }
       result(FlutterError(code: "BARE_RUNTIME_MISSING", message: "desktop native plugin does not implement OTP1 IPC; use LocalWorkletPlatform", details: nil))
     case "suspend":
       suspended = true

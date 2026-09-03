@@ -137,6 +137,7 @@ jobs:
           bash tool/bare/fetch-official-runtime.sh
           bash tool/bare/verify-runtime.sh
           npm ci --prefix tool/connectivity_harness
+          python3 tool/bare/assemble_ios_addons.py
 
       - name: flutter test
         run: flutter test --reporter expanded

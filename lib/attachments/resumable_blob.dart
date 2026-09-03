@@ -3,10 +3,11 @@
 
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart' show sha256;
+import 'package:crypto/crypto.dart' show Hmac, sha256;
 import 'package:pointycastle/export.dart' as pc;
 
 const int kAttachmentChunkSize = 64 * 1024;
+const int kAttachmentTagSize = 32;
 
 class AttachmentChunk {
   const AttachmentChunk({
@@ -53,7 +54,7 @@ class ResumableAttachment {
           : offset + kAttachmentChunkSize;
       final slice = plaintext.sublist(offset, end);
       final index = offset ~/ kAttachmentChunkSize;
-      final ct = cryptAttachmentChunk(slice, fileKey, index);
+      final ct = encryptAttachmentChunk(slice, fileKey, index, offset: offset);
       out.add(
         AttachmentChunk(
           index: index,
@@ -74,20 +75,37 @@ class ResumableAttachment {
       if (actual != chunk.hash) {
         throw StateError('attachment hash mismatch');
       }
-      out.add(cryptAttachmentChunk(chunk.ciphertext, fileKey, chunk.index));
+      out.add(decryptAttachmentChunk(
+        chunk.ciphertext,
+        fileKey,
+        chunk.index,
+        offset: chunk.offset,
+      ));
     }
     return out.toBytes();
   }
 }
 
-/// Cryptographically secure stream cipher for attachment chunks.
-/// Uses standard AES-256 in Counter (CTR) mode with a domain-separated
-/// per-chunk initialization vector derived from the chunk index.
-Uint8List cryptAttachmentChunk(List<int> data, List<int> key, int chunkIndex) {
+/// Authenticated encryption with associated data (AEAD) for attachment chunks.
+/// Uses standard Encrypt-then-MAC (AES-256-CTR + HMAC-SHA256) with domain-separated
+/// keys, 16-byte deterministic per-chunk IV, and 16-byte associated authenticated data
+/// binding the chunk index and byte offset.
+Uint8List encryptAttachmentChunk(
+  List<int> data,
+  List<int> key,
+  int chunkIndex, {
+  int offset = 0,
+}) {
   if (key.isEmpty) {
     throw ArgumentError('file key required');
   }
-  final aesKey = Uint8List.fromList(sha256.convert(key).bytes);
+  final encKey = Uint8List.fromList(
+    sha256.convert(<int>[0x45, 0x4e, 0x43, 0x31, ...key]).bytes,
+  );
+  final macKey = Uint8List.fromList(
+    sha256.convert(<int>[0x4d, 0x41, 0x43, 0x31, ...key]).bytes,
+  );
+
   final ivData = Uint8List(16);
   final bd = ByteData.sublistView(ivData);
   bd.setUint32(0, 0x4f424154); // 'OBAT'
@@ -95,9 +113,83 @@ Uint8List cryptAttachmentChunk(List<int> data, List<int> key, int chunkIndex) {
   final iv = Uint8List.fromList(sha256.convert(ivData).bytes.sublist(0, 16));
 
   final cipher = pc.SICStreamCipher(pc.AESEngine())
-    ..init(
-      true,
-      pc.ParametersWithIV(pc.KeyParameter(aesKey), iv),
-    );
-  return cipher.process(Uint8List.fromList(data));
+    ..init(true, pc.ParametersWithIV(pc.KeyParameter(encKey), iv));
+  final ciphertext = cipher.process(Uint8List.fromList(data));
+
+  final aad = Uint8List(16);
+  final abd = ByteData.sublistView(aad);
+  abd.setUint64(0, chunkIndex);
+  abd.setUint64(8, offset);
+
+  final hmac = Hmac(sha256, macKey);
+  final tag = hmac.convert(<int>[...aad, ...iv, ...ciphertext]).bytes;
+
+  final out = BytesBuilder(copy: false);
+  out.add(ciphertext);
+  out.add(tag);
+  return out.toBytes();
+}
+
+/// Authenticated decryption for attachment chunks with AEAD tag validation.
+Uint8List decryptAttachmentChunk(
+  List<int> data,
+  List<int> key,
+  int chunkIndex, {
+  int offset = 0,
+}) {
+  if (key.isEmpty) {
+    throw ArgumentError('file key required');
+  }
+  if (data.length < kAttachmentTagSize) {
+    throw StateError('attachment chunk too short for AEAD tag');
+  }
+  final encKey = Uint8List.fromList(
+    sha256.convert(<int>[0x45, 0x4e, 0x43, 0x31, ...key]).bytes,
+  );
+  final macKey = Uint8List.fromList(
+    sha256.convert(<int>[0x4d, 0x41, 0x43, 0x31, ...key]).bytes,
+  );
+
+  final ciphertext = data.sublist(0, data.length - kAttachmentTagSize);
+  final receivedTag = data.sublist(data.length - kAttachmentTagSize);
+
+  final ivData = Uint8List(16);
+  final bd = ByteData.sublistView(ivData);
+  bd.setUint32(0, 0x4f424154); // 'OBAT'
+  bd.setUint64(8, chunkIndex);
+  final iv = Uint8List.fromList(sha256.convert(ivData).bytes.sublist(0, 16));
+
+  final aad = Uint8List(16);
+  final abd = ByteData.sublistView(aad);
+  abd.setUint64(0, chunkIndex);
+  abd.setUint64(8, offset);
+
+  final hmac = Hmac(sha256, macKey);
+  final expectedTag = hmac.convert(<int>[...aad, ...iv, ...ciphertext]).bytes;
+
+  var diff = 0;
+  for (var i = 0; i < kAttachmentTagSize; i++) {
+    diff |= receivedTag[i] ^ expectedTag[i];
+  }
+  if (diff != 0) {
+    throw StateError('AEAD authentication tag mismatch');
+  }
+
+  final cipher = pc.SICStreamCipher(pc.AESEngine())
+    ..init(false, pc.ParametersWithIV(pc.KeyParameter(encKey), iv));
+  return cipher.process(Uint8List.fromList(ciphertext));
+}
+
+Uint8List cryptAttachmentChunk(
+  List<int> data,
+  List<int> key,
+  int chunkIndex, {
+  bool encrypt = true,
+  int offset = 0,
+}) {
+  if (encrypt) {
+    return encryptAttachmentChunk(data, key, chunkIndex, offset: offset);
+  } else {
+    return decryptAttachmentChunk(data, key, chunkIndex, offset: offset);
+  }
 }
