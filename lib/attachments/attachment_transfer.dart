@@ -131,11 +131,11 @@ Stream<AttachmentChunk> streamAttachmentPath(
           ? length
           : offset + kAttachmentChunkSize;
       final slice = await raf.read(end - offset);
-      final ct = _xor(slice, fileKey);
+      final ct = cryptAttachmentChunk(slice, fileKey, index);
       yield AttachmentChunk(
         index: index,
         offset: offset,
-        ciphertext: Uint8List.fromList(ct),
+        ciphertext: ct,
         hash: sha256.convert(ct).toString(),
       );
       offset = end;
@@ -144,9 +144,4 @@ Stream<AttachmentChunk> streamAttachmentPath(
   } finally {
     await raf.close();
   }
-}
-
-List<int> _xor(List<int> data, List<int> key) {
-  if (key.isEmpty) throw ArgumentError('file key required');
-  return List<int>.generate(data.length, (i) => data[i] ^ key[i % key.length]);
 }

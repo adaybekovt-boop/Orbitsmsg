@@ -4,6 +4,7 @@
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show sha256;
+import 'package:pointycastle/export.dart' as pc;
 
 const int kAttachmentChunkSize = 64 * 1024;
 
@@ -51,12 +52,13 @@ class ResumableAttachment {
           ? plaintext.length
           : offset + kAttachmentChunkSize;
       final slice = plaintext.sublist(offset, end);
-      final ct = _xor(slice, fileKey);
+      final index = offset ~/ kAttachmentChunkSize;
+      final ct = cryptAttachmentChunk(slice, fileKey, index);
       out.add(
         AttachmentChunk(
-          index: offset ~/ kAttachmentChunkSize,
+          index: index,
           offset: offset,
-          ciphertext: Uint8List.fromList(ct),
+          ciphertext: ct,
           hash: sha256.convert(ct).toString(),
         ),
       );
@@ -72,18 +74,30 @@ class ResumableAttachment {
       if (actual != chunk.hash) {
         throw StateError('attachment hash mismatch');
       }
-      out.add(_xor(chunk.ciphertext, fileKey));
+      out.add(cryptAttachmentChunk(chunk.ciphertext, fileKey, chunk.index));
     }
     return out.toBytes();
   }
 }
 
-List<int> _xor(List<int> data, List<int> key) {
+/// Cryptographically secure stream cipher for attachment chunks.
+/// Uses standard AES-256 in Counter (CTR) mode with a domain-separated
+/// per-chunk initialization vector derived from the chunk index.
+Uint8List cryptAttachmentChunk(List<int> data, List<int> key, int chunkIndex) {
   if (key.isEmpty) {
     throw ArgumentError('file key required');
   }
-  return List<int>.generate(
-    data.length,
-    (i) => data[i] ^ key[i % key.length],
-  );
+  final aesKey = Uint8List.fromList(sha256.convert(key).bytes);
+  final ivData = Uint8List(16);
+  final bd = ByteData.sublistView(ivData);
+  bd.setUint32(0, 0x4f424154); // 'OBAT'
+  bd.setUint64(8, chunkIndex);
+  final iv = Uint8List.fromList(sha256.convert(ivData).bytes.sublist(0, 16));
+
+  final cipher = pc.SICStreamCipher(pc.AESEngine())
+    ..init(
+      true,
+      pc.ParametersWithIV(pc.KeyParameter(aesKey), iv),
+    );
+  return cipher.process(Uint8List.fromList(data));
 }
