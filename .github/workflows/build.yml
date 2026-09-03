@@ -191,7 +191,7 @@ jobs:
 
       - name: Official Bare worklet integration
         working-directory: tool/connectivity_harness
-        run: node --test test/bare_runtime.test.js test/corestore_persist.test.js test/hyperswarm_dht.test.js test/two_runtime_loopback.test.js test/two_runtime_dht.test.js
+        run: node --test test/bare_runtime.test.js test/corestore_persist.test.js test/hyperswarm_dht.test.js test/two_runtime_loopback.test.js test/two_runtime_dht.test.js test/two_runtime_hyperswarm.test.js
 
       - name: Pin worklet bundle hash (no remote JS)
         run: bash tool/ci/verify_worklet_bundle.sh
@@ -292,6 +292,8 @@ jobs:
           bash tool/bare/fetch-official-runtime.sh --kit
           bash tool/bare/verify-runtime.sh --kit
           bash tool/bare/verify-kit-start.sh
+          npm ci --prefix tool/connectivity_harness
+          bash tool/bare/assemble-mobile-worklet.sh
 
       - name: Resolve dependencies and generate Drift code
         run: |
@@ -372,6 +374,8 @@ jobs:
           bash tool/bare/fetch-official-runtime.sh --kit
           bash tool/bare/verify-runtime.sh --kit
           bash tool/bare/verify-kit-start.sh
+          npm ci --prefix tool/connectivity_harness
+          bash tool/bare/assemble-mobile-worklet.sh
 
       - name: Cache CI sideload upload keystore
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0

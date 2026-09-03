@@ -41,6 +41,7 @@ class PeerDescriptor {
     required this.peerId,
     this.binding,
     this.discoverySecret,
+    this.noisePublicKey,
   });
 
   final String peerId;
@@ -48,6 +49,9 @@ class PeerDescriptor {
 
   /// Shared contact-discovery secret. Never the public Peer ID.
   final List<int>? discoverySecret;
+
+  /// Optional Hyperswarm Noise public key (hex). Not the identity key.
+  final String? noisePublicKey;
 }
 
 class TransportLocalConfiguration {

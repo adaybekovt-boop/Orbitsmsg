@@ -70,6 +70,33 @@ def orbitsBareKitAar = {
     return candidates.find { it.file }
 }()
 
+def orbitsMobileWorkletZip = {
+    def cur = project.projectDir
+    while (cur != null) {
+        def z = file("${cur}/build/orbits-bare/mobile-worklet.zip")
+        if (z.file) return z
+        cur = cur.parentFile
+    }
+    return null
+}()
+
+tasks.register("copyOrbitsWorkletModules") {
+    doLast {
+        def dest = file("${project.projectDir}/src/main/assets")
+        dest.mkdirs()
+        if (orbitsMobileWorkletZip != null) {
+            copy {
+                from orbitsMobileWorkletZip
+                into dest
+                rename { "orbits-worklet-modules.zip" }
+            }
+        }
+    }
+}
+afterEvaluate {
+    tasks.named("preBuild").configure { dependsOn("copyOrbitsWorkletModules") }
+}
+
 android {
     namespace = "app.orbits.transport"
     compileSdk = 36

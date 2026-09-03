@@ -6,6 +6,7 @@
 // shell already surfaces the same status — this is the place to inspect
 // it in detail.
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -14,6 +15,8 @@ import '../../core/haptics.dart';
 import '../../state/connections_notifier.dart';
 import '../../state/local_profile_provider.dart';
 import '../../state/peer_connection_provider.dart';
+import '../../transport/dev_bare_transport.dart';
+import '../../transport/native_transport_host.dart';
 import '../../themes/orbits_tokens.dart';
 import '../../ui/primitives/orbits_glass_button.dart';
 import '../../ui/primitives/orbits_glass_list_tile.dart';
@@ -36,6 +39,8 @@ class NetworkPage extends ConsumerWidget {
     final relayOnly = ref.watch(relayOnlyProvider);
     final lastConnErr =
         ref.watch(connectionsNotifierProvider.select((s) => s.lastConnectError));
+    final host = ref.watch(nativeTransportHostProvider);
+    final devBareOn = ref.watch(devBareTransportProvider);
 
     return Scaffold(
       appBar: OrbitsGlassAppBar(
@@ -155,6 +160,43 @@ class NetworkPage extends ConsumerWidget {
                     ),
                   );
                 },
+              ),
+            ),
+
+          const OrbsSectionTitle('Транспорт'),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            child: OrbitsGlassListTile(
+              title: const Text('Активный транспорт'),
+              subtitle: Text(host.visibleTransportLabel),
+            ),
+          ),
+          if (!kReleaseMode)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                title: const Text('Bare/Hyperswarm (dev)'),
+                subtitle: Text(
+                  devBareOn || isDevBareTransportRequested()
+                      ? 'Включено. Без отката на PeerJS. Нужен перезапуск сессии.'
+                      : 'Только отладочная сборка. Выключено в release.',
+                ),
+                trailing: Switch(
+                  value: devBareOn || kDevBareTransportDartDefine,
+                  onChanged: kDevBareTransportDartDefine
+                      ? null
+                      : (value) => ref
+                          .read(devBareTransportProvider.notifier)
+                          .set(value),
+                ),
+              ),
+            ),
+          if (host.lastError.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                title: const Text('Bare runtime'),
+                subtitle: Text(host.lastError),
               ),
             ),
 

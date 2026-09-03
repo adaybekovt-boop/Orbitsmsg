@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:typed_data';
+
 import 'package:flutter/services.dart';
 import 'package:orbits_transport_platform_interface/orbits_transport_platform_interface.dart';
 
@@ -8,11 +11,36 @@ class MethodChannelOrbitsTransport extends OrbitsTransportPlatform {
     : _channel = channel ?? const MethodChannel('app.orbits/transport');
 
   final MethodChannel _channel;
+  final StreamController<Map<String, Object?>> _events =
+      StreamController<Map<String, Object?>>.broadcast();
+  bool _incomingAttached = false;
+
+  @override
+  Stream<Map<String, Object?>> get events {
+    _ensureIncoming();
+    return _events.stream;
+  }
+
+  void _ensureIncoming() {
+    if (_incomingAttached) return;
+    _incomingAttached = true;
+    _channel.setMethodCallHandler(_onIncoming);
+  }
+
+  Future<dynamic> _onIncoming(MethodCall call) async {
+    if (call.method == 'event') {
+      final raw = call.arguments;
+      if (raw is Map) {
+        _events.add(Map<String, Object?>.from(raw));
+      }
+    }
+  }
 
   @override
   Future<void> start(Map<String, Object?> config) async {
     assertNoRemoteBareJs(config);
-    await _channel.invokeMethod<void>('start', config);
+    _ensureIncoming();
+    await _channel.invokeMethod<dynamic>('start', config);
   }
 
   @override
@@ -39,7 +67,7 @@ class MethodChannelOrbitsTransport extends OrbitsTransportPlatform {
     return _channel.invokeMethod<void>('send', {
       'peerId': peerId,
       'channel': channel,
-      'frame': frame,
+      'frame': Uint8List.fromList(frame),
     });
   }
 
@@ -67,4 +95,12 @@ class MethodChannelOrbitsTransport extends OrbitsTransportPlatform {
   @override
   Future<void> refreshNetwork() =>
       _channel.invokeMethod<void>('refreshNetwork');
+
+  Future<Map<String, Object?>> runtimeInfo() async {
+    final raw = await _channel.invokeMethod<dynamic>('runtimeInfo');
+    if (raw is Map) {
+      return Map<String, Object?>.from(raw);
+    }
+    return const <String, Object?>{};
+  }
 }

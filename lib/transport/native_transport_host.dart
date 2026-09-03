@@ -1,5 +1,7 @@
 // Starts the native carrier and binds it into ConnectionsNotifier.
 // Default product path stays PeerJS until rollout != off.
+// The development-only Bare path never installs LocalWorkletPlatform on
+// Android/iOS and never falls back to PeerJS.
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -15,6 +17,7 @@ import '../replication/memory_journal.dart';
 import '../state/auth_notifier.dart';
 import '../state/connections_notifier.dart';
 import 'capabilities.dart';
+import 'dev_bare_transport.dart';
 import 'device_binding.dart';
 import 'discovery_secret_store.dart';
 import 'journal_file_io.dart' if (dart.library.html) 'journal_file_stub.dart';
@@ -41,6 +44,7 @@ class NativeTransportHost {
   final bool contactForbidsFallback;
   OrbitsTransport? transport;
   String backend = 'none';
+  String lastError = '';
   NativeBackendDecision? lastDecision;
   bool attached = false;
   TransportLifecycle? lifecycle;
@@ -52,10 +56,28 @@ class NativeTransportHost {
         'backend': backend,
         'reason': attached ? 'attached' : 'idle',
         'rollout': hyperswarmRollout().name,
+        'devBare': isDevBareTransportRequested(),
+        if (lastError.isNotEmpty) 'error': lastError,
       };
 
+  String get visibleTransportLabel {
+    if (isDevBareTransportRequested()) {
+      if (attached && backend == 'hyperswarm') {
+        return 'Bare/Hyperswarm (dev)';
+      }
+      if (lastError.isNotEmpty) {
+        return 'Bare/Hyperswarm (dev) failed';
+      }
+      return 'Bare/Hyperswarm (dev) starting';
+    }
+    if (backend == 'hyperswarm') return 'Bare/Hyperswarm';
+    if (backend == 'peerjs' || backend == 'none') return 'PeerJS';
+    return backend;
+  }
+
   Future<void> ensureStarted() async {
-    if (!isHyperswarmTransportEnabled()) {
+    final devBare = isDevBareTransportRequested();
+    if (!isHyperswarmTransportEnabled() && !devBare) {
       lastDecision = selectNativeBackend(
         rollout: hyperswarmRollout(),
         peerjsFallbackEnabled: isPeerjsFallbackEnabled(),
@@ -73,8 +95,14 @@ class NativeTransportHost {
     await deviceRegistry.hydrate();
 
     _ensurePluginBoundary();
-    final chosen = await _chooseTransport();
-    if (chosen == null) return;
+    final chosen = await _chooseTransport(devBare: devBare);
+    if (chosen == null) {
+      if (devBare) {
+        lastError = 'BARE_RUNTIME_MISSING';
+        throw StateError('BARE_RUNTIME_MISSING');
+      }
+      return;
+    }
 
     transport = chosen;
 
@@ -82,12 +110,21 @@ class NativeTransportHost {
     await authorizeLocalDevice(material);
     final journal = await openLocalFileJournal(material.deviceId);
     final secret = discoverySecretStore.getOrCreateLocal();
-    await transport!.start(
-      TransportLocalConfiguration(
-        peerId: auth.user.peerId,
-        discoverySecret: secret,
-      ),
-    );
+    try {
+      await transport!.start(
+        TransportLocalConfiguration(
+          peerId: auth.user.peerId,
+          discoverySecret: secret,
+        ),
+      );
+    } catch (err) {
+      lastError = err.toString();
+      transport = null;
+      if (devBare) {
+        rethrow;
+      }
+      return;
+    }
 
     final now = DateTime.now().millisecondsSinceEpoch;
     final caps = await issueLocalCapabilityRecord(
@@ -149,9 +186,11 @@ class NativeTransportHost {
     );
     wake = OpaqueWakeService(onAccepted: (_) => lifecycle!.onOpaqueWake());
     attached = true;
+    lastError = '';
   }
 
   void _ensurePluginBoundary() {
+    if (isMobileBareHost()) return;
     final current = OrbitsTransportPlatform.instance;
     if (current is InProcessOrbitsTransportPlatform) return;
     if (current is LocalWorkletPlatform) return;
@@ -162,7 +201,16 @@ class NativeTransportHost {
     );
   }
 
-  Future<OrbitsTransport?> _chooseTransport() async {
+  Future<OrbitsTransport?> _chooseTransport({required bool devBare}) async {
+    if (isMobileBareHost()) {
+      lastDecision = const NativeBackendDecision(
+        backend: NativeBackendKind.hyperswarm,
+        attempted: <NativeBackendKind>[NativeBackendKind.hyperswarm],
+      );
+      backend = 'hyperswarm';
+      return PluginOrbitsTransport(backend: 'hyperswarm');
+    }
+
     final inProcess =
         OrbitsTransportPlatform.instance is InProcessOrbitsTransportPlatform;
     var moduleAvailable = inProcess;

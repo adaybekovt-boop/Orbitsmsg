@@ -44,6 +44,7 @@ import '../peer/room_plaintext_gate.dart';
 import '../peer/peerjs_client.dart';
 import '../calls/hyperswarm_signaling.dart';
 import '../core/feature_flags.dart';
+import '../transport/dev_bare_transport.dart';
 import '../peer/wire_transport.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
@@ -292,21 +293,23 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// don't have a reliable connection to this peer.
   Future<bool> sendEncrypted(String remoteId, Object? msg) async {
     final dual = _dual;
+    final failClosed = isDevBareTransportRequested();
     if (dual != null && dual.nativeEnabled) {
       if (dual.canUseNative(remoteId)) {
         try {
           return await dual.sendEncrypted(remoteId, msg);
         } catch (_) {
-          if (!isPeerjsFallbackEnabled()) return false;
+          if (failClosed || !isPeerjsFallbackEnabled()) return false;
         }
       } else if (dual.mailbox != null && dual.secrets.get(remoteId) != null) {
         try {
           return await dual.sendEncrypted(remoteId, msg);
         } catch (_) {
-          if (!isPeerjsFallbackEnabled()) return false;
+          if (failClosed || !isPeerjsFallbackEnabled()) return false;
         }
       }
     }
+    if (failClosed) return false;
     final conn = getConn(remoteId, 'reliable');
     if (conn == null) return false;
     return _wire.sendEncryptedOn(conn, remoteId, msg);

@@ -3,6 +3,8 @@
 // Module-level mutable state (matches JS). Persistence is out of scope here;
 // UI code can call the setters on unlock if it reads from stored prefs.
 
+import '../transport/dev_bare_transport.dart';
+
 /// Lowest wire-handshake protocol version we'll *complete*. v2 hellos are
 /// unsigned — they carry no identity key, so accepting one silently skips the
 /// signature check and the TOFU pin, leaving the session on a bare
@@ -78,9 +80,12 @@ void setHyperswarmDiagnosticsEnabled(bool value) {
   _flags.hyperswarmDiagnosticsEnabled = value;
 }
 
-/// Live native path is still PeerJS. Hyperswarm stays off until Phase 4.
+/// Live native path is still PeerJS. Hyperswarm stays off until Phase 4
+/// unless a development-only Bare test path is explicitly requested.
+/// The default rollout remains [HyperswarmRollout.off].
 bool isHyperswarmTransportEnabled() =>
-    _flags.hyperswarmRollout != HyperswarmRollout.off;
+    _flags.hyperswarmRollout != HyperswarmRollout.off ||
+    isDevBareTransportRequested();
 
 /// Test-only reset. Do not call from production code.
 void resetFlagsForTests() {
@@ -90,4 +95,5 @@ void resetFlagsForTests() {
   _flags.peerjsFallbackEnabled = true;
   _flags.hyperswarmRelayForced = false;
   _flags.hyperswarmDiagnosticsEnabled = false;
+  resetDevBareTransportForTests();
 }

@@ -32,6 +32,7 @@ class PluginOrbitsTransport implements OrbitsTransport {
       'relayForced': config.relayForced,
       'backend': backend,
       'remoteJs': false,
+      'requireRealCorestore': true,
       'ipcVersion': kOrbitsBareIpcInfo,
     });
   }
@@ -66,6 +67,7 @@ class PluginOrbitsTransport implements OrbitsTransport {
     return plugin.connect({
       'peerId': peer.peerId,
       if (peer.discoverySecret != null) 'discoverySecret': peer.discoverySecret,
+      if (peer.noisePublicKey != null) 'noisePublicKey': peer.noisePublicKey,
     });
   }
 
@@ -109,9 +111,13 @@ class PluginOrbitsTransport implements OrbitsTransport {
           (c) => c.name == channelName,
           orElse: () => TransportChannel.message,
         );
-        final bytes =
+        var bytes =
             (event['bytes'] as List?)?.whereType<int>().toList() ??
             const <int>[];
+        final b64 = event['frameB64'] as String?;
+        if (bytes.isEmpty && b64 != null && b64.isNotEmpty) {
+          bytes = base64Decode(b64);
+        }
         _events.add(TransportFrame(peerId, channel, bytes));
       case 'error':
         _events.add(

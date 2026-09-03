@@ -36,10 +36,20 @@ if [[ "$MODE" == "apk" ]]; then
     grep -E 'lib/' <<<"$listing" | head || true
     exit 1
   fi
-  if ! grep -q 'flutter_assets/tool/connectivity_harness/src/worklet.js' <<<"$listing"; then
-    echo "BARE_RUNTIME_MISSING: APK missing packaged worklet.js" >&2
-    exit 1
-  fi
+  for asset in \
+    flutter_assets/tool/connectivity_harness/src/worklet.js \
+    flutter_assets/tool/connectivity_harness/src/mux.js \
+    flutter_assets/tool/connectivity_harness/src/ipc.js \
+    flutter_assets/tool/connectivity_harness/src/swarm.js \
+    flutter_assets/tool/connectivity_harness/src/bare_compat.js \
+    flutter_assets/tool/connectivity_harness/src/discovery.js \
+    flutter_assets/tool/connectivity_harness/src/corestore_journal.js
+  do
+    if ! grep -q "$asset" <<<"$listing"; then
+      echo "BARE_RUNTIME_MISSING: APK missing $asset" >&2
+      exit 1
+    fi
+  done
   echo "ok packaged BareKit in $apk"
   grep -E 'lib/.+/libbare-kit\.so' <<<"$listing" || true
   exit 0
@@ -69,9 +79,17 @@ if [[ "$MODE" == "ios" ]]; then
     find "$app" -iname '*BareKit*' | head || true
     exit 1
   fi
-  if [[ ! -f "$app/Frameworks/App.framework/flutter_assets/tool/connectivity_harness/src/worklet.js" \
-     && ! -f "$app/flutter_assets/tool/connectivity_harness/src/worklet.js" ]]; then
-    echo "BARE_RUNTIME_MISSING: Runner.app missing packaged worklet.js" >&2
+  worklet_ok=0
+  for root in \
+    "$app/Frameworks/App.framework/flutter_assets/tool/connectivity_harness/src" \
+    "$app/flutter_assets/tool/connectivity_harness/src"
+  do
+    if [[ -f "$root/worklet.js" && -f "$root/ipc.js" && -f "$root/swarm.js" && -f "$root/bare_compat.js" ]]; then
+      worklet_ok=1
+    fi
+  done
+  if [[ "$worklet_ok" -ne 1 ]]; then
+    echo "BARE_RUNTIME_MISSING: Runner.app missing packaged worklet modules" >&2
     exit 1
   fi
   echo "ok packaged BareKit in $app"

@@ -17,24 +17,13 @@ Pod::Spec.new do |s|
   }
 
   kit_root = ENV['ORBITS_BARE_KIT']
-  xc = nil
   local = File.join(__dir__, 'BareKit.xcframework')
-  xc = local if File.directory?(local)
-  if xc.nil? && kit_root && !kit_root.empty?
-    nested = File.join(kit_root, 'ios', 'BareKit.xcframework')
-    direct = File.join(kit_root, 'BareKit.xcframework')
-    xc = nested if File.directory?(nested)
-    xc ||= direct if File.directory?(direct)
+  # CocoaPods requires a relative vendored_frameworks path. The official
+  # XCFramework is linked into this plugin directory by tool/bare/link-official-kit.sh.
+  if File.directory?(local)
+    s.vendored_frameworks = 'BareKit.xcframework'
+  elsif kit_root && !kit_root.empty?
+    # Keep the ORBITS_BARE_KIT hook for verify-kit-hooks; linking happens before pod install.
+    _ = File.join(kit_root, 'ios', 'BareKit.xcframework')
   end
-  unless xc
-    cache = ENV['ORBITS_BARE_CACHE']
-    repo_root = File.expand_path('../../..', __dir__)
-    cached = if cache && !cache.empty?
-               File.join(cache, 'bare-kit', 'ios', 'BareKit.xcframework')
-             else
-               File.join(repo_root, 'build', 'orbits-bare', 'bare-kit', 'ios', 'BareKit.xcframework')
-             end
-    xc = cached if File.directory?(cached)
-  end
-  s.vendored_frameworks = xc if xc
 end

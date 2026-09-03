@@ -26,6 +26,16 @@ function persistTransferState(statePath, state) {
   fs.renameSync(tmp, statePath)
 }
 
+function parseWorkletArgv(argv) {
+  const out = { backend: null, storage: null }
+  for (const raw of argv || []) {
+    const a = String(raw)
+    if (a.startsWith('--backend=')) out.backend = a.slice('--backend='.length)
+    if (a.startsWith('--storage=')) out.storage = a.slice('--storage='.length)
+  }
+  return out
+}
+
 class Worklet {
   constructor(opts = {}) {
     this.backend = opts.backend || 'loopback'
@@ -42,14 +52,21 @@ class Worklet {
     this._dhtServer = null
     this._bootstrapper = null
     this._dhtSockets = []
+    this._connWaiters = []
+    this._pendingPeerId = null
+    this._argvStorage = opts.storageDir || null
     this._emit = opts.emit || ((name, payload) => this.events.push({ name, payload }))
   }
 
   async start(config) {
-    this._config = config
+    this._config = config || {}
+    if (config && typeof config.backend === 'string' && config.backend.length > 0) {
+      this.backend = config.backend
+    }
     this._started = true
     const storageDir =
       config.storageDir ||
+      this._argvStorage ||
       (isBare || config.requireRealCorestore
         ? path.join(os.tmpdir(), 'orbits-corestore', config.peerId || 'local')
         : undefined)
@@ -61,12 +78,18 @@ class Worklet {
     if (this.backend === 'loopback') {
       await this._loop.listen()
       this._loop.on('connection', (sock, info) => this._onConn(sock, info))
-    } else {
+    } else if (this.backend === 'hyperswarm') {
       const { createHyperswarmBackend } = require('./swarm')
       this._swarm = await createHyperswarmBackend(config)
       this._swarm.onConnection((sock, info) => this._onConn(sock, info))
+    } else {
+      throw new Error('unknown backend ' + this.backend)
     }
-    this._emit('started', { backend: this.backend, port: this._loop.port })
+    this._emit('started', {
+      backend: this.backend,
+      port: this._loop.port,
+      noisePublicKey: this.noisePublicKey(),
+    })
   }
 
   async publish(binding) {
@@ -82,15 +105,93 @@ class Worklet {
 
   async connect(peer) {
     if (this._suspended) throw new Error('suspended')
+    if (!this._started) throw new Error('not started')
+    if (peer && peer.peerId) this._pendingPeerId = String(peer.peerId)
     if (this.backend === 'loopback') {
       if (peer.port == null) throw new Error('loopback connect needs port')
       await this._loop.connect(peer.port)
-    } else if (this._swarm && peer.noisePublicKey) {
-      this._swarm.swarm.joinPeer(Buffer.from(peer.noisePublicKey, 'hex'))
+      return { peerId: this._firstPeerId() }
+    }
+    if (!this._swarm) throw new Error('swarm not started')
+    if (peer && peer.noisePublicKey) {
+      const key = Buffer.from(String(peer.noisePublicKey), 'hex')
+      if (key.length !== 32) throw new Error('noisePublicKey must be 32 bytes hex')
+      this._swarm.swarm.joinPeer(key)
       if (typeof this._swarm.swarm.flush === 'function') {
         await this._swarm.swarm.flush()
       }
+    } else if (!this._topic) {
+      throw new Error('publish or noisePublicKey required before connect')
     }
+    if (this._peers.size > 0) return { peerId: this._firstPeerId() }
+    const timeoutMs = Number(peer && peer.timeoutMs) || 45000
+    const peerId = await new Promise((resolve, reject) => {
+      const waiter = {
+        resolve: (id) => {
+          clearTimeout(timer)
+          resolve(id)
+        },
+      }
+      const timer = setTimeout(() => {
+        this._connWaiters = this._connWaiters.filter((w) => w !== waiter)
+        reject(new Error('connect timeout'))
+      }, timeoutMs)
+      this._connWaiters.push(waiter)
+      if (this._peers.size > 0) {
+        this._connWaiters = this._connWaiters.filter((w) => w !== waiter)
+        waiter.resolve(this._firstPeerId())
+      }
+    })
+    return { peerId }
+  }
+
+  async disconnect(peerId) {
+    const id = String(peerId || '')
+    const peer = this._peers.get(id)
+    if (!peer) return
+    try {
+      peer.socket.destroy()
+    } catch {
+      // already closed
+    }
+    this._peers.delete(id)
+    this._emit('disconnected', { peerId: id })
+  }
+
+  _firstPeerId() {
+    return this._peers.keys().next().value || null
+  }
+
+  _announceIdentity(peerId) {
+    const localId = this._config && this._config.peerId
+    if (!localId) return
+    const peer = this._peers.get(peerId)
+    if (!peer || !peer.socket) return
+    try {
+      peer.socket.write(
+        encodeMux(
+          'control',
+          Buffer.from(
+            JSON.stringify({ type: 'orbits-identity', peerId: localId }),
+            'utf8',
+          ),
+        ),
+      )
+    } catch {
+      // peer already closed
+    }
+  }
+
+  _remapPeer(fromId, toId) {
+    if (!fromId || !toId || fromId === toId) return toId
+    if (this._peers.has(toId)) return toId
+    const rec = this._peers.get(fromId)
+    if (!rec) return toId
+    this._peers.delete(fromId)
+    this._peers.set(toId, rec)
+    this._emit('disconnected', { peerId: fromId })
+    this._emit('connected', { peerId: toId, path: (rec.info && rec.info.path) || 'unknown' })
+    return toId
   }
 
   noisePublicKey() {
@@ -356,20 +457,40 @@ class Worklet {
   }
 
   _onConn(socket, info) {
-    const peerId = info.id || info.publicKey.toString('hex')
+    const noise =
+      info && info.publicKey
+        ? Buffer.isBuffer(info.publicKey)
+          ? info.publicKey.toString('hex')
+          : String(info.publicKey)
+        : null
+    const assigned = this._pendingPeerId
+    this._pendingPeerId = null
+    const peerId = assigned || info.id || noise
     const decoder = new MuxDecoder()
-    this._peers.set(peerId, { socket, info, decoder })
-    this._emit('connected', { peerId, path: info.path || 'unknown' })
-    this._emit('pathChanged', { peerId, path: info.path || 'direct' })
+    this._peers.set(peerId, { socket, info, decoder, noise })
+    this._emit('connected', { peerId, path: (info && info.path) || 'unknown' })
+    this._emit('pathChanged', { peerId, path: (info && info.path) || 'direct' })
+    const waiters = this._connWaiters.splice(0)
+    for (const waiter of waiters) waiter.resolve(peerId)
     socket.on('data', (chunk) => {
+      const currentId = this._idForSocket(socket) || peerId
       for (const frame of decoder.add(chunk)) {
-        this._onFrame(peerId, frame.channel, frame.payload)
+        this._onFrame(currentId, frame.channel, frame.payload)
       }
     })
     socket.on('close', () => {
-      this._peers.delete(peerId)
-      this._emit('disconnected', { peerId })
+      const currentId = this._idForSocket(socket) || peerId
+      this._peers.delete(currentId)
+      this._emit('disconnected', { peerId: currentId })
     })
+    this._announceIdentity(peerId)
+  }
+
+  _idForSocket(socket) {
+    for (const [id, rec] of this._peers) {
+      if (rec.socket === socket) return id
+    }
+    return null
   }
 
   _onFrame(peerId, channel, payload) {
@@ -380,6 +501,9 @@ class Worklet {
     } catch {
       this._emit('frame', { peerId, channel, frameB64 })
       return
+    }
+    if (channel === 'control' && body && body.type === 'orbits-identity' && body.peerId) {
+      peerId = this._remapPeer(peerId, String(body.peerId))
     }
     if (channel === 'message' && body.type === 'harness-echo') {
       this.send(peerId, 'message', {
@@ -415,7 +539,9 @@ async function handleIpcRequest(worklet, body) {
       await worklet.unpublish()
       return {}
     case 'connect':
-      await worklet.connect(params)
+      return await worklet.connect(params)
+    case 'disconnect':
+      await worklet.disconnect(params.peerId)
       return {}
     case 'send':
       await worklet.send(
@@ -449,6 +575,11 @@ async function handleIpcRequest(worklet, body) {
         backend: worklet.backend,
         journal: worklet._journal && worklet._journal.backend,
         version: 'orbits-bare-ipc-v1',
+        started: worklet._started === true,
+        suspended: worklet._suspended === true,
+        published: Boolean(worklet._topic),
+        peerCount: worklet._peers.size,
+        noisePublicKey: worklet.noisePublicKey(),
       }
     default:
       throw new Error('unknown method ' + method)
@@ -464,9 +595,13 @@ function isMain() {
 }
 
 if (isMain()) {
+  const argv = parseWorkletArgv((process.argv || []).slice(1))
+  const envBackend = process.env && process.env.ORBITS_HARNESS_BACKEND
+  const backend = argv.backend || envBackend || (isBare ? 'hyperswarm' : 'loopback')
   const channel = ipcChannel()
   const worklet = new Worklet({
-    backend: (process.env && process.env.ORBITS_HARNESS_BACKEND) || 'loopback',
+    backend,
+    storageDir: argv.storage || undefined,
     emit: (name, payload) => {
       channel.write(encode(EVENT, { name, payload }))
     },
@@ -487,4 +622,4 @@ if (isMain()) {
   })
 }
 
-module.exports = { Worklet, handleIpcRequest }
+module.exports = { Worklet, handleIpcRequest, parseWorkletArgv }
