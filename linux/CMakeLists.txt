@@ -135,7 +135,10 @@ if(NOT EXISTS "${_orbits_bare_linux}")
   set(_orbits_bare_linux "${CMAKE_CURRENT_SOURCE_DIR}/../build/orbits-bare/linux-arm64/bare")
 endif()
 if(EXISTS "${_orbits_bare_linux}" AND EXISTS "${_orbits_bare_linux}.sha256")
-  install(FILES "${_orbits_bare_linux}" "${_orbits_bare_linux}.sha256"
+  install(PROGRAMS "${_orbits_bare_linux}"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+  install(FILES "${_orbits_bare_linux}.sha256"
     DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
     COMPONENT Runtime)
 endif()

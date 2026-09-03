@@ -631,6 +631,10 @@ jobs:
         run: |
           set -euo pipefail
           bundle=build/linux/x64/release/bundle
+          ls -la "$bundle/lib" || true
+          ls -la "$bundle/data/orbits-worklet/src" || true
+          test -e "$bundle/lib/bare"
+          chmod +x "$bundle/lib/bare"
           test -x "$bundle/lib/bare"
           test -f "$bundle/lib/bare.sha256"
           test -f "$bundle/data/orbits-worklet/src/worklet.js"
