@@ -114,7 +114,7 @@
       "iosPath": "ios/BareKit.xcframework",
       "androidConsume": "classes.jar + jni/ (official bare-android fileTree, not Maven)",
       "iosConsume": "BareKit.xcframework (official bare-ios vendored framework)",
-      "note": "Optional ~396MB Apple/Android archive. Default CI must not download it. Fetch only with tool/bare/fetch-official-runtime.sh --kit, which verifies this sha256 then extracts android/bare-kit and ios/BareKit.xcframework into build/orbits-bare/bare-kit/. Do not commit the zip or extracted binaries."
+      "note": "~396MB official Apple/Android archive. Android and iOS CI jobs fetch it with tool/bare/fetch-official-runtime.sh --kit (sha256-verified, cached). Extracts android/bare-kit (exploded AAR + bare-kit.aar), ios/BareKit.xcframework, darwin/BareKit.xcframework, and linux/x64/libbare-kit.so into build/orbits-bare/bare-kit/, then links them into the Flutter plugin trees. Do not commit the zip or extracted binaries."
     }
   },
   "workletModules": {
@@ -138,8 +138,8 @@
     "darwin-arm64": "official bare-runtime CLI spawn when packaged",
     "win32-x64": "official bare-runtime CLI spawn when packaged",
     "win32-arm64": "official bare-runtime CLI spawn when packaged",
-    "android": "official BareKit Worklet when AAR is packaged; otherwise BARE_RUNTIME_MISSING",
-    "ios": "official BareKit Worklet when XCFramework is packaged; otherwise BARE_RUNTIME_MISSING",
+    "android": "official BareKit Worklet from packaged exploded AAR (classes.jar + jni/libbare-kit.so)",
+    "ios": "official BareWorklet from packaged BareKit.xcframework",
     "web": "unsupported"
   }
 }

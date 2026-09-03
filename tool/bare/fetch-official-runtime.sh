@@ -212,6 +212,15 @@ if only == "--kit":
             elif name.startswith("macos/BareKit.xcframework/") or name == "macos/BareKit.xcframework":
                 zf.extract(info, extract_root)
                 extracted.append(name)
+            elif name.startswith("darwin/BareKit.xcframework/") or name == "darwin/BareKit.xcframework":
+                zf.extract(info, extract_root)
+                extracted.append(name)
+            elif name.startswith("apple/BareKit.xcframework/") or name == "apple/BareKit.xcframework":
+                zf.extract(info, extract_root)
+                extracted.append(name)
+            elif name == "linux/x64/libbare-kit.so" or name == "linux/arm64/libbare-kit.so":
+                zf.extract(info, extract_root)
+                extracted.append(name)
             elif name in {"LICENSE", "NOTICE"} or name.endswith("/LICENSE") or name.endswith("/NOTICE"):
                 zf.extract(info, extract_root)
                 extracted.append(name)
@@ -221,6 +230,8 @@ if only == "--kit":
     android_src = extract_root / "android" / "bare-kit"
     ios_src = extract_root / "ios" / "BareKit.xcframework"
     macos_src = extract_root / "macos" / "BareKit.xcframework"
+    darwin_src = extract_root / "darwin" / "BareKit.xcframework"
+    apple_src = extract_root / "apple" / "BareKit.xcframework"
     android_dst = dest / "android" / "bare-kit"
     ios_dst = dest / "ios" / "BareKit.xcframework"
     macos_dst = dest / "macos" / "BareKit.xcframework"
@@ -228,14 +239,32 @@ if only == "--kit":
         if android_dst.exists():
             shutil.rmtree(android_dst)
         shutil.copytree(android_src, android_dst)
+        aar_path = dest / "android" / "bare-kit.aar"
+        with zipfile.ZipFile(aar_path, "w", zipfile.ZIP_DEFLATED) as aar:
+            for item in android_dst.rglob("*"):
+                if item.is_file():
+                    aar.write(item, item.relative_to(android_dst).as_posix())
+        print(f"packaged official exploded AAR -> {aar_path}")
     if ios_src.is_dir():
         if ios_dst.exists():
             shutil.rmtree(ios_dst)
         shutil.copytree(ios_src, ios_dst)
-    if macos_src.is_dir():
+    macos_from = macos_src if macos_src.is_dir() else (
+        darwin_src if darwin_src.is_dir() else (
+            apple_src if apple_src.is_dir() else None
+        )
+    )
+    if macos_from is not None:
         if macos_dst.exists():
             shutil.rmtree(macos_dst)
-        shutil.copytree(macos_src, macos_dst)
+        shutil.copytree(macos_from, macos_dst)
+
+    for arch in ("x64", "arm64"):
+        so_src = extract_root / "linux" / arch / "libbare-kit.so"
+        if so_src.is_file():
+            so_dst = dest / "linux" / arch / "libbare-kit.so"
+            so_dst.parent.mkdir(parents=True, exist_ok=True)
+            so_dst.write_bytes(so_src.read_bytes())
 
     license_src = next(extract_root.rglob("LICENSE"), None)
     if license_src and license_src.is_file():
@@ -244,13 +273,18 @@ if only == "--kit":
     if notice_src and notice_src.is_file():
         (dest / "NOTICE").write_bytes(notice_src.read_bytes())
 
+    aar_path = dest / "android" / "bare-kit.aar"
     layout = {
         "sha256": digest,
         "android": str(android_dst) if android_dst.is_dir() else None,
+        "aar": str(aar_path) if aar_path.is_file() else None,
         "ios": str(ios_dst) if ios_dst.is_dir() else None,
         "macos": str(macos_dst) if macos_dst.is_dir() else None,
         "classesJar": str(android_dst / "classes.jar")
         if (android_dst / "classes.jar").is_file()
+        else None,
+        "linuxX64": str(dest / "linux" / "x64" / "libbare-kit.so")
+        if (dest / "linux" / "x64" / "libbare-kit.so").is_file()
         else None,
     }
     (dest / "layout.json").write_text(json.dumps(layout, indent=2) + "\n")
@@ -264,5 +298,13 @@ if only == "--kit":
     if layout["ios"]:
         print(f"extracted ios/BareKit.xcframework -> {ios_dst}")
     if layout["macos"]:
-        print(f"extracted macos/BareKit.xcframework -> {macos_dst}")
+        print(f"extracted macos BareKit.xcframework -> {macos_dst}")
+    if layout["linuxX64"]:
+        print(f"extracted linux/x64/libbare-kit.so -> {layout['linuxX64']}")
+
+    link = Path(pins_path).resolve().parent / "link-official-kit.sh"
+    if link.is_file():
+        result = subprocess.run(["bash", str(link)], check=False)
+        if result.returncode != 0:
+            raise SystemExit("BARE_RUNTIME_MISSING: link-official-kit.sh failed")
 PY

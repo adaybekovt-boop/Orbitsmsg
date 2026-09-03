@@ -30,7 +30,10 @@ if only == "--kit":
     zpath = dest / "prebuilds.zip"
     sidecar = dest / "prebuilds.zip.sha256"
     android = dest / "android" / "bare-kit" / "classes.jar"
+    aar = dest / "android" / "bare-kit.aar"
     ios = dest / "ios" / "BareKit.xcframework"
+    macos = dest / "macos" / "BareKit.xcframework"
+    linux = dest / "linux" / "x64" / "libbare-kit.so"
     if not pinned:
         raise SystemExit("BARE_RUNTIME_MISSING: pins.json bareKit.prebuilds.sha256 is null")
     if not zpath.is_file() and not android.is_file() and not ios.is_dir():
@@ -48,8 +51,24 @@ if only == "--kit":
         print(f"ok bare-kit prebuilds.zip sha256={digest}")
     if android.is_file():
         print(f"ok android classes.jar {android}")
+    if aar.is_file():
+        print(f"ok android bare-kit.aar {aar}")
     if ios.is_dir():
         print(f"ok ios BareKit.xcframework {ios}")
+    if macos.is_dir():
+        print(f"ok macos BareKit.xcframework {macos}")
+    if linux.is_file():
+        print(f"ok linux libbare-kit.so {linux}")
+    repo = Path(sys.argv[1]).resolve().parent.parent.parent
+    plugin_jar = repo / "packages/orbits_transport_android/android/libs/bare-kit/classes.jar"
+    plugin_so = repo / "packages/orbits_transport_android/android/libs/bare-kit/jni/arm64-v8a/libbare-kit.so"
+    plugin_ios = repo / "packages/orbits_transport_ios/ios/BareKit.xcframework/ios-arm64/BareKit.framework/BareKit"
+    if plugin_jar.is_file():
+        print(f"ok linked android classes.jar {plugin_jar}")
+    if plugin_so.is_file():
+        print(f"ok linked android libbare-kit.so {plugin_so}")
+    if plugin_ios.is_file():
+        print(f"ok linked ios BareKit.framework {plugin_ios}")
     if pins.get("remoteFetchAtRuntime") is not False:
         raise SystemExit("pins allow runtime fetch")
     raise SystemExit(0)

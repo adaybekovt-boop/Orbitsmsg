@@ -3,15 +3,16 @@ package app.orbits.transport
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.MethodCall
 import java.io.File
+import java.nio.charset.StandardCharsets
 
 /**
  * Official BareKit / packaged-runtime probe. This class must not embed a
  * remote URL. Missing or unverified artifacts fail closed.
  *
  * Official bare-kit 2.4.3 host is to.holepunch.bare.kit.Worklet:
- * Worklet(Options), then start(filename, source, charset, arguments).
- * Resolved by reflection so the plugin still compiles when classes.jar
- * has not been fetched into the local cache.
+ * Worklet(Options), then start(filename, source, StandardCharsets.UTF_8, args).
+ * Resolved by reflection so the plugin still compiles when the official
+ * exploded AAR has not been linked into android/libs/bare-kit.
  */
 internal object OrbitsBareRuntime {
   private var retainedWorklet: Any? = null
@@ -20,8 +21,10 @@ internal object OrbitsBareRuntime {
     call: MethodCall,
     binding: FlutterPlugin.FlutterPluginBinding? = null,
   ): Boolean {
-    if (tryStartBareKit(binding)) {
-      return true
+    when (tryStartBareKit(binding)) {
+      KitStart.STARTED -> return true
+      KitStart.PRESENT_BUT_FAILED -> return false
+      KitStart.ABSENT -> Unit
     }
     val expected = call.argument<String>("expectedRuntimeSha256")
     val packaged = File("bare")
@@ -59,12 +62,20 @@ internal object OrbitsBareRuntime {
     }
   }
 
+  private enum class KitStart { STARTED, PRESENT_BUT_FAILED, ABSENT }
+
   private fun tryStartBareKit(
     binding: FlutterPlugin.FlutterPluginBinding?,
-  ): Boolean {
-    val source = readWorkletSource(binding) ?: return false
+  ): KitStart {
+    val workletClass = try {
+      Class.forName("to.holepunch.bare.kit.Worklet")
+    } catch (_: ClassNotFoundException) {
+      return KitStart.ABSENT
+    } catch (_: NoClassDefFoundError) {
+      return KitStart.ABSENT
+    }
+    val source = readWorkletSource(binding) ?: return KitStart.PRESENT_BUT_FAILED
     return try {
-      val workletClass = Class.forName("to.holepunch.bare.kit.Worklet")
       val optionsClass = Class.forName("to.holepunch.bare.kit.Worklet\$Options")
       val options = optionsClass.getDeclaredConstructor().newInstance()
       val memoryLimit = optionsClass.methods.firstOrNull { method ->
@@ -78,19 +89,15 @@ internal object OrbitsBareRuntime {
           method.parameterTypes.size == 4 &&
           method.parameterTypes[0] == String::class.java &&
           method.parameterTypes[1] == String::class.java &&
-          method.parameterTypes[2] == String::class.java
-      } ?: return false
-      start.invoke(worklet, "/orbits/worklet.js", source, "UTF-8", null)
+          method.parameterTypes[2] == java.nio.charset.Charset::class.java
+      } ?: return KitStart.PRESENT_BUT_FAILED
+      start.invoke(worklet, "/orbits/worklet.js", source, StandardCharsets.UTF_8, null)
       retainedWorklet = worklet
-      true
-    } catch (_: ClassNotFoundException) {
-      false
-    } catch (_: NoClassDefFoundError) {
-      false
+      KitStart.STARTED
     } catch (_: UnsatisfiedLinkError) {
-      false
+      KitStart.PRESENT_BUT_FAILED
     } catch (_: Exception) {
-      false
+      KitStart.PRESENT_BUT_FAILED
     }
   }
 

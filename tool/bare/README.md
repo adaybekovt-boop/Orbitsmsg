@@ -15,18 +15,27 @@ Writes verified files under `build/orbits-bare/<platform>/` (gitignored):
 - `bare.sha256`
 - extracted `LICENSE` / `NOTICE`
 
-Android/iOS official BareKit (optional, ~396MB, **not** default CI):
+Android/iOS official BareKit (~396MB). Android and iOS CI jobs fetch it:
 
 ```bash
 bash tool/bare/fetch-official-runtime.sh --kit
 bash tool/bare/verify-runtime.sh --kit
+bash tool/bare/verify-kit-start.sh
 ```
 
-That verifies the pinned `prebuilds.zip` sha256, then extracts only
-`android/bare-kit` (`classes.jar` + `jni`) and `ios/BareKit.xcframework`
-into `build/orbits-bare/bare-kit/`. Gradle and the iOS/macOS podspecs
-consume those local paths when present. The application never downloads
-them. If the extract is absent, hosts return `BARE_RUNTIME_MISSING`.
+That verifies the pinned `prebuilds.zip` sha256, extracts
+`android/bare-kit` (official exploded AAR + `bare-kit.aar`),
+`ios/BareKit.xcframework`, `darwin/BareKit.xcframework`, and
+`linux/x64/libbare-kit.so`, then copies them into the plugin trees
+(`android/libs/bare-kit`, vendored XCFrameworks). The application never
+downloads them. If the extract is absent, hosts return `BARE_RUNTIME_MISSING`.
+
+After `flutter build apk` / `flutter build ios --no-codesign`:
+
+```bash
+bash tool/bare/verify-packaged-kit.sh apk
+bash tool/bare/verify-packaged-kit.sh ios
+```
 
 ```bash
 bash tool/bare/verify-kit-hooks.sh

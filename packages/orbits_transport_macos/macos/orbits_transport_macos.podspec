@@ -18,7 +18,9 @@ Pod::Spec.new do |s|
 
   kit_root = ENV['ORBITS_BARE_KIT']
   xc = nil
-  if kit_root && !kit_root.empty?
+  local = File.join(__dir__, 'BareKit.xcframework')
+  xc = local if File.directory?(local)
+  if xc.nil? && kit_root && !kit_root.empty?
     nested = File.join(kit_root, 'macos', 'BareKit.xcframework')
     ios_nested = File.join(kit_root, 'ios', 'BareKit.xcframework')
     direct = File.join(kit_root, 'BareKit.xcframework')

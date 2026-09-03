@@ -51,12 +51,20 @@ for label, path in (("ios podspec", ios_pod_path), ("macos podspec", macos_pod_p
 gradle = gradle_path.read_text()
 if "classes.jar" not in gradle or "ORBITS_BARE_KIT" not in gradle:
     raise SystemExit("android gradle must consume a local verified classes.jar path")
+if "libs/bare-kit" not in gradle:
+    raise SystemExit("android gradle must consume official exploded AAR at libs/bare-kit")
+if "bare-kit.aar" not in gradle:
+    raise SystemExit("android gradle must accept the official bare-kit.aar")
 if "jni" not in gradle:
     raise SystemExit("android gradle must wire official bare-kit jni when present")
+if 'jvmTarget = "17"' not in gradle:
+    raise SystemExit("android gradle must keep Kotlin jvmTarget 17 to match Java 17")
 
 ios_pod = ios_pod_path.read_text()
 if "vendored_frameworks" not in ios_pod or "BareKit.xcframework" not in ios_pod:
     raise SystemExit("ios podspec must vend a local BareKit.xcframework when present")
+if "File.join(__dir__, 'BareKit.xcframework')" not in ios_pod:
+    raise SystemExit("ios podspec must vendor the plugin-local BareKit.xcframework")
 if "ORBITS_BARE_KIT" not in ios_pod:
     raise SystemExit("ios podspec must honor ORBITS_BARE_KIT")
 
@@ -69,8 +77,8 @@ if "to.holepunch.bare.kit.Worklet" not in kt:
     raise SystemExit("android host must resolve official Worklet by reflection")
 if 'start.invoke(worklet, "/orbits/worklet.js", source, null)' in kt:
     raise SystemExit("android host must not invent a 3-arg Worklet.start")
-if "UTF-8" not in kt:
-    raise SystemExit("android host must use official start(filename, source, charset, args)")
+if "StandardCharsets.UTF_8" not in kt:
+    raise SystemExit("android host must use official start(filename, source, StandardCharsets.UTF_8, args)")
 if "Redirect.DISCARD" in kt:
     raise SystemExit("android host must not use Java 9 ProcessBuilder.Redirect.DISCARD")
 
@@ -87,9 +95,15 @@ if "--kit" not in fetch:
     raise SystemExit("fetch script must support --kit")
 if "android/bare-kit" not in fetch or "ios/BareKit.xcframework" not in fetch:
     raise SystemExit("fetch --kit must extract official android/ios trees")
+if "darwin/BareKit.xcframework" not in fetch:
+    raise SystemExit("fetch --kit must extract official darwin BareKit.xcframework")
+if "bare-kit.aar" not in fetch or "link-official-kit.sh" not in fetch:
+    raise SystemExit("fetch --kit must package the official AAR and link plugin trees")
 
 print("ok BareKit mobile hooks")
-print("next (human/CI, cached, sha-pinned, not default PR):")
+print("next (Android/iOS CI, cached, sha-pinned):")
 print("  bash tool/bare/fetch-official-runtime.sh --kit")
 print("  bash tool/bare/verify-runtime.sh --kit")
+print("  bash tool/bare/verify-kit-start.sh")
+print("  bash tool/bare/verify-packaged-kit.sh apk|ios")
 PY

@@ -81,7 +81,7 @@ void main() {
       'packages/orbits_transport_android/android/src/main/kotlin/app/orbits/transport/OrbitsBareRuntime.kt',
     ).readAsStringSync();
     expect(android, contains('to.holepunch.bare.kit.Worklet'));
-    expect(android, contains('UTF-8'));
+    expect(android, contains('StandardCharsets.UTF_8'));
     expect(android, isNot(contains('Redirect.DISCARD')));
     expect(
       android,
@@ -98,6 +98,8 @@ void main() {
     ).readAsStringSync();
     expect(gradle, contains('classes.jar'));
     expect(gradle, contains('ORBITS_BARE_KIT'));
+    expect(gradle, contains('libs/bare-kit'));
+    expect(gradle, contains('bare-kit.aar'));
     final pod = File(
       'packages/orbits_transport_ios/ios/orbits_transport_ios.podspec',
     ).readAsStringSync();

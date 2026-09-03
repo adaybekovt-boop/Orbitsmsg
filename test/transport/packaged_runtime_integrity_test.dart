@@ -32,6 +32,9 @@ void main() {
     expect(prebuilds['sha256Source'], 'github-release-asset-digest');
     expect(prebuilds['androidPath'], 'android/bare-kit');
     expect(prebuilds['iosPath'], 'ios/BareKit.xcframework');
+    expect(File('tool/bare/link-official-kit.sh').existsSync(), isTrue);
+    expect(File('tool/bare/verify-packaged-kit.sh').existsSync(), isTrue);
+    expect(File('tool/bare/verify-kit-start.sh').existsSync(), isTrue);
   });
 
   test('BareKit mobile hooks verify without downloading prebuilds.zip', () {

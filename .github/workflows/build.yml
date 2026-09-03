@@ -280,6 +280,19 @@ jobs:
           channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
 
+      - name: Cache official BareKit extract
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/orbits-bare/bare-kit
+          key: orbits-bare-kit-${{ hashFiles('tool/bare/pins.json') }}
+
+      - name: Fetch and link official BareKit
+        run: |
+          set -euo pipefail
+          bash tool/bare/fetch-official-runtime.sh --kit
+          bash tool/bare/verify-runtime.sh --kit
+          bash tool/bare/verify-kit-start.sh
+
       - name: Resolve dependencies and generate Drift code
         run: |
           flutter pub get
@@ -315,6 +328,7 @@ jobs:
             --dart-define=PEER_SECURE_SET="${PEER_SECURE:+true}"
           test -d build/ios/iphoneos/Runner.app
           test -f build/ios/iphoneos/Runner.app/PrivacyInfo.xcprivacy
+          bash tool/bare/verify-packaged-kit.sh ios build/ios/iphoneos/Runner.app
 
       - name: Build iOS Simulator debug app
         run: flutter build ios --simulator --debug
@@ -345,6 +359,19 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
+
+      - name: Cache official BareKit extract
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/orbits-bare/bare-kit
+          key: orbits-bare-kit-${{ hashFiles('tool/bare/pins.json') }}
+
+      - name: Fetch and link official BareKit
+        run: |
+          set -euo pipefail
+          bash tool/bare/fetch-official-runtime.sh --kit
+          bash tool/bare/verify-runtime.sh --kit
+          bash tool/bare/verify-kit-start.sh
 
       - name: Cache CI sideload upload keystore
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -444,6 +471,12 @@ jobs:
 
       - name: flutter build apk (universal fallback)
         run: bash tool/ci/retry_flutter_apk.sh --release $DART_DEFINES
+
+      - name: Verify APK packages official BareKit
+        run: |
+          set -euo pipefail
+          bash tool/bare/verify-packaged-kit.sh apk build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          bash tool/bare/verify-packaged-kit.sh apk build/app/outputs/flutter-apk/app-release.apk
 
       - name: Stage APKs for upload
         run: |
