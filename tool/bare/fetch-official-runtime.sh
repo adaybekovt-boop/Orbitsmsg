@@ -14,7 +14,15 @@ if [[ ! -f "$PINS" ]]; then
 fi
 
 python3 - "$PINS" "$CACHE" "$ONLY" <<'PY'
-import hashlib, json, os, sys, tarfile, urllib.request
+import hashlib
+import json
+import os
+import platform
+import subprocess
+import sys
+import tarfile
+import time
+import urllib.request
 from pathlib import Path
 
 pins_path, cache_root, only = sys.argv[1], Path(sys.argv[2]), sys.argv[3]
@@ -25,8 +33,8 @@ runtime = pins["bareRuntime"]
 base = runtime["releaseBase"]
 artifacts = runtime["artifacts"]
 
+
 def platform_key():
-    import platform
     sysname = platform.system().lower()
     machine = platform.machine().lower()
     if sysname == "linux":
@@ -45,11 +53,15 @@ def platform_key():
         raise SystemExit(f"unsupported arch {machine}")
     return f"{os_name}-{arch}"
 
-wanted = [only] if only and only != "--all" and only != "--kit" else (
-    list(artifacts) if only == "--all" else [platform_key()]
+
+wanted = (
+    [only]
+    if only and only not in {"--all", "--kit"}
+    else (list(artifacts) if only == "--all" else [platform_key()])
 )
 if only == "--kit":
     wanted = []
+
 
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
@@ -58,6 +70,66 @@ def sha256_file(path: Path) -> str:
             digest.update(chunk)
     return digest.hexdigest()
 
+
+def download(url: str, dest: Path, timeout: int = 180) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".partial")
+    last_error = None
+    for attempt in range(1, 7):
+        print(f"fetch {url} (attempt {attempt}/6)")
+        tmp.unlink(missing_ok=True)
+        try:
+            if _curl(url, tmp, timeout):
+                tmp.replace(dest)
+                return
+        except Exception as exc:  # noqa: BLE001 — surface last fetch error
+            last_error = exc
+        time.sleep(min(2 ** attempt, 16))
+    raise SystemExit(f"failed to fetch {url}: {last_error}")
+
+
+def _curl(url: str, dest: Path, timeout: int) -> bool:
+    curl = _which("curl")
+    if curl:
+        cmd = [
+            curl,
+            "-fL",
+            "--connect-timeout",
+            "30",
+            "--max-time",
+            str(timeout),
+            "--retry",
+            "5",
+            "--retry-delay",
+            "3",
+            "--retry-all-errors",
+            "-A",
+            "orbits-bare-fetch/1",
+            "-o",
+            str(dest),
+            url,
+        ]
+        result = subprocess.run(cmd, check=False)
+        return result.returncode == 0 and dest.is_file() and dest.stat().st_size > 0
+    req = urllib.request.Request(url, headers={"User-Agent": "orbits-bare-fetch/1"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp, dest.open("wb") as out:
+        while True:
+            chunk = resp.read(1024 * 1024)
+            if not chunk:
+                break
+            out.write(chunk)
+    return dest.is_file() and dest.stat().st_size > 0
+
+
+def _which(name: str):
+    paths = os.environ.get("PATH", "").split(os.pathsep)
+    for folder in paths:
+        candidate = Path(folder) / name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
 for key in wanted:
     spec = artifacts[key]
     dest = cache_root / key
@@ -65,22 +137,21 @@ for key in wanted:
     tgz = dest / spec["asset"]
     url = f"{base}/{spec['asset']}"
     if not tgz.is_file() or sha256_file(tgz) != spec["sha256"]:
-        print(f"fetch {url}")
-        req = urllib.request.Request(url, headers={"User-Agent": "orbits-bare-fetch/1"})
-        with urllib.request.urlopen(req, timeout=120) as resp, tgz.open("wb") as out:
-            while True:
-                chunk = resp.read(1024 * 1024)
-                if not chunk:
-                    break
-                out.write(chunk)
+        download(url, tgz)
     digest = sha256_file(tgz)
     if digest != spec["sha256"]:
         tgz.unlink(missing_ok=True)
         raise SystemExit(f"{spec['asset']} sha256 {digest} != pinned {spec['sha256']}")
+    extract = dest / "extract"
+    if extract.exists():
+        for child in extract.rglob("*"):
+            if child.is_file() or child.is_symlink():
+                child.unlink()
+    extract.mkdir(parents=True, exist_ok=True)
     with tarfile.open(tgz, "r:gz") as tf:
-        tf.extractall(dest / "extract", filter="data")
+        tf.extractall(extract, filter="data")
     binary_name = spec.get("binaryName", "bare")
-    candidates = list((dest / "extract").rglob(binary_name))
+    candidates = list(extract.rglob(binary_name))
     if not candidates:
         raise SystemExit(f"no {binary_name} in {spec['asset']}")
     binary = dest / binary_name
@@ -92,8 +163,8 @@ for key in wanted:
     if expected_bin and actual != expected_bin:
         raise SystemExit(f"{binary_name} sha256 {actual} != pinned {expected_bin}")
     sidecar.write_text(actual + "\n")
-    license_src = next((dest / "extract").rglob("LICENSE"), None)
-    notice_src = next((dest / "extract").rglob("NOTICE"), None)
+    license_src = next(extract.rglob("LICENSE"), None)
+    notice_src = next(extract.rglob("NOTICE"), None)
     if license_src:
         (dest / "LICENSE").write_bytes(license_src.read_bytes())
     if notice_src:
@@ -106,14 +177,7 @@ if only == "--kit":
     dest = cache_root / "bare-kit"
     dest.mkdir(parents=True, exist_ok=True)
     zpath = dest / "prebuilds.zip"
-    print(f"fetch {url}")
-    req = urllib.request.Request(url, headers={"User-Agent": "orbits-bare-fetch/1"})
-    with urllib.request.urlopen(req, timeout=300) as resp, zpath.open("wb") as out:
-        while True:
-            chunk = resp.read(1024 * 1024)
-            if not chunk:
-                break
-            out.write(chunk)
+    download(url, zpath, timeout=300)
     digest = sha256_file(zpath)
     pinned = kit.get("sha256")
     sidecar = dest / "prebuilds.zip.sha256"
