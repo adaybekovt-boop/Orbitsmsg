@@ -49,6 +49,11 @@ void main() {
       'packages/orbits_transport_ios/ios/Classes/ZipExtract.swift',
     ).readAsStringSync();
     expect(zip, contains('compression_decode_buffer'));
+    final pod = File(
+      'packages/orbits_transport_ios/ios/orbits_transport_ios.podspec',
+    ).readAsStringSync();
+    expect(pod, isNot(contains("s.frameworks = 'Compression'")));
+    expect(pod, contains('orbits-worklet-modules.zip'));
     final conns = File('lib/state/connections_notifier.dart').readAsStringSync();
     expect(conns, contains('if (isDevBareTransportRequested())'));
     expect(conns, contains('unawaited(_dual?.dial(normalized))'));
