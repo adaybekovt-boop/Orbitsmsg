@@ -559,6 +559,15 @@ class Worklet {
       await this._journal.close()
       this._journal = null
     }
+
+    // 10. Clean up incoming partial files
+    if (this._incomingFiles) {
+      for (const incoming of this._incomingFiles.values()) {
+        try { fs.closeSync(incoming.fd) } catch {}
+        try { fs.unlinkSync(incoming.path) } catch {}
+      }
+      this._incomingFiles.clear()
+    }
     this._started = false
   }
 
@@ -751,6 +760,74 @@ class Worklet {
         text: body.text,
       }).catch(() => {})
     }
+
+    if (channel === 'attachment' && body) {
+      const type = body.type
+      if (type === 'harness-file-start' || type === 'file-start') {
+        const id = String(body.id || '')
+        if (id) {
+          const safeName = path.basename(String(body.name || id)).replace(/[\x00-\x1f\\/:*?"<>|]/g, '_')
+          const tempDir = path.join(osTmp(), 'orbits-incoming')
+          try { fs.mkdirSync(tempDir, { recursive: true }) } catch {}
+          const tempPath = path.join(tempDir, `${id}-${safeName}`)
+          try {
+            const fd = fs.openSync(tempPath, 'w')
+            this._incomingFiles = this._incomingFiles || new Map()
+            this._incomingFiles.set(id, {
+              fd,
+              path: tempPath,
+              name: safeName,
+              size: Number(body.size || 0),
+              sha256: body.sha256 || null,
+              hasher: createHash('sha256'),
+              writtenBytes: 0,
+            })
+          } catch {}
+        }
+      } else if (type === 'harness-file-chunk' || type === 'file-chunk') {
+        const id = String(body.id || '')
+        this._incomingFiles = this._incomingFiles || new Map()
+        const incoming = this._incomingFiles.get(id)
+        if (incoming && body.b64) {
+          const chunkBuf = Buffer.from(body.b64, 'base64')
+          const offset = Number(body.offset || 0)
+          try {
+            fs.writeSync(incoming.fd, chunkBuf, 0, chunkBuf.length, offset)
+            incoming.hasher.update(chunkBuf)
+            incoming.writtenBytes += chunkBuf.length
+          } catch {}
+        }
+      } else if (type === 'harness-file-end' || type === 'file-end') {
+        const id = String(body.id || '')
+        this._incomingFiles = this._incomingFiles || new Map()
+        const incoming = this._incomingFiles.get(id)
+        if (incoming) {
+          this._incomingFiles.delete(id)
+          try {
+            fs.closeSync(incoming.fd)
+            const actualSha = incoming.hasher.digest('hex')
+            const expectedSha = body.sha256 || incoming.sha256
+            if (expectedSha && actualSha !== expectedSha) {
+              try { fs.unlinkSync(incoming.path) } catch {}
+              this._emit('error', { code: 'file-hash', message: 'attachment hash mismatch' })
+            } else {
+              this._emit('frame', {
+                peerId,
+                channel: 'attachment',
+                body: {
+                  type: 'harness-file-received',
+                  id,
+                  path: incoming.path,
+                  size: incoming.writtenBytes,
+                  sha256: actualSha,
+                },
+              })
+            }
+          } catch {}
+        }
+      }
+    }
+
     this._emit('frame', { peerId, channel, body, frameB64 })
   }
 }

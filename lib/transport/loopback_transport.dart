@@ -71,6 +71,13 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
     for (final id in _peers.keys.toList()) {
       await disconnect(id);
     }
+    for (final incoming in _files.values) {
+      try {
+        await incoming.raf.close();
+        await incoming.file.delete();
+      } catch (_) {}
+    }
+    _files.clear();
     _hub.detach(this);
     _started = false;
     _published = false;
@@ -263,8 +270,11 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
     }
     final type = body['type'];
     if (type != 'harness-file-start' &&
+        type != 'file-start' &&
         type != 'harness-file-chunk' &&
-        type != 'harness-file-end') {
+        type != 'file-chunk' &&
+        type != 'harness-file-end' &&
+        type != 'file-end') {
       _events.add(TransportFrame(from, TransportChannel.attachment, frame));
       return;
     }
@@ -273,28 +283,43 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
       _events.add(TransportFrame(from, TransportChannel.attachment, frame));
       return;
     }
-    if (type == 'harness-file-start') {
+    if (type == 'harness-file-start' || type == 'file-start') {
+      final safeName = (body['name'] as String? ?? id)
+          .replaceAll(RegExp(r'[\x00-\x1f\\/:*?"<>|]'), '_');
+      final dir = Directory.systemTemp.createTempSync('orbits-transfer-');
+      final file = File('${dir.path}${Platform.pathSeparator}$safeName');
+      final raf = file.openSync(mode: FileMode.write);
       _files[id] = _IncomingFile(
-        name: body['name'] as String? ?? id,
+        name: safeName,
         size: body['size'] as int? ?? 0,
         sha256hex: body['sha256'] as String? ?? '',
+        file: file,
+        raf: raf,
       );
-    } else if (type == 'harness-file-chunk') {
+    } else if (type == 'harness-file-chunk' || type == 'file-chunk') {
       final incoming = _files[id];
       if (incoming == null) return;
-      incoming.bytes.addAll(base64Decode(body['b64'] as String));
-    } else if (type == 'harness-file-end') {
+      final chunk = base64Decode(body['b64'] as String);
+      final offset = body['offset'] as int? ?? incoming.writtenBytes;
+      incoming.raf.setPositionSync(offset);
+      incoming.raf.writeFromSync(chunk);
+      incoming.writtenBytes += chunk.length;
+    } else if (type == 'harness-file-end' || type == 'file-end') {
       final incoming = _files.remove(id);
       if (incoming == null) return;
-      final assembled = Uint8List.fromList(incoming.bytes);
-      final actual = sha256.convert(assembled).toString();
+      incoming.raf.flushSync();
+      incoming.raf.closeSync();
+      final actual =
+          sha256.convert(incoming.file.readAsBytesSync()).toString();
       if (incoming.sha256hex.isNotEmpty && actual != incoming.sha256hex) {
-        _events.add(TransportError('file-hash', 'attachment hash mismatch'));
+        try {
+          incoming.file.deleteSync();
+        } catch (_) {}
+        _events.add(
+          const TransportError('file-hash', 'attachment hash mismatch'),
+        );
         return;
       }
-      final dir = await Directory.systemTemp.createTemp('orbits-harness-');
-      final out = File('${dir.path}${Platform.pathSeparator}${incoming.name}');
-      await out.writeAsBytes(assembled, flush: true);
       _events.add(
         TransportFrame(
           from,
@@ -302,8 +327,8 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
           jsonPayload({
             'type': 'harness-file-received',
             'id': id,
-            'path': out.path,
-            'size': assembled.length,
+            'path': incoming.file.path,
+            'size': incoming.writtenBytes,
             'sha256': actual,
           }),
         ),
@@ -318,12 +343,16 @@ class _IncomingFile {
     required this.name,
     required this.size,
     required this.sha256hex,
+    required this.file,
+    required this.raf,
   });
 
   final String name;
   final int size;
   final String sha256hex;
-  final List<int> bytes = <int>[];
+  final File file;
+  final RandomAccessFile raf;
+  int writtenBytes = 0;
 }
 
 String hexOf(List<int> bytes) {

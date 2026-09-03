@@ -383,6 +383,13 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     }
   }
 
+  Future<void> sendFile(String remoteId, TransportFileDescriptor file) async {
+    final dual = _dual;
+    if (dual != null && dual.canUseNative(remoteId)) {
+      await dual.sendFile(remoteId, file);
+    }
+  }
+
   /// Backpressure for Drop: resolve once the reliable channel's send buffer
   /// drains below [dropMaxBufferSize]. No-ops when the platform doesn't report
   /// `bufferedAmount`. Capped (~10s) so a wedged channel can't hang the loop —
