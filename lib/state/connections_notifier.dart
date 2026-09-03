@@ -318,13 +318,15 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// Same on the ephemeral channel (typing / heartbeat).
   Future<bool> sendEphemeral(String remoteId, Object? msg) async {
     final dual = _dual;
+    final failClosed = isDevBareTransportRequested();
     if (dual != null && dual.canUseNative(remoteId)) {
       try {
         return await dual.sendEphemeral(remoteId, msg);
       } catch (_) {
-        if (!isPeerjsFallbackEnabled()) return false;
+        if (failClosed || !isPeerjsFallbackEnabled()) return false;
       }
     }
+    if (failClosed) return false;
     final conn = getConn(remoteId, 'ephemeral');
     if (conn == null) return false;
     return _wire.sendEphemeralOn(conn, remoteId, msg);
@@ -334,6 +336,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// the peer picker / send button).
   bool hasReliable(String remoteId) {
     if (_dual?.isNativeConnected(remoteId) == true) return true;
+    if (isDevBareTransportRequested()) return false;
     final conn = getConn(remoteId, 'reliable');
     return conn != null && conn.open;
   }
@@ -344,10 +347,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// DTLS layer). Returns false if no open reliable connection exists.
   bool sendDrop(String remoteId, Object packet) {
     final dual = _dual;
+    final failClosed = isDevBareTransportRequested();
     if (dual != null && dual.canUseNative(remoteId)) {
       unawaited(dual.sendDrop(remoteId, packet));
       return true;
     }
+    if (failClosed) return false;
     final conn = getConn(remoteId, 'reliable');
     if (conn == null || !conn.open) return false;
     return conn.send(packet);
@@ -361,6 +366,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// no open reliable connection exists.
   bool sendRoomPacket(String remoteId, Map<String, Object?> packet) {
     final dual = _dual;
+    final failClosed = isDevBareTransportRequested();
     if (dual != null && dual.canUseNative(remoteId)) {
       return sendGuardedRoomPacket(
         packet,
@@ -368,6 +374,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         send: (p) => dual.sendRoomPacket(remoteId, p),
       );
     }
+    if (failClosed) return false;
     final conn = getConn(remoteId, 'reliable');
     return sendGuardedRoomPacket(
       packet,
@@ -380,6 +387,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     final dual = _dual;
     if (dual != null && dual.canUseNative(remoteId)) {
       await dual.sendCallSignal(remoteId, signal);
+      return;
+    }
+    if (isDevBareTransportRequested()) {
+      throw StateError('call signaling requires Bare/Hyperswarm');
     }
   }
 
@@ -387,6 +398,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     final dual = _dual;
     if (dual != null && dual.canUseNative(remoteId)) {
       await dual.sendFile(remoteId, file);
+      return;
+    }
+    if (isDevBareTransportRequested()) {
+      throw StateError('file transfer requires Bare/Hyperswarm');
     }
   }
 
@@ -844,6 +859,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     if (current == null) return;
 
     _peerSubs.add(current.onConnection.listen((conn) {
+      if (isDevBareTransportRequested()) {
+        try {
+          conn.close();
+        } catch (_) {}
+        return;
+      }
       final ch = (conn.metadata['channel'] as String?) == 'ephemeral'
           ? 'ephemeral'
           : 'reliable';

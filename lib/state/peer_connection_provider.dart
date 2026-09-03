@@ -26,6 +26,7 @@ import '../peer/peerjs_client.dart';
 import '../peer/helpers.dart';
 import '../peer/signaling.dart';
 import '../peer/turn_runtime.dart';
+import '../transport/dev_bare_transport.dart';
 import 'auth_notifier.dart';
 import 'hide_ip_provider.dart';
 
@@ -330,6 +331,7 @@ final peerConnectionProvider =
     authNotifierProvider,
     (prev, next) {
       if (next is AuthAuthed) {
+        if (isDevBareTransportRequested()) return;
         unawaited(notifier.start(next.user.peerId));
       } else if (prev is AuthAuthed && next is! AuthAuthed) {
         unawaited(notifier.stop());
@@ -344,6 +346,7 @@ final peerConnectionProvider =
     if (prev == next) return;
     final auth = ref.read(authNotifierProvider);
     if (auth is AuthAuthed) {
+      if (isDevBareTransportRequested()) return;
       unawaited(() async {
         await notifier.stop();
         await notifier.start(auth.user.peerId);
