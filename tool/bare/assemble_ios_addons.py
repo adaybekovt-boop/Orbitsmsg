@@ -5,7 +5,9 @@ Hyperswarm and Corestore, ensuring ahead-of-time linking and zero
 unsigned code loading from writable storage.
 """
 
+import os
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -23,12 +25,13 @@ def main():
         'fs-native-extensions'
     ]
 
+    lipo_bin = shutil.which('lipo')
+
     for name in addons:
         prebuilds = harness_nm / name / 'prebuilds'
         arm64_src = prebuilds / 'ios-arm64' / f'{name}.bare'
-        sim_src = prebuilds / 'ios-arm64-simulator' / f'{name}.bare'
-        if not sim_src.exists():
-            sim_src = prebuilds / 'ios-x64-simulator' / f'{name}.bare'
+        sim_arm64_src = prebuilds / 'ios-arm64-simulator' / f'{name}.bare'
+        sim_x64_src = prebuilds / 'ios-x64-simulator' / f'{name}.bare'
 
         if not arm64_src.exists():
             print(f'ERROR: missing {arm64_src}', file=sys.stderr)
@@ -39,12 +42,33 @@ def main():
             shutil.rmtree(xcframework_dir)
 
         arm64_fw = xcframework_dir / 'ios-arm64' / f'{name}.framework'
+        sim_multi_fw = xcframework_dir / 'ios-arm64_x86_64-simulator' / f'{name}.framework'
         sim_fw = xcframework_dir / 'ios-arm64-simulator' / f'{name}.framework'
+
         arm64_fw.mkdir(parents=True, exist_ok=True)
+        sim_multi_fw.mkdir(parents=True, exist_ok=True)
         sim_fw.mkdir(parents=True, exist_ok=True)
 
         shutil.copy2(arm64_src, arm64_fw / name)
-        shutil.copy2(sim_src, sim_fw / name)
+
+        # Prepare simulator binary (universal if lipo available, else best available)
+        sim_created = False
+        if lipo_bin and sim_arm64_src.exists() and sim_x64_src.exists():
+            res = subprocess.run(
+                [lipo_bin, '-create', str(sim_arm64_src), str(sim_x64_src), '-output', str(sim_multi_fw / name)],
+                capture_output=True,
+                text=True
+            )
+            if res.returncode == 0:
+                sim_created = True
+
+        if not sim_created:
+            chosen = sim_arm64_src if sim_arm64_src.exists() else sim_x64_src
+            if chosen.exists():
+                shutil.copy2(chosen, sim_multi_fw / name)
+
+        # Mirror simulator framework to ios-arm64-simulator as well
+        shutil.copy2(sim_multi_fw / name, sim_fw / name)
 
         fw_plist = f'''<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -72,6 +96,7 @@ def main():
 </plist>
 '''
         (arm64_fw / 'Info.plist').write_text(fw_plist, encoding='utf-8')
+        (sim_multi_fw / 'Info.plist').write_text(fw_plist, encoding='utf-8')
         (sim_fw / 'Info.plist').write_text(fw_plist, encoding='utf-8')
 
         xc_plist = f'''<?xml version="1.0" encoding="UTF-8"?>
@@ -84,12 +109,13 @@ def main():
 \t\t\t<key>BinaryPath</key>
 \t\t\t<string>{name}.framework/{name}</string>
 \t\t\t<key>LibraryIdentifier</key>
-\t\t\t<string>ios-arm64-simulator</string>
+\t\t\t<string>ios-arm64_x86_64-simulator</string>
 \t\t\t<key>LibraryPath</key>
 \t\t\t<string>{name}.framework</string>
 \t\t\t<key>SupportedArchitectures</key>
 \t\t\t<array>
 \t\t\t\t<string>arm64</string>
+\t\t\t\t<string>x86_64</string>
 \t\t\t</array>
 \t\t\t<key>SupportedPlatform</key>
 \t\t\t<string>ios</string>

@@ -65,17 +65,19 @@ void main() {
       final xcPlistContent = xcPlist.readAsStringSync();
       expect(xcPlistContent, contains('AvailableLibraries'));
       expect(xcPlistContent, contains('ios-arm64'));
-      expect(xcPlistContent, contains('ios-arm64-simulator'));
+      expect(xcPlistContent, contains('simulator'));
 
       final arm64Fw = Directory('${xcframework.path}/ios-arm64/$addon.framework');
       expect(arm64Fw.existsSync(), isTrue);
       expect(File('${arm64Fw.path}/$addon').existsSync(), isTrue);
       expect(File('${arm64Fw.path}/Info.plist').existsSync(), isTrue);
 
+      final simMultiFw = Directory('${xcframework.path}/ios-arm64_x86_64-simulator/$addon.framework');
       final simFw = Directory('${xcframework.path}/ios-arm64-simulator/$addon.framework');
-      expect(simFw.existsSync(), isTrue);
-      expect(File('${simFw.path}/$addon').existsSync(), isTrue);
-      expect(File('${simFw.path}/Info.plist').existsSync(), isTrue);
+      expect(simMultiFw.existsSync() || simFw.existsSync(), isTrue);
+      final activeSim = simMultiFw.existsSync() ? simMultiFw : simFw;
+      expect(File('${activeSim.path}/$addon').existsSync(), isTrue);
+      expect(File('${activeSim.path}/Info.plist').existsSync(), isTrue);
     }
   });
 

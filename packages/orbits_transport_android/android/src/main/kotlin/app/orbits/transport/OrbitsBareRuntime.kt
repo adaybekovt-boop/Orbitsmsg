@@ -1,4 +1,4 @@
-﻿package app.orbits.transport
+package app.orbits.transport
 
 import android.content.Context
 import android.os.Handler
@@ -419,7 +419,8 @@ internal object OrbitsBareRuntime {
     private val closed = AtomicBoolean(false)
 
     @Volatile
-    var eventSink: ((Map<String, Any?>) -> Unit)? = null
+    private var _eventSink: ((Map<String, Any?>) -> Unit)? = null
+    val eventSink: ((Map<String, Any?>) -> Unit)? get() = _eventSink
     private val earlyEvents = ArrayDeque<Map<String, Any?>>()
 
     init {
@@ -539,7 +540,7 @@ internal object OrbitsBareRuntime {
     }
 
     fun setEventSink(sink: ((Map<String, Any?>) -> Unit)?) {
-      this.eventSink = sink
+      this._eventSink = sink
       if (sink != null) {
         synchronized(earlyEvents) {
           while (earlyEvents.isNotEmpty()) {
