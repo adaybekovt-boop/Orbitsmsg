@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:orbits_transport_platform_interface/orbits_transport_platform_interface.dart';
