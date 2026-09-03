@@ -3,9 +3,11 @@
 
 import 'dart:convert';
 
+import '../peer/helpers.dart';
 import '../transport/layers.dart';
 import '../transport/replication_schema.dart';
 import 'memory_journal.dart';
+import 'replication_authorization.dart';
 
 class HypercoreLocalStore {
   HypercoreLocalStore(this.writerDeviceId);
@@ -21,23 +23,58 @@ class HypercoreLocalStore {
     return record;
   }
 
-  /// Returns records filtered by authorized conversation IDs (F-20).
-  /// Enforces that replication does not expose events from another conversation.
+  /// Contact-scoped filter. Unscoped / device records are excluded.
   List<JournalRecord> recordsForConversations(Set<String> authorizedConversations) {
+    final allowed = authorizedConversations.map(normalizePeerId).toSet();
     return blocks.where((r) {
-      final cid = r.fields['conversationId'] as String?;
-      return cid == null || authorizedConversations.contains(cid);
+      if (isOwnerDeviceScopedKind(r.kind)) return false;
+      final cid = normalizedConversationId(r.fields);
+      return cid != null && allowed.contains(cid);
     }).toList(growable: false);
+  }
+
+  List<JournalRecord> recordsAuthorizedForPeer({
+    required String authenticatedPeerId,
+    required String selfPeerId,
+    required bool peerIsOwnDevice,
+  }) {
+    return blocks
+        .where(
+          (r) => recordMayReplicateTo(
+            r,
+            authenticatedPeerId: authenticatedPeerId,
+            selfPeerId: selfPeerId,
+            peerIsOwnDevice: peerIsOwnDevice,
+          ),
+        )
+        .toList(growable: false);
   }
 
   Map<String, Object?> toReplicationFrame(
     JournalRecord record, {
     Set<String>? authorizedConversations,
+    String? authenticatedPeerId,
+    String? selfPeerId,
+    bool peerIsOwnDevice = false,
   }) {
-    if (authorizedConversations != null) {
-      final cid = record.fields['conversationId'] as String?;
-      if (cid != null && !authorizedConversations.contains(cid)) {
-        throw StateError('refusing to replicate record for unauthorized conversation: $cid');
+    if (authenticatedPeerId != null) {
+      if (!recordMayReplicateTo(
+        record,
+        authenticatedPeerId: authenticatedPeerId,
+        selfPeerId: selfPeerId ?? '',
+        peerIsOwnDevice: peerIsOwnDevice,
+      )) {
+        throw StateError(
+          'refusing to replicate record ${record.kind.name} to $authenticatedPeerId',
+        );
+      }
+    } else if (authorizedConversations != null) {
+      final cid = normalizedConversationId(record.fields);
+      final allowed = authorizedConversations.map(normalizePeerId).toSet();
+      if (cid == null || !allowed.contains(cid)) {
+        throw StateError(
+          'refusing to replicate record for unauthorized conversation: $cid',
+        );
       }
     }
     return <String, Object?>{
@@ -56,6 +93,9 @@ class HypercoreLocalStore {
   JournalRecord? applyRemote(
     Map<String, Object?> frame, {
     Set<String>? authorizedConversations,
+    String? authenticatedPeerId,
+    String? selfPeerId,
+    bool peerIsOwnDevice = false,
   }) {
     if (frame['type'] != 'repl-event') return null;
     if (frame['info'] != kReplicationEventInfo) return null;
@@ -75,12 +115,22 @@ class HypercoreLocalStore {
     });
     if (!replicationFieldsAreSafe(fields.keys)) return null;
 
-    final cid = fields['conversationId'] as String?;
-    if (authorizedConversations != null &&
-        cid != null &&
-        !authorizedConversations.contains(cid)) {
-      // F-20: Reject replication record from conversation not authorized for this peer session
-      return null;
+    if (authenticatedPeerId != null) {
+      if (!frameMayAcceptFrom(
+        kind.first,
+        fields,
+        authenticatedPeerId: authenticatedPeerId,
+        selfPeerId: selfPeerId ?? '',
+        peerIsOwnDevice: peerIsOwnDevice,
+      )) {
+        return null;
+      }
+    } else if (authorizedConversations != null) {
+      final cid = normalizedConversationId(fields);
+      final allowed = authorizedConversations.map(normalizePeerId).toSet();
+      if (cid == null || !allowed.contains(cid)) {
+        return null;
+      }
     }
 
     final record = JournalRecord(

@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/calls/hyperswarm_signaling.dart';
@@ -17,20 +16,23 @@ import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
 import 'package:orbits_flutter/transport/transport_api.dart';
 
-DeviceBinding _bind(String id) => DeviceBinding(
-  version: kDeviceBindingVersion,
-  identityPublicKey: Uint8List.fromList(const [1]),
-  deviceId: id,
-  transportPublicKey: Uint8List.fromList(List<int>.generate(32, (i) => i + 1)),
-  hypercorePublicKey: Uint8List.fromList(List<int>.generate(32, (i) => i + 2)),
-  capabilities: const ['hyperswarm-v1'],
-  createdAt: 1,
-  expiresAt: 2,
-  signatureByIdentityKey: Uint8List.fromList(const [3]),
-);
+import '../helpers/signed_device_binding.dart';
 
 void main() {
-  setUp(resetFlagsForTests);
+  late DeviceBinding bindA;
+  late DeviceBinding bindB;
+
+  setUp(() async {
+    resetFlagsForTests();
+    bindA = await signedDeviceBinding(
+      peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+      deviceId: 'a',
+    );
+    bindB = await signedDeviceBinding(
+      peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+      deviceId: 'b',
+    );
+  });
   tearDown(resetFlagsForTests);
 
   final secret = List<int>.generate(32, (i) => 9);
@@ -78,8 +80,8 @@ void main() {
         discoverySecret: secret,
       ),
     );
-    await pair.$1.publish(_bind('a'));
-    await pair.$2.publish(_bind('b'));
+    await pair.$1.publish(bindA);
+    await pair.$2.publish(bindB);
     final a = make(pair.$1, 'ORBIT-AAAAAAAAAAAAAAAA', 'dev-a');
     final b = make(pair.$2, 'ORBIT-BBBBBBBBBBBBBBBB', 'dev-b');
     await pair.$1.connect(
@@ -114,8 +116,8 @@ void main() {
         discoverySecret: secret,
       ),
     );
-    await pair.$1.publish(_bind('a'));
-    await pair.$2.publish(_bind('b'));
+    await pair.$1.publish(bindA);
+    await pair.$2.publish(bindB);
     DualStackBridge(
       transport: pair.$2,
       journal: MemoryJournal('b'),
@@ -231,8 +233,8 @@ void main() {
         discoverySecret: secret,
       ),
     );
-    await pair.$1.publish(_bind('a'));
-    await pair.$2.publish(_bind('b'));
+    await pair.$1.publish(bindA);
+    await pair.$2.publish(bindB);
     final a = DualStackBridge(
       transport: pair.$1,
       journal: MemoryJournal('a'),
@@ -373,8 +375,8 @@ void main() {
         discoverySecret: secret,
       ),
     );
-    await pair.$1.publish(_bind('a'));
-    await pair.$2.publish(_bind('b'));
+    await pair.$1.publish(bindA);
+    await pair.$2.publish(bindB);
     final a = DualStackBridge(
       transport: pair.$1,
       journal: MemoryJournal('a'),

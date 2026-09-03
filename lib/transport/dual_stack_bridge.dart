@@ -5,8 +5,9 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:crypto/crypto.dart' show sha256;
+import 'package:crypto/crypto.dart' show Hmac, sha256;
 
+import '../attachments/file_transfer_session.dart';
 import '../attachments/resumable_blob.dart';
 import '../calls/hyperswarm_signaling.dart';
 import '../core/feature_flags.dart';
@@ -20,6 +21,7 @@ import '../peer/helpers.dart';
 import '../replication/file_journal.dart';
 import '../replication/hypercore_store.dart';
 import '../replication/memory_journal.dart';
+import '../replication/replication_authorization.dart';
 import '../transport/replication_schema.dart';
 import 'dev_bare_transport.dart';
 import 'device_binding.dart';
@@ -74,13 +76,34 @@ class DualStackBridge {
 
   final Set<String> connecting = <String>{};
   final Set<String> connected = <String>{};
+  final Set<String> authenticated = <String>{};
   final List<CapabilityRecord> remoteCapabilities = <CapabilityRecord>[];
   StreamSubscription<TransportEvent>? _sub;
   void Function(CallSignal signal, String from)? onCallSignal;
   void Function(String peerId, bool connected)? onPresence;
 
+  final Map<String, String> _expectedPeer = <String, String>{};
+  final Map<String, DeviceBinding> _bindings = <String, DeviceBinding>{};
+  final Map<String, String> _fingerprintOwner = <String, String>{};
+  final FileTransferCoordinator files = FileTransferCoordinator();
+
   void attach() {
     _sub ??= transport.events.listen(_onEvent);
+    files.onDrop = (peer, packet) => onDrop?.call(peer, packet);
+    files.send = (peer, bytes) => transport.send(
+      peer,
+      TransportChannel.attachment,
+      bytes,
+    );
+    files.fileKeyFor = (peer, transferId) {
+      final secret = secrets.get(peer);
+      if (secret == null || secret.isEmpty) {
+        throw StateError('file transfer requires a discovery secret');
+      }
+      return Hmac(sha256, secret)
+          .convert(utf8.encode('orbits-file-v1|$transferId'))
+          .bytes;
+    };
   }
 
   Future<void> detach() async {
@@ -88,6 +111,18 @@ class DualStackBridge {
     _sub = null;
     connecting.clear();
     connected.clear();
+    authenticated.clear();
+    _expectedPeer.clear();
+    _bindings.clear();
+    _fingerprintOwner.clear();
+    files.forgetAll();
+  }
+
+  /// Test/harness hook: persist a local journal record and fan it out
+  /// only to authenticated peers that are allowed to see it.
+  void appendAndReplicate(JournalRecord record) {
+    hypercore.append(record);
+    _fanoutReplication(record);
   }
 
   bool get nativeEnabled => isHyperswarmTransportEnabled();
@@ -95,10 +130,13 @@ class DualStackBridge {
   bool isNativeConnected(String peerId) =>
       connected.contains(normalizePeerId(peerId));
 
+  bool isAuthenticated(String peerId) =>
+      authenticated.contains(normalizePeerId(peerId));
+
   bool canUseNative(String peerId) {
     if (!nativeEnabled) return false;
     if (secrets.get(peerId) == null) return false;
-    return isNativeConnected(peerId);
+    return isNativeConnected(peerId) && isAuthenticated(peerId);
   }
 
   Future<void> dial(String peerId) async {
@@ -112,15 +150,28 @@ class DualStackBridge {
     }
     final norm = normalizePeerId(peerId);
     connecting.add(norm);
+    _expectedPeer[norm] = norm;
     try {
       await transport.connect(
         PeerDescriptor(peerId: norm, discoverySecret: secret),
       );
-      // Yield to event loop so stream listeners process synchronous connected events
       await Future<void>.delayed(Duration.zero);
+      await _waitForAuth(norm, timeout: const Duration(seconds: 8));
     } catch (_) {
       connecting.remove(norm);
+      _expectedPeer.remove(norm);
       rethrow;
+    }
+  }
+
+  Future<void> _waitForAuth(String peerId, {required Duration timeout}) async {
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      if (isAuthenticated(peerId)) return;
+      if (!connecting.contains(peerId) && !isNativeConnected(peerId)) {
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 10));
     }
   }
 
@@ -140,11 +191,13 @@ class DualStackBridge {
   Future<bool> _sendEncryptedOne(String peerId, Object? msg) async {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return false;
-    if (!isNativeConnected(norm)) {
+    if (!isAuthenticated(norm)) {
       if (isDevBareTransportRequested() && secrets.get(norm) != null) {
-        await dial(norm);
+        try {
+          await dial(norm);
+        } catch (_) {}
       }
-      if (!isNativeConnected(norm)) {
+      if (!isAuthenticated(norm)) {
         if (isDevBareTransportRequested()) return false;
         if (msg is Map &&
             (msg['type'] == 'wireHello' || msg['type'] == 'wireRekey')) {
@@ -236,11 +289,14 @@ class DualStackBridge {
       ReplicationEventKind.deviceRevoked,
       <String, Object?>{
         'deviceId': deviceId,
+        'ownerPeerId': selfPeerId(),
+        'audience': 'owner-devices',
         'createdAt': DateTime.now().millisecondsSinceEpoch,
       },
     );
     unawaited(durableJournal?.append(record));
     hypercore.append(record);
+    _fanoutReplication(record);
   }
 
   void authorizeDevice(AuthorizedDevice device) {
@@ -249,11 +305,16 @@ class DualStackBridge {
       ReplicationEventKind.deviceAuthorized,
       <String, Object?>{
         'deviceId': device.deviceId,
+        'ownerPeerId': device.ownerPeerId.isNotEmpty
+            ? device.ownerPeerId
+            : selfPeerId(),
+        'audience': 'owner-devices',
         'createdAt': device.createdAt,
       },
     );
     unawaited(durableJournal?.append(record));
     hypercore.append(record);
+    _fanoutReplication(record);
   }
 
   Future<int> drainMailbox({String? fromPeerId}) async {
@@ -317,17 +378,28 @@ class DualStackBridge {
   Future<void> sendAttachmentChunks(
     String peerId,
     List<int> plaintext,
-    List<int> fileKey,
-  ) async {
-    final chunks = ResumableAttachment.chunk(plaintext, fileKey);
+    List<int> fileKey, {
+    required String fileId,
+  }) async {
+    if (!isAuthenticated(peerId)) {
+      throw StateError('attachment requires an authenticated peer');
+    }
+    final chunks = ResumableAttachment.chunk(
+      plaintext,
+      fileKey,
+      fileId: fileId,
+      totalBytes: plaintext.length,
+    );
     for (final chunk in chunks) {
       await transport.send(
         normalizePeerId(peerId),
         TransportChannel.attachment,
         jsonPayload({
           'type': 'attach-chunk',
+          'fileId': fileId,
           'index': chunk.index,
           'offset': chunk.offset,
+          'totalBytes': plaintext.length,
           'hash': chunk.hash,
           'b64': base64Encode(chunk.ciphertext),
         }),
@@ -337,7 +409,9 @@ class DualStackBridge {
 
   Future<bool> sendEphemeral(String peerId, Object? msg) async {
     final norm = normalizePeerId(peerId);
-    if (isBlocked(norm) || !isWireReady(norm)) return false;
+    if (isBlocked(norm) || !isAuthenticated(norm) || !isWireReady(norm)) {
+      return false;
+    }
     final wire = await encryptWirePayload(norm, msg);
     await transport.send(norm, TransportChannel.presence, utf8.encode(wire));
     return true;
@@ -345,7 +419,7 @@ class DualStackBridge {
 
   bool sendRoomPacket(String peerId, Map<String, Object?> packet) {
     final norm = normalizePeerId(peerId);
-    if (isBlocked(norm)) return false;
+    if (isBlocked(norm) || !isAuthenticated(norm)) return false;
     unawaited(
       transport.send(norm, TransportChannel.control, jsonPayload(packet)),
     );
@@ -353,20 +427,28 @@ class DualStackBridge {
   }
 
   Future<void> sendCallSignal(String peerId, CallSignal signal) {
+    final norm = normalizePeerId(peerId);
+    if (!isAuthenticated(norm)) {
+      throw StateError('call signaling requires an authenticated peer');
+    }
     return transport.send(
-      normalizePeerId(peerId),
+      norm,
       TransportChannel.call,
       jsonPayload(signal.toJson()),
     );
   }
 
-  Future<void> sendFile(String peerId, TransportFileDescriptor file) {
-    return transport.sendFile(normalizePeerId(peerId), file);
+  Future<void> sendFile(String peerId, TransportFileDescriptor file) async {
+    final norm = normalizePeerId(peerId);
+    if (isBlocked(norm) || !isAuthenticated(norm)) {
+      throw StateError('file transfer requires an authenticated peer');
+    }
+    await files.sendPath(norm, file);
   }
 
   Future<bool> sendDrop(String peerId, Object packet) async {
     final norm = normalizePeerId(peerId);
-    if (isBlocked(norm) || !isNativeConnected(norm)) return false;
+    if (isBlocked(norm) || !isAuthenticated(norm)) return false;
     if (packet is Map) {
       await transport.send(
         norm,
@@ -398,70 +480,84 @@ class DualStackBridge {
     );
     unawaited(durableJournal?.append(record));
     hypercore.append(record);
-    if (isNativeConnected(peerId)) {
+    _fanoutReplication(record);
+  }
+
+  void _fanoutReplication(JournalRecord record) {
+    for (final peer in authenticated.toList(growable: false)) {
+      if (!_maySendRecord(record, peer)) continue;
       unawaited(
         transport.send(
-          peerId,
+          peer,
           TransportChannel.replication,
-          jsonPayload(hypercore.toReplicationFrame(record)),
+          jsonPayload(
+            hypercore.toReplicationFrame(
+              record,
+              authenticatedPeerId: peer,
+              selfPeerId: selfPeerId(),
+              peerIsOwnDevice: _isOwnDevice(peer),
+            ),
+          ),
         ),
       );
     }
   }
 
+  bool _maySendRecord(JournalRecord record, String peerId) {
+    return recordMayReplicateTo(
+      record,
+      authenticatedPeerId: peerId,
+      selfPeerId: selfPeerId(),
+      peerIsOwnDevice: _isOwnDevice(peerId),
+    );
+  }
+
+  bool _isOwnDevice(String peerId, [DeviceBinding? binding]) {
+    final self = normalizePeerId(selfPeerId());
+    final norm = normalizePeerId(peerId);
+    if (self.isNotEmpty && norm == self) return true;
+    final bind = binding ?? _bindings[norm];
+    if (bind != null &&
+        bind.ownerPeerId.isNotEmpty &&
+        normalizePeerId(bind.ownerPeerId) == self) {
+      return true;
+    }
+    final registry = devices;
+    if (registry == null) return false;
+    for (final device in registry.active) {
+      final owner = normalizePeerId(device.ownerPeerId);
+      if (owner != self) continue;
+      final transportId = device.transportPeerId;
+      if (transportId != null && normalizePeerId(transportId) == norm) {
+        return true;
+      }
+      if (bind != null && device.deviceId == bind.deviceId) return true;
+    }
+    return false;
+  }
+
   void _onEvent(TransportEvent event) {
     switch (event) {
       case TransportConnecting(:final peerId):
-        final norm = normalizePeerId(peerId);
-        connecting.add(norm);
-      case TransportConnected(:final peerId):
-        final norm = normalizePeerId(peerId);
-        connecting.remove(norm);
-        connected.add(norm);
-        onPresence?.call(peerId, true);
-        final caps = localCapabilities;
-        if (caps != null) {
-          unawaited(
-            transport.send(
-              norm,
-              TransportChannel.control,
-              jsonPayload({'type': 'capabilities', ...caps.toWire()}),
-            ),
-          );
-        }
-        for (final record in hypercore.blocks) {
-          unawaited(
-            transport.send(
-              norm,
-              TransportChannel.replication,
-              jsonPayload(hypercore.toReplicationFrame(record)),
-            ),
-          );
-        }
-      case TransportAuthenticated(:final peerId, :final binding):
-        final norm = normalizePeerId(peerId);
+        connecting.add(normalizePeerId(peerId));
+      case TransportConnected():
+        break;
+      case TransportAuthenticated(
+        :final peerId,
+        :final binding,
+        :final connectionNoisePublicKey,
+      ):
         unawaited(
-          verifyDeviceBinding(binding).then((valid) {
-            if (valid) {
-              devices?.authorize(
-                AuthorizedDevice(
-                  deviceId: binding.deviceId,
-                  transportPublicKey: binding.transportPublicKey,
-                  hypercorePublicKey: binding.hypercorePublicKey,
-                  name: 'remote-device',
-                  kind: 'remote',
-                  createdAt: binding.createdAt,
-                  status: DeviceStatus.active,
-                  ownerPeerId: norm,
-                ),
-              );
-            }
-          }),
+          _completeAuthentication(peerId, binding, connectionNoisePublicKey),
         );
       case TransportDisconnected(:final peerId):
         final norm = normalizePeerId(peerId);
         connecting.remove(norm);
         connected.remove(norm);
+        authenticated.remove(norm);
+        _expectedPeer.remove(norm);
+        _bindings.remove(norm);
+        files.forgetPeer(norm);
         onPresence?.call(peerId, false);
       case TransportFrame(:final peerId, :final channel, :final bytes):
         _onFrame(peerId, channel, bytes);
@@ -470,9 +566,141 @@ class DualStackBridge {
     }
   }
 
+  Future<void> _completeAuthentication(
+    String peerId,
+    DeviceBinding binding,
+    List<int>? connectionNoisePublicKey,
+  ) async {
+    final transportId = normalizePeerId(peerId);
+    final logical = binding.ownerPeerId.isNotEmpty
+        ? normalizePeerId(binding.ownerPeerId)
+        : transportId;
+    if (logical.isEmpty) {
+      await _reject(transportId);
+      return;
+    }
+    if (!await verifyDeviceBinding(binding)) {
+      await _reject(transportId);
+      return;
+    }
+    if (connectionNoisePublicKey != null &&
+        connectionNoisePublicKey.isNotEmpty &&
+        !noiseKeyMatchesBinding(
+          connectionNoisePublicKey: connectionNoisePublicKey,
+          binding: binding,
+        )) {
+      await _reject(transportId);
+      return;
+    }
+    final fp = bindingFingerprint(
+      deviceId: binding.deviceId,
+      signature: binding.signatureByIdentityKey,
+      createdAt: binding.createdAt,
+    );
+    final previous = _fingerprintOwner[fp];
+    if (previous != null && previous != logical) {
+      await _reject(transportId);
+      return;
+    }
+    final registry = devices;
+    if (registry != null) {
+      for (final device in registry.all) {
+        if (device.deviceId == binding.deviceId &&
+            device.status == DeviceStatus.revoked) {
+          await _reject(transportId);
+          return;
+        }
+      }
+    }
+    final expected = _expectedPeer[transportId] ?? _expectedPeer[logical];
+    if (expected != null &&
+        expected != logical &&
+        !_isOwnDevice(logical, binding)) {
+      await _reject(transportId);
+      return;
+    }
+    if (transportId != logical && !_isOwnDevice(logical, binding)) {
+      await _reject(transportId);
+      return;
+    }
+
+    _fingerprintOwner[fp] = logical;
+    _bindings[logical] = binding;
+    if (transportId != logical) {
+      _bindings[transportId] = binding;
+    }
+    connecting.remove(transportId);
+    connecting.remove(logical);
+    connected.add(logical);
+    authenticated.add(logical);
+    onPresence?.call(logical, true);
+
+    if (registry != null) {
+      registry.authorize(
+        AuthorizedDevice(
+          deviceId: binding.deviceId,
+          transportPublicKey: binding.transportPublicKey,
+          hypercorePublicKey: binding.hypercorePublicKey,
+          name: 'remote-device',
+          kind: 'remote',
+          createdAt: binding.createdAt,
+          status: DeviceStatus.active,
+          ownerPeerId: logical,
+          transportPeerId: transportId,
+        ),
+      );
+    }
+
+    final caps = localCapabilities;
+    if (caps != null) {
+      unawaited(
+        transport.send(
+          logical,
+          TransportChannel.control,
+          jsonPayload({'type': 'capabilities', ...caps.toWire()}),
+        ),
+      );
+    }
+    _replayAuthorized(logical);
+  }
+
+  void _replayAuthorized(String peerId) {
+    final own = _isOwnDevice(peerId);
+    for (final record in hypercore.recordsAuthorizedForPeer(
+      authenticatedPeerId: peerId,
+      selfPeerId: selfPeerId(),
+      peerIsOwnDevice: own,
+    )) {
+      unawaited(
+        transport.send(
+          peerId,
+          TransportChannel.replication,
+          jsonPayload(
+            hypercore.toReplicationFrame(
+              record,
+              authenticatedPeerId: peerId,
+              selfPeerId: selfPeerId(),
+              peerIsOwnDevice: own,
+            ),
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _reject(String peerId) async {
+    connecting.remove(peerId);
+    connected.remove(peerId);
+    authenticated.remove(peerId);
+    try {
+      await transport.disconnect(peerId);
+    } catch (_) {}
+  }
+
   void _onFrame(String peerId, TransportChannel channel, List<int> bytes) {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return;
+    if (!isAuthenticated(norm)) return;
     if (channel == TransportChannel.call) {
       try {
         onCallSignal?.call(CallSignal.fromJson(decodeJsonPayload(bytes)), norm);
@@ -480,6 +708,7 @@ class DualStackBridge {
       return;
     }
     if (channel == TransportChannel.attachment) {
+      if (files.handleInbound(norm, bytes)) return;
       if (bytes.isNotEmpty && bytes[0] == 1) {
         onDrop?.call(norm, bytes);
         return;
@@ -491,7 +720,12 @@ class DualStackBridge {
     }
     if (channel == TransportChannel.replication) {
       try {
-        hypercore.applyRemote(decodeJsonPayload(bytes));
+        hypercore.applyRemote(
+          decodeJsonPayload(bytes),
+          authenticatedPeerId: norm,
+          selfPeerId: selfPeerId(),
+          peerIsOwnDevice: _isOwnDevice(norm),
+        );
       } catch (_) {}
       return;
     }
