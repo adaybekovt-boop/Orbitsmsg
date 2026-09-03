@@ -112,6 +112,7 @@ if(NOT EXISTS "${_orbits_bare_win}")
   set(_orbits_bare_win "${CMAKE_CURRENT_SOURCE_DIR}/../build/orbits-bare/win32-arm64/bare.exe")
 endif()
 if(EXISTS "${_orbits_bare_win}" AND EXISTS "${_orbits_bare_win}.sha256")
+  message(STATUS "Orbits: bundling official Bare ${_orbits_bare_win}")
   install(PROGRAMS "${_orbits_bare_win}"
     DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
     COMPONENT Runtime)
