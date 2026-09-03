@@ -228,7 +228,13 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
     _events.add(TransportPathChanged(remote.peerId, TransportPath.direct));
     final remoteBinding = remote._binding;
     if (remoteBinding != null) {
-      _events.add(TransportAuthenticated(remote.peerId, remoteBinding));
+      _events.add(
+        TransportAuthenticated(
+          remote.peerId,
+          remoteBinding,
+          connectionNoisePublicKey: remoteBinding.transportPublicKey,
+        ),
+      );
     }
   }
 

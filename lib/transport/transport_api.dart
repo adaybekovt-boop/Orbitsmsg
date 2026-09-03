@@ -61,6 +61,7 @@ class TransportLocalConfiguration {
     this.allowPeerjsFallback = true,
     this.relayForced = false,
     this.diagnosticsEnabled = false,
+    this.noiseSeed,
   });
 
   final String peerId;
@@ -71,6 +72,9 @@ class TransportLocalConfiguration {
   final bool allowPeerjsFallback;
   final bool relayForced;
   final bool diagnosticsEnabled;
+
+  /// 32-byte Hyperswarm / HyperDHT seed. Stable per device.
+  final List<int>? noiseSeed;
 }
 
 sealed class TransportEvent {
@@ -88,9 +92,16 @@ class TransportConnected extends TransportEvent {
 }
 
 class TransportAuthenticated extends TransportEvent {
-  const TransportAuthenticated(this.peerId, this.binding);
+  const TransportAuthenticated(
+    this.peerId,
+    this.binding, {
+    this.connectionNoisePublicKey,
+  });
   final String peerId;
   final DeviceBinding binding;
+
+  /// Actual Noise public key of this connection, when the carrier has one.
+  final List<int>? connectionNoisePublicKey;
 }
 
 class TransportFrame extends TransportEvent {

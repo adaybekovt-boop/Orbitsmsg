@@ -61,8 +61,20 @@ class LocalWorkletPlatform extends OrbitsTransportPlatform {
         peerId: config['peerId'] as String? ?? '',
         discoverySecret: (config['discoverySecret'] as List?)?.cast<int>(),
         relayForced: config['relayForced'] == true,
+        noiseSeed: (config['noiseSeed'] as List?)?.cast<int>(),
       ),
     );
+  }
+
+  @override
+  Future<Map<String, Object?>> runtimeInfo() async {
+    final key = _worklet?.lastNoisePublicKey;
+    return <String, Object?>{
+      if (key != null)
+        'noisePublicKey': key
+            .map((b) => b.toRadixString(16).padLeft(2, '0'))
+            .join(),
+    };
   }
 
   @override
@@ -99,6 +111,7 @@ class LocalWorkletPlatform extends OrbitsTransportPlatform {
         createdAt: binding['createdAt'] as int? ?? 0,
         expiresAt: binding['expiresAt'] as int? ?? 0,
         signatureByIdentityKey: signature,
+        ownerPeerId: binding['ownerPeerId'] as String? ?? '',
       ),
     );
   }
@@ -171,7 +184,25 @@ class LocalWorkletPlatform extends OrbitsTransportPlatform {
   }
 
   void _forward(TransportEvent event) {
-    if (event is TransportConnected) {
+    if (event is TransportAuthenticated) {
+      _events.add({
+        'name': 'authenticated',
+        'peerId': event.peerId,
+        'connectionNoisePublicKey': event.connectionNoisePublicKey,
+        'binding': {
+          'version': event.binding.version,
+          'deviceId': event.binding.deviceId,
+          'identityPublicKeyB64': base64Encode(event.binding.identityPublicKey),
+          'transportPublicKeyB64': base64Encode(event.binding.transportPublicKey),
+          'hypercorePublicKeyB64': base64Encode(event.binding.hypercorePublicKey),
+          'signatureB64': base64Encode(event.binding.signatureByIdentityKey),
+          'capabilities': event.binding.capabilities,
+          'createdAt': event.binding.createdAt,
+          'expiresAt': event.binding.expiresAt,
+          'ownerPeerId': event.binding.ownerPeerId,
+        },
+      });
+    } else if (event is TransportConnected) {
       _events.add({'name': 'connected', 'peerId': event.peerId});
     } else if (event is TransportDisconnected) {
       _events.add({'name': 'disconnected', 'peerId': event.peerId});

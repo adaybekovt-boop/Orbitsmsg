@@ -96,6 +96,14 @@ function spawnWorklet(bare, backend, extraArgs = []) {
   )
 }
 
+function identityBinding(peerId, deviceId, noiseHex) {
+  return {
+    deviceId,
+    ownerPeerId: peerId,
+    transportPublicKeyB64: Buffer.from(String(noiseHex), 'hex').toString('base64'),
+  }
+}
+
 function waitFrame(handler, pred, timeoutMs = 30000) {
   const found = handler.events.find(
     (e) => e.name === 'frame' && pred(e.payload || {}),
@@ -167,8 +175,12 @@ test('live Hyperswarm regression: two official Bare worklets over isolated testn
   assert.ok(startedB.noisePublicKey)
 
   // 3. A and B publish the intended shared topic
-  await ha.request('publish', { binding: { deviceId: 'dev-live-a' } })
-  await hb.request('publish', { binding: { deviceId: 'dev-live-b' } })
+  await ha.request('publish', {
+    binding: identityBinding('ORBIT-LIVE-A', 'dev-live-a', startedA.noisePublicKey),
+  })
+  await hb.request('publish', {
+    binding: identityBinding('ORBIT-LIVE-B', 'dev-live-b', startedB.noisePublicKey),
+  })
   const pubEventA = await ha.waitEvent('published')
   const pubEventB = await hb.waitEvent('published')
   assert.equal(pubEventA.payload.topicHex, pubEventB.payload.topicHex)
@@ -324,8 +336,12 @@ test('live Hyperswarm regression: reverse direction - A stops, B survives and st
     discoverySecret: Array.from(secret),
   })
 
-  await ha.request('publish', { binding: { deviceId: 'dev-rev-a' } })
-  await hb.request('publish', { binding: { deviceId: 'dev-rev-b' } })
+  await ha.request('publish', {
+    binding: identityBinding('ORBIT-REV-A', 'dev-rev-a', startedA.noisePublicKey),
+  })
+  await hb.request('publish', {
+    binding: identityBinding('ORBIT-REV-B', 'dev-rev-b', startedB.noisePublicKey),
+  })
   await ha.waitEvent('published')
   await hb.waitEvent('published')
 
@@ -414,8 +430,12 @@ test('live Hyperswarm regression: remote reset during active send does not kill 
     discoverySecret: Array.from(secret),
   })
 
-  await ha.request('publish', { binding: { deviceId: 'dev-rst-a' } })
-  await hb.request('publish', { binding: { deviceId: 'dev-rst-b' } })
+  await ha.request('publish', {
+    binding: identityBinding('ORBIT-RST-A', 'dev-rst-a', startedA.noisePublicKey),
+  })
+  await hb.request('publish', {
+    binding: identityBinding('ORBIT-RST-B', 'dev-rst-b', startedB.noisePublicKey),
+  })
   await ha.waitEvent('published')
   await hb.waitEvent('published')
 

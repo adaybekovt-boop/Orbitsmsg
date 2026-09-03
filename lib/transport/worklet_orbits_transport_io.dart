@@ -119,17 +119,20 @@ class WorkletOrbitsTransport implements OrbitsTransport {
   late final BareIpcClient _client;
   late final StreamSubscription<Map<String, Object?>> _sub;
   final _events = StreamController<TransportEvent>.broadcast();
+  Uint8List? lastNoisePublicKey;
 
   @override
   Stream<TransportEvent> get events => _events.stream;
 
   @override
   Future<void> start(TransportLocalConfiguration config) async {
-    await _client.request('start', {
+    final started = await _client.request('start', {
       'peerId': config.peerId,
       'discoverySecret': config.discoverySecret,
       'relayForced': config.relayForced,
+      if (config.noiseSeed != null) 'noiseSeed': config.noiseSeed,
     });
+    lastNoisePublicKey = parseNoisePublicKey(started['noisePublicKey']);
   }
 
   @override
@@ -159,6 +162,7 @@ class WorkletOrbitsTransport implements OrbitsTransport {
         'signatureB64': base64Encode(binding.signatureByIdentityKey),
         'createdAt': binding.createdAt,
         'expiresAt': binding.expiresAt,
+        'ownerPeerId': binding.ownerPeerId,
       },
     });
   }
@@ -217,6 +221,45 @@ class WorkletOrbitsTransport implements OrbitsTransport {
         (event['payload'] as Map?)?.cast<String, Object?>() ??
         const <String, Object?>{};
     switch (name) {
+      case 'authenticated':
+        final rawBinding =
+            (payload['binding'] as Map?)?.cast<String, Object?>() ??
+            const <String, Object?>{};
+        try {
+          final binding = DeviceBinding(
+            version: (rawBinding['version'] as num?)?.toInt() ?? 1,
+            identityPublicKey: Uint8List.fromList(
+              base64Decode(rawBinding['identityPublicKeyB64'] as String? ?? ''),
+            ),
+            deviceId: rawBinding['deviceId'] as String? ?? '',
+            transportPublicKey: Uint8List.fromList(
+              base64Decode(rawBinding['transportPublicKeyB64'] as String? ?? ''),
+            ),
+            hypercorePublicKey: Uint8List.fromList(
+              base64Decode(rawBinding['hypercorePublicKeyB64'] as String? ?? ''),
+            ),
+            capabilities:
+                (rawBinding['capabilities'] as List?)
+                    ?.whereType<String>()
+                    .toList() ??
+                const <String>[],
+            createdAt: (rawBinding['createdAt'] as num?)?.toInt() ?? 0,
+            expiresAt: (rawBinding['expiresAt'] as num?)?.toInt() ?? 0,
+            signatureByIdentityKey: Uint8List.fromList(
+              base64Decode(rawBinding['signatureB64'] as String? ?? ''),
+            ),
+            ownerPeerId: rawBinding['ownerPeerId'] as String? ?? '',
+          );
+          _events.add(
+            TransportAuthenticated(
+              payload['peerId'] as String? ?? '',
+              binding,
+              connectionNoisePublicKey: parseNoisePublicKey(
+                payload['connectionNoisePublicKey'],
+              ),
+            ),
+          );
+        } catch (_) {}
       case 'connected':
         _events.add(TransportConnected(payload['peerId'] as String? ?? ''));
       case 'disconnected':

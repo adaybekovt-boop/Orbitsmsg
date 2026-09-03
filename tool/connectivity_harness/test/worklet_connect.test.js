@@ -156,7 +156,14 @@ test('F-13: public connected event only emitted after logical identity known, no
   assert.equal(connEvents.length, 0)
 
   // Now an orbits-identity frame arrives on control channel
-  const framePayload = Buffer.from(JSON.stringify({ type: 'orbits-identity', peerId: 'ORBIT-REMOTE' }))
+  const framePayload = Buffer.from(JSON.stringify({
+    type: 'orbits-identity',
+    peerId: 'ORBIT-REMOTE',
+    binding: {
+      ownerPeerId: 'ORBIT-REMOTE',
+      transportPublicKeyB64: noiseKey.toString('base64'),
+    },
+  }))
   const connRecord = Array.from(w._connections)[0]
   w._onFrame(connRecord, 'control', framePayload)
 
@@ -164,6 +171,10 @@ test('F-13: public connected event only emitted after logical identity known, no
   const connEventsAfter = events.filter((e) => e.name === 'connected')
   assert.equal(connEventsAfter.length, 1)
   assert.equal(connEventsAfter[0].payload.peerId, 'ORBIT-REMOTE')
+  const authEvents = events.filter((e) => e.name === 'authenticated')
+  assert.equal(authEvents.length, 1)
+  assert.equal(authEvents[0].payload.peerId, 'ORBIT-REMOTE')
+  assert.equal(authEvents[0].payload.connectionNoisePublicKey, noiseKey.toString('hex'))
 
   // Disconnect emits disconnected only once for ORBIT-REMOTE
   w._handlePeerDisconnect(connRecord, null)
@@ -175,6 +186,27 @@ test('F-13: public connected event only emitted after logical identity known, no
   w._handlePeerDisconnect(connRecord, null)
   const discEvents2 = events.filter((e) => e.name === 'disconnected')
   assert.equal(discEvents2.length, 1)
+})
+
+test('F-09: hyperswarm rejects plaintext orbits-identity without a Noise-bound certificate', async () => {
+  const events = []
+  const w = new Worklet({
+    backend: 'hyperswarm',
+    emit: (name, payload) => events.push({ name, payload }),
+  })
+  w._started = true
+  w._config = { peerId: 'ORBIT-LOCAL' }
+  const fakeSocket = { write() {}, destroy() {}, on() {} }
+  const noiseKey = Buffer.alloc(32, 0xbb)
+  w._onConn(fakeSocket, { publicKey: noiseKey, path: 'direct' })
+  const connRecord = Array.from(w._connections)[0]
+  w._onFrame(
+    connRecord,
+    'control',
+    Buffer.from(JSON.stringify({ type: 'orbits-identity', peerId: 'ORBIT-REMOTE' })),
+  )
+  assert.equal(events.filter((e) => e.name === 'connected').length, 0)
+  assert.equal(events.filter((e) => e.name === 'authenticated').length, 0)
 })
 
 test('F-18: publish local topic + join B + join C, then disconnect B and unpublish leaves correct topics', async () => {

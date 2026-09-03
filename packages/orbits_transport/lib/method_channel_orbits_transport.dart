@@ -122,6 +122,7 @@ class MethodChannelOrbitsTransport extends OrbitsTransportPlatform {
   Future<void> refreshNetwork() =>
       _channel.invokeMethod<void>('refreshNetwork');
 
+  @override
   Future<Map<String, Object?>> runtimeInfo() async {
     final raw = await _channel.invokeMethod<dynamic>('runtimeInfo');
     if (raw is Map) {

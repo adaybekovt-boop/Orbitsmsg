@@ -4,6 +4,7 @@
 import 'dart:math';
 import 'dart:typed_data';
 
+import '../core/base64_helpers.dart';
 import '../core/identity_key.dart';
 import '../core/key_store.dart';
 import '../transport/device_binding.dart';
@@ -18,11 +19,15 @@ class LocalDeviceMaterial {
     required this.deviceId,
     required this.transportPublicKey,
     required this.hypercorePublicKey,
+    required this.transportSecretSeed,
   });
 
   final String deviceId;
   final Uint8List transportPublicKey;
   final Uint8List hypercorePublicKey;
+
+  /// 32-byte Hyperswarm / HyperDHT seed. Stable for this device.
+  final Uint8List transportSecretSeed;
 }
 
 Future<LocalDeviceMaterial> loadOrCreateLocalDeviceMaterial({
@@ -33,29 +38,57 @@ Future<LocalDeviceMaterial> loadOrCreateLocalDeviceMaterial({
   var deviceId = row?['deviceId'] as String?;
   var transport = _asBytes(row?['transportPublicKey']);
   var writer = _asBytes(row?['hypercorePublicKey']);
+  var seed = _asBytes(row?['transportSecretSeed']);
   if (deviceId == null ||
       deviceId.isEmpty ||
-      transport.length != 32 ||
+      seed.length != 32 ||
       writer.length != 32 ||
-      _isPlaceholder(transport) ||
+      _isPlaceholder(seed) ||
       _isPlaceholder(writer)) {
     deviceId = _newDeviceId();
-    transport = _randomKey();
+    seed = _randomKey();
     writer = _randomKey();
-    if (_bytesEqual(transport, writer)) {
+    transport = Uint8List(32);
+    if (_bytesEqual(seed, writer)) {
       writer = _randomKey();
     }
     await keys.put(kLocalDeviceMaterialTable, {
       'id': kLocalDeviceMaterialId,
       'deviceId': deviceId,
-      'transportPublicKey': base64Encode(transport),
-      'hypercorePublicKey': base64Encode(writer),
+      'transportPublicKey': bytesToBase64(transport),
+      'hypercorePublicKey': bytesToBase64(writer),
+      'transportSecretSeed': bytesToBase64(seed),
     });
   }
   return LocalDeviceMaterial(
     deviceId: deviceId,
     transportPublicKey: transport,
     hypercorePublicKey: writer,
+    transportSecretSeed: seed,
+  );
+}
+
+Future<LocalDeviceMaterial> rememberTransportPublicKey({
+  required LocalDeviceMaterial material,
+  required List<int> transportPublicKey,
+  KeyStore? store,
+}) async {
+  final next = Uint8List.fromList(transportPublicKey);
+  if (next.length != 32) return material;
+  if (_bytesEqual(material.transportPublicKey, next)) return material;
+  final keys = store ?? keyStore();
+  await keys.put(kLocalDeviceMaterialTable, {
+    'id': kLocalDeviceMaterialId,
+    'deviceId': material.deviceId,
+    'transportPublicKey': bytesToBase64(next),
+    'hypercorePublicKey': bytesToBase64(material.hypercorePublicKey),
+    'transportSecretSeed': bytesToBase64(material.transportSecretSeed),
+  });
+  return LocalDeviceMaterial(
+    deviceId: material.deviceId,
+    transportPublicKey: next,
+    hypercorePublicKey: material.hypercorePublicKey,
+    transportSecretSeed: material.transportSecretSeed,
   );
 }
 
@@ -64,6 +97,7 @@ Future<DeviceBinding> issueLocalDeviceBinding({
   required List<String> capabilities,
   required int createdAt,
   required int expiresAt,
+  String ownerPeerId = '',
   Future<Uint8List> Function()? exportIdentity,
   Future<Uint8List> Function(List<int> payload)? sign,
 }) async {
@@ -81,6 +115,7 @@ Future<DeviceBinding> issueLocalDeviceBinding({
     createdAt: createdAt,
     expiresAt: expiresAt,
     signatureByIdentityKey: Uint8List(0),
+    ownerPeerId: ownerPeerId,
   );
   final signature = await (sign ?? signBytes)(draft.signedPayload());
   if (signature.isEmpty) {
@@ -96,6 +131,7 @@ Future<DeviceBinding> issueLocalDeviceBinding({
     createdAt: draft.createdAt,
     expiresAt: draft.expiresAt,
     signatureByIdentityKey: signature,
+    ownerPeerId: ownerPeerId,
   );
 }
 
@@ -123,7 +159,7 @@ Uint8List _asBytes(Object? raw) {
   if (raw is List<int>) return Uint8List.fromList(raw);
   if (raw is String && raw.isNotEmpty) {
     try {
-      return Uint8List.fromList(base64Decode(raw));
+      return base64ToBytes(raw);
     } catch (_) {
       return Uint8List(0);
     }

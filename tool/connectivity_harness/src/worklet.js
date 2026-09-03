@@ -36,6 +36,16 @@ function parseWorkletArgv(argv) {
   return out
 }
 
+function noiseSeedToBuffer(raw) {
+  if (raw == null) return null
+  if (Buffer.isBuffer(raw)) return raw.length === 32 ? raw : null
+  if (Array.isArray(raw)) return raw.length === 32 ? Buffer.from(raw) : null
+  if (typeof raw === 'string' && /^[0-9a-f]+$/i.test(raw) && raw.length === 64) {
+    return Buffer.from(raw, 'hex')
+  }
+  return null
+}
+
 function secretToBuffer(raw) {
   if (raw == null) throw new Error('secret must not be empty')
   if (Buffer.isBuffer(raw)) {
@@ -98,12 +108,22 @@ class Worklet {
       storageDir,
       requireReal: config.requireRealCorestore === true || isBare,
     })
+    this._noiseSeed = noiseSeedToBuffer(config.noiseSeed)
     if (this.backend === 'loopback') {
       await this._loop.listen()
       this._loop.on('connection', (sock, info) => this._onConn(sock, info))
     } else if (this.backend === 'hyperswarm') {
       const { createHyperswarmBackend } = require('./swarm')
-      this._swarm = await createHyperswarmBackend(config)
+      const swarmOpts = { ...config }
+      if (this._noiseSeed) {
+        try {
+          const hc = require('hypercore-crypto')
+          swarmOpts.keyPair = hc.keyPair(this._noiseSeed)
+        } catch {
+          swarmOpts.seed = this._noiseSeed
+        }
+      }
+      this._swarm = await createHyperswarmBackend(swarmOpts)
       this._swarm.onConnection((sock, info) => this._onConn(sock, info))
     } else {
       throw new Error('unknown backend ' + this.backend)
@@ -263,7 +283,19 @@ class Worklet {
 
   noisePublicKey() {
     const key = this._swarm && this._swarm.swarm && this._swarm.swarm.keyPair
-    return key && key.publicKey ? key.publicKey.toString('hex') : null
+    if (key && key.publicKey) return key.publicKey.toString('hex')
+    if (this._noisePublicHex) return this._noisePublicHex
+    if (this._noiseSeed) {
+      try {
+        const hc = require('hypercore-crypto')
+        this._noisePublicHex = hc.keyPair(this._noiseSeed).publicKey.toString('hex')
+        return this._noisePublicHex
+      } catch {
+        this._noisePublicHex = createHash('sha256').update(this._noiseSeed).digest('hex')
+        return this._noisePublicHex
+      }
+    }
+    return null
   }
 
   async dhtBootstrap(params = {}) {
@@ -636,11 +668,14 @@ class Worklet {
   _announceIdentityToConn(connRecord) {
     const localId = this._config && this._config.peerId
     if (!localId || connRecord.closed || !connRecord.socket) return
+    const binding = this._localBinding || null
+    const logical =
+      (binding && (binding.ownerPeerId || binding.peerId)) || localId
     const msg = {
       type: 'orbits-identity',
-      peerId: localId,
+      peerId: logical,
       noisePublicKey: this.noisePublicKey(),
-      binding: this._localBinding || null,
+      binding,
     }
     try {
       connRecord.socket.write(
@@ -663,16 +698,17 @@ class Worklet {
 
     if (!connRecord.emittedConnected) {
       connRecord.emittedConnected = true
-      this._emit('connected', {
-        peerId: logicalPeerId,
-        path: (connRecord.info && connRecord.info.path) || 'unknown',
-      })
       if (binding) {
         this._emit('authenticated', {
           peerId: logicalPeerId,
           binding,
+          connectionNoisePublicKey: connRecord.noise || null,
         })
       }
+      this._emit('connected', {
+        peerId: logicalPeerId,
+        path: (connRecord.info && connRecord.info.path) || 'unknown',
+      })
       this._emit('pathChanged', {
         peerId: logicalPeerId,
         path: (connRecord.info && connRecord.info.path) || 'direct',
@@ -737,10 +773,19 @@ class Worklet {
       return
     }
 
-    if (channel === 'control' && body && body.type === 'orbits-identity' && body.peerId) {
-      if (connRecord.noise && body.binding && body.binding.transportPublicKeyB64) {
+    if (channel === 'control' && body && body.type === 'orbits-identity') {
+      if (this.backend === 'hyperswarm') {
+        const binding = body.binding
+        if (!binding || !binding.transportPublicKeyB64) {
+          this._handlePeerDisconnect(connRecord, new Error('IDENTITY_BINDING_REQUIRED'))
+          return
+        }
+        if (!connRecord.noise) {
+          this._handlePeerDisconnect(connRecord, new Error('NOISE_KEY_MISSING'))
+          return
+        }
         try {
-          const transportHex = Buffer.from(body.binding.transportPublicKeyB64, 'base64').toString('hex')
+          const transportHex = Buffer.from(binding.transportPublicKeyB64, 'base64').toString('hex')
           if (transportHex !== connRecord.noise) {
             this._handlePeerDisconnect(connRecord, new Error('NOISE_KEY_MISMATCH: transport public key does not match connection Noise key'))
             return
@@ -749,8 +794,15 @@ class Worklet {
           this._handlePeerDisconnect(connRecord, err)
           return
         }
+        const logical = binding.ownerPeerId || binding.peerId
+        if (!logical) {
+          this._handlePeerDisconnect(connRecord, new Error('IDENTITY_OWNER_REQUIRED'))
+          return
+        }
+        this._assignLogicalPeer(connRecord, String(logical), binding)
+      } else if (body.peerId) {
+        this._assignLogicalPeer(connRecord, String(body.peerId), body.binding || null)
       }
-      this._assignLogicalPeer(connRecord, String(body.peerId), body.binding || null)
     }
 
     const peerId = connRecord.logicalPeerId

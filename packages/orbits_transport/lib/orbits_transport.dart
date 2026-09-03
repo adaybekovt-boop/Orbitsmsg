@@ -34,4 +34,7 @@ class OrbitsTransportPlugin {
 
   Future<void> refreshNetwork() =>
       OrbitsTransportPlatform.instance.refreshNetwork();
+
+  Future<Map<String, Object?>> runtimeInfo() =>
+      OrbitsTransportPlatform.instance.runtimeInfo();
 }

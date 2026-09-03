@@ -137,6 +137,7 @@ class NativeTransportHost {
         TransportLocalConfiguration(
           peerId: auth.user.peerId,
           discoverySecret: secret,
+          noiseSeed: material.transportSecretSeed,
         ),
       );
     } catch (err) {
@@ -148,6 +149,14 @@ class NativeTransportHost {
       return;
     }
 
+    var boundMaterial = material;
+    final noise = _localNoisePublicKey(transport);
+    if (noise != null) {
+      boundMaterial = await rememberTransportPublicKey(
+        material: material,
+        transportPublicKey: noise,
+      );
+    }
     final now = DateTime.now().millisecondsSinceEpoch;
     final caps = await issueLocalCapabilityRecord(
       peerId: auth.user.peerId,
@@ -163,10 +172,11 @@ class NativeTransportHost {
       expiresAt: now + 86400000 * 30,
     );
     final binding = await issueLocalDeviceBinding(
-      material: material,
+      material: boundMaterial,
       capabilities: caps.capabilities.map((c) => c.wireName).toList()..sort(),
       createdAt: now,
       expiresAt: now + 86400000 * 30,
+      ownerPeerId: auth.user.peerId,
     );
     if (!deviceBindingClockIsValid(binding, nowMs: now)) {
       throw StateError('local device binding is not valid');
@@ -187,8 +197,8 @@ class NativeTransportHost {
         .read(connectionsNotifierProvider.notifier)
         .bindNativeTransport(
           transport!,
-          journal: MemoryJournal(material.deviceId),
-          deviceId: material.deviceId,
+          journal: MemoryJournal(boundMaterial.deviceId),
+          deviceId: boundMaterial.deviceId,
           durableJournal: journal,
           mailbox: mailbox,
           mailboxToken: 'local-mailbox',
@@ -297,6 +307,12 @@ class NativeTransportHost {
 
   Future<void> onForeground() async {
     await lifecycle?.onForeground();
+  }
+
+  List<int>? _localNoisePublicKey(OrbitsTransport? carrier) {
+    if (carrier is PluginOrbitsTransport) return carrier.lastNoisePublicKey;
+    if (carrier is WorkletOrbitsTransport) return carrier.lastNoisePublicKey;
+    return null;
   }
 
   Future<WakeOutcome> handleWake(Map<String, Object?> payload) async {

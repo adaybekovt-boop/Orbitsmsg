@@ -21,13 +21,14 @@ class PluginOrbitsTransport implements OrbitsTransport {
   final String backend;
   final _events = StreamController<TransportEvent>.broadcast();
   StreamSubscription<Map<String, Object?>>? _sub;
+  Uint8List? lastNoisePublicKey;
 
   @override
   Stream<TransportEvent> get events => _events.stream;
 
   @override
-  Future<void> start(TransportLocalConfiguration config) {
-    return plugin.start({
+  Future<void> start(TransportLocalConfiguration config) async {
+    await plugin.start({
       'peerId': config.peerId,
       'discoverySecret': config.discoverySecret,
       'relayForced': config.relayForced,
@@ -35,7 +36,10 @@ class PluginOrbitsTransport implements OrbitsTransport {
       'remoteJs': false,
       'requireRealCorestore': true,
       'ipcVersion': kOrbitsBareIpcInfo,
+      if (config.noiseSeed != null) 'noiseSeed': config.noiseSeed,
     });
+    final info = await plugin.runtimeInfo();
+    lastNoisePublicKey = parseNoisePublicKey(info['noisePublicKey']);
   }
 
   @override
@@ -60,6 +64,7 @@ class PluginOrbitsTransport implements OrbitsTransport {
       'capabilities': binding.capabilities,
       'createdAt': binding.createdAt,
       'expiresAt': binding.expiresAt,
+      'ownerPeerId': binding.ownerPeerId,
     });
   }
 
@@ -131,8 +136,18 @@ class PluginOrbitsTransport implements OrbitsTransport {
               signatureByIdentityKey: Uint8List.fromList(
                 base64Decode(rawBinding['signatureB64'] as String? ?? ''),
               ),
+              ownerPeerId: rawBinding['ownerPeerId'] as String? ?? '',
             );
-            _events.add(TransportAuthenticated(peerId, binding));
+            _events.add(
+              TransportAuthenticated(
+                peerId,
+                binding,
+                connectionNoisePublicKey: parseNoisePublicKey(
+                  event['connectionNoisePublicKey'] ??
+                      rawBinding['connectionNoisePublicKey'],
+                ),
+              ),
+            );
           } catch (_) {}
         }
       case 'pathChanged':

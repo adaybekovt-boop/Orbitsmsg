@@ -21,6 +21,7 @@ class DeviceBinding {
     required this.createdAt,
     required this.expiresAt,
     required this.signatureByIdentityKey,
+    this.ownerPeerId = '',
   });
 
   final int version;
@@ -32,6 +33,10 @@ class DeviceBinding {
   final int createdAt;
   final int expiresAt;
   final Uint8List signatureByIdentityKey;
+
+  /// Signed logical identity. The worklet must not take this from a
+  /// plaintext `orbits-identity.peerId` field.
+  final String ownerPeerId;
 
   /// Canonical bytes the identity key must sign (without the signature).
   List<int> signedPayload() {
@@ -61,6 +66,7 @@ class DeviceBinding {
     }
     out.addAll(_u64(createdAt));
     out.addAll(_u64(expiresAt));
+    str(ownerPeerId);
     return out;
   }
 }
@@ -80,6 +86,24 @@ bool deviceBindingClockIsValid(
   if (nowMs > binding.expiresAt) return false;
   if (binding.createdAt > nowMs + maxSkewMs) return false;
   return true;
+}
+
+Uint8List? parseNoisePublicKey(Object? raw) {
+  if (raw is List<int> && raw.length == 32) {
+    return Uint8List.fromList(raw);
+  }
+  if (raw is String && raw.length == 64) {
+    try {
+      final out = Uint8List(32);
+      for (var i = 0; i < 32; i++) {
+        out[i] = int.parse(raw.substring(i * 2, i * 2 + 2), radix: 16);
+      }
+      return out;
+    } catch (_) {
+      return null;
+    }
+  }
+  return null;
 }
 
 bool noiseKeyMatchesBinding({
