@@ -199,14 +199,11 @@ jobs:
       - name: Reproducible Bare packaging gate
         run: bash tool/bare-reproducible-build.sh
 
-  # Hyperswarm join()/joinPeer() is the intended two-device path. GitHub
-  # ubuntu-latest and this agent can announce on a local bootstrap and
-  # flush, but connections stay at 0 (HyperDHT listen/connect still works).
-  # Keep the proof test visible without failing the required suite gate.
+  # Hyperswarm join proof using official Bare worklets over an isolated
+  # multi-node DHT testnet. Required CI gate for PR #62.
   test-hyperswarm-join:
     name: Hyperswarm join proof
     runs-on: ubuntu-latest
-    continue-on-error: true
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
 
@@ -255,6 +252,7 @@ jobs:
       - test-app
       - test-plugin
       - test-harness
+      - test-hyperswarm-join
       - test-storage-peer
     runs-on: ubuntu-latest
     steps:
@@ -265,6 +263,7 @@ jobs:
           TEST_APP: ${{ needs.test-app.result }}
           TEST_PLUGIN: ${{ needs.test-plugin.result }}
           TEST_HARNESS: ${{ needs.test-harness.result }}
+          TEST_HYPERSWARM_JOIN: ${{ needs.test-hyperswarm-join.result }}
           TEST_STORAGE: ${{ needs.test-storage-peer.result }}
         run: |
           set -euo pipefail
@@ -273,12 +272,14 @@ jobs:
           echo "test-app=$TEST_APP"
           echo "test-plugin=$TEST_PLUGIN"
           echo "test-harness=$TEST_HARNESS"
+          echo "test-hyperswarm-join=$TEST_HYPERSWARM_JOIN"
           echo "test-storage-peer=$TEST_STORAGE"
           test "$ANALYZE_ROOT" = success
           test "$ANALYZE_PACKAGES" = success
           test "$TEST_APP" = success
           test "$TEST_PLUGIN" = success
           test "$TEST_HARNESS" = success
+          test "$TEST_HYPERSWARM_JOIN" = success
           test "$TEST_STORAGE" = success
 
   # ────────────────────────────────────────────────────────────────────
@@ -293,7 +294,7 @@ jobs:
   # and simulator builds without requiring distribution signing secrets.
   build-ios:
     name: Build iOS (Xcode 26)
-    needs: analyze-root
+    needs: analyze
     runs-on: macos-26
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -374,7 +375,7 @@ jobs:
   # Tags/main use owner secrets; PRs use a cached CI sideload key.
   build-android:
     name: Build Android (APK)
-    needs: analyze-root
+    needs: analyze
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -573,7 +574,7 @@ jobs:
   # ────────────────────────────────────────────────────────────────────
   build-web:
     name: Build Web (Static)
-    needs: analyze-root
+    needs: analyze
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -672,7 +673,7 @@ jobs:
   # ────────────────────────────────────────────────────────────────────
   build-linux:
     name: Build Linux (desktop)
-    needs: analyze-root
+    needs: analyze
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -742,7 +743,7 @@ jobs:
   # ────────────────────────────────────────────────────────────────────
   build-windows:
     name: Build Windows (EXE)
-    needs: analyze-root
+    needs: analyze
     # Flutter 3.32.0 maps only VS major 17 → "Visual Studio 17 2022".
     # windows-latest (2025+) reports VS 18, which the SDK treats as
     # "Visual Studio 16 2019" — not installed — and cmake fails.
