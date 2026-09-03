@@ -2,7 +2,6 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:orbits_flutter/transport/native_transport_host.dart';
 
 void main() {
   test('mobile host path never installs LocalWorkletPlatform or probes Process.start', () {
