@@ -500,7 +500,10 @@ class Worklet {
       return
     }
     if (channel === 'control' && body && body.type === 'orbits-identity' && body.peerId) {
-      peerId = this._remapPeer(peerId, String(body.peerId))
+      const looksNoise = /^[0-9a-f]{64}$/i.test(String(peerId))
+      if (looksNoise || this.backend === 'hyperswarm') {
+        peerId = this._remapPeer(peerId, String(body.peerId))
+      }
     }
     if (channel === 'message' && body.type === 'harness-echo') {
       this.send(peerId, 'message', {
