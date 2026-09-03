@@ -36,6 +36,26 @@ function parseWorkletArgv(argv) {
   return out
 }
 
+function secretToBuffer(raw) {
+  if (raw == null) throw new Error('secret must not be empty')
+  if (Buffer.isBuffer(raw)) {
+    if (raw.length === 0) throw new Error('secret must not be empty')
+    return raw
+  }
+  if (Array.isArray(raw)) {
+    if (raw.length === 0) throw new Error('secret must not be empty')
+    return Buffer.from(raw)
+  }
+  if (typeof raw === 'string') {
+    if (raw.length === 0) throw new Error('secret must not be empty')
+    if (/^[0-9a-f]+$/i.test(raw) && raw.length % 2 === 0) {
+      return Buffer.from(raw, 'hex')
+    }
+    return Buffer.from(raw, 'utf8')
+  }
+  throw new Error('malformed discoverySecret')
+}
+
 class Worklet {
   constructor(opts = {}) {
     this.backend = opts.backend || 'loopback'
@@ -93,7 +113,7 @@ class Worklet {
   }
 
   async publish(binding) {
-    const secret = Buffer.from(this._config.discoverySecret)
+    const secret = secretToBuffer(this._config.discoverySecret)
     this._topic = contactDiscoveryTopic(secret)
     if (this._swarm) await this._swarm.join(this._topic)
     this._emit('published', { topicHex: this._topic.toString('hex'), binding })
@@ -113,6 +133,10 @@ class Worklet {
       return { peerId: this._firstPeerId() }
     }
     if (!this._swarm) throw new Error('swarm not started')
+    if (peer && peer.discoverySecret) {
+      this._topic = contactDiscoveryTopic(secretToBuffer(peer.discoverySecret))
+      await this._swarm.join(this._topic)
+    }
     if (peer && peer.noisePublicKey) {
       const key = Buffer.from(String(peer.noisePublicKey), 'hex')
       if (key.length !== 32) throw new Error('noisePublicKey must be 32 bytes hex')
@@ -622,4 +646,4 @@ if (isMain()) {
   })
 }
 
-module.exports = { Worklet, handleIpcRequest, parseWorkletArgv }
+module.exports = { Worklet, handleIpcRequest, parseWorkletArgv, secretToBuffer }

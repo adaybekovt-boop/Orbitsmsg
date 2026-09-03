@@ -21,6 +21,7 @@ import '../replication/file_journal.dart';
 import '../replication/hypercore_store.dart';
 import '../replication/memory_journal.dart';
 import '../transport/replication_schema.dart';
+import 'dev_bare_transport.dart';
 import 'discovery_secret_store.dart';
 import 'hello_capabilities.dart';
 import 'mux_frames.dart';
@@ -100,10 +101,17 @@ class DualStackBridge {
   Future<void> dial(String peerId) async {
     if (!nativeEnabled) return;
     final secret = secrets.get(peerId);
-    if (secret == null) return;
+    if (secret == null) {
+      if (isDevBareTransportRequested()) {
+        throw StateError('connect requires a shared discovery secret');
+      }
+      return;
+    }
+    final norm = normalizePeerId(peerId);
     await transport.connect(
-      PeerDescriptor(peerId: normalizePeerId(peerId), discoverySecret: secret),
+      PeerDescriptor(peerId: norm, discoverySecret: secret),
     );
+    connected.add(norm);
   }
 
   Future<bool> sendEncrypted(String peerId, Object? msg) async {
@@ -123,13 +131,19 @@ class DualStackBridge {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return false;
     if (!isNativeConnected(norm)) {
-      if (msg is Map &&
-          (msg['type'] == 'wireHello' || msg['type'] == 'wireRekey')) {
-        return enqueueMailbox(jsonPayload(Map<String, Object?>.from(msg)));
+      if (isDevBareTransportRequested() && secrets.get(norm) != null) {
+        await dial(norm);
       }
-      if (!isWireReady(norm)) return false;
-      final queued = await encryptWirePayload(norm, msg);
-      return enqueueMailbox(utf8.encode(queued));
+      if (!isNativeConnected(norm)) {
+        if (isDevBareTransportRequested()) return false;
+        if (msg is Map &&
+            (msg['type'] == 'wireHello' || msg['type'] == 'wireRekey')) {
+          return enqueueMailbox(jsonPayload(Map<String, Object?>.from(msg)));
+        }
+        if (!isWireReady(norm)) return false;
+        final queued = await encryptWirePayload(norm, msg);
+        return enqueueMailbox(utf8.encode(queued));
+      }
     }
     if (msg is Map &&
         (msg['type'] == 'wireHello' || msg['type'] == 'wireRekey')) {
@@ -334,6 +348,10 @@ class DualStackBridge {
       TransportChannel.call,
       jsonPayload(signal.toJson()),
     );
+  }
+
+  Future<void> sendFile(String peerId, TransportFileDescriptor file) {
+    return transport.sendFile(normalizePeerId(peerId), file);
   }
 
   Future<bool> sendDrop(String peerId, Object packet) async {

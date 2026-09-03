@@ -97,6 +97,11 @@ if [[ "$MODE" == "ios" ]]; then
     echo "BARE_RUNTIME_MISSING: Runner.app missing packaged worklet modules" >&2
     exit 1
   fi
+  if ! find "$app" \( -name 'orbits-worklet-modules.zip' -o -path '*/node_modules/hyperswarm/package.json' \) | grep -q .; then
+    echo "BARE_WORKLET_FAILED: Runner.app missing worklet node_modules zip" >&2
+    find "$app" -iname '*worklet*' -o -iname '*hyperswarm*' | head || true
+    exit 1
+  fi
   echo "ok packaged BareKit in $app"
   exit 0
 fi

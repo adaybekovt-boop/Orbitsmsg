@@ -10,6 +10,7 @@ import 'package:orbits_flutter/transport/replication_schema.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
+import 'package:orbits_flutter/transport/dev_bare_transport.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
@@ -351,6 +352,58 @@ void main() {
       await a.detach();
     },
   );
+
+  test('dev Bare path dials with the shared contact secret', () async {
+    hydrateDevBareTransportPref(true);
+    expect(isHyperswarmTransportEnabled(), isTrue);
+    expect(hyperswarmRollout(), HyperswarmRollout.off);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(_bind('a'));
+    await pair.$2.publish(_bind('b'));
+    final a = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: secrets,
+      isBlocked: (_) => false,
+      onPacket: (peer, data) async {},
+    )..attach();
+    DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'b',
+      secrets: secrets,
+      isBlocked: (_) => false,
+      onPacket: (peer, data) async {},
+    ).attach();
+    await a.dial('ORBIT-BBBBBBBBBBBBBBBB');
+    expect(a.isNativeConnected('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    expect(
+      await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'wireHello',
+        'v': 4,
+      }),
+      isTrue,
+    );
+    await a.detach();
+  });
 
   test('room_msg is blocked without the plaintext ack', () {
     kRoomPlaintextSessionAck.reset();

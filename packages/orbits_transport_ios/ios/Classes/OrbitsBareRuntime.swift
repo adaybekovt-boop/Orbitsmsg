@@ -227,9 +227,13 @@ enum OrbitsBareRuntime {
         try? data.write(to: dest.appendingPathComponent(name), options: .atomic)
       }
     }
-    extractModuleZip(into: dest)
+    extractModuleZip(into: dest, registrar: registrar)
     let script = dest.appendingPathComponent("worklet.js")
-    return FileManager.default.fileExists(atPath: script.path) ? script : nil
+    let hyperswarm = dest.appendingPathComponent("node_modules/hyperswarm/package.json")
+    guard FileManager.default.fileExists(atPath: script.path),
+          FileManager.default.fileExists(atPath: hyperswarm.path)
+    else { return nil }
+    return script
   }
 
   private static func workletSourceData(registrar: FlutterPluginRegistrar?, file: String) -> Data? {
@@ -271,8 +275,40 @@ enum OrbitsBareRuntime {
     return nil
   }
 
-  private static func extractModuleZip(into dest: URL) {
+  private static func extractModuleZip(into dest: URL, registrar: FlutterPluginRegistrar?) {
     let fm = FileManager.default
+    var zips: [URL] = []
+    for bundle in Bundle.allBundles {
+      if let url = bundle.url(forResource: "orbits-worklet-modules", withExtension: "zip") {
+        zips.append(url)
+      }
+      if let root = bundle.resourceURL {
+        zips.append(root.appendingPathComponent("orbits-worklet-modules.zip"))
+      }
+    }
+    if let registrar {
+      let key = registrar.lookupKey(forAsset: "orbits-worklet-modules.zip")
+      if let path = Bundle.main.path(forResource: key, ofType: nil) {
+        zips.append(URL(fileURLWithPath: path))
+      }
+    }
+    if let flutter = Bundle.main.resourceURL?
+      .appendingPathComponent("flutter_assets/orbits-worklet-modules.zip")
+    {
+      zips.append(flutter)
+    }
+    if let app = Bundle.main.privateFrameworksURL?
+      .appendingPathComponent("App.framework")
+      .appendingPathComponent("flutter_assets/orbits-worklet-modules.zip")
+    {
+      zips.append(app)
+    }
+    for zipURL in zips where fm.fileExists(atPath: zipURL.path) {
+      if let data = try? Data(contentsOf: zipURL), !data.isEmpty {
+        try? ZipExtract.unzip(data: data, into: dest)
+        return
+      }
+    }
     let dirs = [
       Bundle.main.resourceURL?.appendingPathComponent("orbits-worklet-modules"),
       Bundle.main.resourceURL?.appendingPathComponent("orbits_worklet_modules"),

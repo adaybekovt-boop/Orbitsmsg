@@ -338,7 +338,8 @@ internal object OrbitsBareRuntime {
     }
     extractModuleZip(context, dest)
     val script = File(dest, "worklet.js")
-    if (!script.isFile || script.length() == 0L) {
+    val hyperswarm = File(dest, "node_modules/hyperswarm/package.json")
+    if (!script.isFile || script.length() == 0L || !hyperswarm.isFile) {
       throw IllegalStateException("BARE_WORKLET_FAILED")
     }
     return script

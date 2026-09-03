@@ -436,6 +436,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     if (reliable) {
       unawaited(_dual?.dial(normalized));
     }
+    if (isDevBareTransportRequested()) {
+      return;
+    }
     final peer = _boundPeer;
     if (peer == null || peer.destroyed || !peer.open) {
       // PeerJS not ready yet (cold-boot race: user taps chat row faster

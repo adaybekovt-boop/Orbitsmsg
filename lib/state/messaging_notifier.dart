@@ -25,6 +25,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/error_reporter.dart';
+import '../transport/dev_bare_transport.dart';
 import '../utils/heavy_codec.dart';
 
 import '../messaging/lost_inbound_ledger.dart';
@@ -667,7 +668,10 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
     final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
+    final open =
+        conn?.open == true ||
+        conns.hasReliable(normalized) ||
+        isDevBareTransportRequested();
 
     final sanitizedReply = _sanitizeReplyTo(replyTo);
 
@@ -772,7 +776,10 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
     final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
+    final open =
+        conn?.open == true ||
+        conns.hasReliable(normalized) ||
+        isDevBareTransportRequested();
 
     // Clamp free-text fields on the sticker blob itself (packName, emoji,
     // label) so a custom pack with 100KB of text fields can't blow up the
@@ -873,7 +880,10 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
     final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
+    final open =
+        conn?.open == true ||
+        conns.hasReliable(normalized) ||
+        isDevBareTransportRequested();
 
     // Defensive clamp вЂ” recorder should produce values in 0..1 already,
     // but a broken input doesn't get to push the UI past that range.
@@ -1013,7 +1023,10 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
     final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
+    final open =
+        conn?.open == true ||
+        conns.hasReliable(normalized) ||
+        isDevBareTransportRequested();
 
     final safeName = name.length > _maxFileNameLen
         ? name.substring(0, _maxFileNameLen)

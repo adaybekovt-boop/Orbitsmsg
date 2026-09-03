@@ -365,7 +365,10 @@ jobs:
           bash tool/bare/verify-packaged-kit.sh ios build/ios/iphoneos/Runner.app
 
       - name: Build iOS Simulator debug app
-        run: flutter build ios --simulator --debug
+        run: |
+          flutter build ios --simulator --debug \
+            --dart-define=ORBITS_DEV_BARE_TRANSPORT=true
+          bash tool/bare/verify-packaged-kit.sh ios build/ios/iphonesimulator/Runner.app
 
   # Android release signing (GH-C01 / U-5) never uses the SDK debug key.
   # Tags/main use owner secrets; PRs use a cached CI sideload key.

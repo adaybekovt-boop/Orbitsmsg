@@ -28,6 +28,7 @@ void main() {
     expect(android, isNot(contains('ProcessBuilder')));
     expect(android, contains('to.holepunch.bare.kit.IPC'));
     expect(android, contains('request("start"'));
+    expect(android, contains('node_modules/hyperswarm/package.json'));
     final plugin = File(
       'packages/orbits_transport_android/android/src/main/kotlin/app/orbits/transport/OrbitsTransportPlugin.kt',
     ).readAsStringSync();
@@ -42,6 +43,18 @@ void main() {
     expect(ios, contains('BareIPC'));
     expect(ios, contains('request("start"'));
     expect(ios, isNot(contains('Process()')));
+    expect(ios, contains('orbits-worklet-modules.zip'));
+    expect(ios, contains('node_modules/hyperswarm/package.json'));
+    final zip = File(
+      'packages/orbits_transport_ios/ios/Classes/ZipExtract.swift',
+    ).readAsStringSync();
+    expect(zip, contains('compression_decode_buffer'));
+    final conns = File('lib/state/connections_notifier.dart').readAsStringSync();
+    expect(conns, contains('if (isDevBareTransportRequested())'));
+    expect(conns, contains('unawaited(_dual?.dial(normalized))'));
+    final openChannel = conns.split('void _openChannel').last;
+    final afterDial = openChannel.split('if (isDevBareTransportRequested())').elementAt(1);
+    expect(afterDial.split('final peer = _boundPeer').first, contains('return;'));
   });
 
   test('defaultTargetPlatform android is classified as mobile', () {

@@ -43,7 +43,14 @@ test('opaque wire-v4 frame is not interpreted', async () => {
     const prev = b._emit
     b._emit = (name, payload) => {
       prev(name, payload)
-      if (name === 'frame' && payload.channel === 'control') resolve(payload.body)
+      if (
+        name === 'frame' &&
+        payload.channel === 'control' &&
+        payload.body &&
+        payload.body.type === 'wireHello'
+      ) {
+        resolve(payload.body)
+      }
     }
   })
   await a.send(peerId, 'control', { type: 'wireHello', v: 4, pub: 'x', idPub: 'y', sig: 'z' })

@@ -2,7 +2,8 @@
 
 const test = require('node:test')
 const assert = require('node:assert/strict')
-const { Worklet, parseWorkletArgv } = require('../src/worklet')
+const { contactDiscoveryTopic } = require('../src/discovery')
+const { Worklet, parseWorkletArgv, secretToBuffer } = require('../src/worklet')
 
 test('parseWorkletArgv reads backend and storage', () => {
   const parsed = parseWorkletArgv([
@@ -23,6 +24,28 @@ test('hyperswarm connect without publish or noise key fails closed', async () =>
     () => w.connect({ peerId: 'ORBIT-X' }),
     /publish or noisePublicKey required/,
   )
+})
+
+test('connect joins the contact discovery topic from the shared secret', async () => {
+  const joined = []
+  const w = new Worklet({ backend: 'hyperswarm' })
+  w._started = true
+  w._swarm = {
+    swarm: { joinPeer() {}, async flush() {} },
+    async join(topic) {
+      joined.push(topic)
+    },
+  }
+  const secret = Buffer.alloc(32, 7)
+  w._peers.set('ORBIT-B', { socket: { write() {}, destroy() {} }, info: {} })
+  const result = await w.connect({
+    peerId: 'ORBIT-B',
+    discoverySecret: [...secret],
+  })
+  assert.equal(joined.length, 1)
+  assert.deepEqual(joined[0], contactDiscoveryTopic(secret))
+  assert.equal(result.peerId, 'ORBIT-B')
+  assert.deepEqual(secretToBuffer([...secret]), secret)
 })
 
 test('loopback connect still requires a port and records a peer', async () => {

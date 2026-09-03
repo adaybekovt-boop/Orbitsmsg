@@ -83,3 +83,5 @@ tool/connectivity_harness/node_modules/
 **/prebuilds.zip
 **/BareKit.xcframework/
 packages/orbits_transport_android/android/libs/
+packages/orbits_transport_ios/ios/orbits-worklet-modules.zip
+packages/orbits_transport_ios/ios/orbits-worklet-modules/

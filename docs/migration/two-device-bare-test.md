@@ -20,7 +20,9 @@ flutter build apk --debug --split-per-abi \
 ```
 
 Install `build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk` (or the
-ABI that matches the device).
+ABI that matches the device). CI uploads the same files as artifact
+`orbits-android-dev-bare`
+(`orbits-android-arm64-dev-bare.apk` / `orbits-android-arm32-dev-bare.apk`).
 
 iOS (no-sign validation on CI; on a Mac with a development team):
 
@@ -50,8 +52,11 @@ phones. Release builds hide the switch.
    `HASH("orbits-contact-discovery-v1" || secret)`.
 3. Keep both apps in the foreground on the same LAN or on networks that
    can reach the public Hyperswarm DHT.
-4. Open the chat with the other contact. The worklet publishes, then
-   `connect()` waits for the Hyperswarm join.
+4. Open the chat with the other contact. Opening the chat calls
+   `connect()` with the **shared contact secret** (never `HASH(peerId)`).
+   The worklet joins `HASH("orbits-contact-discovery-v1" || secret)`.
+   PeerJS is not used on this path. If Bare cannot start, the transport
+   row says it failed and messages are not sent.
 
 ## Message and file
 

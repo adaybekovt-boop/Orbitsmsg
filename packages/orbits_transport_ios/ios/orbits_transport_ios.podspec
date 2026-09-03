@@ -12,9 +12,14 @@ Pod::Spec.new do |s|
   s.swift_version    = '5.0'
   s.static_framework = true
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }
+  s.frameworks = 'Compression'
   s.resource_bundles = {
     'orbits_transport_ios_privacy' => ['Resources/PrivacyInfo.xcprivacy']
   }
+  zip = File.join(__dir__, 'orbits-worklet-modules.zip')
+  if File.file?(zip)
+    s.resources = ['orbits-worklet-modules.zip']
+  end
 
   kit_root = ENV['ORBITS_BARE_KIT']
   local = File.join(__dir__, 'BareKit.xcframework')

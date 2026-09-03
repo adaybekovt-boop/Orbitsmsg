@@ -38,7 +38,16 @@ async function createHyperswarmBackend(opts = {}) {
     dht,
     async join(topic) {
       const discovery = swarm.join(topic, { server: true, client: true })
-      await swarm.flush()
+      try {
+        await Promise.race([
+          swarm.flush(),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('flush timeout')), 15_000),
+          ),
+        ])
+      } catch {
+        // Topic is already registered. Announce continues in the background.
+      }
       return discovery
     },
     async leave(topic) {
