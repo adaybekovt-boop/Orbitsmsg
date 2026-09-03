@@ -568,6 +568,12 @@ class Worklet {
       }
       this._incomingFiles.clear()
     }
+
+    // 11. Clean up outgoing file transfer fd
+    if (this._sendFileFd) {
+      try { fs.closeSync(this._sendFileFd) } catch {}
+      this._sendFileFd = null
+    }
     this._started = false
   }
 

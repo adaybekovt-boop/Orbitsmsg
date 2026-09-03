@@ -12,6 +12,7 @@ import 'package:cryptography/cryptography.dart';
 
 const String kContactDiscoveryInfo = 'orbits-contact-discovery-v1';
 const String kRoomDiscoveryInfo = 'orbits-room-discovery-v1';
+const String kReplicationDiscoveryInfo = 'orbits-replication-discovery-v1';
 
 /// 32-byte topic from a caller-supplied shared secret.
 ///
@@ -24,6 +25,10 @@ Future<Uint8List> contactDiscoveryTopic(List<int> sharedDiscoverySecret) {
 
 Future<Uint8List> roomDiscoveryTopic(List<int> roomDiscoveryKey) {
   return _topic(kRoomDiscoveryInfo, roomDiscoveryKey);
+}
+
+Future<Uint8List> replicationDiscoveryTopic(List<int> deviceSecret) {
+  return _topic(kReplicationDiscoveryInfo, deviceSecret);
 }
 
 Future<Uint8List> _topic(String info, List<int> secret) async {

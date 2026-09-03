@@ -3,17 +3,17 @@
   "ipc": "orbits-bare-ipc-v1",
   "transportFrame": "orbits-transport-v1",
   "remoteJs": false,
-  "workletSha256": "b1da0c4121d931a650a49cca2fb69ea2d121d88603012525b15b70b5a3643e09",
+  "workletSha256": "526928ab53d230b2b5a7574ae4b469f096a4069635292066fb180b6f514d0661",
   "note": "Production Bare must ship this tree hashed with the app. Do not fetch executable JS.",
   "files": {
     "bare_compat.js": "1c7991f9fd0a7c52be690ffaf198969c09353fef1644ce8542dc23eb07104f0f",
     "corestore_journal.js": "d44b39ed162b94c0cce3fed770e2d2ab80a080c2d1c8a5a557af22944d2f125c",
-    "discovery.js": "e63b2641eb756f63e1c8554e0caeeab47336608b75a39151f60f8834d180f33f",
-    "ipc.js": "cf983e1ac28d0f8187edcf589708658d9209510ecd968801ba94e41b1d336aa9",
+    "discovery.js": "66ed719a2e77a2be62e6a4133c0bac8a4964ad77ae4c1caff106e409d9277ea6",
+    "ipc.js": "d22e627a80b9216b2d31505e287d94733481011395e4443f1eea0fdd4e495d7f",
     "loopback.js": "6b2081f568921bfe1d05c13f523665f04bd018b64d90ee1e940b43116b258c95",
     "mux.js": "3c43488c57c23913c4fc980ad81eda25645db70280cf8c74d7acc2461132afb6",
     "stand.js": "ff42515080cde2b80c160dd037f20dffea7f2bb89b62fe0f0c7ff3f7a677bece",
     "swarm.js": "4e66d441c18e4c20bac49b103c77b165e7e50a858c441fe391616aae4c6cb664",
-    "worklet.js": "b1da0c4121d931a650a49cca2fb69ea2d121d88603012525b15b70b5a3643e09"
+    "worklet.js": "526928ab53d230b2b5a7574ae4b469f096a4069635292066fb180b6f514d0661"
   }
 }
