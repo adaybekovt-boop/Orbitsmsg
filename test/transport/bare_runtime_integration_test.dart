@@ -35,9 +35,11 @@ void main() {
           .toString();
       expect(actual, expected);
 
+      final exe = File(launch.executable).absolute.path;
+      final script = File(launch.arguments.single).absolute.path;
       final proc = await Process.start(
-        launch.executable,
-        launch.arguments,
+        exe,
+        [script],
         workingDirectory: 'tool/connectivity_harness',
         environment: {
           ...Platform.environment,
