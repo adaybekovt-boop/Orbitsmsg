@@ -1,7 +1,9 @@
 {
   "name": "orbits-bare-runtime",
+  "version": "1.31.0",
   "remoteFetch": false,
   "downloadUrl": null,
   "bundleUrl": null,
-  "note": "Drop a local Bare binary here as bare or bare.exe. Production must not download it."
+  "pins": "tool/bare/pins.json",
+  "note": "Official Holepunch bare-runtime 1.31.0. Fetch only at build time via tool/bare/fetch-official-runtime.sh. Production must not download it."
 }

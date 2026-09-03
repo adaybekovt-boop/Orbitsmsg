@@ -105,6 +105,47 @@ def main() -> int:
         print("pubspec.lock contained no packages", file=sys.stderr)
         return 1
     components = []
+    pins_path = pathlib.Path("tool/bare/pins.json")
+    if pins_path.is_file():
+        pins = json.loads(pins_path.read_text())
+        for name, meta in (
+            ("bare", pins.get("bare", {})),
+            ("bare-runtime", pins.get("bareRuntime", {})),
+            ("bare-kit", pins.get("bareKit", {})),
+        ):
+            version = meta.get("version") or "unknown"
+            commit = meta.get("commit") or ""
+            license_id = meta.get("spdx") or meta.get("license") or "NOASSERTION"
+            components.append(
+                {
+                    "type": "library",
+                    "name": name,
+                    "version": version,
+                    "bom-ref": f"pkg:github/holepunchto/{name}@{version}",
+                    "purl": f"pkg:github/holepunchto/{name}@{version}",
+                    "properties": [
+                        {"name": "source", "value": "github"},
+                        {"name": "sha256", "value": commit},
+                        {"name": "license", "value": license_id},
+                    ],
+                    "licenses": [{"license": {"id": license_id if license_id != "NOASSERTION" else "Apache-2.0"}}],
+                }
+            )
+        for mod, ver in (pins.get("workletModules") or {}).items():
+            components.append(
+                {
+                    "type": "library",
+                    "name": str(mod),
+                    "version": str(ver),
+                    "bom-ref": f"pkg:npm/{mod}@{ver}",
+                    "purl": f"pkg:npm/{mod}@{ver}",
+                    "properties": [
+                        {"name": "source", "value": "npm"},
+                        {"name": "sha256", "value": ""},
+                    ],
+                    "licenses": [{"license": {"name": "NOASSERTION"}}],
+                }
+            )
     denied = []
     for pkg in packages:
         license_id = license_from_pub_cache(pkg["name"], pkg["version"]) or "NOASSERTION"

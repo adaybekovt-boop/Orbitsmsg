@@ -1,0 +1,137 @@
+{
+  "schema": "orbits-bare-pins-v1",
+  "remoteFetchAtRuntime": false,
+  "note": "Build-time only. Application code must never download these URLs.",
+  "bare": {
+    "name": "bare",
+    "version": "1.31.0",
+    "repository": "https://github.com/holepunchto/bare",
+    "tag": "v1.31.0",
+    "commit": "99dee2a6e56979bca696b6c21b8d4acc95e10e6a",
+    "license": "Apache-2.0",
+    "spdx": "Apache-2.0"
+  },
+  "bareRuntime": {
+    "name": "bare-runtime",
+    "version": "1.31.0",
+    "repository": "https://github.com/holepunchto/bare-runtime",
+    "tag": "v1.31.0",
+    "tagObject": "154f0a3b60514e68d8958a14220015a4a3642632",
+    "commit": "18063d1c6baec5bef57d9e7aad1ab248f04d6f39",
+    "license": "Apache-2.0",
+    "spdx": "Apache-2.0",
+    "releaseBase": "https://github.com/holepunchto/bare-runtime/releases/download/v1.31.0",
+    "artifacts": {
+      "linux-x64": {
+        "asset": "bare-runtime-linux-x64-1.31.0.tgz",
+        "sha256": "9408f82dd1344d7403acb93a0c66b50a4b2cc63c483c6bf48ef8df67203b6ec7",
+        "binarySha256": "40537d6254b03d262e544aa8e9d0870698a3ca4c580266e7893459e45f9df8dd",
+        "binaryName": "bare"
+      },
+      "linux-arm64": {
+        "asset": "bare-runtime-linux-arm64-1.31.0.tgz",
+        "sha256": "dedaeb43fb3315e69d215b262a02c7f74fcdc354076df363905c73fec3cc7119",
+        "binaryName": "bare"
+      },
+      "darwin-arm64": {
+        "asset": "bare-runtime-darwin-arm64-1.31.0.tgz",
+        "sha256": "3c0bbb33eab8c5147bb4af80366815c1d9c58015043d721c67f13a7d20b8d5f2",
+        "binaryName": "bare"
+      },
+      "darwin-x64": {
+        "asset": "bare-runtime-darwin-x64-1.31.0.tgz",
+        "sha256": "5efb7c26b5a95b5bfba3aa0d1177709dd9d71ba90096ccd50f62a04fc6e69cd1",
+        "binaryName": "bare"
+      },
+      "win32-x64": {
+        "asset": "bare-runtime-win32-x64-1.31.0.tgz",
+        "sha256": "d31c7c79b445546416d37462808616482993bc85460856ff23a772fe2ed97527",
+        "binaryName": "bare.exe"
+      },
+      "win32-arm64": {
+        "asset": "bare-runtime-win32-arm64-1.31.0.tgz",
+        "sha256": "c9338b7910a0bb60656885f67ea33466d3c7854c5302b4cfc08a1a8f4ed5fffc",
+        "binaryName": "bare.exe"
+      },
+      "android-arm64": {
+        "asset": "bare-runtime-android-arm64-1.31.0.tgz",
+        "sha256": "f80ff745710fd82bc2f5f68016c7e2375a8e0d0254a2270db36ae2e7e55cd3e6",
+        "binaryName": "bare"
+      },
+      "android-arm": {
+        "asset": "bare-runtime-android-arm-1.31.0.tgz",
+        "sha256": "6c9ba5e1362dce19dd5eb70b0b6f49def137e0df5410d66939057c44b4206b8b",
+        "binaryName": "bare"
+      },
+      "android-x64": {
+        "asset": "bare-runtime-android-x64-1.31.0.tgz",
+        "sha256": "48b55ca8069a65671e38ddb174967f6b6567560409a6227faec6103f7432defd",
+        "binaryName": "bare"
+      },
+      "ios-arm64": {
+        "asset": "bare-runtime-ios-arm64-1.31.0.tgz",
+        "sha256": "5a19737fd26279ef57756cea4e40325be02967599952c569d3b46d1a6f2776b6",
+        "binaryName": "bare"
+      },
+      "ios-arm64-simulator": {
+        "asset": "bare-runtime-ios-arm64-simulator-1.31.0.tgz",
+        "sha256": "cf894dd2412e831dd6510b14803b02f96136500f4b0802d293596198d6016106",
+        "binaryName": "bare"
+      },
+      "ios-x64-simulator": {
+        "asset": "bare-runtime-ios-x64-simulator-1.31.0.tgz",
+        "sha256": "a2b094b4cba2b09213f8a326cb4578e1bb0af61fc2ff224157307d264b9295b1",
+        "binaryName": "bare"
+      }
+    }
+  },
+  "bareKit": {
+    "name": "bare-kit",
+    "version": "2.4.3",
+    "repository": "https://github.com/holepunchto/bare-kit",
+    "tag": "v2.4.3",
+    "tagObject": "e67be375f929c56ba74ab0751625f074e7c72fe2",
+    "commit": "d6960d8cb63f500e064f8cf6c4ea72aaf3cc1233",
+    "license": "Apache-2.0",
+    "spdx": "Apache-2.0",
+    "officialHost": {
+      "android": "to.holepunch.bare.kit.Worklet",
+      "ios": "BareKit/BareKit.h BareWorklet",
+      "macos": "BareKit XCFramework when prebuilds are fetched",
+      "linux": "official bare-runtime CLI spawn (BareKit .so is optional)",
+      "windows": "official bare-runtime CLI spawn",
+      "web": "unsupported — fail closed BARE_RUNTIME_MISSING"
+    },
+    "prebuilds": {
+      "asset": "prebuilds.zip",
+      "url": "https://github.com/holepunchto/bare-kit/releases/download/v2.4.3/prebuilds.zip",
+      "sha256": null,
+      "note": "Optional 396MB Apple/Android XCFramework+AAR archive. Fetch records sha256 into the local cache sidecar. Not required for linux-x64 CLI embedding."
+    }
+  },
+  "workletModules": {
+    "corestore": "7.12.2",
+    "hyperswarm": "4.17.0",
+    "hyperdht": "6.33.2",
+    "bare-fs": "4.8.1",
+    "bare-os": "3.9.3",
+    "bare-path": "3.1.2",
+    "bare-crypto": "1.15.3",
+    "bare-process": "4.5.1",
+    "bare-events": "2.9.2",
+    "bare-net": "2.3.3",
+    "bare-buffer": "3.7.1",
+    "bare-pipe": "4.3.1"
+  },
+  "capability": {
+    "linux-x64": "embedded official bare-runtime CLI + worklet + Corestore/Hyperswarm modules",
+    "linux-arm64": "same artifact family; host spawn path is shared",
+    "darwin-x64": "official bare-runtime CLI spawn when packaged",
+    "darwin-arm64": "official bare-runtime CLI spawn when packaged",
+    "win32-x64": "official bare-runtime CLI spawn when packaged",
+    "win32-arm64": "official bare-runtime CLI spawn when packaged",
+    "android": "official BareKit Worklet when AAR is packaged; otherwise BARE_RUNTIME_MISSING",
+    "ios": "official BareKit Worklet when XCFramework is packaged; otherwise BARE_RUNTIME_MISSING",
+    "web": "unsupported"
+  }
+}
