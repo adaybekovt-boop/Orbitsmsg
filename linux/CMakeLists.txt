@@ -116,6 +116,25 @@ foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})
     COMPONENT Runtime)
 endforeach(bundled_library)
 
+# flutter_webrtc re-extracts libwebrtc.zip during configure. Rewrite the
+# bundled copy in place so data-only chats never build a Pulse/ALSA ADM.
+# Fail the install if the Dummy-ADM bytes are not present — do not ship
+# an unpatched .so and call the ADM Fatal "handled".
+install(CODE "
+  set(_orbits_webrtc_so \"${INSTALL_BUNDLE_LIB_DIR}/libwebrtc.so\")
+  if(EXISTS \"\${_orbits_webrtc_so}\")
+    execute_process(
+      COMMAND python3 \"${CMAKE_CURRENT_SOURCE_DIR}/../tool/ci/patch_libwebrtc_dummy_adm.py\"
+              \"\${_orbits_webrtc_so}\"
+      RESULT_VARIABLE _orbits_bundle_adm
+    )
+    if(NOT _orbits_bundle_adm EQUAL 0)
+      message(FATAL_ERROR
+        \"bundled libwebrtc Dummy ADM patch failed: \${_orbits_bundle_adm}\")
+    endif()
+  endif()
+" COMPONENT Runtime)
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/linux/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"

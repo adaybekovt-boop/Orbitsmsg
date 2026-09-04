@@ -196,17 +196,28 @@ def patch_third_party_cmake(base_cc: pathlib.Path) -> None:
         return
     text = cmake.read_text()
     marker = "patch_libwebrtc_dummy_adm.py"
-    if marker in text:
+    so_x64 = cmake.parent / "libwebrtc/lib/linux-x64/libwebrtc.so"
+    so_arm = cmake.parent / "libwebrtc/lib/linux-arm64/libwebrtc.so"
+    hook = (
+        "\n# Orbits: force Dummy ADM after libwebrtc extract (linux data-only chats).\n"
+        "execute_process(\n"
+        f'  COMMAND {sys.executable} "{ROOT / "tool/ci/patch_libwebrtc_dummy_adm.py"}"\n'
+        f'          "{so_x64}"\n'
+        f'          "{so_arm}"\n'
+        "  RESULT_VARIABLE _orbits_adm_patch\n"
+        ")\n"
+        "if(NOT _orbits_adm_patch EQUAL 0)\n"
+        '  message(FATAL_ERROR "libwebrtc Dummy ADM patch failed: ${_orbits_adm_patch}")\n'
+        "endif()\n"
+    )
+    if marker in text and "libwebrtc Dummy ADM patch failed" in text:
         return
-    hook = f"""
-# Orbits: force Dummy ADM after libwebrtc extract (linux data-only chats).
-execute_process(
-  COMMAND {sys.executable} "{ROOT / "tool/ci/patch_libwebrtc_dummy_adm.py"}"
-          "{cmake.parent / "libwebrtc/lib/linux-x64/libwebrtc.so"}"
-          "{cmake.parent / "libwebrtc/lib/linux-arm64/libwebrtc.so"}"
-  RESULT_VARIABLE _orbits_adm_patch
-)
-"""
+    if marker in text:
+        # Older hook swallowed a non-zero patcher. Replace the tail.
+        start = text.find("# Orbits: force Dummy ADM")
+        if start < 0:
+            start = text.find("execute_process(\n  COMMAND") 
+        text = text[:start] if start >= 0 else text
     cmake.write_text(text + hook)
     print("patched", cmake)
 
@@ -216,7 +227,7 @@ def patch_sos(so_root: pathlib.Path) -> None:
     if not so_root.exists():
         return
     for so in so_root.rglob("libwebrtc.so"):
-        subprocess.run([sys.executable, str(py), str(so)], check=False)
+        subprocess.run([sys.executable, str(py), str(so)], check=True)
 
 
 def main() -> int:
