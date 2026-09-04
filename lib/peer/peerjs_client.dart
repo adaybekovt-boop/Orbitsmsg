@@ -43,6 +43,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'dial_attempt.dart';
 import 'ice_lifecycle.dart';
 import 'signaling.dart';
+import 'webrtc_audio_lifecycle.dart';
 import 'ws_channel.dart';
 
 // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
@@ -682,6 +683,7 @@ class PeerJsClient {
     String? token,
     bool serverEchoesHeartbeat = false,
     this.connectTimeout = const Duration(seconds: 10),
+    CreateRtcPeerConnection? createPeerConnectionFn,
   })  : _desiredId = id,
         _key = key,
         _version = version,
@@ -695,7 +697,8 @@ class PeerJsClient {
           'bundlePolicy': 'max-bundle',
           'rtcpMuxPolicy': 'require',
           'sdpSemantics': 'unified-plan',
-        };
+        },
+        _createPeerConnectionFn = createPeerConnectionFn;
 
   final ResolvedSignalingEndpoint endpoint;
   final String? _desiredId;
@@ -705,6 +708,20 @@ class PeerJsClient {
   final bool _serverEchoesHeartbeat;
   final String _token;
   final Map<String, Object> _rtcConfig;
+  final CreateRtcPeerConnection? _createPeerConnectionFn;
+
+  Future<RTCPeerConnection> _openPeerConnection(WebRtcPeerKind kind) {
+    final config = Map<String, dynamic>.from(_rtcConfig);
+    final injected = _createPeerConnectionFn;
+    if (injected != null) {
+      WebRtcAudioLifecycle.instance.recordPeerConnection(kind);
+      return injected(config);
+    }
+    return WebRtcAudioLifecycle.instance.createPeerConnectionFor(
+      config,
+      kind: kind,
+    );
+  }
 
   SignalingSocket? _sock;
   String? _id;
@@ -952,7 +969,7 @@ class PeerJsClient {
     try {
       final labelOrDefault = label ?? cid;
       final meta = metadata ?? <String, Object?>{};
-      final pc = await createPeerConnection(_rtcConfig);
+      final pc = await _openPeerConnection(WebRtcPeerKind.dataOnly);
       final dc = await pc.createDataChannel(
         labelOrDefault,
         RTCDataChannelInit()..ordered = reliable,
@@ -1027,7 +1044,7 @@ class PeerJsClient {
     final meta = metadata ?? const <String, Object?>{};
     final cid = _newMediaConnectionId();
     try {
-      final pc = await createPeerConnection(_rtcConfig);
+      final pc = await _openPeerConnection(WebRtcPeerKind.media);
       final conn = PeerMediaConnection._(
         peer: targetId,
         connectionId: cid,
@@ -1156,7 +1173,9 @@ class PeerJsClient {
       sdpMap['type']?.toString() ?? 'offer',
     );
 
-    final pc = await createPeerConnection(_rtcConfig);
+    // Inbound media offers allocate a PC before the user accepts. Capture
+    // still happens in acceptCurrent / getUserMedia — not here.
+    final pc = await _openPeerConnection(WebRtcPeerKind.dataOnly);
 
     if (kind == 'media') {
       final media = PeerMediaConnection._(

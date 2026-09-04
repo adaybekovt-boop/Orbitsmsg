@@ -48,6 +48,16 @@ endfunction()
 
 # Flutter library and tool build rules.
 set(FLUTTER_MANAGED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flutter")
+# Data-only chats must not create a Pulse/ALSA ADM. Patch flutter_webrtc
+# sources in pub-cache before the plugin is compiled.
+execute_process(
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../tool/ci/patch_flutter_webrtc_linux_adm.py"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+  RESULT_VARIABLE _orbits_adm_patch
+)
+if(NOT _orbits_adm_patch EQUAL 0)
+  message(FATAL_ERROR "flutter_webrtc Linux ADM patch failed: ${_orbits_adm_patch}")
+endif()
 add_subdirectory(${FLUTTER_MANAGED_DIR})
 
 # System-level dependencies.
