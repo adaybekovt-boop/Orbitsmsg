@@ -92,6 +92,8 @@ class ResumableAttachment {
     List<int> fileKey, {
     required String fileId,
     required int totalBytes,
+    bool verifyHash = true,
+    Uint8List? derivedKey,
   }) {
     final ordered = [...chunks]..sort((a, b) => a.index.compareTo(b.index));
     final seen = <int>{};
@@ -107,10 +109,6 @@ class ResumableAttachment {
       if (chunk.offset != expectedOffset) {
         throw StateError('attachment chunk offset mismatch');
       }
-      final actual = sha256.convert(chunk.ciphertext).toString();
-      if (actual != chunk.hash) {
-        throw StateError('attachment hash mismatch');
-      }
       final plain = decryptAttachmentChunk(
         chunk.ciphertext,
         fileKey,
@@ -118,6 +116,9 @@ class ResumableAttachment {
         fileId: fileId,
         totalBytes: totalBytes,
         offset: chunk.offset,
+        derivedKey: derivedKey,
+        verifyHash: verifyHash,
+        expectedHash: chunk.hash,
       );
       out.add(plain);
       expectedOffset += plain.length;
@@ -176,8 +177,9 @@ Uint8List encryptAttachmentChunk(
   required String fileId,
   required int totalBytes,
   int offset = 0,
+  Uint8List? derivedKey,
 }) {
-  final encKey = deriveAttachmentKey(key, fileId);
+  final encKey = derivedKey ?? deriveAttachmentKey(key, fileId);
   final nonce = attachmentNonce(fileId, chunkIndex, offset);
   final aad = attachmentAad(
     fileId: fileId,
@@ -185,9 +187,10 @@ Uint8List encryptAttachmentChunk(
     chunkIndex: chunkIndex,
     offset: offset,
   );
+  final input = data is Uint8List ? data : Uint8List.fromList(data);
   final cipher = pc.GCMBlockCipher(pc.AESEngine())
     ..init(true, pc.AEADParameters(pc.KeyParameter(encKey), 128, nonce, aad));
-  return cipher.process(Uint8List.fromList(data));
+  return cipher.process(input);
 }
 
 Uint8List decryptAttachmentChunk(
@@ -197,11 +200,20 @@ Uint8List decryptAttachmentChunk(
   required String fileId,
   required int totalBytes,
   int offset = 0,
+  Uint8List? derivedKey,
+  bool verifyHash = true,
+  String? expectedHash,
 }) {
   if (data.length < kAttachmentTagSize) {
     throw StateError('attachment chunk too short for AEAD tag');
   }
-  final encKey = deriveAttachmentKey(key, fileId);
+  if (verifyHash && expectedHash != null) {
+    final actual = sha256.convert(data).toString();
+    if (actual != expectedHash) {
+      throw StateError('attachment hash mismatch');
+    }
+  }
+  final encKey = derivedKey ?? deriveAttachmentKey(key, fileId);
   final nonce = attachmentNonce(fileId, chunkIndex, offset);
   final aad = attachmentAad(
     fileId: fileId,
@@ -210,13 +222,15 @@ Uint8List decryptAttachmentChunk(
     offset: offset,
   );
   try {
+    final input = data is Uint8List ? data : Uint8List.fromList(data);
     final cipher = pc.GCMBlockCipher(pc.AESEngine())
       ..init(
         false,
         pc.AEADParameters(pc.KeyParameter(encKey), 128, nonce, aad),
       );
-    return cipher.process(Uint8List.fromList(data));
-  } catch (_) {
+    return cipher.process(input);
+  } catch (e) {
+    if (e is StateError) rethrow;
     throw StateError('AEAD authentication tag mismatch');
   }
 }

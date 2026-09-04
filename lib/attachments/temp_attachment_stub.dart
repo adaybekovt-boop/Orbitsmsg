@@ -15,3 +15,5 @@ Future<List<int>?> readIncomingTransfer({
   required String name,
 }) async =>
     null;
+
+Future<void> deleteTempAttachment(String? path) async {}

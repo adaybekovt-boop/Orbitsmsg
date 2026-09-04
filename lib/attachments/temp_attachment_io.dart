@@ -36,3 +36,15 @@ Future<List<int>?> readIncomingTransfer({
       '${Directory.systemTemp.path}${Platform.pathSeparator}orbits-incoming${Platform.pathSeparator}$safeId${Platform.pathSeparator}$safeName';
   return readAttachmentPath(path);
 }
+
+Future<void> deleteTempAttachment(String? path) async {
+  if (path == null || path.isEmpty) return;
+  try {
+    final file = File(path);
+    if (file.existsSync()) await file.delete();
+    final parent = file.parent;
+    if (parent.path.contains('orbits-chat-file-') && parent.existsSync()) {
+      if (parent.listSync().isEmpty) await parent.delete();
+    }
+  } catch (_) {}
+}
