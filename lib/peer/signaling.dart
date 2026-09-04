@@ -276,6 +276,13 @@ PeerEnv applyPeerjsRuntimeOverride(
     peerSecure = scheme == 'https' || scheme == 'wss';
     peerPort = uri.hasPort ? uri.port : null;
     peerPath = _normalizePeerjsPath(uri.path);
+    // Canonical URL without a trailing /peerjs — SignalingSocket appends it.
+    peerServer = Uri(
+      scheme: uri.scheme,
+      host: uri.host,
+      port: uri.hasPort ? uri.port : null,
+      path: peerPath == '/' ? '' : peerPath,
+    ).toString();
   } else {
     peerHost = host;
   }
@@ -441,6 +448,7 @@ ResolvedSignalingEndpoint resolveEndpoint({
     explicitPort = uri.hasPort ? uri.port : null;
     path = uri.path.isEmpty ? '/' : uri.path;
   }
+  path = _normalizePeerjsPath(path);
 
   // Hard-upgrade insecure transport to wss unless explicitly allowed for dev
   // (audit H3). An explicit non-standard port is dropped on upgrade so we don't

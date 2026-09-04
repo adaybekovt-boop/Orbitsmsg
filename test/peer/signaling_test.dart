@@ -145,7 +145,7 @@ void main() {
           kOrbitsSignalingUrlEnv: 'ws://127.0.0.1:9000/peerjs',
         });
         expect(isPeerjsLocalTestnet(env), isTrue);
-        expect(env.peerServer, 'ws://127.0.0.1:9000/peerjs');
+        expect(env.peerServer, 'ws://127.0.0.1:9000');
         final hosts = buildSignalingHosts(env);
         expect(hosts, [peerServerSentinel]);
         expect(canRotateHosts(env, hosts), isFalse);
