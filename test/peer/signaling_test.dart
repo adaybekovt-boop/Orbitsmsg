@@ -70,19 +70,24 @@ void main() {
 
     test('iceServers override replaces the public STUN defaults', () {
       final cfg = buildRtcConfig(
-        const PeerEnv(iceServers: [
-          {'urls': 'stun:stun.self-hosted.example:3478'}
-        ]),
+        const PeerEnv(
+          iceServers: [
+            {'urls': 'stun:stun.self-hosted.example:3478'},
+          ],
+        ),
       );
       expect(cfg.iceServers.length, 1);
-      expect(cfg.iceServers.first['urls'], 'stun:stun.self-hosted.example:3478');
+      expect(
+        cfg.iceServers.first['urls'],
+        'stun:stun.self-hosted.example:3478',
+      );
     });
 
     test('a configured TURN is appended on top of the override', () {
       final cfg = buildRtcConfig(
         const PeerEnv(
           iceServers: [
-            {'urls': 'stun:stun.self-hosted.example:3478'}
+            {'urls': 'stun:stun.self-hosted.example:3478'},
           ],
           turnUrl: 'turn:turn.example:3478',
           turnUsername: 'u',
@@ -100,13 +105,107 @@ void main() {
     });
   });
 
+  group(
+    'LOCAL TESTNET runtime override (ORBITS_PEERJS_* / ORBITS_SIGNALING_URL)',
+    () {
+      test('empty env keeps public PeerJS hosts and secure wss', () {
+        final env = applyPeerjsRuntimeOverride(const PeerEnv(), const {});
+        expect(isPeerjsLocalTestnet(env), isFalse);
+        expect(env.allowInsecureTransport, isFalse);
+        final hosts = buildSignalingHosts(env);
+        expect(hosts, ['0.peerjs.com', '1.peerjs.com', '2.peerjs.com']);
+        final ep = resolveEndpoint(host: hosts.first, env: env);
+        expect(ep.host, '0.peerjs.com');
+        expect(ep.secure, isTrue);
+        expect(ep.port, 443);
+        expect(env.resolvedPeerKey, 'peerjs');
+      });
+
+      test('ORBITS_PEERJS_HOST pins loopback and allows ws on port 9000', () {
+        final env = applyPeerjsRuntimeOverride(const PeerEnv(), const {
+          kOrbitsPeerjsHostEnv: '127.0.0.1',
+        });
+        expect(isPeerjsLocalTestnet(env), isTrue);
+        expect(env.peerHost, '127.0.0.1');
+        expect(env.peerServer, isNull);
+        expect(env.allowInsecureTransport, isTrue);
+        expect(env.peerSecure, isFalse);
+        expect(env.peerPort, kLocalPeerjsTestnetPort);
+        final hosts = buildSignalingHosts(env);
+        expect(hosts, ['127.0.0.1']);
+        expect(canRotateHosts(env, hosts), isFalse);
+        final ep = resolveEndpoint(host: hosts.first, env: env);
+        expect(ep.host, '127.0.0.1');
+        expect(ep.secure, isFalse);
+        expect(ep.port, 9000);
+      });
+
+      test('ORBITS_SIGNALING_URL is parsed and strips a trailing /peerjs', () {
+        final env = applyPeerjsRuntimeOverride(const PeerEnv(), const {
+          kOrbitsSignalingUrlEnv: 'ws://127.0.0.1:9000/peerjs',
+        });
+        expect(isPeerjsLocalTestnet(env), isTrue);
+        expect(env.peerServer, 'ws://127.0.0.1:9000/peerjs');
+        final hosts = buildSignalingHosts(env);
+        expect(hosts, [peerServerSentinel]);
+        expect(canRotateHosts(env, hosts), isFalse);
+        final ep = resolveEndpoint(host: hosts.first, env: env);
+        expect(ep.host, '127.0.0.1');
+        expect(ep.port, 9000);
+        expect(ep.secure, isFalse);
+        expect(ep.path, '/');
+      });
+
+      test(
+        'partial override without host/url fails closed (no public fallback)',
+        () {
+          expect(
+            () => applyPeerjsRuntimeOverride(const PeerEnv(), const {
+              kOrbitsPeerjsPortEnv: '9000',
+            }),
+            throwsA(isA<PeerjsOverrideException>()),
+          );
+          expect(
+            () => applyPeerjsRuntimeOverride(const PeerEnv(), const {
+              kOrbitsSignalingUrlEnv: 'not a url',
+            }),
+            throwsA(isA<PeerjsOverrideException>()),
+          );
+        },
+      );
+
+      test('runtime pin replaces a compile-time public PEER_SERVER', () {
+        const compileTime = PeerEnv(peerServer: 'wss://0.peerjs.com');
+        final env = applyPeerjsRuntimeOverride(compileTime, const {
+          kOrbitsPeerjsHostEnv: 'localhost',
+          kOrbitsPeerjsPortEnv: '9000',
+          kOrbitsPeerjsSecureEnv: 'false',
+        });
+        expect(env.peerServer, isNull);
+        expect(env.peerHost, 'localhost');
+        expect(buildSignalingHosts(env), ['localhost']);
+        expect(isPeerjsLocalTestnet(env), isTrue);
+      });
+
+      test('ORBITS_PEERJS_KEY is presented when host is pinned', () {
+        final env = applyPeerjsRuntimeOverride(const PeerEnv(), const {
+          kOrbitsPeerjsHostEnv: '127.0.0.1',
+          kOrbitsPeerjsKeyEnv: 'orbits-local-testnet',
+        });
+        expect(env.resolvedPeerKey, 'orbits-local-testnet');
+      });
+    },
+  );
+
   group('TURN / relay policy (cross-network)', () {
     test('TURN creds from env are added to the ICE list', () {
-      final cfg = buildRtcConfig(const PeerEnv(
-        turnUrl: 'turn:turn.example:3478',
-        turnUsername: 'user',
-        turnCredential: 'secret',
-      ));
+      final cfg = buildRtcConfig(
+        const PeerEnv(
+          turnUrl: 'turn:turn.example:3478',
+          turnUsername: 'user',
+          turnCredential: 'secret',
+        ),
+      );
       final turn = cfg.iceServers.firstWhere(
         (s) => (s['urls'] as String).startsWith('turn:'),
         orElse: () => const {},
@@ -117,42 +216,48 @@ void main() {
     });
 
     test('relayOnly + TURN forces iceTransportPolicy=relay', () {
-      final cfg = buildRtcConfig(const PeerEnv(
-        turnUrl: 'turn:t:3478',
-        turnUsername: 'u',
-        turnCredential: 'c',
-        relayOnly: true,
-      ));
-      expect(cfg.iceTransportPolicy, 'relay');
-    });
-
-    test('relayOnly WITHOUT TURN fails closed (does not fall back to STUN)',
-        () {
-      expect(
-        () => buildRtcConfig(const PeerEnv(relayOnly: true)),
-        throwsA(isA<RelayOnlyUnavailable>()),
-      );
-    });
-
-    test('user hide-IP pref is what drives relayOnly, not compile-time env',
-        () {
-      const compileTime = PeerEnv(relayOnly: false);
-      final hidden = applyUserRelayOnly(compileTime, true);
-      expect(hidden.relayOnly, isTrue);
-      expect(
-        () => buildRtcConfig(hidden),
-        throwsA(isA<RelayOnlyUnavailable>()),
-      );
-      final withTurn = applyUserRelayOnly(
+      final cfg = buildRtcConfig(
         const PeerEnv(
           turnUrl: 'turn:t:3478',
           turnUsername: 'u',
           turnCredential: 'c',
+          relayOnly: true,
         ),
-        true,
       );
-      expect(buildRtcConfig(withTurn).iceTransportPolicy, 'relay');
+      expect(cfg.iceTransportPolicy, 'relay');
     });
+
+    test(
+      'relayOnly WITHOUT TURN fails closed (does not fall back to STUN)',
+      () {
+        expect(
+          () => buildRtcConfig(const PeerEnv(relayOnly: true)),
+          throwsA(isA<RelayOnlyUnavailable>()),
+        );
+      },
+    );
+
+    test(
+      'user hide-IP pref is what drives relayOnly, not compile-time env',
+      () {
+        const compileTime = PeerEnv(relayOnly: false);
+        final hidden = applyUserRelayOnly(compileTime, true);
+        expect(hidden.relayOnly, isTrue);
+        expect(
+          () => buildRtcConfig(hidden),
+          throwsA(isA<RelayOnlyUnavailable>()),
+        );
+        final withTurn = applyUserRelayOnly(
+          const PeerEnv(
+            turnUrl: 'turn:t:3478',
+            turnUsername: 'u',
+            turnCredential: 'c',
+          ),
+          true,
+        );
+        expect(buildRtcConfig(withTurn).iceTransportPolicy, 'relay');
+      },
+    );
 
     test('no TURN configured → no relay policy, STUN-only', () {
       final cfg = buildRtcConfig(const PeerEnv());
@@ -167,7 +272,12 @@ void main() {
   group('computeBackoffMs', () {
     test('grows with attempt and stays within [exp, exp+jitter]', () {
       for (var attempt = 0; attempt < 10; attempt++) {
-        final v = computeBackoffMs(attempt, base: 800, maxMs: 30000, jitter: 500);
+        final v = computeBackoffMs(
+          attempt,
+          base: 800,
+          maxMs: 30000,
+          jitter: 500,
+        );
         expect(v, greaterThanOrEqualTo(0));
         expect(v, lessThanOrEqualTo(30000 + 500));
       }

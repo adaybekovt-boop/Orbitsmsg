@@ -13,11 +13,13 @@ import '../core/feature_flags.dart';
 import '../devices/device_registry.dart';
 import '../devices/local_device_material.dart';
 import '../mailbox/blind_store.dart';
+import '../peer/signaling.dart';
 import '../push/opaque_wake.dart';
 import '../push/wake_service.dart';
 import '../replication/memory_journal.dart';
 import '../state/auth_notifier.dart';
 import '../state/connections_notifier.dart';
+import '../state/peer_connection_provider.dart';
 import 'capabilities.dart';
 import 'dev_bare_transport.dart';
 import 'device_binding.dart';
@@ -63,11 +65,12 @@ class NativeTransportHost {
       };
 
   String get visibleTransportLabel => orbitsVisibleTransportLabel(
-        devBareRequested: isDevBareTransportRequested(),
-        attached: attached,
-        backend: backend,
-        lastError: lastError,
-      );
+    devBareRequested: isDevBareTransportRequested(),
+    attached: attached,
+    backend: backend,
+    lastError: lastError,
+    peerjsLocalTestnet: isAppPeerjsLocalTestnet(),
+  );
 
   Completer<void>? _startCompleter;
 
@@ -325,6 +328,7 @@ String orbitsVisibleTransportLabel({
   required bool attached,
   required String backend,
   required String lastError,
+  bool peerjsLocalTestnet = false,
 }) {
   if (devBareRequested) {
     if (attached && backend == 'hyperswarm') {
@@ -339,7 +343,9 @@ String orbitsVisibleTransportLabel({
   if (lastError.isNotEmpty && backend != 'peerjs' && backend != 'none') {
     return 'unavailable/error';
   }
-  if (backend == 'peerjs' || backend == 'none') return 'PeerJS';
+  if (backend == 'peerjs' || backend == 'none') {
+    return peerjsLocalTestnet ? kPeerjsLocalTestnetLabel : 'PeerJS';
+  }
   return backend;
 }
 
