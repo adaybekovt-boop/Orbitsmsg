@@ -157,4 +157,10 @@ void main() {
       ),
     );
   });
+
+  test('data-only SDP constraints refuse audio and video receive', () {
+    final mandatory = kDataOnlySdpConstraints['mandatory'] as Map;
+    expect(mandatory['OfferToReceiveAudio'], isFalse);
+    expect(mandatory['OfferToReceiveVideo'], isFalse);
+  });
 }

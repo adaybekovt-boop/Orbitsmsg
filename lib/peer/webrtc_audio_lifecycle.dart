@@ -24,6 +24,15 @@ enum WebRtcPeerKind {
   media,
 }
 
+/// SDP constraints for DataChannel-only offers/answers. Explicitly refuse
+/// audio/video receive so Dummy ADM / PulseAudio is never touched during chat.
+const Map<String, dynamic> kDataOnlySdpConstraints = <String, dynamic>{
+  'mandatory': <String, dynamic>{
+    'OfferToReceiveAudio': false,
+    'OfferToReceiveVideo': false,
+  },
+};
+
 class WebRtcAudioException implements Exception {
   const WebRtcAudioException(this.code, this.message);
 

@@ -669,6 +669,10 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final ts = now();
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
+    // Always (re)kick the dial. Chat mount used to be the only caller of
+    // openReliable; sendText no-op'd when the channel looked open even if
+    // handshake never ran, leaving the row status=pending forever.
+    conns.openReliable(normalized);
     final conn = conns.getConn(normalized, 'reliable');
     final open =
         conn?.open == true ||

@@ -125,6 +125,11 @@ class _ConnBinding {
   final List<StreamSubscription<dynamic>> subscriptions;
   Timer? connectTimer;
 
+  /// True after the first [onOpen] (or already-open catch-up) has run the
+  /// reliable handshake. Broadcast `onOpen` is not replayed, so attachConn
+  /// must catch a channel that was already Open before the listener was wired.
+  bool openHandled = false;
+
   Future<void> dispose() async {
     connectTimer?.cancel();
     connectTimer = null;
@@ -574,16 +579,15 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
     // Wire events.
     binding.subscriptions.add(conn.onOpen.listen((_) {
-      binding.connectTimer?.cancel();
-      binding.connectTimer = null;
-      if (ch == 'reliable') {
-        _markPeerOnline(remoteId);
-        _refreshConnectedIds();
-        unawaited(_postReliableOpen(conn, remoteId));
-      } else {
-        // Ephemeral open — no handshake, just note the latency channel is up.
-      }
+      _noteChannelOpen(binding, remoteId);
     }));
+
+    // Already-open catch-up: if `_attachDataChannel` fired onOpen before
+    // this listener existed, the broadcast event is gone. `conn.open`
+    // still reflects the native channel, so kick handshake now.
+    if (conn.open) {
+      _noteChannelOpen(binding, remoteId);
+    }
 
     binding.subscriptions.add(conn.onClose.listen((_) {
       binding.connectTimer?.cancel();
@@ -734,7 +738,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   PacketRouterCtx _buildRouterCtx(PeerDataConnection conn, String remoteId) {
     return PacketRouterCtx(
-      conn: conn.send,
+      conn: (msg) => _sendPlaintext(conn, msg),
       flushOutbox: () => _messaging.flushOutboxForPeer(remoteId),
       reliable: _reliableCtx(remoteId),
       ephemeral: EphemeralInboundCtx(
@@ -750,6 +754,35 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       isBlocked: (rid) => _messaging.isPeerBlocked(rid),
       roomInbound: (rid, packet) => _room.handleInbound(rid, packet),
     );
+  }
+
+  /// Handshake replies ride [ConnSend] (void). If the DataChannel is already
+  /// Open but `_open` hasn't latched, [PeerDataConnection.send] used to drop
+  /// the hello. Retry once after [onOpen].
+  void _sendPlaintext(PeerDataConnection conn, Object? msg) {
+    if (conn.send(msg)) return;
+    if (conn.closed) return;
+    if (conn.open) {
+      conn.send(msg);
+      return;
+    }
+    unawaited(() async {
+      try {
+        await conn.onOpen.first.timeout(const Duration(seconds: 8));
+      } catch (_) {}
+      conn.send(msg);
+    }());
+  }
+
+  void _noteChannelOpen(_ConnBinding binding, String remoteId) {
+    binding.connectTimer?.cancel();
+    binding.connectTimer = null;
+    if (binding.channel != 'reliable') return;
+    if (binding.openHandled) return;
+    binding.openHandled = true;
+    _markPeerOnline(remoteId);
+    _refreshConnectedIds();
+    unawaited(_postReliableOpen(binding.conn, remoteId));
   }
 
   // ─── Reliable-open follow-up ──────────────────────────────────
@@ -869,6 +902,18 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
           ? 'ephemeral'
           : 'reliable';
       unawaited(attachConn(conn, ch));
+    }));
+
+    _peerSubs.add(current.onError.listen((err) {
+      if (!mounted) return;
+      state = state.copyWith(
+        lastConnectError: ConnectError(
+          peerId: current.id ?? '',
+          channel: 'signaling',
+          message: err.toString(),
+          atMs: now(),
+        ),
+      );
     }));
 
     // Flush any reliable dials that were queued while PeerJS was still
