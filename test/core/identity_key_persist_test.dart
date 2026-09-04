@@ -9,6 +9,8 @@ import 'package:orbits_flutter/core/identity_key.dart';
 import 'package:orbits_flutter/core/key_store.dart';
 import 'package:orbits_flutter/core/vault_kek.dart';
 
+import '../helpers/pointycastle_ecdh.dart';
+
 class _ThrowingPutStore extends InMemoryKeyStore {
   @override
   Future<void> put(String table, Map<String, Object?> value) async {
@@ -20,6 +22,7 @@ Uint8List _key32() =>
     Uint8List.fromList(List<int>.generate(32, (i) => (i * 7 + 1) & 0xff));
 
 void main() {
+  installPointyCastleEcdh();
   setUp(() {
     resetIdentityCaches();
     setKeyStore(InMemoryKeyStore());

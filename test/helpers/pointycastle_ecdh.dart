@@ -25,6 +25,10 @@ void installPointyCastleEcdh() {
 class PointyCastleCryptography extends DartCryptography {
   @override
   Ecdh ecdhP256({required int length}) => const PointyCastleP256Ecdh();
+
+  @override
+  Ecdsa ecdsaP256(HashAlgorithm hashAlgorithm) =>
+      PointyCastleP256Ecdsa(hashAlgorithm);
 }
 
 class PointyCastleP256Ecdh extends Ecdh {
@@ -83,6 +87,61 @@ class PointyCastleP256Ecdh extends Ecdh {
     final pub = pc.ECPublicKey(q, _p256);
     final z = (pc.ECDHBasicAgreement()..init(priv)).calculateAgreement(pub);
     return SecretKey(_bigIntToBytes(z, 32));
+  }
+}
+
+/// VM ECDSA-P256/SHA-256 so identity_key tests can mint and sign without
+/// `cryptography_flutter`. Same PointyCastle backend as [PointyCastleP256Ecdh].
+class PointyCastleP256Ecdsa extends Ecdsa {
+  const PointyCastleP256Ecdsa(this.hashAlgorithm) : super.constructor();
+
+  @override
+  final HashAlgorithm hashAlgorithm;
+
+  @override
+  KeyPairType get keyPairType => KeyPairType.p256;
+
+  @override
+  Future<EcKeyPair> newKeyPairFromSeed(List<int> seed) {
+    throw UnimplementedError('P-256 ECDSA from seed is unused in tests');
+  }
+
+  @override
+  Future<EcKeyPair> newKeyPair() => const PointyCastleP256Ecdh().newKeyPair();
+
+  @override
+  Future<Signature> sign(
+    List<int> message, {
+    required KeyPair keyPair,
+  }) async {
+    final data = await keyPair.extract() as EcKeyPairData;
+    final bytes = signP256Ecdsa(data, message);
+    final pub = await keyPair.extractPublicKey();
+    return Signature(bytes, publicKey: pub);
+  }
+
+  @override
+  Future<bool> verify(
+    List<int> message, {
+    required Signature signature,
+  }) async {
+    final pub = signature.publicKey;
+    if (pub is! EcPublicKey) return false;
+    final bytes = signature.bytes;
+    if (bytes.length != 64) return false;
+    final q = _p256.curve.createPoint(
+      _bytesToBigInt(pub.x),
+      _bytesToBigInt(pub.y),
+    );
+    final pcPub = pc.ECPublicKey(q, _p256);
+    final signer = pc.ECDSASigner(pc.SHA256Digest())
+      ..init(false, pc.PublicKeyParameter(pcPub));
+    final r = _bytesToBigInt(bytes.sublist(0, 32));
+    final s = _bytesToBigInt(bytes.sublist(32, 64));
+    return signer.verifySignature(
+      Uint8List.fromList(message),
+      pc.ECSignature(r, s),
+    );
   }
 }
 
