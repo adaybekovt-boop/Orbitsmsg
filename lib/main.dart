@@ -21,6 +21,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_acrylic/flutter_acrylic.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'core/pointycastle_cryptography.dart';
 import 'storage/db.dart' as db;
 import 'storage/db_health.dart';
 import 'storage/drift_key_store.dart';
@@ -33,6 +34,10 @@ Future<void> main() async {
   // Binding first — required before anything that hits a platform channel
   // (path_provider lookups inside Drift / flutter_secure_storage).
   WidgetsFlutterBinding.ensureInitialized();
+
+  // VM/desktop: DartEcdh/DartEcdsa.newKeyPair is unimplemented. Wire
+  // handshake must mint P-256 keys here or 1:1 text stays pending.
+  installPointyCastleEcdh();
 
   // Cap the image cache at 50 MB / 200 entries. The Flutter default is
   // ~100 MB / 1000 entries, which is overkill for a chat where most images
