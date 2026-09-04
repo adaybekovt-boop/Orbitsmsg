@@ -62,20 +62,12 @@ class NativeTransportHost {
         if (lastError.isNotEmpty) 'error': lastError,
       };
 
-  String get visibleTransportLabel {
-    if (isDevBareTransportRequested()) {
-      if (attached && backend == 'hyperswarm') {
-        return 'Bare/Hyperswarm (dev)';
-      }
-      if (lastError.isNotEmpty) {
-        return 'Bare/Hyperswarm (dev) failed';
-      }
-      return 'Bare/Hyperswarm (dev) starting';
-    }
-    if (backend == 'hyperswarm') return 'Bare/Hyperswarm';
-    if (backend == 'peerjs' || backend == 'none') return 'PeerJS';
-    return backend;
-  }
+  String get visibleTransportLabel => orbitsVisibleTransportLabel(
+        devBareRequested: isDevBareTransportRequested(),
+        attached: attached,
+        backend: backend,
+        lastError: lastError,
+      );
 
   Completer<void>? _startCompleter;
 
@@ -325,6 +317,30 @@ class NativeTransportHost {
     }
     return service.handle(payload);
   }
+}
+
+/// Honest user-visible backend. A dev flag alone must never look "active".
+String orbitsVisibleTransportLabel({
+  required bool devBareRequested,
+  required bool attached,
+  required String backend,
+  required String lastError,
+}) {
+  if (devBareRequested) {
+    if (attached && backend == 'hyperswarm') {
+      return 'Bare/Hyperswarm (dev)';
+    }
+    if (lastError.isNotEmpty) {
+      return 'Bare/Hyperswarm (dev) failed';
+    }
+    return 'Bare/Hyperswarm (dev) not running';
+  }
+  if (attached && backend == 'hyperswarm') return 'Bare/Hyperswarm';
+  if (lastError.isNotEmpty && backend != 'peerjs' && backend != 'none') {
+    return 'unavailable/error';
+  }
+  if (backend == 'peerjs' || backend == 'none') return 'PeerJS';
+  return backend;
 }
 
 final nativeTransportHostProvider = Provider<NativeTransportHost>((ref) {

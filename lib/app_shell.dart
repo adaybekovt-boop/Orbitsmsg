@@ -232,6 +232,7 @@ class _NavItem extends StatelessWidget {
     final icon = active ? dest.activeIcon : dest.icon;
 
     return Semantics(
+      key: Key('nav-${dest.tab.name}'),
       button: true,
       selected: active,
       label: dest.label,
@@ -337,6 +338,7 @@ class _SidebarItem extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Semantics(
+        key: Key('nav-${dest.tab.name}'),
         button: true,
         selected: active,
         label: dest.label,

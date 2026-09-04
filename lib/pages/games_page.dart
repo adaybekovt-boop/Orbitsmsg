@@ -34,18 +34,21 @@ class GamesPage extends StatelessWidget {
 
     final games = <_GameItem>[
       _GameItem(
+        key: const Key('game-block-blast'),
         title: 'Block Blast',
         subtitle: 'Собирай линии, ставь рекорды',
         icon: Icons.grid_view,
         onTap: () => open((onExit) => BlockBlastPage(onExit: onExit)),
       ),
       _GameItem(
+        key: const Key('game-blackjack'),
         title: '21 очко',
         subtitle: 'Классический блекджек',
         icon: Icons.style,
         onTap: () => open((onExit) => BlackjackPage(onExit: onExit)),
       ),
       _GameItem(
+        key: const Key('game-chess'),
         title: 'Шахматы',
         subtitle: 'Игра вдвоём на одном устройстве',
         icon: Icons.extension,
@@ -91,11 +94,13 @@ class GamesPage extends StatelessWidget {
 
 class _GameItem {
   const _GameItem({
+    this.key,
     required this.title,
     required this.subtitle,
     required this.icon,
     required this.onTap,
   });
+  final Key? key;
   final String title;
   final String subtitle;
   final IconData icon;
@@ -164,6 +169,7 @@ class _GameRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: OrbitsGlassListTile(
+        key: item.key,
         onTap: item.onTap,
         leading: Container(
           width: 36,
@@ -202,6 +208,7 @@ class _GameCard extends StatelessWidget {
         child: Material(
           color: Colors.transparent,
           child: InkWell(
+            key: item.key,
             onTap: item.onTap,
             borderRadius: radius,
             child: Padding(

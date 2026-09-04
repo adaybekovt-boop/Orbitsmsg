@@ -31,7 +31,15 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
   @override
   void initState() {
     super.initState();
-    _packageInfoFuture = PackageInfo.fromPlatform();
+    _packageInfoFuture = PackageInfo.fromPlatform().timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => PackageInfo(
+        appName: 'Orbits',
+        packageName: 'com.orbits.orbits_flutter',
+        version: 'unknown',
+        buildNumber: '0',
+      ),
+    );
   }
 
   @override
