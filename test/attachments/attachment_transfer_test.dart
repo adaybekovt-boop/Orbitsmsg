@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/attachments/attachment_transfer.dart';
 import 'package:orbits_flutter/attachments/resumable_blob.dart';
@@ -66,9 +65,10 @@ void main() {
     () async {
       await provePathTransfer(50 * 1024 * 1024, 9);
     },
-    // Measured 10 MiB encrypt+decrypt+SHA ≈ 7s on this host; 50 MiB is
-    // the same AES-GCM path at 5× bytes, so 30s is below real work.
-    timeout: const Timeout(Duration(seconds: 60)),
+    // Local isolate path: 10 MiB ≈ 6s, 50 MiB ≈ 31s. GitHub ubuntu-latest
+    // App tests timed out at 60s on the same 50 MiB case (not a hang —
+    // 10 MiB passed; AES-GCM of 50 MiB is slower on shared CI CPUs).
+    timeout: const Timeout(Duration(seconds: 180)),
   );
 
   test(
