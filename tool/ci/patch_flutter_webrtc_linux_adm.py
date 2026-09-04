@@ -56,9 +56,38 @@ def patch_header(path: pathlib.Path) -> None:
     print("patched", path)
 
 
+def _move_helpers_inside_namespace(path: pathlib.Path, text: str) -> str:
+    """A previous patch appended helpers after the namespace close."""
+    closer = "}  // namespace flutter_webrtc_plugin\n"
+    outside = (
+        "void FlutterWebRTCBase::EnsureFactoryInitialized() {\n"
+        "  if (factory_initialized_ || !factory_) return;\n"
+        "  if (!factory_->Initialize()) return;\n"
+        "  video_device_ = factory_->GetVideoDevice();\n"
+        "  desktop_device_ = factory_->GetDesktopDevice();\n"
+        "  audio_processing_ = factory_->GetAudioProcessing();\n"
+        "  factory_initialized_ = true;\n"
+        "}\n"
+        "\n"
+        "void FlutterWebRTCBase::EnsureAudioDevice() {\n"
+        "  EnsureFactoryInitialized();\n"
+        "  if (!audio_device_ && factory_) {\n"
+        "    audio_device_ = factory_->GetAudioDevice();\n"
+        "  }\n"
+        "}\n"
+    )
+    if closer in text and outside in text and text.find(outside) > text.find(closer):
+        text = text.replace(outside, "")
+        text = text.replace(closer, outside + "\n" + closer, 1)
+        path.write_text(text)
+        print("moved helpers inside namespace", path)
+    return text
+
+
 def patch_base_cc(path: pathlib.Path) -> None:
     text = path.read_text()
     if "EnsureFactoryInitialized" in text:
+        _move_helpers_inside_namespace(path, text)
         return
     old = """  LibWebRTC::Initialize();
   factory_ = LibWebRTC::CreateRTCPeerConnectionFactory();
@@ -78,7 +107,7 @@ def patch_base_cc(path: pathlib.Path) -> None:
     if old not in text:
         raise SystemExit(f"constructor block missing in {path}")
     text = text.replace(old, new, 1)
-    text += """
+    methods = """
 void FlutterWebRTCBase::EnsureFactoryInitialized() {
   if (factory_initialized_ || !factory_) return;
   if (!factory_->Initialize()) return;
@@ -94,7 +123,12 @@ void FlutterWebRTCBase::EnsureAudioDevice() {
     audio_device_ = factory_->GetAudioDevice();
   }
 }
+
 """
+    closer = "}  // namespace flutter_webrtc_plugin\n"
+    if closer not in text:
+        raise SystemExit(f"namespace closer missing in {path}")
+    text = text.replace(closer, methods + closer, 1)
     path.write_text(text)
     print("patched", path)
 
