@@ -84,10 +84,39 @@ def _move_helpers_inside_namespace(path: pathlib.Path, text: str) -> str:
     return text
 
 
+def _restore_dummy_init_ctor(path: pathlib.Path, text: str) -> str:
+    lazy = """  LibWebRTC::Initialize();
+  factory_ = LibWebRTC::CreateRTCPeerConnectionFactory();
+  // Lazy: plugin registration must not create a platform ADM.
+  factory_initialized_ = false;
+  event_channel_ = EventChannelProxy::Create(messenger_, task_runner_, kEventChannelName);
+"""
+    restored = """  LibWebRTC::Initialize();
+  factory_ = LibWebRTC::CreateRTCPeerConnectionFactory();
+  // Dummy ADM (see patch_libwebrtc_dummy_adm.py). Must Initialize here:
+  // FlutterMediaStream binds audio_device_->OnDeviceChange at construction.
+  // Platform Pulse/ALSA is never created, so missing sound does not Fatal.
+  if (factory_->Initialize()) {
+    audio_device_ = factory_->GetAudioDevice();
+    video_device_ = factory_->GetVideoDevice();
+    desktop_device_ = factory_->GetDesktopDevice();
+    audio_processing_ = factory_->GetAudioProcessing();
+    factory_initialized_ = true;
+  }
+  event_channel_ = EventChannelProxy::Create(messenger_, task_runner_, kEventChannelName);
+"""
+    if lazy in text:
+        text = text.replace(lazy, restored, 1)
+        path.write_text(text)
+        print("restored Dummy-ADM factory init in", path)
+    return text
+
+
 def patch_base_cc(path: pathlib.Path) -> None:
     text = path.read_text()
     if "EnsureFactoryInitialized" in text:
-        _move_helpers_inside_namespace(path, text)
+        text = _move_helpers_inside_namespace(path, text)
+        _restore_dummy_init_ctor(path, text)
         return
     old = """  LibWebRTC::Initialize();
   factory_ = LibWebRTC::CreateRTCPeerConnectionFactory();
@@ -100,8 +129,16 @@ def patch_base_cc(path: pathlib.Path) -> None:
 """
     new = """  LibWebRTC::Initialize();
   factory_ = LibWebRTC::CreateRTCPeerConnectionFactory();
-  // Lazy: plugin registration must not create a platform ADM.
-  factory_initialized_ = false;
+  // Dummy ADM (see patch_libwebrtc_dummy_adm.py). Must Initialize here:
+  // FlutterMediaStream binds audio_device_->OnDeviceChange at construction.
+  // Platform Pulse/ALSA is never created, so missing sound does not Fatal.
+  if (factory_->Initialize()) {
+    audio_device_ = factory_->GetAudioDevice();
+    video_device_ = factory_->GetVideoDevice();
+    desktop_device_ = factory_->GetDesktopDevice();
+    audio_processing_ = factory_->GetAudioProcessing();
+    factory_initialized_ = true;
+  }
   event_channel_ = EventChannelProxy::Create(messenger_, task_runner_, kEventChannelName);
 """
     if old not in text:
