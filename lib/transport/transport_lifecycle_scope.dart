@@ -1,8 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'native_transport_host.dart'
-    if (dart.library.html) 'native_transport_host_stub.dart';
+import 'native_transport.dart';
 
 /// Binds app pause/resume to Bare suspend/resume + mailbox drain.
 class TransportLifecycleScope extends ConsumerStatefulWidget {

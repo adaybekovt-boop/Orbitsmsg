@@ -8,7 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
-import '../../transport/native_transport_host.dart';
+import '../../transport/native_transport.dart';
 
 import '../../themes/orbits_tokens.dart';
 import '../../ui/primitives/adaptive_page_frame.dart';

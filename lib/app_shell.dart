@@ -22,8 +22,7 @@ import 'pages/settings_page.dart';
 import 'state/calls_provider.dart';
 import 'state/drop_provider.dart';
 import 'state/messaging_notifier.dart';
-import 'transport/native_transport_host.dart'
-    if (dart.library.html) 'transport/native_transport_host_stub.dart';
+import 'transport/native_transport.dart';
 import 'transport/transport_lifecycle_scope.dart';
 import 'themes/orbits_tokens.dart';
 import 'ui/calls/call_overlay_mount.dart';

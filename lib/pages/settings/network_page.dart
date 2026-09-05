@@ -16,7 +16,7 @@ import '../../state/connections_notifier.dart';
 import '../../state/local_profile_provider.dart';
 import '../../state/peer_connection_provider.dart';
 import '../../transport/dev_bare_transport.dart';
-import '../../transport/native_transport_host.dart';
+import '../../transport/native_transport.dart';
 import '../../themes/orbits_tokens.dart';
 import '../../ui/primitives/orbits_glass_button.dart';
 import '../../ui/primitives/orbits_glass_list_tile.dart';
