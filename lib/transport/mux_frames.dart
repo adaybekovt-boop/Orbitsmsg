@@ -9,6 +9,8 @@ import 'transport_api.dart';
 const String kOrbitsTransportFrameInfo = 'orbits-transport-v1';
 const int kMuxVersion = 1;
 const int kFileChunkSize = 64 * 1024;
+const int kMaxMuxFrameBytes = 256 * 1024;
+const int kMaxMuxBufferBytes = 512 * 1024;
 
 int channelId(TransportChannel channel) => channel.index;
 
@@ -19,6 +21,9 @@ TransportChannel? channelFromId(int id) {
 
 /// mux frame: version u8 | channel u8 | flags u8 | length u32be | payload
 Uint8List encodeMuxFrame(TransportChannel channel, List<int> payload) {
+  if (payload.length > kMaxMuxFrameBytes) {
+    throw FormatException('mux frame too large');
+  }
   final header = ByteData(7);
   header.setUint8(0, kMuxVersion);
   header.setUint8(1, channelId(channel));
@@ -32,8 +37,25 @@ Uint8List encodeMuxFrame(TransportChannel channel, List<int> payload) {
 
 class MuxDecoder {
   final BytesBuilder _buf = BytesBuilder(copy: false);
+  bool closed = false;
+
+  void reset() {
+    _buf.clear();
+  }
+
+  void close() {
+    closed = true;
+    reset();
+  }
 
   List<(TransportChannel, Uint8List)> add(List<int> chunk) {
+    if (closed) {
+      throw FormatException('mux decoder closed');
+    }
+    if (_buf.length + chunk.length > kMaxMuxBufferBytes) {
+      reset();
+      throw FormatException('mux buffer exceeded');
+    }
     _buf.add(chunk);
     final data = _buf.takeBytes();
     final view = ByteData.sublistView(Uint8List.fromList(data));
@@ -42,13 +64,19 @@ class MuxDecoder {
     while (offset + 7 <= data.length) {
       final version = view.getUint8(offset);
       if (version != kMuxVersion) {
+        reset();
         throw FormatException('bad mux version $version');
       }
       final channel = channelFromId(view.getUint8(offset + 1));
       if (channel == null) {
+        reset();
         throw FormatException('bad mux channel');
       }
       final len = view.getUint32(offset + 3);
+      if (len > kMaxMuxFrameBytes) {
+        reset();
+        throw FormatException('mux frame too large');
+      }
       if (offset + 7 + len > data.length) break;
       out.add((
         channel,

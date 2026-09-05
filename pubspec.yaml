@@ -173,6 +173,7 @@ flutter:
     - tool/connectivity_harness/src/stand.js
     - tool/connectivity_harness/src/corestore_journal.js
     - tool/connectivity_harness/src/bare_compat.js
+    - tool/connectivity_harness/src/incoming_paths.js
     - tool/bare/pins.json
     - tool/bare/BARE.manifest
 
