@@ -126,7 +126,7 @@ class BlindMailboxStore {
     if (used + block.bytes.length > cap.quotaBytes) {
       throw StateError('mailbox quota exceeded');
     }
-    rejectPlaintextEnvelope(block.bytes);
+    _validateStoredBlock(block);
     list.add(block);
   }
 
@@ -158,10 +158,15 @@ class BlindMailboxStore {
     if (list == null) return;
     for (var i = 0; i < list.length; i++) {
       if (list[i].seq == seq) {
-        list[i] = list[i].copyWith(tombstoned: true, bytes: const <int>[]);
+        list[i] = list[i].copyWith(
+          tombstoned: true,
+          bytes: encodeMailboxTombstone(
+            id: list[i].envelopeId ?? 'seq-$seq',
+            deletedAt: nowMs(),
+          ),
+        );
       }
     }
-    list.removeWhere((b) => b.seq == seq && b.envelopeId == null);
   }
 
   bool rememberRequest(String requestId) {
@@ -182,6 +187,9 @@ class BlindMailboxStore {
     required int quotaBytes,
     required int retentionMs,
   }) {
+    if (isMailboxTombstone(bytes)) {
+      throw MailboxProtocolException('malformed', 'tombstone is not an envelope');
+    }
     rejectPlaintextEnvelope(bytes);
     final list = _cores.putIfAbsent(mailboxId, () => <EncryptedBlock>[]);
     for (final existing in list) {
@@ -236,7 +244,13 @@ class BlindMailboxStore {
     if (list == null) return;
     for (var i = 0; i < list.length; i++) {
       if (list[i].envelopeId == envelopeId) {
-        list[i] = list[i].copyWith(tombstoned: true, bytes: const <int>[]);
+        list[i] = list[i].copyWith(
+          tombstoned: true,
+          bytes: encodeMailboxTombstone(
+            id: envelopeId,
+            deletedAt: nowMs(),
+          ),
+        );
       }
     }
   }
@@ -300,7 +314,7 @@ class BlindMailboxStore {
           if (block == null) {
             throw const FormatException('corrupt mailbox persist: bad record');
           }
-          rejectPlaintextEnvelope(block.bytes);
+          _hydrateStoredBlock(block);
           blocks.add(block);
         }
         _cores[key] = blocks;
@@ -320,5 +334,29 @@ class BlindMailboxStore {
         if (key is String && value is int) _seenRequests[key] = value;
       });
     }
+  }
+
+  void _validateStoredBlock(EncryptedBlock block) {
+    if (block.tombstoned || isMailboxTombstone(block.bytes)) {
+      requireMailboxTombstone(block.bytes);
+      return;
+    }
+    rejectPlaintextEnvelope(block.bytes);
+  }
+
+  void _hydrateStoredBlock(EncryptedBlock block) {
+    if (block.tombstoned) {
+      if (block.bytes.isEmpty) {
+        // Legacy persist: empty tombstone body is accepted, never decrypted.
+        return;
+      }
+      requireMailboxTombstone(block.bytes);
+      return;
+    }
+    if (isMailboxTombstone(block.bytes)) {
+      requireMailboxTombstone(block.bytes);
+      return;
+    }
+    rejectPlaintextEnvelope(block.bytes);
   }
 }

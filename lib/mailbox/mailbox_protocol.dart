@@ -15,6 +15,9 @@ const int kOpaqueEnvelopeVersion = 1;
 const int kOpaqueEnvelopeAlgRatchetV2 = 1;
 const List<int> kOpaqueEnvelopeMagic = <int>[0x4F, 0x45, 0x31, 0x01];
 const int kOpaqueEnvelopeHeaderBytes = 4 + 1 + 32 + 4;
+const String kMailboxTombstoneInfo = 'orbits-mailbox-tombstone-v1';
+const List<int> kMailboxTombstoneMagic = <int>[0x4F, 0x54, 0x31, 0x01];
+const int kMailboxTombstoneVersion = 1;
 
 /// Chat-sized envelope cap. Attachments use the Phase 9 path/descriptor
 /// pipeline and must not be copied through this HTTP body.
@@ -528,6 +531,100 @@ Uint8List requireOpaqueEnvelope(List<int> bytes) {
 
 void rejectPlaintextEnvelope(List<int> bytes) {
   requireOpaqueEnvelope(bytes);
+}
+
+class MailboxTombstone {
+  const MailboxTombstone({
+    required this.id,
+    required this.deletedAt,
+    this.version = kMailboxTombstoneVersion,
+  });
+
+  final String id;
+  final int deletedAt;
+  final int version;
+}
+
+bool isMailboxTombstone(List<int> bytes) {
+  if (bytes.length < kMailboxTombstoneMagic.length) return false;
+  for (var i = 0; i < kMailboxTombstoneMagic.length; i++) {
+    if (bytes[i] != kMailboxTombstoneMagic[i]) return false;
+  }
+  return true;
+}
+
+Uint8List encodeMailboxTombstone({
+  required String id,
+  required int deletedAt,
+  int version = kMailboxTombstoneVersion,
+}) {
+  if (id.isEmpty) {
+    throw MailboxProtocolException('malformed', 'tombstone id required');
+  }
+  final body = utf8.encode(
+    jsonEncode(<String, Object?>{
+      'v': kMailboxTombstoneInfo,
+      'id': id,
+      'deleted': true,
+      'deletedAt': deletedAt,
+      'version': version,
+    }),
+  );
+  final digest = sha256.convert(body).bytes;
+  final out = BytesBuilder(copy: false);
+  out.add(kMailboxTombstoneMagic);
+  out.add(digest);
+  out.add(body);
+  return out.toBytes();
+}
+
+MailboxTombstone requireMailboxTombstone(List<int> bytes) {
+  if (!isMailboxTombstone(bytes)) {
+    throw MailboxProtocolException('malformed', 'not a mailbox tombstone');
+  }
+  if (bytes.length < kMailboxTombstoneMagic.length + 32) {
+    throw MailboxProtocolException('malformed', 'tombstone too short');
+  }
+  final expected = bytes.sublist(
+    kMailboxTombstoneMagic.length,
+    kMailboxTombstoneMagic.length + 32,
+  );
+  final body = bytes.sublist(kMailboxTombstoneMagic.length + 32);
+  if (body.isEmpty) {
+    throw MailboxProtocolException('malformed', 'tombstone body empty');
+  }
+  final actual = sha256.convert(body).bytes;
+  var diff = 0;
+  for (var i = 0; i < 32; i++) {
+    diff |= actual[i] ^ expected[i];
+  }
+  if (diff != 0) {
+    throw MailboxProtocolException('malformed', 'tombstone hash mismatch');
+  }
+  late final Object decoded;
+  try {
+    decoded = jsonDecode(utf8.decode(body));
+  } catch (_) {
+    throw MailboxProtocolException('malformed', 'tombstone json');
+  }
+  if (decoded is! Map) {
+    throw MailboxProtocolException('malformed', 'tombstone not an object');
+  }
+  final json = Map<String, Object?>.from(decoded);
+  if (json['v'] != kMailboxTombstoneInfo || json['deleted'] != true) {
+    throw MailboxProtocolException('malformed', 'tombstone marker missing');
+  }
+  final id = json['id'] as String? ?? '';
+  if (id.isEmpty) {
+    throw MailboxProtocolException('malformed', 'tombstone id required');
+  }
+  return MailboxTombstone(
+    id: id,
+    deletedAt: _requireInt(json, 'deletedAt'),
+    version: json['version'] is int
+        ? json['version'] as int
+        : kMailboxTombstoneVersion,
+  );
 }
 
 bool mailboxBodyKeysAreSafe(Iterable<Object?> keys) {
