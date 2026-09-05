@@ -101,6 +101,7 @@ class DualStackBridge {
   final Map<String, String> _expectedPeer = <String, String>{};
   final Map<String, DeviceBinding> _bindings = <String, DeviceBinding>{};
   final Map<String, String> _fingerprintOwner = <String, String>{};
+  final Map<String, String> _fingerprintTransport = <String, String>{};
   final FileTransferCoordinator files = FileTransferCoordinator();
 
   void attach() {
@@ -139,6 +140,7 @@ class DualStackBridge {
     _expectedPeer.clear();
     _bindings.clear();
     _fingerprintOwner.clear();
+    _fingerprintTransport.clear();
     files.forgetAll();
   }
 
@@ -579,6 +581,7 @@ class DualStackBridge {
         _authorizedPending.remove(norm);
         _expectedPeer.remove(norm);
         _bindings.remove(norm);
+        _fingerprintTransport.removeWhere((_, id) => id == norm);
         files.forgetPeer(norm);
         onPresence?.call(peerId, false);
       case TransportFrame(:final peerId, :final channel, :final bytes):
@@ -616,14 +619,10 @@ class DualStackBridge {
     List<int>? connectionNoisePublicKey,
   ) async {
     final transportId = normalizePeerId(peerId);
-    final logical = binding.ownerPeerId.isNotEmpty
-        ? normalizePeerId(binding.ownerPeerId)
-        : transportId;
-    if (authenticated.contains(transportId) || authenticated.contains(logical)) {
+    if (authenticated.contains(transportId)) {
       return;
     }
-    if (_authorizedPending.contains(transportId) ||
-        _authorizedPending.contains(logical)) {
+    if (_authorizedPending.contains(transportId)) {
       _admitPeer(transportId, binding);
       return;
     }
@@ -666,6 +665,10 @@ class DualStackBridge {
     );
     final previous = _fingerprintOwner[fp];
     if (previous != null && previous != logical) return false;
+    final boundTransport = _fingerprintTransport[fp];
+    if (boundTransport != null && boundTransport != transportId) {
+      return false;
+    }
     final expected = _expectedPeer[transportId] ?? _expectedPeer[logical];
     if (expected != null &&
         expected != logical &&
@@ -673,6 +676,7 @@ class DualStackBridge {
       return false;
     }
     _fingerprintOwner[fp] = logical;
+    _fingerprintTransport[fp] = transportId;
     return true;
   }
 
