@@ -48,4 +48,9 @@ class WorkletOrbitsTransport implements OrbitsTransport {
 
   @override
   Future<void> refreshNetwork() async {}
+
+  Future<void> confirmAuthorization(
+    String peerId, {
+    required bool authorized,
+  }) async {}
 }
