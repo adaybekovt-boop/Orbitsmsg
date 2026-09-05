@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_transport/orbits_transport.dart';
-import 'package:orbits_transport_platform_interface/orbits_transport_platform_interface.dart';
 
 void main() {
   test('default instance is unimplemented and IPC version is pinned', () {
@@ -29,7 +28,10 @@ void main() {
     await plugin.send('ORBIT-BB', 'message', const [1, 2, 3]);
     await plugin.stop();
     expect(host.started, isFalse);
-    expect(host.calls, containsAll(['start', 'publish', 'suspend', 'resume', 'stop']));
+    expect(
+      host.calls,
+      containsAll(['start', 'publish', 'suspend', 'resume', 'stop']),
+    );
   });
 
   test('hosts refuse remote executable JS', () async {
@@ -46,15 +48,42 @@ void main() {
       throwsStateError,
     );
     expect(
-      () => assertNoRemoteBareJs({
-        'bundleUrl': 'http://127.0.0.1/evil.js',
-      }),
+      () => assertNoRemoteBareJs({'bundleUrl': 'http://127.0.0.1/evil.js'}),
       throwsStateError,
     );
     final channel = MethodChannelOrbitsTransport();
+    await expectLater(channel.start({'remoteJs': true}), throwsStateError);
+  });
+
+  test('BareHostMachine covers crash recovery and bundle/ABI failures', () {
+    final machine = BareHostMachine();
+    expect(
+      () => machine.start({'remoteJs': true}),
+      throwsA(isA<BareHostException>()),
+    );
+    machine.start({'remoteJs': false, 'ipcVersion': 'orbits-bare-ipc-v1'});
+    machine.crash();
+    expect(machine.started, isFalse);
+    machine.recover({'remoteJs': false});
+    expect(machine.started, isTrue);
+    machine.shutdown();
+    expect(machine.started, isFalse);
+  });
+
+  test('oversized IPC frames and missing file paths fail closed', () async {
+    final host = InProcessOrbitsTransportPlatform();
+    OrbitsTransportPlatform.instance = host;
+    await host.start({'peerId': 'ORBIT-AA', 'remoteJs': false});
     await expectLater(
-      channel.start({'remoteJs': true}),
+      host.send(
+        'ORBIT-BB',
+        'message',
+        List<int>.filled(kOrbitsBareIpcMaxFrameBytes + 1, 1),
+      ),
       throwsStateError,
     );
+    await expectLater(host.sendFile('ORBIT-BB', '', 1), throwsStateError);
+    await host.sendFile('ORBIT-BB', '/tmp/a.bin', 12);
+    expect(host.calls, contains('sendFile'));
   });
 }

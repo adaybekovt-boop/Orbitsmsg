@@ -2,7 +2,7 @@
   "name": "orbits-connectivity-harness",
   "version": "1.0.0",
   "private": true,
-  "description": "Phase 1 headless Bare/Hyperswarm connectivity harness. No UI, Drift, Hypercore, or rooms.",
+  "description": "Headless Bare/Hyperswarm connectivity harness. No UI, Drift, or rooms.",
   "type": "commonjs",
   "main": "src/worklet.js",
   "scripts": {
@@ -14,7 +14,17 @@
     "node": ">=20"
   },
   "dependencies": {
-    "hyperdht": "^6.20.0",
-    "hyperswarm": "^4.11.0"
+    "bare-buffer": "3.7.1",
+    "bare-crypto": "1.15.3",
+    "bare-events": "2.9.2",
+    "bare-fs": "4.8.1",
+    "bare-net": "2.3.3",
+    "bare-os": "3.9.3",
+    "bare-path": "3.1.2",
+    "bare-pipe": "4.3.1",
+    "bare-process": "4.5.1",
+    "corestore": "7.12.2",
+    "hyperdht": "6.33.2",
+    "hyperswarm": "4.17.0"
   }
 }

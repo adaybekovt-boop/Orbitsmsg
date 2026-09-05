@@ -1,7 +1,6 @@
 // R08 — consumeOPK must be an atomic used=0→1 compare-and-set.
 // Two concurrent handshakes reading the same unused OPK must not both win.
 
-import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/key_store.dart';
 import 'package:orbits_flutter/core/prekey_store.dart';
@@ -38,14 +37,14 @@ void main() {
       'createdAt': 1,
     });
 
-    final results = await Future.wait([
-      consumeOPK(id),
-      consumeOPK(id),
-    ]);
+    final results = await Future.wait([consumeOPK(id), consumeOPK(id)]);
 
     final winners = results.where((r) => r != null).toList();
-    expect(winners, hasLength(1),
-        reason: 'exactly one concurrent consumeOPK may obtain the private key');
+    expect(
+      winners,
+      hasLength(1),
+      reason: 'exactly one concurrent consumeOPK may obtain the private key',
+    );
     expect(winners.single!.id, id);
 
     final third = await consumeOPK(id);

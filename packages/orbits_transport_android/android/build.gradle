@@ -12,12 +12,94 @@ buildscript {
     }
 }
 
+rootProject.allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
 apply plugin: "com.android.library"
 apply plugin: "kotlin-android"
 
+// Official holepunchto/bare-android consume: exploded AAR at libs/bare-kit
+// (classes.jar + jni/), not Maven. The .aar zip is the same tree.
+def orbitsBareKitAndroid = {
+    def candidates = []
+    candidates.add(file("${project.projectDir}/libs/bare-kit"))
+    def fromEnv = System.getenv("ORBITS_BARE_KIT")
+    if (fromEnv != null && !fromEnv.isEmpty()) {
+        candidates.add(file("${fromEnv}/android/bare-kit"))
+        candidates.add(file(fromEnv))
+    }
+    def cache = System.getenv("ORBITS_BARE_CACHE")
+    if (cache != null && !cache.isEmpty()) {
+        candidates.add(file("${cache}/bare-kit/android/bare-kit"))
+    }
+    def cur = project.projectDir
+    while (cur != null) {
+        if (file("${cur}/tool/bare/pins.json").isFile()) {
+            candidates.add(file("${cur}/build/orbits-bare/bare-kit/android/bare-kit"))
+            break
+        }
+        cur = cur.parentFile
+    }
+    return candidates.find { it.directory && file("${it}/classes.jar").isFile() }
+}()
+
+def orbitsBareKitAar = {
+    def candidates = []
+    candidates.add(file("${project.projectDir}/libs/bare-kit.aar"))
+    def fromEnv = System.getenv("ORBITS_BARE_KIT")
+    if (fromEnv != null && !fromEnv.isEmpty()) {
+        candidates.add(file("${fromEnv}/android/bare-kit.aar"))
+        candidates.add(file("${fromEnv}/bare-kit.aar"))
+    }
+    def cache = System.getenv("ORBITS_BARE_CACHE")
+    if (cache != null && !cache.isEmpty()) {
+        candidates.add(file("${cache}/bare-kit/android/bare-kit.aar"))
+    }
+    def cur = project.projectDir
+    while (cur != null) {
+        if (file("${cur}/tool/bare/pins.json").isFile()) {
+            candidates.add(file("${cur}/build/orbits-bare/bare-kit/android/bare-kit.aar"))
+            break
+        }
+        cur = cur.parentFile
+    }
+    return candidates.find { it.file }
+}()
+
+def orbitsMobileWorkletZip = {
+    def cur = project.projectDir
+    while (cur != null) {
+        def z = file("${cur}/build/orbits-bare/mobile-worklet.zip")
+        if (z.file) return z
+        cur = cur.parentFile
+    }
+    return null
+}()
+
+tasks.register("copyOrbitsWorkletModules") {
+    doLast {
+        def dest = file("${project.projectDir}/src/main/assets")
+        dest.mkdirs()
+        if (orbitsMobileWorkletZip != null) {
+            copy {
+                from orbitsMobileWorkletZip
+                into dest
+                rename { "orbits-worklet-modules.zip" }
+            }
+        }
+    }
+}
+afterEvaluate {
+    tasks.named("preBuild").configure { dependsOn("copyOrbitsWorkletModules") }
+}
+
 android {
     namespace = "app.orbits.transport"
-    compileSdk = 35
+    compileSdk = 36
     defaultConfig {
         minSdk = 24
     }
@@ -25,8 +107,25 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+    sourceSets {
+        main.java.srcDirs += "src/main/kotlin"
+        if (orbitsBareKitAndroid != null && file("${orbitsBareKitAndroid}/jni").directory) {
+            main.jniLibs.srcDirs += file("${orbitsBareKitAndroid}/jni")
+        }
+    }
 }
 
 dependencies {
     implementation("androidx.annotation:annotation:1.9.1")
+    if (orbitsBareKitAndroid != null) {
+        // Same as holepunchto/bare-android: fileTree(dir: "libs", include: ["bare-kit/classes.jar"])
+        implementation files("${orbitsBareKitAndroid}/classes.jar")
+    } else if (orbitsBareKitAar != null) {
+        implementation files(orbitsBareKitAar)
+    }
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

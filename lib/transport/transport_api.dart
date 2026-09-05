@@ -23,6 +23,8 @@ class TransportFileDescriptor {
     required this.sizeBytes,
     this.mime,
     this.fileName,
+    this.transferId,
+    this.resumeOffset = 0,
   });
 
   /// Local filesystem path or platform handle. Not a byte array over IPC.
@@ -30,6 +32,8 @@ class TransportFileDescriptor {
   final int sizeBytes;
   final String? mime;
   final String? fileName;
+  final String? transferId;
+  final int resumeOffset;
 }
 
 class PeerDescriptor {
@@ -37,6 +41,7 @@ class PeerDescriptor {
     required this.peerId,
     this.binding,
     this.discoverySecret,
+    this.noisePublicKey,
   });
 
   final String peerId;
@@ -44,6 +49,9 @@ class PeerDescriptor {
 
   /// Shared contact-discovery secret. Never the public Peer ID.
   final List<int>? discoverySecret;
+
+  /// Optional Hyperswarm Noise public key (hex). Not the identity key.
+  final String? noisePublicKey;
 }
 
 class TransportLocalConfiguration {
@@ -53,6 +61,7 @@ class TransportLocalConfiguration {
     this.allowPeerjsFallback = true,
     this.relayForced = false,
     this.diagnosticsEnabled = false,
+    this.noiseSeed,
   });
 
   final String peerId;
@@ -63,10 +72,18 @@ class TransportLocalConfiguration {
   final bool allowPeerjsFallback;
   final bool relayForced;
   final bool diagnosticsEnabled;
+
+  /// 32-byte Hyperswarm / HyperDHT seed. Stable per device.
+  final List<int>? noiseSeed;
 }
 
 sealed class TransportEvent {
   const TransportEvent();
+}
+
+class TransportConnecting extends TransportEvent {
+  const TransportConnecting(this.peerId);
+  final String peerId;
 }
 
 class TransportConnected extends TransportEvent {
@@ -75,9 +92,29 @@ class TransportConnected extends TransportEvent {
 }
 
 class TransportAuthenticated extends TransportEvent {
-  const TransportAuthenticated(this.peerId, this.binding);
+  const TransportAuthenticated(
+    this.peerId,
+    this.binding, {
+    this.connectionNoisePublicKey,
+  });
   final String peerId;
   final DeviceBinding binding;
+
+  /// Actual Noise public key of this connection, when the carrier has one.
+  final List<int>? connectionNoisePublicKey;
+}
+
+/// Carrier has a logical peer and binding, but application traffic is
+/// still gated until Dart authorizes or denies the certificate.
+class TransportIdentityPending extends TransportEvent {
+  const TransportIdentityPending(
+    this.peerId,
+    this.binding, {
+    this.connectionNoisePublicKey,
+  });
+  final String peerId;
+  final DeviceBinding binding;
+  final List<int>? connectionNoisePublicKey;
 }
 
 class TransportFrame extends TransportEvent {

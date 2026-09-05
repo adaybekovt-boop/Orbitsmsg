@@ -8,7 +8,6 @@ import 'dart:typed_data';
 import '../core/vault_kek.dart';
 import '../peer/helpers.dart';
 import '../storage/wrapped_snapshot.dart';
-import '../transport/discovery_secret_store.dart';
 
 enum DeviceStatus { active, revoked }
 
@@ -100,6 +99,13 @@ class DeviceRegistry {
   List<AuthorizedDevice> get active => _devices.values
       .where((d) => d.status == DeviceStatus.active)
       .toList(growable: false);
+
+  /// Restart / replay hydrate. Does not re-authorize revoked devices.
+  void replaceAll(Iterable<AuthorizedDevice> devices) {
+    _devices
+      ..clear()
+      ..addEntries(devices.map((d) => MapEntry(d.deviceId, d)));
+  }
 
   void authorize(AuthorizedDevice device) {
     final existing = _devices[device.deviceId];

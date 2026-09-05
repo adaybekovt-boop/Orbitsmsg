@@ -59,7 +59,9 @@ cannot be recovered — that's part of the security model.
 | GitHub Releases API | Update checks and installer downloads |
 | Theme fonts | Bundled in the app; no Google Fonts CDN |
 
-Details: [docs/privacy.md](docs/privacy.md).
+Details: [docs/privacy.md](docs/privacy.md). Two isolated localhost clients
+must pin signaling explicitly — see [docs/local-testnet.md](docs/local-testnet.md).
+Production still uses public PeerJS; Hyperswarm stays off.
 
 ## Support
 

@@ -13,6 +13,12 @@
 include: package:flutter_lints/flutter.yaml
 
 analyzer:
+  exclude:
+    # Federated plugin packages have their own package graphs. Root
+    # `flutter analyze` must not type-check them against the app's
+    # package_config. CI runs `tool/ci/analyze_packages.sh` so every
+    # excluded package is still analyzed in its own resolved context.
+    - packages/**
   errors:
     # Promote a few forward-compatibility info-level warnings to actual
     # warnings so they surface in CI output.

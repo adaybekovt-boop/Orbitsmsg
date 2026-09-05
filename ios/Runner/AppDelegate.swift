@@ -12,7 +12,7 @@ import UIKit
   ) -> Bool {
     GeneratedPluginRegistrant.register(with: self)
     let config = CXProviderConfiguration()
-    config.localizedName = "Orbits"
+    // iOS 26 SDK: localizedName is get-only. CallKit uses the app display name.
     config.supportsVideo = true
     config.maximumCallsPerCallGroup = 1
     config.supportedHandleTypes = [.generic]

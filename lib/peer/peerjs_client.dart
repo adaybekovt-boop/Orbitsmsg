@@ -43,6 +43,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import 'dial_attempt.dart';
 import 'ice_lifecycle.dart';
 import 'signaling.dart';
+import 'webrtc_audio_lifecycle.dart';
 import 'ws_channel.dart';
 
 // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
@@ -408,7 +409,16 @@ class PeerDataConnection {
   final _errorCtl = StreamController<PeerError>.broadcast();
   final _dataCtl = StreamController<Object?>.broadcast();
 
-  bool get open => _open;
+  /// True once the DataChannel is writable. Reads the native channel state
+  /// as well as the latched flag: Linux libwebrtc can deliver `onDataChannel`
+  /// with the channel already [RTCDataChannelState.RTCDataChannelOpen], so
+  /// [onDataChannelState] never fires and `_open` would otherwise stay false.
+  bool get open {
+    if (_open) return true;
+    if (_closed) return false;
+    return _dc?.state == RTCDataChannelState.RTCDataChannelOpen;
+  }
+
   bool get closed => _closed;
 
   /// Raw DataChannel вЂ” exposed so callers that need to tune
@@ -421,13 +431,27 @@ class PeerDataConnection {
   Stream<PeerError> get onError => _errorCtl.stream;
   Stream<Object?> get onData => _dataCtl.stream;
 
+  void _emitOpen() {
+    if (_closed || _open) return;
+    _open = true;
+    if (!_openCtl.isClosed) _openCtl.add(null);
+  }
+
+  /// Latch `_open` from the native channel if the Open event was missed.
+  void _syncOpenFromChannel() {
+    if (_closed || _open) return;
+    final dc = _dc;
+    if (dc != null && dc.state == RTCDataChannelState.RTCDataChannelOpen) {
+      _emitOpen();
+    }
+  }
+
   void _attachDataChannel(RTCDataChannel dc) {
     _dc = dc;
     dc.onDataChannelState = (state) {
       if (_closed) return;
       if (state == RTCDataChannelState.RTCDataChannelOpen) {
-        _open = true;
-        _openCtl.add(null);
+        _emitOpen();
       } else if (state == RTCDataChannelState.RTCDataChannelClosed) {
         _markClosed();
       }
@@ -458,6 +482,12 @@ class PeerDataConnection {
       }
       _dataCtl.add(payload);
     };
+    // Linux libwebrtc can hand us a channel that is already Open before this
+    // callback is attached; the state listener then never fires. Promote
+    // immediately so [send] and [onOpen] observers see a live channel.
+    if (dc.state == RTCDataChannelState.RTCDataChannelOpen) {
+      _emitOpen();
+    }
   }
 
   /// Send JSON-serializable payload (Map/List/String/num/bool) or raw bytes.
@@ -467,7 +497,11 @@ class PeerDataConnection {
   bool send(Object? value) {
     if (_closed) return false;
     final dc = _dc;
-    if (dc == null || !_open) return false;
+    if (dc == null) return false;
+    if (!_open) {
+      _syncOpenFromChannel();
+      if (!_open) return false;
+    }
     try {
       if (value is Uint8List) {
         dc.send(RTCDataChannelMessage.fromBinary(value));
@@ -682,6 +716,7 @@ class PeerJsClient {
     String? token,
     bool serverEchoesHeartbeat = false,
     this.connectTimeout = const Duration(seconds: 10),
+    CreateRtcPeerConnection? createPeerConnectionFn,
   })  : _desiredId = id,
         _key = key,
         _version = version,
@@ -695,7 +730,8 @@ class PeerJsClient {
           'bundlePolicy': 'max-bundle',
           'rtcpMuxPolicy': 'require',
           'sdpSemantics': 'unified-plan',
-        };
+        },
+        _createPeerConnectionFn = createPeerConnectionFn;
 
   final ResolvedSignalingEndpoint endpoint;
   final String? _desiredId;
@@ -705,6 +741,20 @@ class PeerJsClient {
   final bool _serverEchoesHeartbeat;
   final String _token;
   final Map<String, Object> _rtcConfig;
+  final CreateRtcPeerConnection? _createPeerConnectionFn;
+
+  Future<RTCPeerConnection> _openPeerConnection(WebRtcPeerKind kind) {
+    final config = Map<String, dynamic>.from(_rtcConfig);
+    final injected = _createPeerConnectionFn;
+    if (injected != null) {
+      WebRtcAudioLifecycle.instance.recordPeerConnection(kind);
+      return injected(config);
+    }
+    return WebRtcAudioLifecycle.instance.createPeerConnectionFor(
+      config,
+      kind: kind,
+    );
+  }
 
   SignalingSocket? _sock;
   String? _id;
@@ -952,7 +1002,7 @@ class PeerJsClient {
     try {
       final labelOrDefault = label ?? cid;
       final meta = metadata ?? <String, Object?>{};
-      final pc = await createPeerConnection(_rtcConfig);
+      final pc = await _openPeerConnection(WebRtcPeerKind.dataOnly);
       final dc = await pc.createDataChannel(
         labelOrDefault,
         RTCDataChannelInit()..ordered = reliable,
@@ -977,7 +1027,7 @@ class PeerJsClient {
         timeout: dialTimeout,
         dispose: () => _giveUpConnection(cid),
         createOffer: () async {
-          final offer = await pc.createOffer({});
+          final offer = await pc.createOffer(kDataOnlySdpConstraints);
           await pc.setLocalDescription(offer);
           return offer;
         },
@@ -1027,7 +1077,7 @@ class PeerJsClient {
     final meta = metadata ?? const <String, Object?>{};
     final cid = _newMediaConnectionId();
     try {
-      final pc = await createPeerConnection(_rtcConfig);
+      final pc = await _openPeerConnection(WebRtcPeerKind.media);
       final conn = PeerMediaConnection._(
         peer: targetId,
         connectionId: cid,
@@ -1156,62 +1206,72 @@ class PeerJsClient {
       sdpMap['type']?.toString() ?? 'offer',
     );
 
-    final pc = await createPeerConnection(_rtcConfig);
+    // Inbound media offers allocate a PC before the user accepts. Capture
+    // still happens in acceptCurrent / getUserMedia — not here.
+    try {
+      final pc = await _openPeerConnection(WebRtcPeerKind.dataOnly);
 
-    if (kind == 'media') {
-      final media = PeerMediaConnection._(
-        peer: src,
-        connectionId: cid,
-        initiator: false,
-        pc: pc,
-        client: this,
-        pendingOffer: sdp,
-        metadata: (map['metadata'] is Map)
-            ? (map['metadata'] as Map)
-                .map((k, v) => MapEntry(k.toString(), v))
-            : const <String, Object?>{},
-      );
-      media._wireRemoteTracks();
-      _wirePcLifecycle(pc, cid);
-      _wireIceOut(pc, cid, src, 'media');
-      _conns[cid] = _Negotiator.media(media);
-      // Do NOT flush pending ICE here вЂ” setRemoteDescription happens later in
-      // [PeerMediaConnection.answer]. Candidates that raced in before the
-      // offer arrived stay buffered and get flushed inside answer().
-      _callCtl.add(media);
-    } else {
-      final data = PeerDataConnection._(
-        peer: src,
-        connectionId: cid,
-        label: (map['label']?.toString() ?? cid),
-        metadata: (map['metadata'] is Map)
-            ? (map['metadata'] as Map).map((k, v) => MapEntry(k.toString(), v))
-            : <String, Object?>{},
-        reliable: map['reliable'] == true || map['reliable'] == 'true',
-        initiator: false,
-        pc: pc,
-        client: this,
-      );
-      pc.onDataChannel = (dc) {
-        data._attachDataChannel(dc);
-      };
-      _wirePcLifecycle(pc, cid);
-      _wireIceOut(pc, cid, src, 'data');
-      _conns[cid] = _Negotiator.data(data);
-      await pc.setRemoteDescription(sdp);
-      await _flushPendingIce(cid);
-      final answer = await pc.createAnswer({});
-      await pc.setLocalDescription(answer);
-      _sendFrame({
-        'type': _ServerMessageType.answer,
-        'dst': src,
-        'payload': {
-          'sdp': {'type': answer.type, 'sdp': answer.sdp},
-          'type': 'data',
-          'connectionId': cid,
-        },
-      });
-      _connectionCtl.add(data);
+      if (kind == 'media') {
+        final media = PeerMediaConnection._(
+          peer: src,
+          connectionId: cid,
+          initiator: false,
+          pc: pc,
+          client: this,
+          pendingOffer: sdp,
+          metadata: (map['metadata'] is Map)
+              ? (map['metadata'] as Map)
+                  .map((k, v) => MapEntry(k.toString(), v))
+              : const <String, Object?>{},
+        );
+        media._wireRemoteTracks();
+        _wirePcLifecycle(pc, cid);
+        _wireIceOut(pc, cid, src, 'media');
+        _conns[cid] = _Negotiator.media(media);
+        // Do NOT flush pending ICE here — setRemoteDescription happens later in
+        // [PeerMediaConnection.answer]. Candidates that raced in before the
+        // offer arrived stay buffered and get flushed inside answer().
+        _callCtl.add(media);
+      } else {
+        final data = PeerDataConnection._(
+          peer: src,
+          connectionId: cid,
+          label: (map['label']?.toString() ?? cid),
+          metadata: (map['metadata'] is Map)
+              ? (map['metadata'] as Map).map((k, v) => MapEntry(k.toString(), v))
+              : <String, Object?>{},
+          reliable: map['reliable'] == true || map['reliable'] == 'true',
+          initiator: false,
+          pc: pc,
+          client: this,
+        );
+        pc.onDataChannel = (dc) {
+          data._attachDataChannel(dc);
+        };
+        _wirePcLifecycle(pc, cid);
+        _wireIceOut(pc, cid, src, 'data');
+        _conns[cid] = _Negotiator.data(data);
+        await pc.setRemoteDescription(sdp);
+        await _flushPendingIce(cid);
+        final answer = await pc.createAnswer(kDataOnlySdpConstraints);
+        await pc.setLocalDescription(answer);
+        _sendFrame({
+          'type': _ServerMessageType.answer,
+          'dst': src,
+          'payload': {
+            'sdp': {'type': answer.type, 'sdp': answer.sdp},
+            'type': 'data',
+            'connectionId': cid,
+          },
+        });
+        _connectionCtl.add(data);
+      }
+    } catch (e) {
+      // Previously unawaited: createAnswer / Dummy ADM / setRemoteDescription
+      // failures vanished. Surface them as PeerError so lastConnectError can
+      // record the reason instead of leaving a half-open zombie.
+      _giveUpConnection(cid);
+      _errorCtl.add(PeerError('webrtc', 'handleOffer: $e'));
     }
   }
 

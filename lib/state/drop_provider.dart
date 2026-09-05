@@ -10,8 +10,11 @@ import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../attachments/temp_attachment.dart';
 import '../core/orbits_drop.dart';
 import '../peer/helpers.dart';
+import '../transport/dev_bare_transport.dart';
+import '../transport/transport_api.dart';
 import '../storage/db.dart' as db;
 import 'auth_notifier.dart';
 import 'connections_notifier.dart';
@@ -100,6 +103,10 @@ class DropNotifier extends StateNotifier<DropState> {
           DropBridge(
             handleInbound: (remoteId, packet) {
               _pendingInboundPeer = remoteId;
+              if (packet is Map && packet['type'] == 'harness-file-received') {
+                unawaited(_persistNativeFile(remoteId, packet));
+                return;
+              }
               unawaited(_engine.handleInbound(packet, peerId: remoteId));
             },
             resetPeer: (remoteId) => _engine.resetPeer(remoteId),
@@ -151,6 +158,28 @@ class DropNotifier extends StateNotifier<DropState> {
     ));
 
     try {
+      if (conns.canUseNative(pid) || isDevBareTransportRequested()) {
+        final desc = await writeTempAttachment(
+          bytes: bytes,
+          name: name,
+          mime: mime,
+        );
+        if (desc == null) {
+          throw StateError('native attachment path unavailable');
+        }
+        await conns.sendFile(
+          pid,
+          TransportFileDescriptor(
+            path: desc.path,
+            sizeBytes: desc.sizeBytes,
+            fileName: name,
+            mime: mime,
+            transferId: id,
+          ),
+        );
+        _patch(id, (t) => t.copyWith(status: DropStatus.completed, transferred: bytes.length));
+        return id;
+      }
       await _engine.sendFile(
         bytes: bytes,
         name: name,
@@ -221,6 +250,45 @@ class DropNotifier extends StateNotifier<DropState> {
 
   void _onFailed(String fileId, DropDirection _, String reason) {
     _patch(fileId, (t) => t.copyWith(status: DropStatus.failed, error: reason));
+  }
+
+  Future<void> _persistNativeFile(String peerId, Map<dynamic, dynamic> packet) async {
+    final path = packet['path'] as String? ?? '';
+    final id = packet['id'] as String? ?? '';
+    final name = (packet['name'] as String?) ??
+        (path.isEmpty ? id : path.split(RegExp(r'[/\\]')).last);
+    final size = (packet['size'] as num?)?.toInt() ?? 0;
+    final mime = (packet['mime'] as String?) ?? 'application/octet-stream';
+    if (path.isEmpty || id.isEmpty) return;
+    _upsert(DropTransfer(
+      id: id,
+      name: name,
+      size: size,
+      mime: mime,
+      peerId: peerId,
+      direction: DropDirection.incoming,
+      transferred: size,
+      status: DropStatus.received,
+    ));
+    try {
+      final bytes = await readAttachmentPath(path);
+      if (bytes == null) {
+        throw StateError('received file missing');
+      }
+      await _persistIncoming(
+        DropFileMeta(
+          fileId: id,
+          name: name,
+          size: bytes.length,
+          mime: mime,
+          hash: packet['sha256'] as String? ?? '',
+          totalChunks: 1,
+        ),
+        Uint8List.fromList(bytes),
+      );
+    } catch (e) {
+      _patch(id, (t) => t.copyWith(status: DropStatus.failed, error: '$e'));
+    }
   }
 
   Future<bool> _persistIncoming(DropFileMeta meta, Uint8List bytes) async {

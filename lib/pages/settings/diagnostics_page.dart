@@ -5,7 +5,10 @@
 // screen keeps a shortcut to it so it's still discoverable from the old spot.
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+
+import '../../transport/native_transport.dart';
 
 import '../../themes/orbits_tokens.dart';
 import '../../ui/primitives/adaptive_page_frame.dart';
@@ -15,20 +18,28 @@ import '../../ui/primitives/orbits_glass_surface.dart';
 import '../../ui/primitives/orbs_card.dart';
 import 'updates_page.dart';
 
-class DiagnosticsPage extends StatefulWidget {
+class DiagnosticsPage extends ConsumerStatefulWidget {
   const DiagnosticsPage({super.key});
 
   @override
-  State<DiagnosticsPage> createState() => _DiagnosticsPageState();
+  ConsumerState<DiagnosticsPage> createState() => _DiagnosticsPageState();
 }
 
-class _DiagnosticsPageState extends State<DiagnosticsPage> {
+class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
   late final Future<PackageInfo> _packageInfoFuture;
 
   @override
   void initState() {
     super.initState();
-    _packageInfoFuture = PackageInfo.fromPlatform();
+    _packageInfoFuture = PackageInfo.fromPlatform().timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => PackageInfo(
+        appName: 'Orbits',
+        packageName: 'com.orbits.orbits_flutter',
+        version: 'unknown',
+        buildNumber: '0',
+      ),
+    );
   }
 
   @override
@@ -83,6 +94,23 @@ class _DiagnosticsPageState extends State<DiagnosticsPage> {
                       color: tokens.muted,
                       fontFamily: tokens.fontBody,
                       height: 1.45,
+                    ),
+                  ),
+                ),
+                const OrbsSectionTitle('Транспорт'),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: OrbitsGlassSurface(
+                    role: OrbitsGlassRole.card,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    child: OrbsSettingRow(
+                      label: 'Канал',
+                      subtitle: ref
+                          .watch(nativeTransportHostProvider)
+                          .visibleTransportLabel,
                     ),
                   ),
                 ),

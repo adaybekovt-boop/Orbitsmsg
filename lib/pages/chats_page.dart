@@ -309,8 +309,8 @@ class _EmptyState extends StatelessWidget {
             ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 320),
               child: Text(
-                'Добавь человека по коду или QR, '
-                'чтобы начать защищённую переписку.',
+                'Добавь человека по коду или QR. '
+                'Защищённый канал появится, когда транспорт будет доступен.',
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: tokens.muted,

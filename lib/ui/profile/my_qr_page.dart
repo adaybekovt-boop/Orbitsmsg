@@ -9,11 +9,15 @@
 // accepts a bare peerId too, so older QRs keep scanning. The plain-text code
 // shown below the QR stays the bare id — that's what a human copies/types.
 
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../core/haptics.dart';
+import '../../core/identity_key.dart';
+import '../../devices/local_device_material.dart';
 import '../../peer/helpers.dart' show contactQrPayload;
 import '../../transport/discovery_secret_store.dart';
 import '../../themes/orbits_tokens.dart';
@@ -21,10 +25,40 @@ import '../primitives/orbits_glass_button.dart';
 import '../primitives/orbits_glass_app_bar.dart';
 import '../primitives/orbits_glass_surface.dart';
 
-class MyQrPage extends StatelessWidget {
+class MyQrPage extends StatefulWidget {
   const MyQrPage({super.key, required this.peerId});
 
   final String peerId;
+
+  @override
+  State<MyQrPage> createState() => _MyQrPageState();
+}
+
+class _MyQrPageState extends State<MyQrPage> {
+  late final Future<String> _qrFuture = _buildQrPayload();
+
+  Future<String> _buildQrPayload() async {
+    Uint8List? identity;
+    String? deviceId;
+    Uint8List? transport;
+    try {
+      identity = await exportIdentityPubSpki();
+    } catch (_) {}
+    try {
+      final material = await loadOrCreateLocalDeviceMaterial();
+      deviceId = material.deviceId;
+      transport = material.transportPublicKey.isEmpty
+          ? null
+          : material.transportPublicKey;
+    } catch (_) {}
+    return contactQrPayload(
+      widget.peerId,
+      discoverySecret: discoverySecretStore.getOrCreateLocal(),
+      identityPublicKey: identity,
+      deviceId: deviceId,
+      transportPublicKey: transport,
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -81,22 +115,33 @@ class MyQrPage extends StatelessWidget {
                       color: Colors.white,
                       borderRadius: BorderRadius.circular(tokens.radiusCard),
                     ),
-                    child: QrImageView(
-                      data: contactQrPayload(
-                        peerId,
-                        discoverySecret: discoverySecretStore.getOrCreateLocal(),
-                      ),
-                      version: QrVersions.auto,
-                      size: 240,
-                      backgroundColor: Colors.white,
-                      eyeStyle: const QrEyeStyle(
-                        eyeShape: QrEyeShape.square,
-                        color: Colors.black,
-                      ),
-                      dataModuleStyle: const QrDataModuleStyle(
-                        dataModuleShape: QrDataModuleShape.square,
-                        color: Colors.black,
-                      ),
+                    child: FutureBuilder<String>(
+                      future: _qrFuture,
+                      builder: (context, snapshot) {
+                        if (!snapshot.hasData) {
+                          return const SizedBox(
+                            width: 240,
+                            height: 240,
+                            child: Center(
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                          );
+                        }
+                        return QrImageView(
+                          data: snapshot.data!,
+                          version: QrVersions.auto,
+                          size: 240,
+                          backgroundColor: Colors.white,
+                          eyeStyle: const QrEyeStyle(
+                            eyeShape: QrEyeShape.square,
+                            color: Colors.black,
+                          ),
+                          dataModuleStyle: const QrDataModuleStyle(
+                            dataModuleShape: QrDataModuleShape.square,
+                            color: Colors.black,
+                          ),
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -128,7 +173,7 @@ class MyQrPage extends StatelessWidget {
                         children: [
                           Flexible(
                             child: SelectableText(
-                              peerId,
+                              widget.peerId,
                               style: TextStyle(
                                 fontFamily: tokens.fontMono,
                                 fontSize: 15,
@@ -145,7 +190,7 @@ class MyQrPage extends StatelessWidget {
                             onPressed: () async {
                               hapticTap();
                               await Clipboard.setData(
-                                ClipboardData(text: peerId),
+                                ClipboardData(text: widget.peerId),
                               );
                               if (!context.mounted) return;
                               ScaffoldMessenger.of(context)

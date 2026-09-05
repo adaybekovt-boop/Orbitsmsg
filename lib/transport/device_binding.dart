@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'layers.dart';
+import 'signed_capabilities.dart';
 
 const int kDeviceBindingVersion = 1;
 
@@ -20,6 +21,7 @@ class DeviceBinding {
     required this.createdAt,
     required this.expiresAt,
     required this.signatureByIdentityKey,
+    this.ownerPeerId = '',
   });
 
   final int version;
@@ -31,6 +33,10 @@ class DeviceBinding {
   final int createdAt;
   final int expiresAt;
   final Uint8List signatureByIdentityKey;
+
+  /// Signed logical identity. The worklet must not take this from a
+  /// plaintext `orbits-identity.peerId` field.
+  final String ownerPeerId;
 
   /// Canonical bytes the identity key must sign (without the signature).
   List<int> signedPayload() {
@@ -60,12 +66,83 @@ class DeviceBinding {
     }
     out.addAll(_u64(createdAt));
     out.addAll(_u64(expiresAt));
+    str(ownerPeerId);
     return out;
   }
 }
 
 /// Connect-time checklist. Crypto verify is Phase 10; Phase 0 locks order.
-List<String> requiredBindingChecks() => List<String>.from(kConnectBindingChecks);
+List<String> requiredBindingChecks() =>
+    List<String>.from(kConnectBindingChecks);
+
+/// Reject expired, not-yet-valid, or clock-skewed certificates before
+/// decrypt / Drift persist. [maxSkewMs] is the allowed future-date window.
+bool deviceBindingClockIsValid(
+  DeviceBinding binding, {
+  required int nowMs,
+  int maxSkewMs = 5 * 60 * 1000,
+}) {
+  if (binding.expiresAt <= binding.createdAt) return false;
+  if (nowMs > binding.expiresAt) return false;
+  if (binding.createdAt > nowMs + maxSkewMs) return false;
+  return true;
+}
+
+DeviceBinding? deviceBindingFromWire(Map<String, Object?>? raw) {
+  if (raw == null || raw.isEmpty) return null;
+  try {
+    final deviceId = raw['deviceId'] as String? ?? '';
+    final identity = _b64Field(raw['identityPublicKeyB64']);
+    final transport = _b64Field(raw['transportPublicKeyB64']);
+    final hypercore = _b64Field(raw['hypercorePublicKeyB64']);
+    final signature = _b64Field(raw['signatureB64']);
+    if (deviceId.isEmpty ||
+        identity.isEmpty ||
+        transport.isEmpty ||
+        signature.isEmpty) {
+      return null;
+    }
+    return DeviceBinding(
+      version: (raw['version'] as num?)?.toInt() ?? kDeviceBindingVersion,
+      identityPublicKey: identity,
+      deviceId: deviceId,
+      transportPublicKey: transport,
+      hypercorePublicKey: hypercore,
+      capabilities:
+          (raw['capabilities'] as List?)?.whereType<String>().toList() ??
+          const <String>[],
+      createdAt: (raw['createdAt'] as num?)?.toInt() ?? 0,
+      expiresAt: (raw['expiresAt'] as num?)?.toInt() ?? 0,
+      signatureByIdentityKey: signature,
+      ownerPeerId: raw['ownerPeerId'] as String? ?? '',
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+Uint8List _b64Field(Object? raw) {
+  if (raw is! String || raw.isEmpty) return Uint8List(0);
+  return Uint8List.fromList(base64Decode(raw));
+}
+
+Uint8List? parseNoisePublicKey(Object? raw) {
+  if (raw is List<int> && raw.length == 32) {
+    return Uint8List.fromList(raw);
+  }
+  if (raw is String && raw.length == 64) {
+    try {
+      final out = Uint8List(32);
+      for (var i = 0; i < 32; i++) {
+        out[i] = int.parse(raw.substring(i * 2, i * 2 + 2), radix: 16);
+      }
+      return out;
+    } catch (_) {
+      return null;
+    }
+  }
+  return null;
+}
 
 bool noiseKeyMatchesBinding({
   required List<int> connectionNoisePublicKey,
@@ -78,6 +155,21 @@ bool noiseKeyMatchesBinding({
     mismatch |= connectionNoisePublicKey[i] ^ expected[i];
   }
   return mismatch == 0;
+}
+
+/// Verifies that the binding is within its validity window and signed by
+/// the user's identity public key.
+Future<bool> verifyDeviceBinding(
+  DeviceBinding binding, {
+  int? nowMs,
+}) async {
+  final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+  if (!deviceBindingClockIsValid(binding, nowMs: now)) return false;
+  return verifyIdentitySignedBytes(
+    binding.identityPublicKey,
+    binding.signedPayload(),
+    binding.signatureByIdentityKey,
+  );
 }
 
 List<int> _u64(int value) {

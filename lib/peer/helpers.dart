@@ -45,14 +45,58 @@ bool isValidPeerId(String? raw) {
 /// The stable QR/deep-link payload for sharing a contact. The reader
 /// ([parseContactQrPayload]) also accepts a bare peerId and the legacy
 /// shapes, so changing the *writer* to this form is backward-compatible.
-String contactQrPayload(String peerId, {List<int>? discoverySecret}) {
+String contactQrPayload(
+  String peerId, {
+  List<int>? discoverySecret,
+  List<int>? identityPublicKey,
+  String? deviceId,
+  List<int>? transportPublicKey,
+}) {
   final base = 'orbits://contact/${normalizePeerId(peerId)}';
-  if (discoverySecret == null || discoverySecret.isEmpty) return base;
-  return '$base?d=${base64Url.encode(discoverySecret).replaceAll('=', '')}';
+  final q = <String>[];
+  if (discoverySecret != null && discoverySecret.isNotEmpty) {
+    q.add('d=${base64Url.encode(discoverySecret).replaceAll('=', '')}');
+  }
+  if (identityPublicKey != null && identityPublicKey.isNotEmpty) {
+    q.add('i=${base64Url.encode(identityPublicKey).replaceAll('=', '')}');
+  }
+  if (deviceId != null && deviceId.isNotEmpty) {
+    q.add('did=${Uri.encodeQueryComponent(deviceId)}');
+  }
+  if (transportPublicKey != null && transportPublicKey.isNotEmpty) {
+    q.add('t=${base64Url.encode(transportPublicKey).replaceAll('=', '')}');
+  }
+  return q.isEmpty ? base : '$base?${q.join('&')}';
 }
 
 /// Shared contact-discovery secret from a QR query `d=`. Never the Peer ID.
-List<int>? parseContactDiscoverySecret(String? raw) {
+List<int>? parseContactDiscoverySecret(String? raw) =>
+    _parseQrBytesQuery(raw, 'd');
+
+/// Identity SPKI from a QR query `i=`. Used to pin a contact before connect.
+List<int>? parseContactIdentityPublicKey(String? raw) =>
+    _parseQrBytesQuery(raw, 'i');
+
+String? parseContactDeviceId(String? raw) => _parseQrStringQuery(raw, 'did');
+
+List<int>? parseContactTransportPublicKey(String? raw) =>
+    _parseQrBytesQuery(raw, 't');
+
+List<int>? _parseQrBytesQuery(String? raw, String key) {
+  final v = _parseQrStringQuery(raw, key);
+  if (v == null || v.isEmpty) return null;
+  var padded = v;
+  final pad = (4 - padded.length % 4) % 4;
+  padded = padded + ('=' * pad);
+  try {
+    final bytes = base64Url.decode(padded);
+    return bytes.isEmpty ? null : bytes;
+  } catch (_) {
+    return null;
+  }
+}
+
+String? _parseQrStringQuery(String? raw, String key) {
   if (raw == null) return null;
   final q = raw.trim().indexOf('?');
   if (q < 0) return null;
@@ -60,16 +104,9 @@ List<int>? parseContactDiscoverySecret(String? raw) {
   for (final part in query.split('&')) {
     final eq = part.indexOf('=');
     if (eq <= 0) continue;
-    if (part.substring(0, eq) != 'd') continue;
-    var v = part.substring(eq + 1);
-    final pad = (4 - v.length % 4) % 4;
-    v = v + ('=' * pad);
-    try {
-      final bytes = base64Url.decode(v);
-      return bytes.isEmpty ? null : bytes;
-    } catch (_) {
-      return null;
-    }
+    if (part.substring(0, eq) != key) continue;
+    final value = part.substring(eq + 1);
+    return value.isEmpty ? null : Uri.decodeQueryComponent(value);
   }
   return null;
 }

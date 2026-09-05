@@ -25,7 +25,10 @@ import '../peer/peer_connection_manager.dart';
 import '../peer/peerjs_client.dart';
 import '../peer/helpers.dart';
 import '../peer/signaling.dart';
+import '../peer/process_environment_stub.dart'
+    if (dart.library.io) '../peer/process_environment_io.dart';
 import '../peer/turn_runtime.dart';
+import '../transport/dev_bare_transport.dart';
 import 'auth_notifier.dart';
 import 'hide_ip_provider.dart';
 
@@ -40,10 +43,10 @@ class PeerConnectionState {
   });
 
   const PeerConnectionState.idle()
-      : status = 'idle',
-        peerId = null,
-        signalingHost = null,
-        error = null;
+    : status = 'idle',
+      peerId = null,
+      signalingHost = null,
+      error = null;
 
   /// One of: idle / connecting / connected / disconnected / multitab.
   /// Kept as a String (not enum) for parity with the JS layer — the pill
@@ -58,15 +61,14 @@ class PeerConnectionState {
     Object? peerId = _unset,
     Object? signalingHost = _unset,
     Object? error = _unset,
-  }) =>
-      PeerConnectionState(
-        status: status ?? this.status,
-        peerId: identical(peerId, _unset) ? this.peerId : peerId as String?,
-        signalingHost: identical(signalingHost, _unset)
-            ? this.signalingHost
-            : signalingHost as String?,
-        error: identical(error, _unset) ? this.error : error as String?,
-      );
+  }) => PeerConnectionState(
+    status: status ?? this.status,
+    peerId: identical(peerId, _unset) ? this.peerId : peerId as String?,
+    signalingHost: identical(signalingHost, _unset)
+        ? this.signalingHost
+        : signalingHost as String?,
+    error: identical(error, _unset) ? this.error : error as String?,
+  );
 }
 
 /// Sentinel so copyWith can tell "caller passed null" from "caller omitted".
@@ -74,7 +76,7 @@ const Object _unset = Object();
 
 class PeerConnectionNotifier extends StateNotifier<PeerConnectionState> {
   PeerConnectionNotifier({required this.env})
-      : super(const PeerConnectionState.idle()) {
+    : super(const PeerConnectionState.idle()) {
     _installWatchdog();
   }
 
@@ -139,8 +141,7 @@ class PeerConnectionNotifier extends StateNotifier<PeerConnectionState> {
 
     var resolvedEnv = envWithUserHideIp(env, await isRelayOnlyEnabled());
     try {
-      resolvedEnv =
-          applyTurnRuntime(resolvedEnv, await loadTurnRuntimeCreds());
+      resolvedEnv = applyTurnRuntime(resolvedEnv, await loadTurnRuntimeCreds());
     } catch (_) {
       // Prefs unavailable — keep compile-time env (secrets already stripped).
     }
@@ -180,10 +181,7 @@ class PeerConnectionNotifier extends StateNotifier<PeerConnectionState> {
       await manager.start();
     } on RelayOnlyUnavailable catch (err) {
       if (!_disposed) {
-        state = state.copyWith(
-          status: 'disconnected',
-          error: err.message,
-        );
+        state = state.copyWith(status: 'disconnected', error: err.message);
       }
     } catch (err) {
       if (!_disposed) {
@@ -285,10 +283,11 @@ const _peerSecureRaw = bool.fromEnvironment('PEER_SECURE');
 const _turnUrlRaw = String.fromEnvironment('TURN_URL');
 const _turnUserRaw = String.fromEnvironment('TURN_USERNAME');
 const _turnCredRaw = String.fromEnvironment('TURN_CREDENTIAL');
-const _allowCompileTimeTurnSecrets =
-    bool.fromEnvironment('ALLOW_COMPILE_TIME_TURN_SECRETS');
+const _allowCompileTimeTurnSecrets = bool.fromEnvironment(
+  'ALLOW_COMPILE_TIME_TURN_SECRETS',
+);
 
-final _env = PeerEnv(
+final _compileTimeEnv = PeerEnv(
   peerServer: _envString(_peerServerRaw),
   peerHost: _envString(_peerHostRaw),
   peerPath: _envString(_peerPathRaw),
@@ -308,12 +307,29 @@ final _env = PeerEnv(
   relayOnly: const bool.fromEnvironment('RELAY_ONLY', defaultValue: false),
 );
 
+/// Merge compile-time `--dart-define` knobs with an explicit OS-env LOCAL
+/// TESTNET pin (`ORBITS_SIGNALING_URL` / `ORBITS_PEERJS_HOST`). Production
+/// builds with neither still resolve to public `*.peerjs.com`.
+PeerEnv resolveAppPeerEnv([Map<String, String>? runtimeEnv]) =>
+    applyPeerjsRuntimeOverride(
+      _compileTimeEnv,
+      runtimeEnv ?? orbitsProcessEnvironment(),
+    );
+
+final _env = resolveAppPeerEnv();
+
+/// True when 1:1 signaling is an explicit localhost/testnet PeerJS server.
+/// Used by the Connections screen so the label is PeerJS (localhost/testnet),
+/// never Bare/Hyperswarm.
+bool isAppPeerjsLocalTestnet() => isPeerjsLocalTestnet(_env);
+
 /// Whether a TURN relay is configured in THIS build (via `--dart-define`).
 /// Without TURN, WebRTC across different NATs/networks (e.g. phone mobile-data
 /// ↔ PC behind a router) can fail to establish — surfaced in diagnostics so
 /// the user understands why a contact may stay "не в сети" cross-network.
 final turnConfiguredProvider = Provider<bool>(
-    (ref) => _env.turnUrl != null && _env.turnUrl!.isNotEmpty);
+  (ref) => _env.turnUrl != null && _env.turnUrl!.isNotEmpty,
+);
 
 /// Live user "hide my IP" preference (SharedPreferences), not the
 /// compile-time RELAY_ONLY dart-define.
@@ -321,38 +337,36 @@ final relayOnlyProvider = Provider<bool>((ref) => ref.watch(hideIpProvider));
 
 final peerConnectionProvider =
     StateNotifierProvider<PeerConnectionNotifier, PeerConnectionState>((ref) {
-  final notifier = PeerConnectionNotifier(env: _env);
+      final notifier = PeerConnectionNotifier(env: _env);
 
-  // Watch auth: start the pipeline when the user unlocks, stop on
-  // logout/wipe. `ref.listen` (not watch) so we fire side-effects only on
-  // transitions, not on every rebuild of an unrelated consumer.
-  ref.listen<AuthState>(
-    authNotifierProvider,
-    (prev, next) {
-      if (next is AuthAuthed) {
-        unawaited(notifier.start(next.user.peerId));
-      } else if (prev is AuthAuthed && next is! AuthAuthed) {
-        unawaited(notifier.stop());
-      }
-    },
-    fireImmediately: true,
-  );
+      // Watch auth: start the pipeline when the user unlocks, stop on
+      // logout/wipe. `ref.listen` (not watch) so we fire side-effects only on
+      // transitions, not on every rebuild of an unrelated consumer.
+      ref.listen<AuthState>(authNotifierProvider, (prev, next) {
+        if (next is AuthAuthed) {
+          if (isDevBareTransportRequested()) return;
+          unawaited(notifier.start(next.user.peerId));
+        } else if (prev is AuthAuthed && next is! AuthAuthed) {
+          unawaited(notifier.stop());
+        }
+      }, fireImmediately: true);
 
-  // Changing hide-IP mid-session must recreate the PeerJS client so the
-  // new iceTransportPolicy applies to every data/media connection.
-  ref.listen<bool>(hideIpProvider, (prev, next) {
-    if (prev == next) return;
-    final auth = ref.read(authNotifierProvider);
-    if (auth is AuthAuthed) {
-      unawaited(() async {
-        await notifier.stop();
-        await notifier.start(auth.user.peerId);
-      }());
-    }
-  });
+      // Changing hide-IP mid-session must recreate the PeerJS client so the
+      // new iceTransportPolicy applies to every data/media connection.
+      ref.listen<bool>(hideIpProvider, (prev, next) {
+        if (prev == next) return;
+        final auth = ref.read(authNotifierProvider);
+        if (auth is AuthAuthed) {
+          if (isDevBareTransportRequested()) return;
+          unawaited(() async {
+            await notifier.stop();
+            await notifier.start(auth.user.peerId);
+          }());
+        }
+      });
 
-  return notifier;
-});
+      return notifier;
+    });
 
 /// Convenience selector — most UI only cares about the single status string.
 final peerStatusProvider = Provider<String>((ref) {

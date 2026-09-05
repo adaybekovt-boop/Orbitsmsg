@@ -3,10 +3,12 @@ import 'transport_api.dart';
 
 Future<WorkletOrbitsTransport?> spawnWorkletTransport({
   String backend = 'loopback',
-}) async =>
-    null;
+}) async => null;
 
 class WorkletOrbitsTransport implements OrbitsTransport {
+  String get runtime => 'missing';
+  List<int>? lastNoisePublicKey;
+
   @override
   Stream<TransportEvent> get events => const Stream.empty();
 
@@ -46,4 +48,9 @@ class WorkletOrbitsTransport implements OrbitsTransport {
 
   @override
   Future<void> refreshNetwork() async {}
+
+  Future<void> confirmAuthorization(
+    String peerId, {
+    required bool authorized,
+  }) async {}
 }

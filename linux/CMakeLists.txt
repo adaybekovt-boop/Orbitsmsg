@@ -48,6 +48,16 @@ endfunction()
 
 # Flutter library and tool build rules.
 set(FLUTTER_MANAGED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flutter")
+# Data-only chats must not create a Pulse/ALSA ADM. Patch flutter_webrtc
+# sources in pub-cache before the plugin is compiled.
+execute_process(
+  COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../tool/ci/patch_flutter_webrtc_linux_adm.py"
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/.."
+  RESULT_VARIABLE _orbits_adm_patch
+)
+if(NOT _orbits_adm_patch EQUAL 0)
+  message(FATAL_ERROR "flutter_webrtc Linux ADM patch failed: ${_orbits_adm_patch}")
+endif()
 add_subdirectory(${FLUTTER_MANAGED_DIR})
 
 # System-level dependencies.
@@ -106,6 +116,25 @@ foreach(bundled_library ${PLUGIN_BUNDLED_LIBRARIES})
     COMPONENT Runtime)
 endforeach(bundled_library)
 
+# flutter_webrtc re-extracts libwebrtc.zip during configure. Rewrite the
+# bundled copy in place so data-only chats never build a Pulse/ALSA ADM.
+# Fail the install if the Dummy-ADM bytes are not present — do not ship
+# an unpatched .so and call the ADM Fatal "handled".
+install(CODE "
+  set(_orbits_webrtc_so \"${INSTALL_BUNDLE_LIB_DIR}/libwebrtc.so\")
+  if(EXISTS \"\${_orbits_webrtc_so}\")
+    execute_process(
+      COMMAND python3 \"${CMAKE_CURRENT_SOURCE_DIR}/../tool/ci/patch_libwebrtc_dummy_adm.py\"
+              \"\${_orbits_webrtc_so}\"
+      RESULT_VARIABLE _orbits_bundle_adm
+    )
+    if(NOT _orbits_bundle_adm EQUAL 0)
+      message(FATAL_ERROR
+        \"bundled libwebrtc Dummy ADM patch failed: \${_orbits_bundle_adm}\")
+    endif()
+  endif()
+" COMPONENT Runtime)
+
 # Copy the native assets provided by the build.dart from all packages.
 set(NATIVE_ASSETS_DIR "${PROJECT_BUILD_DIR}native_assets/linux/")
 install(DIRECTORY "${NATIVE_ASSETS_DIR}"
@@ -125,4 +154,36 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 if(NOT CMAKE_BUILD_TYPE MATCHES "Debug")
   install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
     COMPONENT Runtime)
+endif()
+
+# Official Bare worklet tree (src + npm modules) next to the bundle data
+# directory so the spawned `bare` CLI can require('corestore'). Copied only
+# when the build machine has already run `npm ci` in the harness.
+set(_orbits_bare_linux "${CMAKE_CURRENT_SOURCE_DIR}/../build/orbits-bare/linux-x64/bare")
+if(NOT EXISTS "${_orbits_bare_linux}")
+  set(_orbits_bare_linux "${CMAKE_CURRENT_SOURCE_DIR}/../build/orbits-bare/linux-arm64/bare")
+endif()
+if(EXISTS "${_orbits_bare_linux}" AND EXISTS "${_orbits_bare_linux}.sha256")
+  message(STATUS "Orbits: bundling official Bare ${_orbits_bare_linux}")
+  install(PROGRAMS "${_orbits_bare_linux}"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+  install(FILES "${_orbits_bare_linux}.sha256"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+endif()
+
+set(_orbits_harness "${CMAKE_CURRENT_SOURCE_DIR}/../tool/connectivity_harness")
+if(EXISTS "${_orbits_harness}/src/worklet.js" AND EXISTS "${_orbits_harness}/node_modules/corestore")
+  install(DIRECTORY "${_orbits_harness}/src"
+    DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/orbits-worklet"
+    COMPONENT Runtime)
+  install(DIRECTORY "${_orbits_harness}/node_modules"
+    DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/orbits-worklet"
+    COMPONENT Runtime)
+  if(EXISTS "${_orbits_harness}/BUNDLE.manifest")
+    install(FILES "${_orbits_harness}/BUNDLE.manifest"
+      DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/orbits-worklet"
+      COMPONENT Runtime)
+  endif()
 endif()
