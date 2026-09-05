@@ -24,12 +24,14 @@ import '../replication/memory_journal.dart';
 import '../replication/replication_authorization.dart';
 import '../transport/replication_schema.dart';
 import 'dev_bare_transport.dart';
+import 'binding_authorization.dart';
 import 'device_binding.dart';
 import 'discovery_secret_store.dart';
 import 'hello_capabilities.dart';
 import 'mux_frames.dart';
 import 'signed_capabilities.dart';
 import 'transport_api.dart';
+import 'trusted_identity_store.dart';
 
 typedef PacketSink = Future<void> Function(String peerId, Object? data);
 typedef BlockedCheck = bool Function(String peerId);
@@ -51,8 +53,11 @@ class DualStackBridge {
     this.mailboxCapability,
     this.localCapabilities,
     this.devices,
+    TrustedIdentityStore? identities,
+    this.confirmPeerAuthorization,
     HypercoreLocalStore? hypercore,
   }) : secrets = secrets ?? discoverySecretStore,
+       identities = identities ?? TrustedIdentityStore(),
        hypercore = hypercore ?? HypercoreLocalStore(selfDeviceId);
 
   final OrbitsTransport transport;
@@ -70,7 +75,10 @@ class DualStackBridge {
   final SignedMailboxCapability? mailboxCapability;
   final CapabilityRecord? localCapabilities;
   final DeviceRegistry? devices;
+  final TrustedIdentityStore identities;
   final HypercoreLocalStore hypercore;
+  final Future<void> Function(String peerId, {required bool authorized})?
+      confirmPeerAuthorization;
   final MailboxPump _mailboxPump = MailboxPump();
   void Function(String peerId, Object packet)? onDrop;
 
@@ -132,6 +140,10 @@ class DualStackBridge {
 
   bool isAuthenticated(String peerId) =>
       authenticated.contains(normalizePeerId(peerId));
+
+  /// Own-device privileges. Must never be inferred from a peer-id string.
+  bool isOwnDevice(String peerId, [DeviceBinding? binding]) =>
+      _isOwnDevice(peerId, binding);
 
   bool canUseNative(String peerId) {
     if (!nativeEnabled) return false;
@@ -513,27 +525,12 @@ class DualStackBridge {
   }
 
   bool _isOwnDevice(String peerId, [DeviceBinding? binding]) {
-    final self = normalizePeerId(selfPeerId());
-    final norm = normalizePeerId(peerId);
-    if (self.isNotEmpty && norm == self) return true;
-    final bind = binding ?? _bindings[norm];
-    if (bind != null &&
-        bind.ownerPeerId.isNotEmpty &&
-        normalizePeerId(bind.ownerPeerId) == self) {
-      return true;
-    }
-    final registry = devices;
-    if (registry == null) return false;
-    for (final device in registry.active) {
-      final owner = normalizePeerId(device.ownerPeerId);
-      if (owner != self) continue;
-      final transportId = device.transportPeerId;
-      if (transportId != null && normalizePeerId(transportId) == norm) {
-        return true;
-      }
-      if (bind != null && device.deviceId == bind.deviceId) return true;
-    }
-    return false;
+    return registrySaysOwnDevice(
+      peerId: peerId,
+      selfPeerId: selfPeerId(),
+      devices: devices,
+      binding: binding ?? _bindings[normalizePeerId(peerId)],
+    );
   }
 
   void _onEvent(TransportEvent event) {
@@ -574,21 +571,16 @@ class DualStackBridge {
     final transportId = normalizePeerId(peerId);
     final logical = binding.ownerPeerId.isNotEmpty
         ? normalizePeerId(binding.ownerPeerId)
-        : transportId;
-    if (logical.isEmpty) {
-      await _reject(transportId);
-      return;
-    }
-    if (!await verifyDeviceBinding(binding)) {
-      await _reject(transportId);
-      return;
-    }
-    if (connectionNoisePublicKey != null &&
-        connectionNoisePublicKey.isNotEmpty &&
-        !noiseKeyMatchesBinding(
-          connectionNoisePublicKey: connectionNoisePublicKey,
-          binding: binding,
-        )) {
+        : '';
+    final decided = await authorizeIncomingBinding(
+      binding: binding,
+      connectionNoisePublicKey: connectionNoisePublicKey,
+      transportPeerId: transportId,
+      selfPeerId: selfPeerId(),
+      identities: identities,
+      devices: devices,
+    );
+    if (!decided.accepted || logical.isEmpty) {
       await _reject(transportId);
       return;
     }
@@ -602,24 +594,10 @@ class DualStackBridge {
       await _reject(transportId);
       return;
     }
-    final registry = devices;
-    if (registry != null) {
-      for (final device in registry.all) {
-        if (device.deviceId == binding.deviceId &&
-            device.status == DeviceStatus.revoked) {
-          await _reject(transportId);
-          return;
-        }
-      }
-    }
     final expected = _expectedPeer[transportId] ?? _expectedPeer[logical];
     if (expected != null &&
         expected != logical &&
-        !_isOwnDevice(logical, binding)) {
-      await _reject(transportId);
-      return;
-    }
-    if (transportId != logical && !_isOwnDevice(logical, binding)) {
+        !decided.ownDevicePrivileges) {
       await _reject(transportId);
       return;
     }
@@ -632,24 +610,14 @@ class DualStackBridge {
     connecting.remove(transportId);
     connecting.remove(logical);
     connected.add(logical);
-    authenticated.add(logical);
-    onPresence?.call(logical, true);
-
-    if (registry != null) {
-      registry.authorize(
-        AuthorizedDevice(
-          deviceId: binding.deviceId,
-          transportPublicKey: binding.transportPublicKey,
-          hypercorePublicKey: binding.hypercorePublicKey,
-          name: 'remote-device',
-          kind: 'remote',
-          createdAt: binding.createdAt,
-          status: DeviceStatus.active,
-          ownerPeerId: logical,
-          transportPeerId: transportId,
-        ),
-      );
+    if (transportId != logical) {
+      connected.add(transportId);
     }
+    authenticated.add(logical);
+    if (transportId != logical) {
+      authenticated.add(transportId);
+    }
+    onPresence?.call(logical, true);
 
     final caps = localCapabilities;
     if (caps != null) {
@@ -662,6 +630,11 @@ class DualStackBridge {
       );
     }
     _replayAuthorized(logical);
+    try {
+      await confirmPeerAuthorization?.call(transportId, authorized: true);
+    } catch (_) {
+      await _reject(transportId);
+    }
   }
 
   void _replayAuthorized(String peerId) {
@@ -692,6 +665,9 @@ class DualStackBridge {
     connecting.remove(peerId);
     connected.remove(peerId);
     authenticated.remove(peerId);
+    try {
+      await confirmPeerAuthorization?.call(peerId, authorized: false);
+    } catch (_) {}
     try {
       await transport.disconnect(peerId);
     } catch (_) {}

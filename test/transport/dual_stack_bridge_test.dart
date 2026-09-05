@@ -15,6 +15,7 @@ import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
 import 'package:orbits_flutter/transport/transport_api.dart';
+import 'package:orbits_flutter/transport/trusted_identity_store.dart';
 
 import '../helpers/signed_device_binding.dart';
 
@@ -47,17 +48,32 @@ void main() {
       ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
       ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
     final packets = <Object?>[];
+    final aliceDevices = DeviceRegistry();
+    final bobDevices = DeviceRegistry();
+    final aliceIdentities = TrustedIdentityStore();
+    final bobIdentities = TrustedIdentityStore();
+    trustContactPair(
+      aliceIdentities: aliceIdentities,
+      aliceDevices: aliceDevices,
+      bobIdentities: bobIdentities,
+      bobDevices: bobDevices,
+      aliceBinding: bindA,
+      bobBinding: bindB,
+    );
     DualStackBridge make(
       LoopbackOrbitsTransport t,
       String self,
       String device,
     ) {
+      final isAlice = self == 'ORBIT-AAAAAAAAAAAAAAAA';
       return DualStackBridge(
         transport: t,
         journal: MemoryJournal(device),
         selfPeerId: () => self,
         selfDeviceId: device,
         secrets: secrets,
+        devices: isAlice ? aliceDevices : bobDevices,
+        identities: isAlice ? aliceIdentities : bobIdentities,
         isBlocked: blocked.contains,
         mailbox: mailbox,
         mailboxToken: mailbox == null ? null : 'cap-1',
@@ -118,12 +134,26 @@ void main() {
     );
     await pair.$1.publish(bindA);
     await pair.$2.publish(bindB);
+    final aliceIds = TrustedIdentityStore();
+    final bobIds = TrustedIdentityStore();
+    final aliceDev = DeviceRegistry();
+    final bobDev = DeviceRegistry();
+    trustContactPair(
+      aliceIdentities: aliceIds,
+      aliceDevices: aliceDev,
+      bobIdentities: bobIds,
+      bobDevices: bobDev,
+      aliceBinding: bindA,
+      bobBinding: bindB,
+    );
     DualStackBridge(
       transport: pair.$2,
       journal: MemoryJournal('b'),
       selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
       selfDeviceId: 'b',
       secrets: secrets,
+      devices: bobDev,
+      identities: bobIds,
       isBlocked: (id) => id == 'ORBIT-AAAAAAAAAAAAAAAA',
       onPacket: (peer, data) async => seen.add(data),
     ).attach();
@@ -235,12 +265,26 @@ void main() {
     );
     await pair.$1.publish(bindA);
     await pair.$2.publish(bindB);
+    final aliceIds = TrustedIdentityStore();
+    final bobIds = TrustedIdentityStore();
+    final aliceDev = DeviceRegistry();
+    final bobDev = DeviceRegistry();
+    trustContactPair(
+      aliceIdentities: aliceIds,
+      aliceDevices: aliceDev,
+      bobIdentities: bobIds,
+      bobDevices: bobDev,
+      aliceBinding: bindA,
+      bobBinding: bindB,
+    );
     final a = DualStackBridge(
       transport: pair.$1,
       journal: MemoryJournal('a'),
       selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
       selfDeviceId: 'a',
       secrets: secrets,
+      devices: aliceDev,
+      identities: aliceIds,
       isBlocked: (_) => false,
       mailbox: store,
       mailboxToken: 'cap-1',
@@ -253,6 +297,8 @@ void main() {
       selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
       selfDeviceId: 'b',
       secrets: secrets,
+      devices: bobDev,
+      identities: bobIds,
       isBlocked: (_) => false,
       mailbox: store,
       mailboxToken: 'cap-1',
@@ -377,12 +423,26 @@ void main() {
     );
     await pair.$1.publish(bindA);
     await pair.$2.publish(bindB);
+    final aliceIds = TrustedIdentityStore();
+    final bobIds = TrustedIdentityStore();
+    final aliceDev = DeviceRegistry();
+    final bobDev = DeviceRegistry();
+    trustContactPair(
+      aliceIdentities: aliceIds,
+      aliceDevices: aliceDev,
+      bobIdentities: bobIds,
+      bobDevices: bobDev,
+      aliceBinding: bindA,
+      bobBinding: bindB,
+    );
     final a = DualStackBridge(
       transport: pair.$1,
       journal: MemoryJournal('a'),
       selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
       selfDeviceId: 'a',
       secrets: secrets,
+      devices: aliceDev,
+      identities: aliceIds,
       isBlocked: (_) => false,
       onPacket: (peer, data) async {},
     )..attach();
@@ -392,6 +452,8 @@ void main() {
       selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
       selfDeviceId: 'b',
       secrets: secrets,
+      devices: bobDev,
+      identities: bobIds,
       isBlocked: (_) => false,
       onPacket: (peer, data) async {},
     ).attach();

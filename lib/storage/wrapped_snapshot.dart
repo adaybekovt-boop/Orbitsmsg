@@ -10,6 +10,10 @@ import '../core/vault_kek.dart';
 
 const String kDiscoverySecretsPrefsKey = 'orbits.discovery.secrets.v1';
 const String kDeviceRegistryPrefsKey = 'orbits.device.registry.v1';
+const String kTrustedIdentitiesPrefsKey = 'orbits.trusted.identities.v1';
+
+typedef WrappedSnapshotWriter = Future<void> Function(List<int> plaintext);
+typedef WrappedSnapshotReader = Future<Uint8List?> Function();
 
 Future<void> writeWrappedPrefsSnapshot(String key, List<int> plaintext) async {
   if (!hasVaultKek()) return;
@@ -36,6 +40,12 @@ Future<void> writeDeviceRegistrySnapshot(List<int> plaintext) =>
 
 Future<Uint8List?> readDeviceRegistrySnapshot() =>
     readWrappedPrefsSnapshot(kDeviceRegistryPrefsKey);
+
+Future<void> writeTrustedIdentitiesSnapshot(List<int> plaintext) =>
+    writeWrappedPrefsSnapshot(kTrustedIdentitiesPrefsKey, plaintext);
+
+Future<Uint8List?> readTrustedIdentitiesSnapshot() =>
+    readWrappedPrefsSnapshot(kTrustedIdentitiesPrefsKey);
 
 Map<String, List<int>> decodeSecretMap(List<int> bytes) {
   final raw = jsonDecode(utf8.decode(bytes));

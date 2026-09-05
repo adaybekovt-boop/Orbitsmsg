@@ -135,16 +135,21 @@ Future<DeviceBinding> issueLocalDeviceBinding({
   );
 }
 
-Future<void> authorizeLocalDevice(LocalDeviceMaterial material) async {
+Future<void> authorizeLocalDevice(
+  LocalDeviceMaterial material, {
+  String ownerPeerId = '',
+}) async {
   deviceRegistry.authorize(
     AuthorizedDevice(
       deviceId: material.deviceId,
       transportPublicKey: material.transportPublicKey,
       hypercorePublicKey: material.hypercorePublicKey,
       name: 'this-device',
-      kind: kLocalDeviceKind,
+      kind: 'own',
       createdAt: DateTime.now().millisecondsSinceEpoch,
       status: DeviceStatus.active,
+      ownerPeerId: ownerPeerId,
+      transportPeerId: ownerPeerId.isEmpty ? null : ownerPeerId,
     ),
   );
 }

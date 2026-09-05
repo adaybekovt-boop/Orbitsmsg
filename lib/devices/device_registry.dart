@@ -8,7 +8,6 @@ import 'dart:typed_data';
 import '../core/vault_kek.dart';
 import '../peer/helpers.dart';
 import '../storage/wrapped_snapshot.dart';
-import '../transport/discovery_secret_store.dart';
 
 enum DeviceStatus { active, revoked }
 

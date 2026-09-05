@@ -5,8 +5,10 @@ import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/transport/dev_bare_transport.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
+import 'package:orbits_flutter/devices/device_registry.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
 import 'package:orbits_flutter/transport/transport_api.dart';
+import 'package:orbits_flutter/transport/trusted_identity_store.dart';
 
 import '../helpers/signed_device_binding.dart';
 
@@ -108,12 +110,26 @@ void main() {
     );
     await pair.$1.publish(bindA);
     await pair.$2.publish(bindB);
+    final aliceIds = TrustedIdentityStore();
+    final bobIds = TrustedIdentityStore();
+    final aliceDev = DeviceRegistry();
+    final bobDev = DeviceRegistry();
+    trustContactPair(
+      aliceIdentities: aliceIds,
+      aliceDevices: aliceDev,
+      bobIdentities: bobIds,
+      bobDevices: bobDev,
+      aliceBinding: bindA,
+      bobBinding: bindB,
+    );
     final a = DualStackBridge(
       transport: pair.$1,
       journal: MemoryJournal('a'),
       selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
       selfDeviceId: 'a',
       secrets: secrets,
+      devices: aliceDev,
+      identities: aliceIds,
       isBlocked: (_) => false,
       onPacket: (_, __) async {},
     )..attach();
@@ -123,6 +139,8 @@ void main() {
       selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
       selfDeviceId: 'b',
       secrets: secrets,
+      devices: bobDev,
+      identities: bobIds,
       isBlocked: (_) => false,
       onPacket: (_, __) async {},
     ).attach();

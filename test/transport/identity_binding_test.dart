@@ -10,6 +10,7 @@ import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
 import 'package:orbits_flutter/transport/transport_api.dart';
+import 'package:orbits_flutter/transport/trusted_identity_store.dart';
 
 import '../helpers/pointycastle_ecdh.dart';
 import '../helpers/signed_device_binding.dart';
@@ -66,7 +67,11 @@ void main() {
   setUp(resetFlagsForTests);
   tearDown(resetFlagsForTests);
 
-  Future<DualStackBridge> bridge(_FakeTransport transport, {DeviceRegistry? devices}) async {
+  Future<DualStackBridge> bridge(
+    _FakeTransport transport, {
+    DeviceRegistry? devices,
+    TrustedIdentityStore? identities,
+  }) async {
     setHyperswarmRollout(HyperswarmRollout.internal);
     final secrets = DiscoverySecretStore()
       ..put('ORBIT-AAAAAAAAAAAAAAAA', List<int>.filled(32, 1))
@@ -78,6 +83,7 @@ void main() {
       selfDeviceId: 'dev-a',
       secrets: secrets,
       devices: devices ?? DeviceRegistry(),
+      identities: identities ?? TrustedIdentityStore(),
       isBlocked: (_) => false,
       onPacket: (_, __) async {},
     )..attach();
@@ -148,6 +154,10 @@ void main() {
       peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
       deviceId: 'dev-ok',
     );
+    final identities = TrustedIdentityStore();
+    trustBinding(identities: identities, devices: devices, binding: ok);
+    await dual.detach();
+    final trusted = await bridge(transport, devices: devices, identities: identities);
     transport.emit(
       TransportAuthenticated(
         'ORBIT-BBBBBBBBBBBBBBBB',
@@ -156,8 +166,8 @@ void main() {
       ),
     );
     await Future<void>.delayed(const Duration(milliseconds: 30));
-    expect(dual.isAuthenticated('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
-    expect(dual.isNativeConnected('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    expect(trusted.isAuthenticated('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    expect(trusted.isNativeConnected('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
 
     transport.emit(
       TransportAuthenticated(
@@ -167,7 +177,7 @@ void main() {
       ),
     );
     await Future<void>.delayed(const Duration(milliseconds: 20));
-    expect(dual.isAuthenticated('ORBIT-CCCCCCCCCCCCCCCC'), isFalse);
+    expect(trusted.isAuthenticated('ORBIT-CCCCCCCCCCCCCCCC'), isFalse);
     expect(transport.disconnected, contains('ORBIT-CCCCCCCCCCCCCCCC'));
 
     final swapped = DeviceBinding(
@@ -190,11 +200,15 @@ void main() {
       ),
     );
     await Future<void>.delayed(const Duration(milliseconds: 20));
-    expect(dual.isAuthenticated('ORBIT-CCCCCCCCCCCCCCCC'), isFalse);
+    expect(trusted.isAuthenticated('ORBIT-CCCCCCCCCCCCCCCC'), isFalse);
 
     devices.revoke('dev-ok');
-    await dual.detach();
-    final afterRevoke = await bridge(transport, devices: devices);
+    await trusted.detach();
+    final afterRevoke = await bridge(
+      transport,
+      devices: devices,
+      identities: identities,
+    );
     transport.emit(
       TransportAuthenticated(
         'ORBIT-BBBBBBBBBBBBBBBB',

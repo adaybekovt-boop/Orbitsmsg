@@ -10,6 +10,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:orbits_transport/orbits_transport.dart';
 
 import '../core/feature_flags.dart';
+import '../core/identity_key.dart';
 import '../devices/device_registry.dart';
 import '../devices/local_device_material.dart';
 import '../mailbox/blind_store.dart';
@@ -24,6 +25,7 @@ import 'capabilities.dart';
 import 'dev_bare_transport.dart';
 import 'device_binding.dart';
 import 'discovery_secret_store.dart';
+import 'trusted_identity_store.dart';
 import 'journal_file_io.dart' if (dart.library.html) 'journal_file_stub.dart';
 import 'local_worklet_platform.dart';
 import 'native_backend_policy.dart';
@@ -110,6 +112,7 @@ class NativeTransportHost {
 
     await discoverySecretStore.hydrate();
     await deviceRegistry.hydrate();
+    await trustedIdentityStore.hydrate();
 
     _ensurePluginBoundary();
     final chosen = await _chooseTransport(devBare: devBare);
@@ -124,7 +127,12 @@ class NativeTransportHost {
     transport = chosen;
 
     final material = await loadOrCreateLocalDeviceMaterial();
-    await authorizeLocalDevice(material);
+    await authorizeLocalDevice(material, ownerPeerId: auth.user.peerId);
+    trustedIdentityStore.trust(
+      peerId: auth.user.peerId,
+      identityPublicKey: await exportIdentityPubSpki(),
+      isSelf: true,
+    );
     final journal = await openLocalFileJournal(material.deviceId);
     final secret = discoverySecretStore.getOrCreateLocal();
     try {
@@ -200,6 +208,7 @@ class NativeTransportHost {
           mailboxWriterKey: auth.user.peerId,
           localCapabilities: caps,
           devices: deviceRegistry,
+          identities: trustedIdentityStore,
         );
     lifecycle = TransportLifecycle(
       transport: transport!,

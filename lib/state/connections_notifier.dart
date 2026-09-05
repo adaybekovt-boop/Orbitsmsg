@@ -54,6 +54,7 @@ import '../storage/db.dart' as db;
 import '../transport/dual_stack_bridge.dart';
 import '../transport/signed_capabilities.dart';
 import '../transport/transport_api.dart';
+import '../transport/trusted_identity_store.dart';
 import 'auth_notifier.dart';
 import 'local_profile_provider.dart';
 import 'peer_connection_provider.dart';
@@ -240,6 +241,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     String? mailboxWriterKey,
     CapabilityRecord? localCapabilities,
     DeviceRegistry? devices,
+    TrustedIdentityStore? identities,
   }) {
     _nativeJournal = journal ?? MemoryJournal(deviceId);
     _dual = DualStackBridge(
@@ -253,6 +255,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       mailboxWriterKey: mailboxWriterKey,
       localCapabilities: localCapabilities,
       devices: devices ?? deviceRegistry,
+      identities: identities ?? trustedIdentityStore,
       onPacket: _dispatchNativeInbound,
       isBlocked: (rid) => _messaging.isPeerBlocked(rid),
     )

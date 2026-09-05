@@ -11,9 +11,6 @@ import '../storage/wrapped_snapshot.dart';
 
 const String kLocalDiscoverySecretId = 'self';
 
-typedef WrappedSnapshotWriter = Future<void> Function(List<int> plaintext);
-typedef WrappedSnapshotReader = Future<Uint8List?> Function();
-
 class DiscoverySecretStore {
   DiscoverySecretStore({
     this.writeSnapshot,
