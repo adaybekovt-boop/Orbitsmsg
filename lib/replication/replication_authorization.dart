@@ -4,6 +4,7 @@
 
 import '../peer/helpers.dart';
 import '../transport/replication_schema.dart';
+import 'conversation_id.dart';
 import 'memory_journal.dart';
 
 /// Who may see a journal record on the replication channel.
@@ -42,6 +43,7 @@ ReplicationAudience audienceForKind(ReplicationEventKind kind) {
 String? normalizedConversationId(Map<String, Object?> fields) {
   final raw = fields['conversationId'];
   if (raw is! String || raw.isEmpty) return null;
+  if (RegExp(r'^[0-9a-f]{64}$').hasMatch(raw)) return raw;
   return normalizePeerId(raw);
 }
 
@@ -72,7 +74,11 @@ bool recordMayReplicateTo(
   final cid = normalizedConversationId(record.fields);
   if (cid == null) return peerIsOwnDevice;
   if (peerIsOwnDevice) return true;
-  return cid == peer;
+  return peerIsConversationMember(
+    conversationId: cid,
+    selfPeerId: self,
+    authenticatedPeerId: peer,
+  );
 }
 
 bool frameMayAcceptFrom(

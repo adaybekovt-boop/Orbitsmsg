@@ -6,6 +6,7 @@ import 'package:orbits_flutter/core/feature_flags.dart';
 import 'package:orbits_flutter/devices/device_registry.dart';
 import 'package:orbits_flutter/peer/helpers.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
+import 'package:orbits_flutter/replication/conversation_id.dart';
 import 'package:orbits_flutter/replication/replication_authorization.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
@@ -132,10 +133,16 @@ void main() {
     });
 
     alice.hypercore.append(
-      _envelope(conversationId: bobId, ciphertext: utf8.encode('BOB-ONLY')),
+      _envelope(
+        conversationId: conversationIdForPeers(aliceId, bobId),
+        ciphertext: utf8.encode('BOB-ONLY'),
+      ),
     );
     alice.hypercore.append(
-      _envelope(conversationId: carolId, ciphertext: utf8.encode('CAROL-SECRET')),
+      _envelope(
+        conversationId: conversationIdForPeers(aliceId, carolId),
+        ciphertext: utf8.encode('CAROL-SECRET'),
+      ),
     );
     alice.hypercore.append(_deviceEvent(ReplicationEventKind.deviceAuthorized, 'alice-phone-2'));
 
@@ -161,13 +168,19 @@ void main() {
 
     final afterReplay = bobWire.length;
     alice.appendAndReplicate(
-      _envelope(conversationId: carolId, ciphertext: utf8.encode('CAROL-SECRET')),
+      _envelope(
+        conversationId: conversationIdForPeers(aliceId, carolId),
+        ciphertext: utf8.encode('CAROL-SECRET'),
+      ),
     );
     alice.appendAndReplicate(
       _deviceEvent(ReplicationEventKind.deviceRevoked, 'alice-phone-2'),
     );
     alice.appendAndReplicate(
-      _envelope(conversationId: bobId, ciphertext: utf8.encode('BOB-LIVE')),
+      _envelope(
+        conversationId: conversationIdForPeers(aliceId, bobId),
+        ciphertext: utf8.encode('BOB-LIVE'),
+      ),
     );
     await Future<void>.delayed(const Duration(milliseconds: 40));
 
@@ -253,7 +266,7 @@ void main() {
         'seq': 99,
         'writerDeviceId': 'forger',
         'fields': <String, Object?>{
-          'conversationId': carolId,
+          'conversationId': conversationIdForPeers(aliceId, carolId),
           'encryptedEnvelope': base64Encode(utf8.encode('INJECTED-CAROL')),
           'senderIdentity': bobId,
         },
@@ -316,7 +329,7 @@ void main() {
       isTrue,
     );
     final carol = _envelope(
-      conversationId: carolId,
+      conversationId: conversationIdForPeers(aliceId, carolId),
       ciphertext: Uint8List.fromList(const [1]),
     );
     expect(
