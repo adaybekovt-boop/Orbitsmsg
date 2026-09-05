@@ -36,6 +36,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
+import '../calls/call_media_peer.dart';
 import '../calls/hyperswarm_signaling.dart';
 import '../calls/system_calling.dart';
 import '../core/feature_flags.dart';
@@ -232,30 +233,24 @@ class CallsNotifier extends StateNotifier<CallState> {
     state = state.copyWith(localStream: local);
 
     if (conns.canUseNative(remotePeerId)) {
-      _nativeSession = NativeCallSession(
-        send: (signal) => conns.sendCallSignal(remotePeerId, signal),
-      );
-      String sdp = 'v=0';
       try {
-        final pc = await WebRtcAudioLifecycle.instance.createPeerConnectionFor(
-          <String, dynamic>{'sdpSemantics': 'unified-plan'},
-          kind: WebRtcPeerKind.media,
+        _nativeSession = _newNativeSession(remotePeerId);
+        await _nativeSession!.startOutgoing(
+          callId: remotePeerId,
+          localStream: local,
+          localTracks: local.getTracks(),
+          media: {'video': video},
         );
-        _ownedMediaPc = pc;
-        for (final track in local.getTracks()) {
-          await pc.addTrack(track, local);
+      } catch (e) {
+        if (!isPeerjsFallbackEnabled() || peer == null) {
+          _starting = false;
+          _resetIdleWithError(
+            e is StateError ? e.message : kNativeCallsUnavailable,
+          );
+          await WebRtcAudioLifecycle.instance.releaseStream(local);
+          return;
         }
-        final offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        sdp = offer.sdp ?? sdp;
-      } catch (_) {
-        // Signaling still proceeds; media attach can use PeerJS fallback.
       }
-      await _nativeSession!.startOutgoing(
-        callId: remotePeerId,
-        sdp: sdp,
-        media: {'video': video},
-      );
       if (!isPeerjsFallbackEnabled() || peer == null) {
         _starting = false;
         return;
@@ -319,21 +314,25 @@ class CallsNotifier extends StateNotifier<CallState> {
     }
     state = state.copyWith(localStream: local);
     if (_nativeSession != null) {
-      String sdp = 'v=0';
       try {
-        final pc = await WebRtcAudioLifecycle.instance.createPeerConnectionFor(
-          <String, dynamic>{'sdpSemantics': 'unified-plan'},
-          kind: WebRtcPeerKind.media,
-        );
-        _ownedMediaPc = pc;
-        for (final track in local.getTracks()) {
-          await pc.addTrack(track, local);
+        final offer = _nativeSession!.remoteSdp;
+        if (offer == null || offer.trim().isEmpty || offer.trim() == 'v=0') {
+          throw StateError(kNativeCallsUnavailable);
         }
-        final answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        sdp = answer.sdp ?? sdp;
-      } catch (_) {}
-      await _nativeSession!.accept(sdp: sdp);
+        await _nativeSession!.acceptIncoming(
+          remoteOfferSdp: offer,
+          localStream: local,
+          localTracks: local.getTracks(),
+        );
+      } catch (e) {
+        if (!isPeerjsFallbackEnabled()) {
+          await WebRtcAudioLifecycle.instance.releaseStream(local);
+          _resetIdleWithError(
+            e is StateError ? e.message : kNativeCallsUnavailable,
+          );
+          return;
+        }
+      }
       if (!isPeerjsFallbackEnabled()) return;
     }
     try {
@@ -559,13 +558,50 @@ class CallsNotifier extends StateNotifier<CallState> {
     state = const CallState.idle().copyWith(lastError: message);
   }
 
-  void _onNativeCallSignal(String from, CallSignal signal) {
-    _nativeSession ??= NativeCallSession(
-      send: (next) => _ref
+  NativeCallSession _newNativeSession(String remotePeerId) {
+    return NativeCallSession(
+      send: (signal) => _ref
           .read(connectionsNotifierProvider.notifier)
-          .sendCallSignal(from, next),
+          .sendCallSignal(remotePeerId, signal),
+      createPeer: () async {
+        final pc = await WebRtcAudioLifecycle.instance.createPeerConnectionFor(
+          <String, dynamic>{'sdpSemantics': 'unified-plan'},
+          kind: WebRtcPeerKind.media,
+        );
+        _ownedMediaPc = pc;
+        return _RtcCallMediaPeer(pc);
+      },
+      onMediaConnected: () {
+        if (!mounted) return;
+        if (state.status == CallStatus.calling ||
+            state.status == CallStatus.ringing) {
+          state = state.copyWith(status: CallStatus.inCall);
+        }
+      },
+      onRemoteTrack: (track) {
+        if (!mounted) return;
+        if (track is MediaStream) {
+          state = state.copyWith(
+            status: CallStatus.inCall,
+            remoteStream: track,
+          );
+        }
+      },
     );
-    _nativeSession!.applyRemote(signal);
+  }
+
+  void _onNativeCallSignal(String from, CallSignal signal) {
+    _nativeSession ??= _newNativeSession(from);
+    unawaited(() async {
+      try {
+        await _nativeSession!.applyRemote(signal);
+      } catch (e) {
+        if (!mounted) return;
+        state = state.copyWith(
+          lastError: e is StateError ? e.message : kNativeCallsUnavailable,
+        );
+      }
+    }());
     if (!mounted) return;
     if (signal.type == CallSignalType.hangup ||
         signal.type == CallSignalType.reject) {
@@ -585,10 +621,6 @@ class CallsNotifier extends StateNotifier<CallState> {
           video: signal.media?['video'] == true,
         ),
       );
-    }
-    if (signal.type == CallSignalType.answer &&
-        state.status == CallStatus.calling) {
-      state = state.copyWith(status: CallStatus.inCall);
     }
   }
 
@@ -661,3 +693,95 @@ final callsNotifierProvider = StateNotifierProvider<CallsNotifier, CallState>((
 final callIsActiveProvider = Provider<bool>((ref) {
   return ref.watch(callsNotifierProvider.select((s) => s.isActive));
 });
+
+class _RtcCallMediaPeer implements CallMediaPeer {
+  _RtcCallMediaPeer(this._pc);
+
+  final RTCPeerConnection _pc;
+  final _ice = StreamController<Map<String, Object?>>.broadcast();
+  final _states = StreamController<String>.broadcast();
+  final _tracks = StreamController<Object>.broadcast();
+  bool _closed = false;
+
+  @override
+  bool get closed => _closed;
+
+  @override
+  Stream<Map<String, Object?>> get iceCandidates {
+    _pc.onIceCandidate = (candidate) {
+      final json = candidate.toMap();
+      _ice.add(json.map((k, v) => MapEntry(k.toString(), v)));
+    };
+    return _ice.stream;
+  }
+
+  @override
+  Stream<String> get connectionStates {
+    _pc.onConnectionState = (state) {
+      _states.add(state.name);
+    };
+    return _states.stream;
+  }
+
+  @override
+  Stream<Object> get remoteTracks {
+    _pc.onTrack = (event) {
+      final streams = event.streams;
+      if (streams.isNotEmpty) {
+        _tracks.add(streams.first);
+      }
+    };
+    return _tracks.stream;
+  }
+
+  @override
+  Future<void> addLocalTrack(Object track, Object stream) {
+    return _pc.addTrack(track as MediaStreamTrack, stream as MediaStream);
+  }
+
+  @override
+  Future<CallSessionDescription> createOffer() async {
+    final offer = await _pc.createOffer();
+    return CallSessionDescription(type: 'offer', sdp: offer.sdp ?? '');
+  }
+
+  @override
+  Future<CallSessionDescription> createAnswer() async {
+    final answer = await _pc.createAnswer();
+    return CallSessionDescription(type: 'answer', sdp: answer.sdp ?? '');
+  }
+
+  @override
+  Future<void> setLocalDescription(CallSessionDescription description) {
+    return _pc.setLocalDescription(
+      RTCSessionDescription(description.sdp, description.type),
+    );
+  }
+
+  @override
+  Future<void> setRemoteDescription(CallSessionDescription description) {
+    return _pc.setRemoteDescription(
+      RTCSessionDescription(description.sdp, description.type),
+    );
+  }
+
+  @override
+  Future<void> addIceCandidate(Map<String, Object?> candidate) {
+    return _pc.addCandidate(
+      RTCIceCandidate(
+        candidate['candidate'] as String?,
+        candidate['sdpMid'] as String?,
+        (candidate['sdpMLineIndex'] as num?)?.toInt(),
+      ),
+    );
+  }
+
+  @override
+  Future<void> close() async {
+    _closed = true;
+    await _ice.close();
+    await _states.close();
+    await _tracks.close();
+    await _pc.close();
+  }
+}

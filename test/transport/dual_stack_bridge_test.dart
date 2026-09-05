@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbits_flutter/calls/call_media_peer.dart';
 import 'package:orbits_flutter/calls/hyperswarm_signaling.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
 import 'package:orbits_flutter/devices/device_registry.dart';
@@ -203,10 +204,17 @@ void main() {
       );
       final caller = NativeCallSession(
         send: (s) => a.sendCallSignal('ORBIT-BBBBBBBBBBBBBBBB', s),
+        createPeer: () async => FakeCallMediaPeer(peerName: 'alice'),
       );
-      await caller.startOutgoing(callId: 'c1', sdp: 'v=0-offer');
+      await caller.startOutgoing(callId: 'c1', localStream: 'stream');
       await caller.addIce({'candidate': '1.2.3.4'});
-      await caller.accept(sdp: 'v=0-answer');
+      await caller.applyRemote(
+        const CallSignal(
+          type: CallSignalType.answer,
+          callId: 'c1',
+          sdp: 'answer-from-bob',
+        ),
+      );
       await a.sendCallSignal(
         'ORBIT-BBBBBBBBBBBBBBBB',
         const CallSignal(type: CallSignalType.hangup, callId: 'c1'),
