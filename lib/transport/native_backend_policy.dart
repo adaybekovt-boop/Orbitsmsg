@@ -13,6 +13,7 @@ enum NativeBackendFailure {
   pathFailed,
   remoteCapabilityMissing,
   fallbackForbidden,
+  protocolFailed,
 }
 
 class NativeBackendDecision {
@@ -61,8 +62,9 @@ NativeBackendDecision selectNativeBackend({
   required bool peerjsFallbackEnabled,
   required bool contactForbidsFallback,
   required NativeBackendProbe probe,
+  bool allowDevBare = false,
 }) {
-  if (rollout == HyperswarmRollout.off) {
+  if (rollout == HyperswarmRollout.off && !allowDevBare) {
     return const NativeBackendDecision(
       backend: NativeBackendKind.none,
       failure: NativeBackendFailure.rolloutOff,
