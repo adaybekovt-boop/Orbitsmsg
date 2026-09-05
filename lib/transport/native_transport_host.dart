@@ -17,6 +17,8 @@ import '../mailbox/blind_store.dart';
 import '../peer/signaling.dart';
 import '../push/opaque_wake.dart';
 import '../push/wake_service.dart';
+import '../replication/drift_projector.dart';
+import '../replication/hypercore_store.dart';
 import '../replication/memory_journal.dart';
 import '../state/auth_notifier.dart';
 import '../state/connections_notifier.dart';
@@ -43,11 +45,15 @@ class NativeTransportHost {
     this._ref, {
     WorkletSpawner? spawnWorklet,
     this.contactForbidsFallback = false,
+    this.transportOverride,
+    this.authStateOverride,
   }) : spawnWorklet = spawnWorklet ?? spawnWorkletTransport;
 
   final Ref _ref;
   final WorkletSpawner spawnWorklet;
   final bool contactForbidsFallback;
+  final OrbitsTransport Function()? transportOverride;
+  final AuthState Function()? authStateOverride;
   OrbitsTransport? transport;
   String backend = 'none';
   String lastError = '';
@@ -74,57 +80,108 @@ class NativeTransportHost {
     peerjsLocalTestnet: isAppPeerjsLocalTestnet(),
   );
 
-  Completer<void>? _startCompleter;
+  Future<void>? _inFlightStart;
+  int _sessionGeneration = 0;
+  String? _sessionPeerId;
+  bool _startCancelled = false;
+
+  String? get sessionPeerId => _sessionPeerId;
+  JournalProjector? projector;
+  HypercoreLocalStore? hypercore;
+  StreamSubscription<TransportEvent>? _staleGuard;
+
+  bool _startupAborted(int generation) =>
+      _startCancelled || generation != _sessionGeneration;
+
+  Future<void> onAuthChanged(AuthState next) async {
+    if (next is AuthAuthed) {
+      if (_sessionPeerId != null && _sessionPeerId != next.user.peerId) {
+        await shutdown();
+      }
+      try {
+        await ensureStarted();
+      } catch (_) {
+        if (_startCancelled) return;
+        rethrow;
+      }
+      return;
+    }
+    await shutdown();
+  }
 
   Future<void> ensureStarted() async {
-    if (attached) return;
-    if (_startCompleter != null) {
-      return _startCompleter!.future;
-    }
-    final completer = Completer<void>();
-    _startCompleter = completer;
+    if (attached && _sessionPeerId != null && !_startCancelled) return;
+    final existing = _inFlightStart;
+    if (existing != null) return existing;
+    _startCancelled = false;
+    final generation = ++_sessionGeneration;
+    final run = () async {
+      try {
+        await _doEnsureStarted(generation);
+      } catch (err) {
+        if (_startupAborted(generation)) return;
+        rethrow;
+      }
+    }();
+    _inFlightStart = run;
     try {
-      await _doEnsureStarted();
-      completer.complete();
-    } catch (err, st) {
-      completer.completeError(err, st);
-      rethrow;
+      await run;
     } finally {
-      _startCompleter = null;
+      if (identical(_inFlightStart, run)) {
+        _inFlightStart = null;
+      }
     }
   }
 
-  Future<void> _doEnsureStarted() async {
+  Future<void> _doEnsureStarted(int generation) async {
     final devBare = isDevBareTransportRequested();
-    if (!isHyperswarmTransportEnabled() && !devBare) {
+    if (!devBare && hyperswarmRollout() == HyperswarmRollout.off) {
       lastDecision = selectNativeBackend(
         rollout: hyperswarmRollout(),
         peerjsFallbackEnabled: isPeerjsFallbackEnabled(),
         contactForbidsFallback: contactForbidsFallback,
         probe: const NativeBackendProbe(hyperswarmModuleAvailable: false),
+        allowDevBare: false,
       );
       backend = 'none';
+      lastError = '';
       return;
     }
     if (attached) return;
-    final auth = _ref.read(authNotifierProvider);
+    final auth = authStateOverride?.call() ?? _ref.read(authNotifierProvider);
     if (auth is! AuthAuthed) return;
+    _sessionPeerId = auth.user.peerId;
+    if (_startupAborted(generation)) return;
 
     await discoverySecretStore.hydrate();
     await deviceRegistry.hydrate();
     await trustedIdentityStore.hydrate();
+    if (_startupAborted(generation)) return;
 
     _ensurePluginBoundary();
     final chosen = await _chooseTransport(devBare: devBare);
+    if (_startupAborted(generation)) {
+      try {
+        await chosen?.stop();
+      } catch (_) {}
+      return;
+    }
     if (chosen == null) {
       if (devBare) {
-        lastError = 'BARE_RUNTIME_MISSING';
-        throw StateError('BARE_RUNTIME_MISSING');
+        lastError = lastError.isEmpty ? 'BARE_RUNTIME_MISSING' : lastError;
+        throw StateError(lastError);
       }
       return;
     }
 
     transport = chosen;
+    if (_startupAborted(generation)) {
+      try {
+        await chosen.stop();
+      } catch (_) {}
+      if (identical(transport, chosen)) transport = null;
+      return;
+    }
 
     final material = await loadOrCreateLocalDeviceMaterial();
     await authorizeLocalDevice(material, ownerPeerId: auth.user.peerId);
@@ -133,8 +190,32 @@ class NativeTransportHost {
       identityPublicKey: await exportIdentityPubSpki(),
       isSelf: true,
     );
-    final journal = await openLocalFileJournal(material.deviceId);
+    final durable = await openLocalFileJournal(
+      material.deviceId,
+      ownerPeerId: auth.user.peerId,
+    );
+    MemoryJournal memory;
+    if (durable != null) {
+      memory = await durable.replay();
+    } else {
+      memory = MemoryJournal(material.deviceId);
+    }
+    hypercore = HypercoreLocalStore(material.deviceId);
+    for (final record in memory.records) {
+      hypercore!.append(record);
+    }
+    projector = JournalProjector(
+      decrypt: (enc) async => <String, Object?>{'bytes': enc.length},
+    );
+    await projector!.applyAll(memory);
     final secret = discoverySecretStore.getOrCreateLocal();
+    if (_startupAborted(generation)) {
+      try {
+        await chosen.stop();
+      } catch (_) {}
+      if (identical(transport, chosen)) transport = null;
+      return;
+    }
     try {
       await transport!.start(
         TransportLocalConfiguration(
@@ -144,11 +225,18 @@ class NativeTransportHost {
         ),
       );
     } catch (err) {
-      lastError = err.toString();
+      lastError = 'BARE_START_FAILED';
       transport = null;
       if (devBare) {
-        rethrow;
+        throw StateError('BARE_START_FAILED: $err');
       }
+      return;
+    }
+    if (_startupAborted(generation)) {
+      try {
+        await chosen.stop();
+      } catch (_) {}
+      if (identical(transport, chosen)) transport = null;
       return;
     }
 
@@ -184,7 +272,23 @@ class NativeTransportHost {
     if (!deviceBindingClockIsValid(binding, nowMs: now)) {
       throw StateError('local device binding is not valid');
     }
-    await transport!.publish(binding);
+    try {
+      await transport!.publish(binding);
+    } catch (err) {
+      lastError = 'BARE_PROTOCOL_FAILED';
+      transport = null;
+      if (devBare) {
+        throw StateError('BARE_PROTOCOL_FAILED: $err');
+      }
+      return;
+    }
+    if (_startupAborted(generation)) {
+      try {
+        await chosen.stop();
+      } catch (_) {}
+      if (identical(transport, chosen)) transport = null;
+      return;
+    }
 
     final mailbox = BlindMailboxStore()
       ..grant(
@@ -200,15 +304,28 @@ class NativeTransportHost {
         .read(connectionsNotifierProvider.notifier)
         .bindNativeTransport(
           transport!,
-          journal: MemoryJournal(boundMaterial.deviceId),
+          journal: memory,
           deviceId: boundMaterial.deviceId,
-          durableJournal: journal,
+          durableJournal: durable,
           mailbox: mailbox,
           mailboxToken: 'local-mailbox',
           mailboxWriterKey: auth.user.peerId,
           localCapabilities: caps,
           devices: deviceRegistry,
           identities: trustedIdentityStore,
+          hypercore: hypercore,
+          confirmPeerAuthorization: (peerId, {required authorized}) async {
+            final carrier = transport;
+            if (carrier is WorkletOrbitsTransport) {
+              await carrier.confirmAuthorization(
+                peerId,
+                authorized: authorized,
+              );
+            }
+          },
+          onRemoteRecord: (record) async {
+            await projector?.apply(record);
+          },
         );
     lifecycle = TransportLifecycle(
       transport: transport!,
@@ -221,6 +338,23 @@ class NativeTransportHost {
       },
     );
     wake = OpaqueWakeService(onAccepted: (_) => lifecycle!.onOpaqueWake());
+    if (_startupAborted(generation)) {
+      try {
+        await _ref
+            .read(connectionsNotifierProvider.notifier)
+            .unbindNativeTransport();
+      } catch (_) {}
+      try {
+        await chosen.stop();
+      } catch (_) {}
+      if (identical(transport, chosen)) transport = null;
+      lifecycle = null;
+      wake = null;
+      projector = null;
+      hypercore = null;
+      attached = false;
+      return;
+    }
     attached = true;
     lastError = '';
   }
@@ -238,6 +372,15 @@ class NativeTransportHost {
   }
 
   Future<OrbitsTransport?> _chooseTransport({required bool devBare}) async {
+    final override = transportOverride;
+    if (override != null) {
+      lastDecision = const NativeBackendDecision(
+        backend: NativeBackendKind.loopback,
+        attempted: <NativeBackendKind>[NativeBackendKind.loopback],
+      );
+      backend = 'loopback';
+      return override();
+    }
     if (isMobileBareHost()) {
       lastDecision = const NativeBackendDecision(
         backend: NativeBackendKind.hyperswarm,
@@ -263,10 +406,30 @@ class NativeTransportHost {
       }
     }
 
+    if (devBare && !kReleaseMode) {
+      if (!moduleAvailable) {
+        lastError = 'BARE_RUNTIME_MISSING';
+        lastDecision = const NativeBackendDecision(
+          backend: NativeBackendKind.none,
+          failure: NativeBackendFailure.moduleUnavailable,
+          attempted: <NativeBackendKind>[NativeBackendKind.hyperswarm],
+        );
+        backend = 'none';
+        return null;
+      }
+      lastDecision = const NativeBackendDecision(
+        backend: NativeBackendKind.hyperswarm,
+        attempted: <NativeBackendKind>[NativeBackendKind.hyperswarm],
+      );
+      backend = 'hyperswarm';
+      return PluginOrbitsTransport(backend: 'hyperswarm');
+    }
+
     final decision = selectNativeBackend(
       rollout: hyperswarmRollout(),
       peerjsFallbackEnabled: isPeerjsFallbackEnabled(),
       contactForbidsFallback: contactForbidsFallback,
+      allowDevBare: devBare && !kReleaseMode,
       probe: NativeBackendProbe(
         hyperswarmModuleAvailable: moduleAvailable,
         hyperswarmStarted: started,
@@ -277,6 +440,13 @@ class NativeTransportHost {
     if (decision.backend == NativeBackendKind.none ||
         decision.backend == NativeBackendKind.peerjs) {
       backend = decision.backend.name;
+      if (decision.failure == NativeBackendFailure.rolloutOff) {
+        lastError = 'BARE_DISABLED_BY_POLICY';
+      } else if (decision.failure == NativeBackendFailure.moduleUnavailable) {
+        lastError = 'BARE_RUNTIME_MISSING';
+      } else if (decision.failure == NativeBackendFailure.startupFailed) {
+        lastError = 'BARE_START_FAILED';
+      }
       return null;
     }
 
@@ -295,14 +465,33 @@ class NativeTransportHost {
   }
 
   Future<void> shutdown() async {
+    _startCancelled = true;
+    _sessionGeneration++;
+    final running = _inFlightStart;
+    if (running != null) {
+      try {
+        await running.timeout(const Duration(seconds: 8));
+      } catch (_) {}
+    }
     await lifecycle?.onBackground();
+    try {
+      await _ref.read(connectionsNotifierProvider.notifier).unbindNativeTransport();
+    } catch (_) {}
     try {
       await transport?.stop();
     } catch (_) {}
+    await _staleGuard?.cancel();
+    _staleGuard = null;
     transport = null;
     lifecycle = null;
+    wake = null;
+    projector = null;
+    hypercore = null;
     attached = false;
     backend = 'none';
+    _sessionPeerId = null;
+    lastError = '';
+    trustedIdentityStore.clear();
   }
 
   Future<void> onBackground() async {
@@ -361,9 +550,10 @@ String orbitsVisibleTransportLabel({
 final nativeTransportHostProvider = Provider<NativeTransportHost>((ref) {
   final host = NativeTransportHost(ref);
   ref.listen<AuthState>(authNotifierProvider, (prev, next) {
-    if (next is AuthAuthed) {
-      host.ensureStarted();
-    }
+    unawaited(host.onAuthChanged(next));
   }, fireImmediately: true);
+  ref.onDispose(() {
+    unawaited(host.shutdown());
+  });
   return host;
 });
