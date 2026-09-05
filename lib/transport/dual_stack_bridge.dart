@@ -760,6 +760,17 @@ class DualStackBridge {
     } catch (_) {}
   }
 
+  Future<void> _onAttachmentFrame(String peerId, List<int> bytes) async {
+    if (await files.handleInbound(peerId, bytes)) return;
+    if (bytes.isNotEmpty && bytes[0] == 1) {
+      onDrop?.call(peerId, bytes);
+      return;
+    }
+    try {
+      onDrop?.call(peerId, decodeJsonPayload(bytes));
+    } catch (_) {}
+  }
+
   void _onFrame(String peerId, TransportChannel channel, List<int> bytes) {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return;
@@ -771,14 +782,7 @@ class DualStackBridge {
       return;
     }
     if (channel == TransportChannel.attachment) {
-      if (files.handleInbound(norm, bytes)) return;
-      if (bytes.isNotEmpty && bytes[0] == 1) {
-        onDrop?.call(norm, bytes);
-        return;
-      }
-      try {
-        onDrop?.call(norm, decodeJsonPayload(bytes));
-      } catch (_) {}
+      unawaited(_onAttachmentFrame(norm, bytes));
       return;
     }
     if (channel == TransportChannel.replication) {

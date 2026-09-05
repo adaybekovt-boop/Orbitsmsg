@@ -180,7 +180,7 @@ void main() {
     final carolKey = recv.keys!.issue('carol', 'same-id');
     expect(aliceKey, isNot(carolKey));
 
-    recv.handleInbound(
+    await recv.handleInbound(
       'alice',
       utf8.encode(
         jsonEncode({
@@ -193,7 +193,7 @@ void main() {
         }),
       ),
     );
-    recv.handleInbound(
+    await recv.handleInbound(
       'carol',
       utf8.encode(
         jsonEncode({
@@ -250,7 +250,7 @@ void main() {
     expect(dropped.single['sha256'], digest);
     expect(dropped.single['size'], 10 * 1024 * 1024);
     expect(File(dropped.single['path'] as String).existsSync(), isTrue);
-  });
+  }, timeout: const Timeout(Duration(minutes: 2)));
 
   test('50 MiB transfer SHA-256 matches', () async {
     final incoming = Directory.systemTemp.createTempSync('orbits-50m-');

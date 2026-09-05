@@ -174,7 +174,7 @@ class FileTransferCoordinator {
     }
   }
 
-  bool handleInbound(String peerId, List<int> bytes) {
+  Future<bool> handleInbound(String peerId, List<int> bytes) async {
     Map<String, Object?> body;
     try {
       body = decodeJsonPayload(bytes);
@@ -202,7 +202,7 @@ class FileTransferCoordinator {
       return true;
     }
     if (type == 'file-offer') {
-      unawaited(_acceptOffer(peerId, body));
+      await _acceptOffer(peerId, body);
       return true;
     }
     if (type == 'file-chunk') {
@@ -210,7 +210,7 @@ class FileTransferCoordinator {
       return true;
     }
     if (type == 'file-complete') {
-      unawaited(_finishIncoming(peerId, body));
+      await _finishIncoming(peerId, body);
       return true;
     }
     if (type == 'file-progress') {
@@ -347,6 +347,15 @@ class FileTransferCoordinator {
     }
     incoming.raf.flushSync();
     incoming.raf.closeSync();
+    if (!incoming.file.existsSync()) {
+      await _emit(peerId, {
+        'type': 'file-error',
+        'protocol': kFileTransferProtocol,
+        'transferId': id,
+        'error': 'incoming blob missing',
+      });
+      return;
+    }
     final actual = await sha256File(incoming.file);
     final expected = incoming.sha256hex;
     final size = incoming.file.lengthSync();
