@@ -48,10 +48,22 @@ Future<LocalDeviceMaterial> loadOrCreateLocalDeviceMaterial({
     deviceId = _newDeviceId();
     seed = _randomKey();
     writer = _randomKey();
-    transport = Uint8List(32);
+    transport = _randomKey();
     if (_bytesEqual(seed, writer)) {
       writer = _randomKey();
     }
+    if (_bytesEqual(transport, seed) || _bytesEqual(transport, writer)) {
+      transport = _randomKey();
+    }
+    await keys.put(kLocalDeviceMaterialTable, {
+      'id': kLocalDeviceMaterialId,
+      'deviceId': deviceId,
+      'transportPublicKey': bytesToBase64(transport),
+      'hypercorePublicKey': bytesToBase64(writer),
+      'transportSecretSeed': bytesToBase64(seed),
+    });
+  } else if (transport.length != 32 || _isPlaceholder(transport)) {
+    transport = _randomKey();
     await keys.put(kLocalDeviceMaterialTable, {
       'id': kLocalDeviceMaterialId,
       'deviceId': deviceId,
