@@ -479,7 +479,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     if (normalized.isEmpty) return;
     if (_isPeerBlocked(normalized)) return;
     final conns = _ref.read(connectionsNotifierProvider.notifier);
-    if (conns.getConn(normalized, 'reliable')?.open != true) return;
+    if (!conns.hasReliable(normalized)) return;
 
     List<Map<String, Object?>> rows;
     try {

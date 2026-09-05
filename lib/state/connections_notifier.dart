@@ -49,6 +49,7 @@ import '../peer/wire_transport.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
 import '../replication/file_journal.dart';
+import '../replication/hypercore_store.dart';
 import '../replication/memory_journal.dart';
 import '../storage/db.dart' as db;
 import '../transport/dual_stack_bridge.dart';
@@ -242,6 +243,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     CapabilityRecord? localCapabilities,
     DeviceRegistry? devices,
     TrustedIdentityStore? identities,
+    Future<void> Function(String peerId, {required bool authorized})?
+        confirmPeerAuthorization,
+    Future<void> Function(JournalRecord record)? onRemoteRecord,
+    HypercoreLocalStore? hypercore,
   }) {
     _nativeJournal = journal ?? MemoryJournal(deviceId);
     _dual = DualStackBridge(
@@ -256,6 +261,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       localCapabilities: localCapabilities,
       devices: devices ?? deviceRegistry,
       identities: identities ?? trustedIdentityStore,
+      confirmPeerAuthorization: confirmPeerAuthorization,
+      onRemoteRecord: onRemoteRecord,
+      hypercore: hypercore,
       onPacket: _dispatchNativeInbound,
       isBlocked: (rid) => _messaging.isPeerBlocked(rid),
     )
@@ -272,6 +280,13 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         _drop.handleInbound(peerId, packet);
       }
       ..attach();
+  }
+
+  Future<void> unbindNativeTransport() async {
+    await _dual?.detach();
+    _dual = null;
+    _nativeJournal = null;
+    _refreshConnectedIds();
   }
 
   ({String from, CallSignal signal})? _lastCallSignal;
