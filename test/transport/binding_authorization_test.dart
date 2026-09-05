@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
@@ -8,7 +7,6 @@ import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
-import 'package:orbits_flutter/transport/mux_frames.dart';
 import 'package:orbits_flutter/transport/replication_schema.dart';
 import 'package:orbits_flutter/transport/transport_api.dart';
 import 'package:orbits_flutter/transport/trusted_identity_store.dart';
