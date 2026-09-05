@@ -167,7 +167,13 @@ test('F-13: public connected event only emitted after logical identity known, no
   const connRecord = Array.from(w._connections)[0]
   w._onFrame(connRecord, 'control', framePayload)
 
-  // Now 'connected' event should be emitted exactly once for ORBIT-REMOTE
+  const pending = events.filter((e) => e.name === 'identity-pending')
+  assert.ok(pending.length >= 1)
+  assert.equal(pending[pending.length - 1].payload.peerId, 'ORBIT-REMOTE')
+  assert.equal(events.filter((e) => e.name === 'connected').length, 0)
+
+  await w.authorize('ORBIT-REMOTE')
+
   const connEventsAfter = events.filter((e) => e.name === 'connected')
   assert.equal(connEventsAfter.length, 1)
   assert.equal(connEventsAfter[0].payload.peerId, 'ORBIT-REMOTE')

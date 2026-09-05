@@ -184,7 +184,25 @@ class LocalWorkletPlatform extends OrbitsTransportPlatform {
   }
 
   void _forward(TransportEvent event) {
-    if (event is TransportAuthenticated) {
+    if (event is TransportIdentityPending) {
+      _events.add({
+        'name': 'identity-pending',
+        'peerId': event.peerId,
+        'connectionNoisePublicKey': event.connectionNoisePublicKey,
+        'binding': {
+          'version': event.binding.version,
+          'deviceId': event.binding.deviceId,
+          'identityPublicKeyB64': base64Encode(event.binding.identityPublicKey),
+          'transportPublicKeyB64': base64Encode(event.binding.transportPublicKey),
+          'hypercorePublicKeyB64': base64Encode(event.binding.hypercorePublicKey),
+          'signatureB64': base64Encode(event.binding.signatureByIdentityKey),
+          'capabilities': event.binding.capabilities,
+          'createdAt': event.binding.createdAt,
+          'expiresAt': event.binding.expiresAt,
+          'ownerPeerId': event.binding.ownerPeerId,
+        },
+      });
+    } else if (event is TransportAuthenticated) {
       _events.add({
         'name': 'authenticated',
         'peerId': event.peerId,

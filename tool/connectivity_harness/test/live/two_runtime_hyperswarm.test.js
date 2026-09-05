@@ -58,6 +58,11 @@ function attach(child) {
         child.stdin.write(encode(REQUEST, { id, method, params }))
       })
     },
+    async authorizeAfterIdentity(timeoutMs = 30000) {
+      const pending = await this.waitEvent('identity-pending', timeoutMs)
+      await this.request('authorize', { peerId: pending.payload.peerId }, timeoutMs)
+      return pending
+    },
     waitEvent(name, timeoutMs = 30000, match) {
       const found = events.find(
         (e) => e.name === name && (!match || match(e)),
@@ -207,6 +212,7 @@ test('live Hyperswarm regression: two official Bare worklets over isolated testn
     ),
   ])
 
+  await Promise.all([ha.authorizeAfterIdentity(), hb.authorizeAfterIdentity()])
   const connEventA = await ha.waitEvent('connected')
   const connEventB = await hb.waitEvent('connected')
   assert.equal(connEventA.payload.peerId, 'ORBIT-LIVE-B')
@@ -358,6 +364,7 @@ test('live Hyperswarm regression: reverse direction - A stops, B survives and st
     ),
   ])
 
+  await Promise.all([ha.authorizeAfterIdentity(), hb.authorizeAfterIdentity()])
   await ha.waitEvent('connected')
   await hb.waitEvent('connected')
 
@@ -452,6 +459,7 @@ test('live Hyperswarm regression: remote reset during active send does not kill 
     ),
   ])
 
+  await Promise.all([ha.authorizeAfterIdentity(), hb.authorizeAfterIdentity()])
   await ha.waitEvent('connected')
   await hb.waitEvent('connected')
 

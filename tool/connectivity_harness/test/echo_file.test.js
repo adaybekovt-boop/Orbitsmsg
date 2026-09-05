@@ -7,15 +7,26 @@ const os = require('node:os')
 const path = require('node:path')
 const { Worklet } = require('../src/worklet')
 
+async function authorizeAll(worklet) {
+  for (const id of Array.from(worklet._peers.keys())) {
+    const rec = worklet._peers.get(id)
+    if (rec && rec.authState !== 'authenticated') {
+      await worklet.authorize(id)
+    }
+  }
+}
+
 async function pair() {
-  const a = new Worklet({ backend: 'loopback' })
-  const b = new Worklet({ backend: 'loopback' })
+  const a = new Worklet({ backend: 'loopback', allowHarnessFiles: true })
+  const b = new Worklet({ backend: 'loopback', allowHarnessFiles: true })
   const secret = Buffer.alloc(32, 9)
   await a.start({ peerId: 'A', discoverySecret: secret })
   await b.start({ peerId: 'B', discoverySecret: secret })
   await a.publish({ deviceId: 'a' })
   await b.publish({ deviceId: 'b' })
   await a.connect({ port: b._loop.port })
+  await authorizeAll(a)
+  await authorizeAll(b)
   const peerId = Array.from(a._peers.keys())[0]
   return { a, b, peerId }
 }
@@ -146,10 +157,12 @@ test('sendFile resumes after interrupt and rejects mutation', async () => {
   await assert.rejects(pending)
   const statePath = path.join(os.tmpdir(), 'orbits-transfers', id + '.json')
   const resumeFrom = Math.max(0, firstOffset)
-  const second = new Worklet({ backend: 'loopback' })
+  const second = new Worklet({ backend: 'loopback', allowHarnessFiles: true })
   try {
     await second.start({ peerId: 'A2', discoverySecret: Buffer.alloc(32, 9) })
     await second.connect({ port: b._loop.port })
+    await authorizeAll(second)
+    await authorizeAll(b)
     const secondPeer = Array.from(second._peers.keys())[0]
     const done = new Promise((resolve) => {
       const prevB = b._emit

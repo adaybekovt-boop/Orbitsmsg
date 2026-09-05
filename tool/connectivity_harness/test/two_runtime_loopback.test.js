@@ -106,6 +106,10 @@ test('two official Bare worklets exchange a payload over loopback', async (t) =>
   })
   assert.ok(startedA.port)
   await hb.request('connect', { port: startedA.port })
+  const pendingA = await ha.waitEvent('identity-pending')
+  const pendingB = await hb.waitEvent('identity-pending')
+  await ha.request('authorize', { peerId: pendingA.payload.peerId })
+  await hb.request('authorize', { peerId: pendingB.payload.peerId })
   const connected = await ha.waitEvent('connected')
   assert.ok(connected.payload.peerId)
   await ha.request('send', {

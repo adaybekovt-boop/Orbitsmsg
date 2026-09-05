@@ -104,6 +104,19 @@ class TransportAuthenticated extends TransportEvent {
   final List<int>? connectionNoisePublicKey;
 }
 
+/// Carrier has a logical peer and binding, but application traffic is
+/// still gated until Dart authorizes or denies the certificate.
+class TransportIdentityPending extends TransportEvent {
+  const TransportIdentityPending(
+    this.peerId,
+    this.binding, {
+    this.connectionNoisePublicKey,
+  });
+  final String peerId;
+  final DeviceBinding binding;
+  final List<int>? connectionNoisePublicKey;
+}
+
 class TransportFrame extends TransportEvent {
   const TransportFrame(this.peerId, this.channel, this.bytes);
   final String peerId;

@@ -12,6 +12,17 @@ const { contactDiscoveryTopic } = require('./discovery')
 const { LoopbackBackend } = require('./loopback')
 const { REQUEST, RESPONSE, EVENT, encode, Decoder } = require('./ipc')
 const { openJournal } = require('./corestore_journal')
+const incomingPaths = require('./incoming_paths')
+
+const AUTH_IDENTITY_PENDING = 'identity-pending'
+const AUTH_AUTHENTICATED = 'authenticated'
+const AUTH_REJECTED = 'rejected'
+const PRE_AUTH_TYPES = new Set(['orbits-identity'])
+const HARNESS_FILE_TYPES = new Set([
+  'harness-file-start',
+  'harness-file-chunk',
+  'harness-file-end',
+])
 
 const FILE_CHUNK = 64 * 1024
 
@@ -89,6 +100,11 @@ class Worklet {
     this._connWaiters = []
     this._argvStorage = opts.storageDir || null
     this._emit = opts.emit || ((name, payload) => this.events.push({ name, payload }))
+    this.allowHarnessFiles =
+      opts.allowHarnessFiles === true ||
+      (process.env && process.env.ORBITS_HARNESS_FILES === '1')
+    this._incomingRoot = null
+    this._authWaiters = new Map()
   }
 
   async start(config) {
@@ -108,6 +124,10 @@ class Worklet {
       storageDir,
       requireReal: config.requireRealCorestore === true || isBare,
     })
+    this._incomingBase =
+      storageDir ||
+      path.join(osTmp(), 'orbits-incoming-root', config.peerId || 'local')
+    this._incomingRoot = incomingPaths.incomingRoot(this._incomingBase)
     this._noiseSeed = noiseSeedToBuffer(config.noiseSeed)
     if (this.backend === 'loopback') {
       await this._loop.listen()
@@ -186,7 +206,8 @@ class Worklet {
     if (this.backend === 'loopback') {
       if (peer.port == null) throw new Error('loopback connect needs port')
       await this._loop.connect(peer.port)
-      if (targetPeerId && this._peers.has(targetPeerId)) {
+      const existing = targetPeerId ? this._peers.get(targetPeerId) : null
+      if (existing && this._isTransportUp(existing)) {
         return { peerId: targetPeerId }
       }
     } else if (this.backend === 'hyperswarm') {
@@ -217,7 +238,7 @@ class Worklet {
 
     if (targetPeerId && this._peers.has(targetPeerId)) {
       const existing = this._peers.get(targetPeerId)
-      if (existing && existing.socket && !existing.socket.destroyed && !existing.closed) {
+      if (this._isTransportUp(existing)) {
         return { peerId: targetPeerId }
       }
     }
@@ -379,11 +400,60 @@ class Worklet {
     if (this._suspended) throw new Error('suspended')
     const peer = this._peers.get(peerId)
     if (!peer) throw new Error('not connected: ' + peerId)
+    if (peer.authState !== AUTH_AUTHENTICATED && channel !== 'control') {
+      throw new Error('application traffic before authorization')
+    }
     const payload = Buffer.isBuffer(frame) ? frame : Buffer.from(JSON.stringify(frame))
     peer.socket.write(encodeMux(channel, payload))
   }
 
+  async authorize(peerId) {
+    const peer = this._requirePeer(peerId)
+    if (peer.authState === AUTH_REJECTED) throw new Error('peer already rejected')
+    peer.authState = AUTH_AUTHENTICATED
+    this._resolveAuthWaiter(peer, true)
+    this._emitAuthenticated(peer)
+    return { peerId: peer.logicalPeerId || String(peerId), authorized: true }
+  }
+
+  async deny(peerId) {
+    const peer = this._requirePeer(peerId)
+    peer.authState = AUTH_REJECTED
+    this._resolveAuthWaiter(peer, false)
+    this._emit('rejected', { peerId: peer.logicalPeerId || String(peerId) })
+    this._handlePeerDisconnect(peer, new Error('authorization denied'))
+    return { peerId: String(peerId), authorized: false }
+  }
+
+  _requirePeer(peerId) {
+    const peer = this._peers.get(String(peerId))
+    if (!peer) throw new Error('unknown peer ' + peerId)
+    return peer
+  }
+
+  _isTransportUp(existing) {
+    return Boolean(
+      existing &&
+        existing.socket &&
+        !existing.socket.destroyed &&
+        !existing.closed &&
+        existing.authState !== AUTH_REJECTED,
+    )
+  }
+
+  _resolveAuthWaiter(peer, authorized) {
+    const id = peer.logicalPeerId || peer.alias
+    const waiter = id && this._authWaiters.get(id)
+    if (!waiter) return
+    this._authWaiters.delete(id)
+    waiter(authorized)
+  }
+
   async sendFile(peerId, file) {
+    const peer = this._peers.get(peerId)
+    if (!peer || peer.authState !== AUTH_AUTHENTICATED) {
+      throw new Error('application traffic before authorization')
+    }
     if (!file || typeof file.path !== 'string' || file.path.length === 0) {
       throw new Error('path required')
     }
@@ -624,7 +694,9 @@ class Worklet {
       decoder,
       noise,
       logicalPeerId: null,
+      authState: AUTH_IDENTITY_PENDING,
       emittedConnected: false,
+      emittedAuthenticated: false,
       closed: false,
     }
     this._connections.add(connRecord)
@@ -636,6 +708,7 @@ class Worklet {
     })
 
     socket.on('close', () => {
+      try { decoder.close() } catch {}
       this._handlePeerDisconnect(connRecord, null)
     })
 
@@ -646,6 +719,7 @@ class Worklet {
         frames = decoder.add(chunk)
       } catch (err) {
         // Bad mux chunk
+        try { decoder.close() } catch {}
         this._handlePeerDisconnect(connRecord, err)
         return
       }
@@ -654,11 +728,15 @@ class Worklet {
       }
     })
 
-    // If loopback backend, record info.id as an alias in _peers for backwards compatibility
+    // Loopback may alias the socket, but application traffic stays gated.
     if (this.backend === 'loopback' && info && info.id) {
       connRecord.alias = info.id
       this._peers.set(info.id, connRecord)
-      this._assignLogicalPeer(connRecord, info.id)
+      connRecord.authState = AUTH_IDENTITY_PENDING
+      this._emit('identity-pending', {
+        peerId: info.id,
+        path: (info && info.path) || 'unknown',
+      })
     }
 
     // Always announce our own identity immediately on connect
@@ -691,31 +769,23 @@ class Worklet {
 
   _assignLogicalPeer(connRecord, logicalPeerId, binding = null) {
     if (connRecord.closed) return
-    if (connRecord.logicalPeerId === logicalPeerId) return
+    if (connRecord.logicalPeerId === logicalPeerId && !binding) return
 
     connRecord.logicalPeerId = logicalPeerId
+    connRecord.binding = binding || connRecord.binding || null
+    if (connRecord.authState !== AUTH_AUTHENTICATED) {
+      connRecord.authState = AUTH_IDENTITY_PENDING
+    }
     this._peers.set(logicalPeerId, connRecord)
 
-    if (!connRecord.emittedConnected) {
-      connRecord.emittedConnected = true
-      if (binding) {
-        this._emit('authenticated', {
-          peerId: logicalPeerId,
-          binding,
-          connectionNoisePublicKey: connRecord.noise || null,
-        })
-      }
-      this._emit('connected', {
-        peerId: logicalPeerId,
-        path: (connRecord.info && connRecord.info.path) || 'unknown',
-      })
-      this._emit('pathChanged', {
-        peerId: logicalPeerId,
-        path: (connRecord.info && connRecord.info.path) || 'direct',
-      })
-    }
+    this._emit('identity-pending', {
+      peerId: logicalPeerId,
+      binding: connRecord.binding,
+      connectionNoisePublicKey: connRecord.noise || null,
+    })
 
-    // Resolve matching connection waiters (F-07)
+    // Connect waiters resolve once identity is known. Application
+    // traffic still waits for authorize().
     for (let i = this._connWaiters.length - 1; i >= 0; i--) {
       const waiter = this._connWaiters[i]
       if (!waiter.targetPeerId || waiter.targetPeerId === logicalPeerId) {
@@ -725,12 +795,41 @@ class Worklet {
     }
   }
 
+  _emitAuthenticated(connRecord) {
+    const logicalPeerId = connRecord.logicalPeerId || connRecord.alias
+    if (!logicalPeerId || connRecord.closed) return
+    if (!connRecord.emittedAuthenticated && connRecord.binding) {
+      connRecord.emittedAuthenticated = true
+      this._emit('authenticated', {
+        peerId: logicalPeerId,
+        binding: connRecord.binding,
+        connectionNoisePublicKey: connRecord.noise || null,
+      })
+    }
+    if (!connRecord.emittedConnected) {
+      connRecord.emittedConnected = true
+      this._emit('connected', {
+        peerId: logicalPeerId,
+        path: (connRecord.info && connRecord.info.path) || 'unknown',
+      })
+      this._emit('pathChanged', {
+        peerId: logicalPeerId,
+        path: (connRecord.info && connRecord.info.path) || 'direct',
+      })
+    }
+  }
+
   _handlePeerDisconnect(connRecord, err) {
     if (connRecord.closed) return
     connRecord.closed = true
 
     this._connections.delete(connRecord)
 
+    try {
+      if (connRecord.decoder && typeof connRecord.decoder.close === 'function') {
+        connRecord.decoder.close()
+      }
+    } catch {}
     try {
       connRecord.socket.destroy()
     } catch {}
@@ -767,51 +866,38 @@ class Worklet {
     try {
       body = JSON.parse(payload.toString('utf8'))
     } catch {
-      if (connRecord.logicalPeerId) {
-        this._emit('frame', { peerId: connRecord.logicalPeerId, channel, frameB64 })
+      if (connRecord.authState !== AUTH_AUTHENTICATED) {
+        this._handlePeerDisconnect(connRecord, new Error('pre-auth binary frame'))
+        return
       }
+      this._emit('frame', {
+        peerId: connRecord.logicalPeerId,
+        channel,
+        frameB64,
+      })
       return
     }
 
-    if (channel === 'control' && body && body.type === 'orbits-identity') {
-      if (this.backend === 'hyperswarm') {
-        const binding = body.binding
-        if (!binding || !binding.transportPublicKeyB64) {
-          this._handlePeerDisconnect(connRecord, new Error('IDENTITY_BINDING_REQUIRED'))
-          return
-        }
-        if (!connRecord.noise) {
-          this._handlePeerDisconnect(connRecord, new Error('NOISE_KEY_MISSING'))
-          return
-        }
-        try {
-          const transportHex = Buffer.from(binding.transportPublicKeyB64, 'base64').toString('hex')
-          if (transportHex !== connRecord.noise) {
-            this._handlePeerDisconnect(connRecord, new Error('NOISE_KEY_MISMATCH: transport public key does not match connection Noise key'))
-            return
-          }
-        } catch (err) {
-          this._handlePeerDisconnect(connRecord, err)
-          return
-        }
-        const logical = binding.ownerPeerId || binding.peerId
-        if (!logical) {
-          this._handlePeerDisconnect(connRecord, new Error('IDENTITY_OWNER_REQUIRED'))
-          return
-        }
-        this._assignLogicalPeer(connRecord, String(logical), binding)
-      } else if (body.peerId) {
-        this._assignLogicalPeer(connRecord, String(body.peerId), body.binding || null)
+    const type = body && body.type
+    if (channel === 'control' && type === 'orbits-identity') {
+      this._handleIdentityFrame(connRecord, body)
+      return
+    }
+
+    if (connRecord.authState !== AUTH_AUTHENTICATED) {
+      if (!PRE_AUTH_TYPES.has(type)) {
+        this._handlePeerDisconnect(connRecord, new Error('pre-auth frame: ' + (type || channel)))
       }
+      return
     }
 
     const peerId = connRecord.logicalPeerId
     if (!peerId) {
-      // Logical identity not yet known, wait until orbits-identity frame arrives (F-13)
+      this._handlePeerDisconnect(connRecord, new Error('authenticated without logical peer'))
       return
     }
 
-    if (channel === 'message' && body.type === 'harness-echo') {
+    if (channel === 'message' && type === 'harness-echo') {
       this.send(peerId, 'message', {
         type: 'harness-echo-reply',
         id: body.id,
@@ -820,73 +906,157 @@ class Worklet {
     }
 
     if (channel === 'attachment' && body) {
-      const type = body.type
-      if (type === 'harness-file-start' || type === 'file-start') {
-        const id = String(body.id || '')
-        if (id) {
-          const safeName = path.basename(String(body.name || id)).replace(/[\x00-\x1f\\/:*?"<>|]/g, '_')
-          const tempDir = path.join(osTmp(), 'orbits-incoming')
-          try { fs.mkdirSync(tempDir, { recursive: true }) } catch {}
-          const tempPath = path.join(tempDir, `${id}-${safeName}`)
-          try {
-            const fd = fs.openSync(tempPath, 'w')
-            this._incomingFiles = this._incomingFiles || new Map()
-            this._incomingFiles.set(id, {
-              fd,
-              path: tempPath,
-              name: safeName,
-              size: Number(body.size || 0),
-              sha256: body.sha256 || null,
-              hasher: createHash('sha256'),
-              writtenBytes: 0,
-            })
-          } catch {}
-        }
-      } else if (type === 'harness-file-chunk' || type === 'file-chunk') {
-        const id = String(body.id || '')
-        this._incomingFiles = this._incomingFiles || new Map()
-        const incoming = this._incomingFiles.get(id)
-        if (incoming && body.b64) {
-          const chunkBuf = Buffer.from(body.b64, 'base64')
-          const offset = Number(body.offset || 0)
-          try {
-            fs.writeSync(incoming.fd, chunkBuf, 0, chunkBuf.length, offset)
-            incoming.hasher.update(chunkBuf)
-            incoming.writtenBytes += chunkBuf.length
-          } catch {}
-        }
-      } else if (type === 'harness-file-end' || type === 'file-end') {
-        const id = String(body.id || '')
-        this._incomingFiles = this._incomingFiles || new Map()
-        const incoming = this._incomingFiles.get(id)
-        if (incoming) {
-          this._incomingFiles.delete(id)
-          try {
-            fs.closeSync(incoming.fd)
-            const actualSha = incoming.hasher.digest('hex')
-            const expectedSha = body.sha256 || incoming.sha256
-            if (expectedSha && actualSha !== expectedSha) {
-              try { fs.unlinkSync(incoming.path) } catch {}
-              this._emit('error', { code: 'file-hash', message: 'attachment hash mismatch' })
-            } else {
-              this._emit('frame', {
-                peerId,
-                channel: 'attachment',
-                body: {
-                  type: 'harness-file-received',
-                  id,
-                  path: incoming.path,
-                  size: incoming.writtenBytes,
-                  sha256: actualSha,
-                },
-              })
-            }
-          } catch {}
-        }
-      }
+      this._handleAttachmentFrame(connRecord, peerId, body)
     }
 
     this._emit('frame', { peerId, channel, body, frameB64 })
+  }
+
+  _handleIdentityFrame(connRecord, body) {
+    if (this.backend === 'hyperswarm') {
+      const binding = body.binding
+      if (!binding || !binding.transportPublicKeyB64) {
+        this._handlePeerDisconnect(connRecord, new Error('IDENTITY_BINDING_REQUIRED'))
+        return
+      }
+      if (!connRecord.noise) {
+        this._handlePeerDisconnect(connRecord, new Error('NOISE_KEY_MISSING'))
+        return
+      }
+      try {
+        const transportHex = Buffer.from(binding.transportPublicKeyB64, 'base64').toString('hex')
+        if (transportHex !== connRecord.noise) {
+          this._handlePeerDisconnect(connRecord, new Error('NOISE_KEY_MISMATCH'))
+          return
+        }
+      } catch (err) {
+        this._handlePeerDisconnect(connRecord, err)
+        return
+      }
+      const logical = binding.ownerPeerId || binding.peerId
+      if (!logical) {
+        this._handlePeerDisconnect(connRecord, new Error('IDENTITY_OWNER_REQUIRED'))
+        return
+      }
+      this._assignLogicalPeer(connRecord, String(logical), binding)
+      return
+    }
+    if (body.peerId) {
+      this._assignLogicalPeer(connRecord, String(body.peerId), body.binding || null)
+    }
+  }
+
+  _handleAttachmentFrame(connRecord, peerId, body) {
+    const type = body.type
+    if (HARNESS_FILE_TYPES.has(type) && !this.allowHarnessFiles) {
+      this._handlePeerDisconnect(connRecord, new Error('harness-file-disabled'))
+      return
+    }
+    if (type === 'harness-file-start' || type === 'file-start') {
+      this._openIncomingOffer(connRecord, peerId, body)
+      return
+    }
+    if (type === 'harness-file-chunk' || type === 'file-chunk') {
+      this._writeIncomingChunk(peerId, body)
+      return
+    }
+    if (type === 'harness-file-end' || type === 'file-end') {
+      this._finishIncomingFile(peerId, body)
+    }
+  }
+
+  _openIncomingOffer(connRecord, peerId, body) {
+    let externalId
+    try {
+      externalId = incomingPaths.assertSafeTransferId(body.id)
+    } catch (err) {
+      this._handlePeerDisconnect(connRecord, err)
+      return
+    }
+    const trustedSender = incomingPaths.assertSafeSenderId(peerId)
+    const localId = incomingPaths.generateLocalStorageId()
+    const dir = incomingPaths.resolveIncomingDir(this._incomingBase, trustedSender, localId)
+    incomingPaths.assertInsideRoot(this._incomingRoot, dir)
+    fs.mkdirSync(dir, { recursive: true })
+    const tempPath = incomingPaths.blobPathFor(dir)
+    incomingPaths.assertInsideRoot(this._incomingRoot, tempPath)
+    const metaPath = path.join(dir, 'meta.json')
+    const meta = {
+      trustedSender,
+      trustedDevice: (connRecord.binding && connRecord.binding.deviceId) || null,
+      externalTransferId: externalId,
+      localTransferId: localId,
+      fileName: String(body.name || 'blob'),
+      expectedSize: Number(body.size || 0),
+      expectedHash: body.sha256 || null,
+      protocolVersion: 1,
+    }
+    fs.writeFileSync(metaPath, JSON.stringify(meta))
+    const flags = fs.existsSync(tempPath) ? 'r+' : 'wx'
+    const fd = fs.openSync(tempPath, flags)
+    this._incomingFiles = this._incomingFiles || new Map()
+    this._incomingFiles.set(`${trustedSender}|${externalId}`, {
+      fd,
+      path: tempPath,
+      dir,
+      name: meta.fileName,
+      size: meta.expectedSize,
+      sha256: meta.expectedHash,
+      hasher: createHash('sha256'),
+      writtenBytes: 0,
+      owner: trustedSender,
+      localId,
+    })
+  }
+
+  _writeIncomingChunk(peerId, body) {
+    let id
+    try {
+      id = incomingPaths.assertSafeTransferId(body.id)
+    } catch {
+      return
+    }
+    this._incomingFiles = this._incomingFiles || new Map()
+    const incoming = this._incomingFiles.get(`${peerId}|${id}`)
+    if (!incoming || !body.b64) return
+    const chunkBuf = Buffer.from(body.b64, 'base64')
+    const offset = Number(body.offset || 0)
+    fs.writeSync(incoming.fd, chunkBuf, 0, chunkBuf.length, offset)
+    incoming.hasher.update(chunkBuf)
+    incoming.writtenBytes += chunkBuf.length
+  }
+
+  _finishIncomingFile(peerId, body) {
+    let id
+    try {
+      id = incomingPaths.assertSafeTransferId(body.id)
+    } catch {
+      return
+    }
+    this._incomingFiles = this._incomingFiles || new Map()
+    const incoming = this._incomingFiles.get(`${peerId}|${id}`)
+    if (!incoming) return
+    this._incomingFiles.delete(`${peerId}|${id}`)
+    fs.closeSync(incoming.fd)
+    const actualSha = incoming.hasher.digest('hex')
+    const expectedSha = body.sha256 || incoming.sha256
+    if (expectedSha && actualSha !== expectedSha) {
+      try { fs.unlinkSync(incoming.path) } catch {}
+      this._emit('error', { code: 'file-hash', message: 'attachment hash mismatch' })
+      return
+    }
+    this._emit('frame', {
+      peerId,
+      channel: 'attachment',
+      body: {
+        type: 'harness-file-received',
+        id,
+        localId: incoming.localId,
+        path: incoming.path,
+        size: incoming.writtenBytes,
+        sha256: actualSha,
+      },
+    })
   }
 }
 
@@ -917,6 +1087,10 @@ async function handleIpcRequest(worklet, body) {
     case 'disconnect':
       await worklet.disconnect(params.peerId)
       return {}
+    case 'authorize':
+      return await worklet.authorize(params.peerId)
+    case 'deny':
+      return await worklet.deny(params.peerId)
     case 'send':
       await worklet.send(
         params.peerId,

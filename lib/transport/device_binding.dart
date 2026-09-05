@@ -88,6 +88,44 @@ bool deviceBindingClockIsValid(
   return true;
 }
 
+DeviceBinding? deviceBindingFromWire(Map<String, Object?>? raw) {
+  if (raw == null || raw.isEmpty) return null;
+  try {
+    final deviceId = raw['deviceId'] as String? ?? '';
+    final identity = _b64Field(raw['identityPublicKeyB64']);
+    final transport = _b64Field(raw['transportPublicKeyB64']);
+    final hypercore = _b64Field(raw['hypercorePublicKeyB64']);
+    final signature = _b64Field(raw['signatureB64']);
+    if (deviceId.isEmpty ||
+        identity.isEmpty ||
+        transport.isEmpty ||
+        signature.isEmpty) {
+      return null;
+    }
+    return DeviceBinding(
+      version: (raw['version'] as num?)?.toInt() ?? kDeviceBindingVersion,
+      identityPublicKey: identity,
+      deviceId: deviceId,
+      transportPublicKey: transport,
+      hypercorePublicKey: hypercore,
+      capabilities:
+          (raw['capabilities'] as List?)?.whereType<String>().toList() ??
+          const <String>[],
+      createdAt: (raw['createdAt'] as num?)?.toInt() ?? 0,
+      expiresAt: (raw['expiresAt'] as num?)?.toInt() ?? 0,
+      signatureByIdentityKey: signature,
+      ownerPeerId: raw['ownerPeerId'] as String? ?? '',
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
+Uint8List _b64Field(Object? raw) {
+  if (raw is! String || raw.isEmpty) return Uint8List(0);
+  return Uint8List.fromList(base64Decode(raw));
+}
+
 Uint8List? parseNoisePublicKey(Object? raw) {
   if (raw is List<int> && raw.length == 32) {
     return Uint8List.fromList(raw);

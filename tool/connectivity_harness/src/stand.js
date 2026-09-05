@@ -156,6 +156,14 @@ async function runPairOnce(model, rng, timeoutMs) {
     await a.publish({ deviceId: 'a' })
     await b.publish({ deviceId: 'b' })
     await a.connect({ port: b._loop.port })
+    for (const side of [a, b]) {
+      for (const id of side._peers.keys()) {
+        const rec = side._peers.get(id)
+        if (rec && rec.authState !== 'authenticated') {
+          await side.authorize(id)
+        }
+      }
+    }
     if (model.extraDelayMs) await delay(model.extraDelayMs)
     if (model.dropRate > 0 && rng() < model.dropRate) {
       await a.stop()

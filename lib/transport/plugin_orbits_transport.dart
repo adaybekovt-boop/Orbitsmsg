@@ -111,44 +111,36 @@ class PluginOrbitsTransport implements OrbitsTransport {
         _events.add(TransportConnecting(peerId));
       case 'connected':
         _events.add(TransportConnected(peerId));
+      case 'identity-pending':
+        final pending = deviceBindingFromWire(
+          (event['binding'] as Map?)?.cast<String, Object?>(),
+        );
+        if (pending != null) {
+          _events.add(
+            TransportIdentityPending(
+              peerId,
+              pending,
+              connectionNoisePublicKey: parseNoisePublicKey(
+                event['connectionNoisePublicKey'] ??
+                    pending.transportPublicKey,
+              ),
+            ),
+          );
+        }
       case 'authenticated':
-        final rawBinding = event['binding'] as Map<String, Object?>?;
-        if (rawBinding != null) {
-          try {
-            final binding = DeviceBinding(
-              version: (rawBinding['version'] as num?)?.toInt() ?? 1,
-              identityPublicKey: Uint8List.fromList(
-                base64Decode(rawBinding['identityPublicKeyB64'] as String? ?? ''),
+        final rawBinding = (event['binding'] as Map?)?.cast<String, Object?>();
+        final binding = deviceBindingFromWire(rawBinding);
+        if (binding != null) {
+          _events.add(
+            TransportAuthenticated(
+              peerId,
+              binding,
+              connectionNoisePublicKey: parseNoisePublicKey(
+                event['connectionNoisePublicKey'] ??
+                    rawBinding?['connectionNoisePublicKey'],
               ),
-              deviceId: rawBinding['deviceId'] as String? ?? '',
-              transportPublicKey: Uint8List.fromList(
-                base64Decode(rawBinding['transportPublicKeyB64'] as String? ?? ''),
-              ),
-              hypercorePublicKey: Uint8List.fromList(
-                base64Decode(rawBinding['hypercorePublicKeyB64'] as String? ?? ''),
-              ),
-              capabilities: (rawBinding['capabilities'] as List?)
-                      ?.whereType<String>()
-                      .toList() ??
-                  const <String>[],
-              createdAt: (rawBinding['createdAt'] as num?)?.toInt() ?? 0,
-              expiresAt: (rawBinding['expiresAt'] as num?)?.toInt() ?? 0,
-              signatureByIdentityKey: Uint8List.fromList(
-                base64Decode(rawBinding['signatureB64'] as String? ?? ''),
-              ),
-              ownerPeerId: rawBinding['ownerPeerId'] as String? ?? '',
-            );
-            _events.add(
-              TransportAuthenticated(
-                peerId,
-                binding,
-                connectionNoisePublicKey: parseNoisePublicKey(
-                  event['connectionNoisePublicKey'] ??
-                      rawBinding['connectionNoisePublicKey'],
-                ),
-              ),
-            );
-          } catch (_) {}
+            ),
+          );
         }
       case 'pathChanged':
         final pathStr = event['path'] as String? ?? 'unknown';

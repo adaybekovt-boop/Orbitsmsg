@@ -4,6 +4,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
@@ -25,6 +26,7 @@ const _bundledWorkletFiles = <String>[
   'stand.js',
   'corestore_journal.js',
   'bare_compat.js',
+  'incoming_paths.js',
 ];
 
 Future<WorkletOrbitsTransport?> spawnWorkletTransport({
@@ -108,18 +110,37 @@ Future<File?> extractBundledWorklet() async {
 
 class WorkletOrbitsTransport implements OrbitsTransport {
   WorkletOrbitsTransport._(this._proc, {this.runtime = 'node'}) {
-    _client = BareIpcClient(write: _proc.stdin.add);
-    _proc.stdout.listen(_client.addBytes);
-    _proc.stderr.listen((_) {});
+    _client = BareIpcClient(write: _writeSafe);
+    _stdoutSub = _proc.stdout.listen(
+      _client.addBytes,
+      onDone: () => _client.failAll(StateError('worklet stdout closed')),
+      onError: (Object err) => _client.failAll(err),
+    );
+    _stderrSub = _proc.stderr.listen((_) {});
     _sub = _client.events.listen(_onIpcEvent);
+    unawaited(
+      _proc.exitCode.then((code) {
+        _client.failAll(StateError('worklet exited: $code'));
+      }),
+    );
   }
 
   final Process _proc;
   final String runtime;
   late final BareIpcClient _client;
   late final StreamSubscription<Map<String, Object?>> _sub;
+  StreamSubscription<List<int>>? _stdoutSub;
+  StreamSubscription<List<int>>? _stderrSub;
   final _events = StreamController<TransportEvent>.broadcast();
   Uint8List? lastNoisePublicKey;
+  bool _stopped = false;
+
+  void _writeSafe(List<int> bytes) {
+    if (_stopped) {
+      throw StateError('ipc closed');
+    }
+    _proc.stdin.add(bytes);
+  }
 
   @override
   Stream<TransportEvent> get events => _events.stream;
@@ -137,17 +158,44 @@ class WorkletOrbitsTransport implements OrbitsTransport {
 
   @override
   Future<void> stop() async {
+    if (_stopped) return;
     try {
-      await _client.request('stop');
+      await _client.request('stop', const {}, const Duration(seconds: 3));
     } catch (_) {}
-    await _sub.cancel();
-    await _client.close();
+    _stopped = true;
     try {
-      _proc.kill(ProcessSignal.sigterm);
-    } catch (_) {
-      _proc.kill();
+      try {
+        _proc.kill(ProcessSignal.sigterm);
+      } catch (_) {
+        try {
+          _proc.kill();
+        } catch (_) {}
+      }
+      try {
+        await _proc.exitCode.timeout(const Duration(seconds: 2));
+      } catch (_) {
+        try {
+          _proc.kill(ProcessSignal.sigkill);
+        } catch (_) {}
+      }
+    } finally {
+      await _stdoutSub?.cancel();
+      await _stderrSub?.cancel();
+      await _sub.cancel();
+      await _client.close();
+      if (!_events.isClosed) {
+        await _events.close();
+      }
     }
-    await _events.close();
+  }
+
+  Future<void> confirmAuthorization(
+    String peerId, {
+    required bool authorized,
+  }) {
+    return _client.request(authorized ? 'authorize' : 'deny', {
+      'peerId': peerId,
+    });
   }
 
   @override
@@ -221,35 +269,26 @@ class WorkletOrbitsTransport implements OrbitsTransport {
         (event['payload'] as Map?)?.cast<String, Object?>() ??
         const <String, Object?>{};
     switch (name) {
-      case 'authenticated':
-        final rawBinding =
-            (payload['binding'] as Map?)?.cast<String, Object?>() ??
-            const <String, Object?>{};
-        try {
-          final binding = DeviceBinding(
-            version: (rawBinding['version'] as num?)?.toInt() ?? 1,
-            identityPublicKey: Uint8List.fromList(
-              base64Decode(rawBinding['identityPublicKeyB64'] as String? ?? ''),
+      case 'identity-pending':
+        final pending = deviceBindingFromWire(
+          (payload['binding'] as Map?)?.cast<String, Object?>(),
+        );
+        if (pending != null) {
+          _events.add(
+            TransportIdentityPending(
+              payload['peerId'] as String? ?? '',
+              pending,
+              connectionNoisePublicKey: parseNoisePublicKey(
+                payload['connectionNoisePublicKey'],
+              ),
             ),
-            deviceId: rawBinding['deviceId'] as String? ?? '',
-            transportPublicKey: Uint8List.fromList(
-              base64Decode(rawBinding['transportPublicKeyB64'] as String? ?? ''),
-            ),
-            hypercorePublicKey: Uint8List.fromList(
-              base64Decode(rawBinding['hypercorePublicKeyB64'] as String? ?? ''),
-            ),
-            capabilities:
-                (rawBinding['capabilities'] as List?)
-                    ?.whereType<String>()
-                    .toList() ??
-                const <String>[],
-            createdAt: (rawBinding['createdAt'] as num?)?.toInt() ?? 0,
-            expiresAt: (rawBinding['expiresAt'] as num?)?.toInt() ?? 0,
-            signatureByIdentityKey: Uint8List.fromList(
-              base64Decode(rawBinding['signatureB64'] as String? ?? ''),
-            ),
-            ownerPeerId: rawBinding['ownerPeerId'] as String? ?? '',
           );
+        }
+      case 'authenticated':
+        final binding = deviceBindingFromWire(
+          (payload['binding'] as Map?)?.cast<String, Object?>(),
+        );
+        if (binding != null) {
           _events.add(
             TransportAuthenticated(
               payload['peerId'] as String? ?? '',
@@ -259,7 +298,7 @@ class WorkletOrbitsTransport implements OrbitsTransport {
               ),
             ),
           );
-        } catch (_) {}
+        }
       case 'connected':
         _events.add(TransportConnected(payload['peerId'] as String? ?? ''));
       case 'disconnected':

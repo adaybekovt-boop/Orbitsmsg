@@ -5,8 +5,9 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:crypto/crypto.dart' show Hmac, sha256;
+import 'package:crypto/crypto.dart' show sha256;
 
+import '../attachments/attachment_keys.dart';
 import '../attachments/file_transfer_session.dart';
 import '../attachments/resumable_blob.dart';
 import '../calls/hyperswarm_signaling.dart';
@@ -18,6 +19,7 @@ import '../mailbox/mailbox_protocol.dart';
 import '../mailbox/mailbox_pump.dart';
 import '../mailbox/storage_peer_client.dart';
 import '../peer/helpers.dart';
+import '../replication/conversation_id.dart';
 import '../replication/file_journal.dart';
 import '../replication/hypercore_store.dart';
 import '../replication/memory_journal.dart';
@@ -55,9 +57,12 @@ class DualStackBridge {
     this.devices,
     TrustedIdentityStore? identities,
     this.confirmPeerAuthorization,
+    this.onRemoteRecord,
+    AttachmentKeyStore? attachmentKeys,
     HypercoreLocalStore? hypercore,
   }) : secrets = secrets ?? discoverySecretStore,
        identities = identities ?? TrustedIdentityStore(),
+       attachmentKeys = attachmentKeys ?? AttachmentKeyStore(),
        hypercore = hypercore ?? HypercoreLocalStore(selfDeviceId);
 
   final OrbitsTransport transport;
@@ -79,12 +84,15 @@ class DualStackBridge {
   final HypercoreLocalStore hypercore;
   final Future<void> Function(String peerId, {required bool authorized})?
       confirmPeerAuthorization;
+  final Future<void> Function(JournalRecord record)? onRemoteRecord;
+  final AttachmentKeyStore attachmentKeys;
   final MailboxPump _mailboxPump = MailboxPump();
   void Function(String peerId, Object packet)? onDrop;
 
   final Set<String> connecting = <String>{};
   final Set<String> connected = <String>{};
   final Set<String> authenticated = <String>{};
+  final Set<String> _authorizedPending = <String>{};
   final List<CapabilityRecord> remoteCapabilities = <CapabilityRecord>[];
   StreamSubscription<TransportEvent>? _sub;
   void Function(CallSignal signal, String from)? onCallSignal;
@@ -103,15 +111,22 @@ class DualStackBridge {
       TransportChannel.attachment,
       bytes,
     );
-    files.fileKeyFor = (peer, transferId) {
-      final secret = secrets.get(peer);
-      if (secret == null || secret.isEmpty) {
-        throw StateError('file transfer requires a discovery secret');
-      }
-      return Hmac(sha256, secret)
-          .convert(utf8.encode('orbits-file-v1|$transferId'))
-          .bytes;
+    files.keys = attachmentKeys;
+    files.announceKey = (peer, transferId, key, meta) async {
+      await sendEncrypted(
+        peer,
+        attachmentKeyMessage(
+          transferId: transferId,
+          key: key,
+          sender: selfPeerId(),
+          receiver: peer,
+          name: meta['name'] as String? ?? '',
+          size: (meta['size'] as num?)?.toInt() ?? 0,
+          sha256hex: meta['sha256'] as String? ?? '',
+        ),
+      );
     };
+    files.fileKeyFor = (peer, transferId) => attachmentKeys.require(peer, transferId);
   }
 
   Future<void> detach() async {
@@ -120,6 +135,7 @@ class DualStackBridge {
     connecting.clear();
     connected.clear();
     authenticated.clear();
+    _authorizedPending.clear();
     _expectedPeer.clear();
     _bindings.clear();
     _fingerprintOwner.clear();
@@ -482,7 +498,7 @@ class DualStackBridge {
     final record = journal.appendEnvelope(
       MessageEnvelopeCreated(
         eventId: id,
-        conversationId: peerId,
+        conversationId: conversationIdForPeers(selfPeerId(), peerId),
         senderIdentity: selfPeerId(),
         senderDeviceId: selfDeviceId,
         logicalSequence: journal.length + 1,
@@ -539,19 +555,28 @@ class DualStackBridge {
         connecting.add(normalizePeerId(peerId));
       case TransportConnected():
         break;
+      case TransportIdentityPending(
+        :final peerId,
+        :final binding,
+        :final connectionNoisePublicKey,
+      ):
+        unawaited(
+          _onIdentityPending(peerId, binding, connectionNoisePublicKey),
+        );
       case TransportAuthenticated(
         :final peerId,
         :final binding,
         :final connectionNoisePublicKey,
       ):
         unawaited(
-          _completeAuthentication(peerId, binding, connectionNoisePublicKey),
+          _onAuthenticated(peerId, binding, connectionNoisePublicKey),
         );
       case TransportDisconnected(:final peerId):
         final norm = normalizePeerId(peerId);
         connecting.remove(norm);
         connected.remove(norm);
         authenticated.remove(norm);
+        _authorizedPending.remove(norm);
         _expectedPeer.remove(norm);
         _bindings.remove(norm);
         files.forgetPeer(norm);
@@ -563,12 +588,65 @@ class DualStackBridge {
     }
   }
 
-  Future<void> _completeAuthentication(
+  Future<void> _onIdentityPending(
     String peerId,
     DeviceBinding binding,
     List<int>? connectionNoisePublicKey,
   ) async {
     final transportId = normalizePeerId(peerId);
+    if (authenticated.contains(transportId) ||
+        _authorizedPending.contains(transportId)) {
+      return;
+    }
+    if (!await _evaluateBinding(transportId, binding, connectionNoisePublicKey)) {
+      await _reject(transportId);
+      return;
+    }
+    _rememberAuthorizedPending(transportId, binding);
+    try {
+      await confirmPeerAuthorization?.call(transportId, authorized: true);
+    } catch (_) {
+      await _reject(transportId);
+    }
+  }
+
+  Future<void> _onAuthenticated(
+    String peerId,
+    DeviceBinding binding,
+    List<int>? connectionNoisePublicKey,
+  ) async {
+    final transportId = normalizePeerId(peerId);
+    final logical = binding.ownerPeerId.isNotEmpty
+        ? normalizePeerId(binding.ownerPeerId)
+        : transportId;
+    if (authenticated.contains(transportId) || authenticated.contains(logical)) {
+      return;
+    }
+    if (_authorizedPending.contains(transportId) ||
+        _authorizedPending.contains(logical)) {
+      _admitPeer(transportId, binding);
+      return;
+    }
+    // In-process loopback emits authenticated without a prior pending event.
+    if (!await _evaluateBinding(transportId, binding, connectionNoisePublicKey)) {
+      await _reject(transportId);
+      return;
+    }
+    _rememberAuthorizedPending(transportId, binding);
+    try {
+      await confirmPeerAuthorization?.call(transportId, authorized: true);
+    } catch (_) {
+      await _reject(transportId);
+      return;
+    }
+    _admitPeer(transportId, binding);
+  }
+
+  Future<bool> _evaluateBinding(
+    String transportId,
+    DeviceBinding binding,
+    List<int>? connectionNoisePublicKey,
+  ) async {
     final logical = binding.ownerPeerId.isNotEmpty
         ? normalizePeerId(binding.ownerPeerId)
         : '';
@@ -580,42 +658,51 @@ class DualStackBridge {
       identities: identities,
       devices: devices,
     );
-    if (!decided.accepted || logical.isEmpty) {
-      await _reject(transportId);
-      return;
-    }
+    if (!decided.accepted || logical.isEmpty) return false;
     final fp = bindingFingerprint(
       deviceId: binding.deviceId,
       signature: binding.signatureByIdentityKey,
       createdAt: binding.createdAt,
     );
     final previous = _fingerprintOwner[fp];
-    if (previous != null && previous != logical) {
-      await _reject(transportId);
-      return;
-    }
+    if (previous != null && previous != logical) return false;
     final expected = _expectedPeer[transportId] ?? _expectedPeer[logical];
     if (expected != null &&
         expected != logical &&
         !decided.ownDevicePrivileges) {
-      await _reject(transportId);
-      return;
+      return false;
     }
-
     _fingerprintOwner[fp] = logical;
+    return true;
+  }
+
+  void _rememberAuthorizedPending(String transportId, DeviceBinding binding) {
+    final logical = binding.ownerPeerId.isNotEmpty
+        ? normalizePeerId(binding.ownerPeerId)
+        : transportId;
     _bindings[logical] = binding;
     if (transportId != logical) {
       _bindings[transportId] = binding;
     }
+    _authorizedPending.add(logical);
+    if (transportId != logical) {
+      _authorizedPending.add(transportId);
+    }
+  }
+
+  void _admitPeer(String transportId, DeviceBinding binding) {
+    final logical = binding.ownerPeerId.isNotEmpty
+        ? normalizePeerId(binding.ownerPeerId)
+        : transportId;
     connecting.remove(transportId);
     connecting.remove(logical);
     connected.add(logical);
+    authenticated.add(logical);
+    _authorizedPending.remove(logical);
     if (transportId != logical) {
       connected.add(transportId);
-    }
-    authenticated.add(logical);
-    if (transportId != logical) {
       authenticated.add(transportId);
+      _authorizedPending.remove(transportId);
     }
     onPresence?.call(logical, true);
 
@@ -630,11 +717,6 @@ class DualStackBridge {
       );
     }
     _replayAuthorized(logical);
-    try {
-      await confirmPeerAuthorization?.call(transportId, authorized: true);
-    } catch (_) {
-      await _reject(transportId);
-    }
   }
 
   void _replayAuthorized(String peerId) {
@@ -665,6 +747,7 @@ class DualStackBridge {
     connecting.remove(peerId);
     connected.remove(peerId);
     authenticated.remove(peerId);
+    _authorizedPending.remove(peerId);
     try {
       await confirmPeerAuthorization?.call(peerId, authorized: false);
     } catch (_) {}
@@ -696,12 +779,16 @@ class DualStackBridge {
     }
     if (channel == TransportChannel.replication) {
       try {
-        hypercore.applyRemote(
+        final record = hypercore.applyRemote(
           decodeJsonPayload(bytes),
           authenticatedPeerId: norm,
           selfPeerId: selfPeerId(),
           peerIsOwnDevice: _isOwnDevice(norm),
         );
+        if (record != null) {
+          unawaited(durableJournal?.append(record));
+          unawaited(onRemoteRecord?.call(record));
+        }
       } catch (_) {}
       return;
     }
@@ -711,9 +798,18 @@ class DualStackBridge {
       if (isWireCiphertext(text)) {
         data = text;
         _appendEnvelope(norm, bytes);
+        unawaited(() async {
+          try {
+            final plain = await decryptWirePayload(norm, text);
+            tryAcceptAttachmentKeyMessage(attachmentKeys, norm, plain);
+          } catch (_) {}
+        }());
       } else {
         final decoded = decodeJsonPayload(bytes);
         data = decoded;
+        if (tryAcceptAttachmentKeyMessage(attachmentKeys, norm, decoded)) {
+          return;
+        }
         if (decoded['type'] == 'capabilities' ||
             decoded['type'] == 'wireHello') {
           try {
