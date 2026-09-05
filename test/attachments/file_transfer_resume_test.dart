@@ -3,6 +3,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbits_flutter/attachments/incoming_paths.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
@@ -20,30 +21,20 @@ void main() {
 
   test('sendFile resumes from confirmed offset and requires size+sha256 ACK', () async {
     setHyperswarmRollout(HyperswarmRollout.internal);
+    const alice = 'ORBIT-AAAAAAAAAAAAAAAA';
+    const bob = 'ORBIT-BBBBBBBBBBBBBBBB';
     final secret = List<int>.generate(32, (i) => 21);
     final pair = loopbackPair();
     final secrets = DiscoverySecretStore()
-      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
-      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
-    final bindA = await signedDeviceBinding(
-      peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
-      deviceId: 'a',
-    );
-    final bindB = await signedDeviceBinding(
-      peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
-      deviceId: 'b',
-    );
+      ..put(alice, secret)
+      ..put(bob, secret);
+    final bindA = await signedDeviceBinding(peerId: alice, deviceId: 'a');
+    final bindB = await signedDeviceBinding(peerId: bob, deviceId: 'b');
     await pair.$1.start(
-      TransportLocalConfiguration(
-        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
-        discoverySecret: secret,
-      ),
+      TransportLocalConfiguration(peerId: alice, discoverySecret: secret),
     );
     await pair.$2.start(
-      TransportLocalConfiguration(
-        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
-        discoverySecret: secret,
-      ),
+      TransportLocalConfiguration(peerId: bob, discoverySecret: secret),
     );
     await pair.$1.publish(bindA);
     await pair.$2.publish(bindB);
@@ -63,7 +54,7 @@ void main() {
     final a = DualStackBridge(
       transport: pair.$1,
       journal: MemoryJournal('a'),
-      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfPeerId: () => alice,
       selfDeviceId: 'a',
       secrets: secrets,
       devices: aliceDev,
@@ -74,7 +65,7 @@ void main() {
     final b = DualStackBridge(
       transport: pair.$2,
       journal: MemoryJournal('b'),
-      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfPeerId: () => bob,
       selfDeviceId: 'b',
       secrets: secrets,
       devices: bobDev,
@@ -85,34 +76,38 @@ void main() {
     b.onDrop = (peer, packet) {
       if (packet is Map) received.add(Map<String, Object?>.from(packet));
     };
-    await pair.$1.connect(
-      const PeerDescriptor(peerId: 'ORBIT-BBBBBBBBBBBBBBBB'),
-    );
+    await pair.$1.connect(const PeerDescriptor(peerId: bob));
     await Future<void>.delayed(const Duration(milliseconds: 50));
-    expect(a.isAuthenticated('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    expect(a.isAuthenticated(bob), isTrue);
 
     final dir = await Directory.systemTemp.createTemp('orbits-ft-');
     addTearDown(() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });
+    b.files.incomingBase = dir;
     final bytes = Uint8List.fromList(List<int>.generate(200000, (i) => i % 251));
     final src = File('${dir.path}/big.bin');
     await src.writeAsBytes(bytes, flush: true);
     final digest = sha256.convert(bytes).toString();
     final transferId = digest.substring(0, 16);
+    final key = a.attachmentKeys.issue(bob, transferId);
+    b.attachmentKeys.accept(alice, transferId, key);
+    a.files.announceKey = (_, __, ___, ____) async {};
 
-    final incomingDir = Directory(
-      '${Directory.systemTemp.path}${Platform.pathSeparator}orbits-incoming${Platform.pathSeparator}$transferId',
+    final localId = generateLocalTransferId();
+    final incoming = resolveIncomingDir(
+      base: dir,
+      trustedSenderId: alice,
+      localTransferId: localId,
     );
-    incomingDir.createSync(recursive: true);
-    File('${incomingDir.path}${Platform.pathSeparator}big.bin')
-        .writeAsBytesSync(bytes.sublist(0, 64 * 1024));
-    File('${incomingDir.path}${Platform.pathSeparator}.offer.json').writeAsStringSync(
-      '{"sha256":"$digest","size":${bytes.length},"name":"big.bin"}',
+    incoming.createSync(recursive: true);
+    blobFile(incoming).writeAsBytesSync(bytes.sublist(0, 64 * 1024));
+    metaFile(incoming).writeAsStringSync(
+      '{"trustedSender":"${trustedSenderDirName(alice)}","externalTransferId":"$transferId","localTransferId":"$localId","fileName":"big.bin","size":${bytes.length},"sha256":"$digest","protocolVersion":1}',
     );
 
     await a.sendFile(
-      'ORBIT-BBBBBBBBBBBBBBBB',
+      bob,
       TransportFileDescriptor(
         path: src.path,
         sizeBytes: bytes.length,
@@ -125,5 +120,9 @@ void main() {
     expect(done['size'], bytes.length);
     expect(done['sha256'], digest);
     expect(File(done['path'] as String).readAsBytesSync(), bytes);
+    expect(
+      File(done['path'] as String).path.contains('${dir.path}${Platform.pathSeparator}orbits-incoming'),
+      isTrue,
+    );
   });
 }

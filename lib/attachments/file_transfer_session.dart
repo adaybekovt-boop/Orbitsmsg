@@ -11,6 +11,8 @@ import 'package:crypto/crypto.dart';
 
 import '../transport/mux_frames.dart';
 import '../transport/transport_api.dart';
+import 'attachment_keys.dart';
+import 'incoming_paths.dart';
 import 'resumable_blob.dart';
 
 const String kFileTransferProtocol = 'orbits-file-v1';
@@ -19,11 +21,20 @@ const int kFileTransferChunk = 64 * 1024;
 typedef FileDropSink = void Function(String peerId, Object packet);
 typedef FileFrameSend = Future<void> Function(String peerId, List<int> bytes);
 typedef FileKeyFor = List<int> Function(String peerId, String transferId);
+typedef FileKeyAnnounce = Future<void> Function(
+  String peerId,
+  String transferId,
+  List<int> key,
+  Map<String, Object?> meta,
+);
 
 class FileTransferCoordinator {
   FileDropSink? onDrop;
   FileFrameSend? send;
   FileKeyFor? fileKeyFor;
+  FileKeyAnnounce? announceKey;
+  AttachmentKeyStore? keys;
+  Directory incomingBase = Directory.systemTemp;
 
   final Map<String, Completer<Map<String, Object?>>> _waits =
       <String, Completer<Map<String, Object?>>>{};
@@ -40,6 +51,7 @@ class FileTransferCoordinator {
       incoming.close();
     }
     _incoming.clear();
+    keys?.clear();
   }
 
   void forgetPeer(String peerId) {
@@ -56,6 +68,7 @@ class FileTransferCoordinator {
         _incoming.remove(key)?.close();
       }
     }
+    keys?.forgetPeer(peerId);
   }
 
   Future<void> sendPath(String peerId, TransportFileDescriptor file) async {
@@ -70,17 +83,38 @@ class FileTransferCoordinator {
     final digest = await sha256File(source);
     final transferId = file.transferId ?? digest.substring(0, 16);
     final name = file.fileName ?? source.uri.pathSegments.last;
-    await _emit(peerId, {
-      'type': 'file-offer',
-      'protocol': kFileTransferProtocol,
-      'transferId': transferId,
-      'name': name,
-      'size': size,
-      'sha256': digest,
-      'mime': file.mime,
-    });
-    final accept = await _wait(peerId, 'file-accept|$transferId');
-    final resume = (accept['resumeOffset'] as num?)?.toInt() ?? 0;
+    final store = keys;
+    if (store != null && !store.has(peerId, transferId)) {
+      store.issue(peerId, transferId);
+    }
+    final key = _requireKey(peerId, transferId);
+    final announce = announceKey;
+    if (announce != null) {
+      await announce(peerId, transferId, key, <String, Object?>{
+        'name': name,
+        'size': size,
+        'sha256': digest,
+        'protocol': kFileTransferProtocol,
+      });
+    }
+    final accept = _wait(peerId, 'file-accept|$transferId');
+    try {
+      await _emit(peerId, {
+        'type': 'file-offer',
+        'protocol': kFileTransferProtocol,
+        'transferId': transferId,
+        'name': name,
+        'size': size,
+        'sha256': digest,
+        'mime': file.mime,
+        'sender': peerId,
+      });
+    } catch (err) {
+      _forgetWait(peerId, 'file-accept|$transferId');
+      rethrow;
+    }
+    final accepted = await accept;
+    final resume = (accepted['resumeOffset'] as num?)?.toInt() ?? 0;
     if (resume < 0 || resume > size) {
       throw StateError('malformed resume offset');
     }
@@ -116,14 +150,20 @@ class FileTransferCoordinator {
     } finally {
       await raf.close();
     }
-    await _emit(peerId, {
-      'type': 'file-complete',
-      'protocol': kFileTransferProtocol,
-      'transferId': transferId,
-      'size': size,
-      'sha256': digest,
-    });
-    final ack = await _wait(peerId, 'file-ack|$transferId');
+    final ackFuture = _wait(peerId, 'file-ack|$transferId');
+    try {
+      await _emit(peerId, {
+        'type': 'file-complete',
+        'protocol': kFileTransferProtocol,
+        'transferId': transferId,
+        'size': size,
+        'sha256': digest,
+      });
+    } catch (err) {
+      _forgetWait(peerId, 'file-ack|$transferId');
+      rethrow;
+    }
+    final ack = await ackFuture;
     if (ack['ok'] != true) {
       throw StateError(ack['error'] as String? ?? 'file not acknowledged');
     }
@@ -158,6 +198,9 @@ class FileTransferCoordinator {
       }
       return true;
     }
+    if (keys != null && tryAcceptAttachmentKeyMessage(keys!, peerId, body)) {
+      return true;
+    }
     if (type == 'file-offer') {
       unawaited(_acceptOffer(peerId, body));
       return true;
@@ -180,24 +223,46 @@ class FileTransferCoordinator {
     final id = body['transferId'] as String? ?? '';
     final size = (body['size'] as num?)?.toInt() ?? 0;
     final digest = body['sha256'] as String? ?? '';
-    final name = (body['name'] as String? ?? id).replaceAll(
+    final name = (body['name'] as String? ?? 'blob').replaceAll(
       RegExp(r'[\x00-\x1f\\/:*?"<>|]'),
       '_',
     );
-    final safeId = id.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
-    final dir = Directory(
-      '${Directory.systemTemp.path}${Platform.pathSeparator}orbits-incoming${Platform.pathSeparator}$safeId',
+    assertSafePathFragment(
+      id.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_'),
+      label: 'transfer-id',
+    );
+    var localId = generateLocalTransferId();
+    final existing = _incoming['$peerId|$id'];
+    if (existing != null) {
+      existing.close();
+      localId = existing.localId;
+    } else {
+      final reused = _lookupExistingTransfer(
+        peerId: peerId,
+        externalId: id,
+        digest: digest,
+        size: size,
+      );
+      if (reused != null) localId = reused;
+    }
+    final dir = resolveIncomingDir(
+      base: incomingBase,
+      trustedSenderId: peerId,
+      localTransferId: localId,
     );
     dir.createSync(recursive: true);
-    final dest = File('${dir.path}${Platform.pathSeparator}$name');
-    final meta = File('${dir.path}${Platform.pathSeparator}.offer.json');
+    final dest = blobFile(dir);
+    final meta = metaFile(dir);
     var resume = 0;
     if (dest.existsSync() && meta.existsSync()) {
       try {
         final prev = Map<String, Object?>.from(
           jsonDecode(meta.readAsStringSync()) as Map,
         );
-        if (prev['sha256'] == digest && (prev['size'] as num?)?.toInt() == size) {
+        if (prev['sha256'] == digest &&
+            (prev['size'] as num?)?.toInt() == size &&
+            prev['trustedSender'] == trustedSenderDirName(peerId) &&
+            prev['externalTransferId'] == id) {
           resume = dest.lengthSync();
           if (resume > size) resume = 0;
         }
@@ -206,25 +271,36 @@ class FileTransferCoordinator {
       }
     }
     meta.writeAsStringSync(
-      jsonEncode(<String, Object?>{'sha256': digest, 'size': size, 'name': name}),
+      jsonEncode(<String, Object?>{
+        'trustedSender': trustedSenderDirName(peerId),
+        'externalTransferId': id,
+        'localTransferId': localId,
+        'fileName': name,
+        'size': size,
+        'sha256': digest,
+        'protocolVersion': 1,
+      }),
     );
+    assertInsideRoot(incomingRoot(incomingBase), dest);
     final raf = dest.openSync(mode: resume > 0 ? FileMode.append : FileMode.write);
     if (resume > 0) {
       raf.setPositionSync(resume);
     }
     _incoming['$peerId|$id'] = _IncomingFile(
       id: id,
+      localId: localId,
       peerId: peerId,
       file: dest,
       raf: raf,
       size: size,
-      sha256hex: body['sha256'] as String? ?? '',
+      sha256hex: digest,
       written: resume,
     );
     await _emit(peerId, {
       'type': 'file-accept',
       'protocol': kFileTransferProtocol,
       'transferId': id,
+      'localTransferId': localId,
       'resumeOffset': resume,
     });
   }
@@ -290,6 +366,13 @@ class FileTransferCoordinator {
       });
       return;
     }
+    onDrop?.call(peerId, {
+      'type': 'harness-file-received',
+      'id': id,
+      'path': incoming.file.path,
+      'size': size,
+      'sha256': actual,
+    });
     await _emit(peerId, {
       'type': 'file-ack',
       'protocol': kFileTransferProtocol,
@@ -297,13 +380,6 @@ class FileTransferCoordinator {
       'ok': true,
       'sha256': actual,
       'size': size,
-    });
-    onDrop?.call(peerId, {
-      'type': 'harness-file-received',
-      'id': id,
-      'path': incoming.file.path,
-      'size': size,
-      'sha256': actual,
     });
   }
 
@@ -330,14 +406,58 @@ class FileTransferCoordinator {
     _waits['$peerId|$key'] = completer;
     return completer.future.timeout(
       const Duration(seconds: 45),
-      onTimeout: () => throw StateError('file transfer timeout: $key'),
+      onTimeout: () {
+        _forgetWait(peerId, key);
+        throw StateError('file transfer timeout: $key');
+      },
     );
+  }
+
+  String? _lookupExistingTransfer({
+    required String peerId,
+    required String externalId,
+    required String digest,
+    required int size,
+  }) {
+    final sender = trustedSenderDirName(peerId);
+    final root = Directory(
+      '${incomingRoot(incomingBase).path}${Platform.pathSeparator}$sender',
+    );
+    if (!root.existsSync()) return null;
+    for (final entity in root.listSync()) {
+      if (entity is! Directory) continue;
+      final meta = metaFile(entity);
+      if (!meta.existsSync()) continue;
+      try {
+        final prev = Map<String, Object?>.from(
+          jsonDecode(meta.readAsStringSync()) as Map,
+        );
+        if (prev['externalTransferId'] == externalId &&
+            prev['sha256'] == digest &&
+            (prev['size'] as num?)?.toInt() == size &&
+            prev['trustedSender'] == sender) {
+          return prev['localTransferId'] as String? ??
+              entity.uri.pathSegments
+                  .where((s) => s.isNotEmpty)
+                  .last;
+        }
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  void _forgetWait(String peerId, String key) {
+    final wait = _waits.remove('$peerId|$key');
+    if (wait != null && !wait.isCompleted) {
+      wait.completeError(StateError('file transfer cancelled: $key'));
+    }
   }
 }
 
 class _IncomingFile {
   _IncomingFile({
     required this.id,
+    required this.localId,
     required this.peerId,
     required this.file,
     required this.raf,
@@ -347,6 +467,7 @@ class _IncomingFile {
   });
 
   final String id;
+  final String localId;
   final String peerId;
   final File file;
   final RandomAccessFile raf;
