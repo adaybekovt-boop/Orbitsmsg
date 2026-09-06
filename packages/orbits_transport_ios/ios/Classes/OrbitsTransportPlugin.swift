@@ -48,6 +48,14 @@ public class OrbitsTransportPlugin: NSObject, FlutterPlugin {
       DispatchQueue.global(qos: .userInitiated).async {
         self.reply(result) { try self.disconnect(args: args, raw: call.arguments) }
       }
+    case "authorize":
+      DispatchQueue.global(qos: .userInitiated).async {
+        self.reply(result) { try self.authorize(args: args, authorized: true) }
+      }
+    case "deny":
+      DispatchQueue.global(qos: .userInitiated).async {
+        self.reply(result) { try self.authorize(args: args, authorized: false) }
+      }
     case "send":
       DispatchQueue.global(qos: .userInitiated).async {
         self.reply(result) { try self.send(args: args) }
@@ -164,6 +172,19 @@ public class OrbitsTransportPlugin: NSObject, FlutterPlugin {
       peerId = args["peerId"] as? String ?? ""
     }
     return try OrbitsBareRuntime.request("disconnect", params: ["peerId": peerId], timeoutMs: 10_000)
+  }
+
+  private func authorize(args: [String: Any], authorized: Bool) throws -> Any? {
+    try requireStarted()
+    let peerId = args["peerId"] as? String ?? ""
+    if peerId.isEmpty {
+      throw FlutterError(code: "MALFORMED", message: "authorization requires peerId", details: nil)
+    }
+    return try OrbitsBareRuntime.request(
+      authorized ? "authorize" : "deny",
+      params: ["peerId": peerId],
+      timeoutMs: 10_000
+    )
   }
 
   private func send(args: [String: Any]) throws -> Any? {
