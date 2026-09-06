@@ -36,7 +36,8 @@ class PluginOrbitsTransport implements OrbitsTransport {
       'remoteJs': false,
       'requireRealCorestore': true,
       'ipcVersion': kOrbitsBareIpcInfo,
-      if (config.noiseSeed != null) 'noiseSeed': config.noiseSeed,
+      if (config.noiseSeed != null)
+        'noiseSeed': encodeNoiseSeedHex(config.noiseSeed!),
     });
     final info = await plugin.runtimeInfo();
     lastNoisePublicKey = parseNoisePublicKey(info['noisePublicKey']);
@@ -82,6 +83,10 @@ class PluginOrbitsTransport implements OrbitsTransport {
 
   @override
   Future<void> disconnect(String peerId) => plugin.disconnect(peerId);
+
+  @override
+  Future<void> authorizePeer(String peerId, {required bool authorized}) =>
+      plugin.authorizePeer(peerId, authorized: authorized);
 
   @override
   Future<void> send(String peerId, TransportChannel channel, List<int> frame) {
