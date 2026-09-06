@@ -46,6 +46,12 @@ abstract class OrbitsTransportPlatform extends PlatformInterface {
   Future<void> unpublish();
   Future<void> connect(Map<String, Object?> peer);
   Future<void> disconnect(String peerId);
+
+  /// Resolve a runtime identity-pending gate. Platforms that do not implement
+  /// the Bare IPC authorization contract fail closed by default.
+  Future<void> authorizePeer(String peerId, {required bool authorized}) =>
+      Future<void>.error(UnimplementedError('authorizePeer'));
+
   Future<void> send(String peerId, String channel, List<int> frame);
   Future<void> sendFile(String peerId, String path, int sizeBytes);
   Future<void> suspend();
