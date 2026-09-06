@@ -133,6 +133,7 @@ class WorkletOrbitsTransport implements OrbitsTransport {
   StreamSubscription<List<int>>? _stderrSub;
   final _events = StreamController<TransportEvent>.broadcast();
   Uint8List? lastNoisePublicKey;
+  Uint8List? lastHypercorePublicKey;
   bool _stopped = false;
 
   void _writeSafe(List<int> bytes) {
@@ -151,9 +152,11 @@ class WorkletOrbitsTransport implements OrbitsTransport {
       'peerId': config.peerId,
       'discoverySecret': config.discoverySecret,
       'relayForced': config.relayForced,
-      if (config.noiseSeed != null) 'noiseSeed': config.noiseSeed,
+      if (config.noiseSeed != null)
+        'noiseSeed': encodeNoiseSeedHex(config.noiseSeed!),
     });
     lastNoisePublicKey = parseNoisePublicKey(started['noisePublicKey']);
+    lastHypercorePublicKey = parseNoisePublicKey(started['hypercorePublicKey']);
   }
 
   @override
@@ -192,7 +195,10 @@ class WorkletOrbitsTransport implements OrbitsTransport {
   Future<void> confirmAuthorization(
     String peerId, {
     required bool authorized,
-  }) {
+  }) => authorizePeer(peerId, authorized: authorized);
+
+  @override
+  Future<void> authorizePeer(String peerId, {required bool authorized}) {
     return _client.request(authorized ? 'authorize' : 'deny', {
       'peerId': peerId,
     });
