@@ -22,6 +22,12 @@ class OrbitsTransportPlugin {
   Future<void> disconnect(String peerId) =>
       OrbitsTransportPlatform.instance.disconnect(peerId);
 
+  Future<void> authorizePeer(String peerId, {required bool authorized}) =>
+      OrbitsTransportPlatform.instance.authorizePeer(
+        peerId,
+        authorized: authorized,
+      );
+
   Future<void> send(String peerId, String channel, List<int> frame) =>
       OrbitsTransportPlatform.instance.send(peerId, channel, frame);
 
