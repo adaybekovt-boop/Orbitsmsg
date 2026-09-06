@@ -61,7 +61,7 @@ class LocalWorkletPlatform extends OrbitsTransportPlatform {
         peerId: config['peerId'] as String? ?? '',
         discoverySecret: (config['discoverySecret'] as List?)?.cast<int>(),
         relayForced: config['relayForced'] == true,
-        noiseSeed: (config['noiseSeed'] as List?)?.cast<int>(),
+        noiseSeed: _decodeNoiseSeedHex(config['noiseSeed']),
       ),
     );
   }
@@ -133,6 +133,10 @@ class LocalWorkletPlatform extends OrbitsTransportPlatform {
   Future<void> disconnect(String peerId) => _require().disconnect(peerId);
 
   @override
+  Future<void> authorizePeer(String peerId, {required bool authorized}) =>
+      _require().confirmAuthorization(peerId, authorized: authorized);
+
+  @override
   Future<void> send(String peerId, String channel, List<int> frame) {
     assertIpcFrameSize(frame);
     final named = TransportChannel.values.firstWhere(
@@ -175,6 +179,17 @@ class LocalWorkletPlatform extends OrbitsTransportPlatform {
     } catch (_) {
       return Uint8List(0);
     }
+  }
+
+  List<int>? _decodeNoiseSeedHex(Object? raw) {
+    if (raw == null) return null;
+    if (raw is! String || !RegExp(r'^[0-9a-f]{64}$').hasMatch(raw)) {
+      throw StateError('noiseSeed must be 64 lowercase hex characters');
+    }
+    return List<int>.generate(
+      32,
+      (i) => int.parse(raw.substring(i * 2, i * 2 + 2), radix: 16),
+    );
   }
 
   bool _isPlaceholder(List<int> bytes) {
