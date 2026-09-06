@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/mailbox/blind_store.dart';
+import 'package:orbits_flutter/mailbox/mailbox_protocol.dart';
 
 void main() {
   test('recipient can fetch after the sender is gone', () {
@@ -17,13 +18,13 @@ void main() {
       writerKey: 'writer-a',
       block: EncryptedBlock(
         seq: 0,
-        bytes: const [1, 2, 3],
+        bytes: wrapOpaqueEnvelope(const [1, 2, 3]),
         storedAt: DateTime.now().millisecondsSinceEpoch,
       ),
     );
     final blocks = store.get(token: 'cap-1', writerKey: 'writer-a');
     expect(blocks, hasLength(1));
-    expect(blocks.first.bytes, [1, 2, 3]);
+    expect(requireOpaqueEnvelope(blocks.first.bytes), [1, 2, 3]);
   });
 
   test('anonymous and over-quota writes are rejected', () {
@@ -53,7 +54,7 @@ void main() {
         writerKey: 'w',
         block: EncryptedBlock(
           seq: 0,
-          bytes: const [1, 2, 3],
+          bytes: wrapOpaqueEnvelope(const [1, 2, 3]),
           storedAt: DateTime.now().millisecondsSinceEpoch,
         ),
       ),
@@ -76,7 +77,7 @@ void main() {
       writerKey: 'w',
       block: EncryptedBlock(
         seq: 3,
-        bytes: const [9],
+        bytes: wrapOpaqueEnvelope(const [9]),
         storedAt: DateTime.now().millisecondsSinceEpoch,
       ),
     );

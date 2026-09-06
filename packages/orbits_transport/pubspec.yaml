@@ -12,7 +12,32 @@ dependencies:
     sdk: flutter
   orbits_transport_platform_interface:
     path: ../orbits_transport_platform_interface
+  orbits_transport_android:
+    path: ../orbits_transport_android
+  orbits_transport_ios:
+    path: ../orbits_transport_ios
+  orbits_transport_linux:
+    path: ../orbits_transport_linux
+  orbits_transport_macos:
+    path: ../orbits_transport_macos
+  orbits_transport_windows:
+    path: ../orbits_transport_windows
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        default_package: orbits_transport_android
+      ios:
+        default_package: orbits_transport_ios
+      linux:
+        default_package: orbits_transport_linux
+      macos:
+        default_package: orbits_transport_macos
+      windows:
+        default_package: orbits_transport_windows

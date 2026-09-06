@@ -51,6 +51,7 @@ import 'room_scoped_transport.dart';
 import 'room_signaling_host.dart';
 import 'security_monitor.dart';
 import 'spatial_audio_engine.dart';
+import 'webrtc_audio_lifecycle.dart';
 
 /// Whether the local user is hosting a room, visiting one as a guest, or in
 /// no room at all.
@@ -1801,8 +1802,10 @@ class RoomManager extends StateNotifier<RoomState> {
 
     MediaStream stream;
     try {
-      stream = await navigator.mediaDevices
-          .getUserMedia({'audio': true, 'video': false});
+      stream = await WebRtcAudioLifecycle.instance.acquireUserMedia(
+        audio: true,
+        video: false,
+      );
     } catch (e) {
       debugPrint('[room] voice: microphone unavailable: $e');
       return;

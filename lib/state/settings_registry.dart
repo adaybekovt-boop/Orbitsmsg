@@ -15,6 +15,7 @@ import 'auto_lock_provider.dart' show kAutoLockPrefKey;
 import 'auto_unlock_service.dart' show kBiometricUnlockPrefKey;
 import 'chat_prefs_provider.dart' show kChatPrefsKey;
 import 'power_saver_provider.dart' show kPowerSaverPrefKey;
+import '../transport/dev_bare_transport.dart' show kDevBareTransportPrefKey;
 
 enum SettingStatus {
   /// Works end-to-end on supported platforms.
@@ -144,6 +145,13 @@ const List<SettingDescriptor> kSettingsRegistry = [
     title: 'Соединение (диагностика)',
     status: SettingStatus.working,
     consumer: 'network_page.dart → live connection/relay state (read-only)',
+  ),
+  SettingDescriptor(
+    id: 'network.devBareTransport',
+    title: 'Bare/Hyperswarm (dev)',
+    status: SettingStatus.platformLimited,
+    persistKey: kDevBareTransportPrefKey,
+    consumer: 'dev_bare_transport.dart → NativeTransportHost / DualStackBridge',
   ),
   SettingDescriptor(
     id: 'settings.updates',

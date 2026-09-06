@@ -20,6 +20,7 @@ class MicPage extends StatelessWidget {
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
     return Scaffold(
+      key: const Key('page-microphone'),
       appBar: OrbitsGlassAppBar(
         leading: Navigator.of(context).canPop()
             ? Center(

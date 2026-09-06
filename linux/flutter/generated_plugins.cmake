@@ -6,6 +6,7 @@ list(APPEND FLUTTER_PLUGIN_LIST
   flutter_acrylic
   flutter_secure_storage_linux
   flutter_webrtc
+  orbits_transport_linux
   record_linux
   sqlite3_flutter_libs
   url_launcher_linux

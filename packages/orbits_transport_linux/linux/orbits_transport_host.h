@@ -1,0 +1,53 @@
+#ifndef ORBITS_TRANSPORT_LINUX_HOST_H_
+#define ORBITS_TRANSPORT_LINUX_HOST_H_
+
+#include <stddef.h>
+#include <stdint.h>
+
+enum OrbitsHostCode {
+  kOrbitsHostOk = 0,
+  kOrbitsHostRemoteJs = -1,
+  kOrbitsHostNotStarted = -2,
+  kOrbitsHostSuspended = -3,
+  kOrbitsHostIpcFrame = -4,
+  kOrbitsHostPathRequired = -5,
+  kOrbitsHostOversize = -6,
+  kOrbitsHostBundleMissing = -7,
+  kOrbitsHostBundleTampered = -8,
+  kOrbitsHostAbiMismatch = -9,
+  kOrbitsHostMalformed = -10,
+  kOrbitsHostBareMissing = -11,
+  kOrbitsHostRuntimeTampered = -12,
+  kOrbitsHostTimeout = -13,
+  kOrbitsHostCrashed = -14,
+};
+
+struct OrbitsBareHost {
+  int started;
+  int suspended;
+  int published;
+  int child_pid;
+  int stdin_fd;
+  int stdout_fd;
+  int restart_count;
+};
+
+int orbits_transport_start(int remote_js, const char* remote_js_url);
+int orbits_bare_host_start(OrbitsBareHost* host, int remote_js,
+                           const char* remote_js_url, const char* bundle_url,
+                           const char* script_url, const char* ipc_version,
+                           int require_local_bundle, int local_bundle_present,
+                           const char* expected_sha, const char* actual_sha);
+int orbits_bare_host_stop(OrbitsBareHost* host);
+int orbits_bare_host_publish(OrbitsBareHost* host, const char* device_id);
+int orbits_bare_host_unpublish(OrbitsBareHost* host);
+int orbits_bare_host_connect(OrbitsBareHost* host);
+int orbits_bare_host_disconnect(OrbitsBareHost* host);
+int orbits_bare_host_refresh_network(OrbitsBareHost* host);
+int orbits_bare_host_send(OrbitsBareHost* host, size_t frame_len);
+int orbits_bare_host_send_file(OrbitsBareHost* host, const char* path,
+                               int64_t size_bytes);
+int orbits_bare_host_suspend(OrbitsBareHost* host);
+int orbits_bare_host_resume(OrbitsBareHost* host);
+
+#endif  // ORBITS_TRANSPORT_LINUX_HOST_H_

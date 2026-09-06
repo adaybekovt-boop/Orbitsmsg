@@ -28,9 +28,18 @@ class RoomState {
 }
 
 class AutobaseProjection {
+  AutobaseProjection({Set<String>? revokedWriters})
+    : revokedWriters = revokedWriters ?? <String>{};
+
   final RoomState state = RoomState();
+  final Set<String> revokedWriters;
+
+  void revokeWriter(String writerId) {
+    revokedWriters.add(writerId);
+  }
 
   void apply(RoomEvent event) {
+    if (revokedWriters.contains(event.writerId)) return;
     final key = state.keyOf(event);
     if (state.applied.contains(key)) return;
     state.applied.add(key);

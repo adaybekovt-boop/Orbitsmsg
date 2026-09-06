@@ -1,7 +1,7 @@
 'use strict'
 
-const net = require('node:net')
-const { EventEmitter } = require('node:events')
+const { net, events } = require('./bare_compat')
+const { EventEmitter } = events
 
 /**
  * Local TCP hub so two worklets can meet without a public DHT.

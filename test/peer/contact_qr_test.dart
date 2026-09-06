@@ -103,5 +103,24 @@ void main() {
       expect(qr.contains(id.substring(6)), isTrue);
       expect(parseContactDiscoverySecret(contactQrPayload(id)), isNull);
     });
+
+    test('identity, device and transport keys round-trip without private material', () {
+      const id = 'ORBIT-AAAAAAAAAAAAAAAA';
+      final identity = List<int>.generate(32, (i) => i + 3);
+      final transport = List<int>.generate(32, (i) => 200 - i);
+      const deviceId = 'dev-alice-01';
+      final qr = contactQrPayload(
+        id,
+        identityPublicKey: identity,
+        deviceId: deviceId,
+        transportPublicKey: transport,
+      );
+      expect(parseContactQrPayload(qr), id);
+      expect(parseContactIdentityPublicKey(qr), identity);
+      expect(parseContactDeviceId(qr), deviceId);
+      expect(parseContactTransportPublicKey(qr), transport);
+      expect(qr.contains('priv'), isFalse);
+      expect(qr.toLowerCase().contains('secret'), isFalse);
+    });
   });
 }

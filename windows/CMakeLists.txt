@@ -106,3 +106,32 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+set(_orbits_bare_win "${CMAKE_CURRENT_SOURCE_DIR}/../build/orbits-bare/win32-x64/bare.exe")
+if(NOT EXISTS "${_orbits_bare_win}")
+  set(_orbits_bare_win "${CMAKE_CURRENT_SOURCE_DIR}/../build/orbits-bare/win32-arm64/bare.exe")
+endif()
+if(EXISTS "${_orbits_bare_win}" AND EXISTS "${_orbits_bare_win}.sha256")
+  message(STATUS "Orbits: bundling official Bare ${_orbits_bare_win}")
+  install(PROGRAMS "${_orbits_bare_win}"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+  install(FILES "${_orbits_bare_win}.sha256"
+    DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+    COMPONENT Runtime)
+endif()
+
+set(_orbits_harness "${CMAKE_CURRENT_SOURCE_DIR}/../tool/connectivity_harness")
+if(EXISTS "${_orbits_harness}/src/worklet.js" AND EXISTS "${_orbits_harness}/node_modules/corestore")
+  install(DIRECTORY "${_orbits_harness}/src"
+    DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/orbits-worklet"
+    COMPONENT Runtime)
+  install(DIRECTORY "${_orbits_harness}/node_modules"
+    DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/orbits-worklet"
+    COMPONENT Runtime)
+  if(EXISTS "${_orbits_harness}/BUNDLE.manifest")
+    install(FILES "${_orbits_harness}/BUNDLE.manifest"
+      DESTINATION "${INSTALL_BUNDLE_DATA_DIR}/orbits-worklet"
+      COMPONENT Runtime)
+  endif()
+endif()

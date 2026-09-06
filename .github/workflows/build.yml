@@ -32,12 +32,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # ────────────────────────────────────────────────────────────────────
-  # Lint + tests. Analyzer warnings are fatal. Infos stay
-  # non-blocking so generated Drift noise doesn't fail the gate.
-  # ────────────────────────────────────────────────────────────────────
-  analyze:
-    name: Analyze & Test
+  # Independent suites. One analysis failure must not hide harness,
+  # plugin, storage-peer, or app-test outcomes.
+  analyze-root:
+    name: Analyze app
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
@@ -60,49 +58,235 @@ jobs:
             exit 1
           fi
 
-      # Codegen failures now fail the job — a missing `database.g.dart`
-      # cascades into a confusing "Type _$OrbitsDatabase not found" wall
-      # downstream, much harder to read than the real codegen error.
       - name: Generate code (drift / build_runner)
         run: dart run build_runner build --delete-conflicting-outputs
 
-      # Warnings block merge. Infos (mostly generated Drift) do not.
       - name: flutter analyze
         run: flutter analyze --no-fatal-infos
 
-      # Test failures now also fail the job; the crypto roundtrip suite
-      # is pure-Dart and stable, so any red here is a real regression.
-      - name: flutter test
-        run: flutter test --reporter expanded
+  analyze-packages:
+    name: Analyze federated packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Analyze each package in its own graph
+        run: bash tool/ci/analyze_packages.sh
+
+      - name: Verify BareKit mobile hooks (no prebuilds download)
+        run: bash tool/bare/verify-kit-hooks.sh
+
+      - name: Compile and run fail-closed host translation units
+        run: |
+          set -euo pipefail
+          g++ -std=c++17 \
+            packages/orbits_transport_linux/linux/orbits_transport_plugin.cc \
+            packages/orbits_transport_linux/linux/orbits_bare_spawn.cc \
+            packages/orbits_transport_linux/linux/orbits_transport_host_test.cc \
+            -I packages/orbits_transport_linux/linux \
+            -o /tmp/orbits_transport_linux_host_test
+          /tmp/orbits_transport_linux_host_test
+          g++ -std=c++17 \
+            packages/orbits_transport_windows/windows/orbits_transport_plugin.cpp \
+            packages/orbits_transport_windows/windows/orbits_bare_spawn.cpp \
+            packages/orbits_transport_windows/windows/orbits_transport_host_test.cpp \
+            -I packages/orbits_transport_windows/windows \
+            -o /tmp/orbits_transport_windows_host_test
+          /tmp/orbits_transport_windows_host_test
+          echo "linux and windows host fail-closed tests passed"
+
+  test-app:
+    name: App tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - name: Install system SQLite for Drift tests
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-0 libsqlite3-dev
+
+      - uses: actions/setup-java@c5195efecf7bdfc987ee8bae7a71cb8b11521c00 # v4.7.1
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Generate code (drift / build_runner)
+        run: dart run build_runner build --delete-conflicting-outputs
 
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22'
 
+      - name: Cache official Bare runtime
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/orbits-bare
+          key: orbits-bare-${{ hashFiles('tool/bare/pins.json') }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Fetch official Bare and worklet modules
+        run: |
+          bash tool/bare/fetch-official-runtime.sh
+          bash tool/bare/verify-runtime.sh
+          npm ci --prefix tool/connectivity_harness
+          python3 tool/bare/assemble_ios_addons.py
+
+      - name: flutter test
+        run: flutter test --reporter expanded
+
+  test-plugin:
+    name: Plugin tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - name: Transport plugin lifecycle
+        working-directory: packages/orbits_transport
+        run: |
+          flutter pub get
+          flutter test
+
+  test-harness:
+    name: Connectivity harness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Install harness dependencies
+        working-directory: tool/connectivity_harness
+        run: npm ci
+
+      - name: Cache official Bare runtime
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/orbits-bare
+          key: orbits-bare-${{ hashFiles('tool/bare/pins.json') }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Fetch official pinned Bare runtime
+        run: bash tool/bare/fetch-official-runtime.sh
+
+      - name: Verify official Bare runtime
+        run: bash tool/bare/verify-runtime.sh
+
       - name: Connectivity harness (loopback, no hardware)
         working-directory: tool/connectivity_harness
         run: node --test test/*.test.js
 
+      - name: Official Bare worklet integration
+        working-directory: tool/connectivity_harness
+        run: node --test test/bare_runtime.test.js test/corestore_persist.test.js test/hyperswarm_dht.test.js test/two_runtime_loopback.test.js test/two_runtime_dht.test.js
+
       - name: Pin worklet bundle hash (no remote JS)
+        run: bash tool/ci/verify_worklet_bundle.sh
+
+      - name: Reproducible Bare packaging gate
+        run: bash tool/bare-reproducible-build.sh
+
+  # Hyperswarm join proof using official Bare worklets over an isolated
+  # multi-node DHT testnet. Required CI gate for PR #62.
+  test-hyperswarm-join:
+    name: Hyperswarm join proof
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Install harness dependencies
+        working-directory: tool/connectivity_harness
+        run: npm ci
+
+      - name: Cache official Bare runtime
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/orbits-bare
+          key: orbits-bare-${{ hashFiles('tool/bare/pins.json') }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Fetch official pinned Bare runtime
+        run: bash tool/bare/fetch-official-runtime.sh
+
+      - name: Two Bare Hyperswarm worklets
+        working-directory: tool/connectivity_harness
+        run: node --test test/live/two_runtime_hyperswarm.test.js
+
+  test-storage-peer:
+    name: Storage peer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Storage peer Node tests
+        run: node --test tool/storage_peer/server.test.js
+
+  # Gate used by platform build jobs. Individual suite jobs above still
+  # report their own conclusions when another suite is red.
+  analyze:
+    name: Required suites
+    if: always()
+    needs:
+      - analyze-root
+      - analyze-packages
+      - test-app
+      - test-plugin
+      - test-harness
+      - test-hyperswarm-join
+      - test-storage-peer
+    runs-on: ubuntu-latest
+    steps:
+      - name: All required suites passed
+        env:
+          ANALYZE_ROOT: ${{ needs.analyze-root.result }}
+          ANALYZE_PACKAGES: ${{ needs.analyze-packages.result }}
+          TEST_APP: ${{ needs.test-app.result }}
+          TEST_PLUGIN: ${{ needs.test-plugin.result }}
+          TEST_HARNESS: ${{ needs.test-harness.result }}
+          TEST_HYPERSWARM_JOIN: ${{ needs.test-hyperswarm-join.result }}
+          TEST_STORAGE: ${{ needs.test-storage-peer.result }}
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import hashlib, json
-          from pathlib import Path
-          worklet = Path("tool/connectivity_harness/src/worklet.js").read_bytes()
-          digest = hashlib.sha256(worklet).hexdigest()
-          manifest = json.loads(Path("tool/connectivity_harness/BUNDLE.manifest").read_text())
-          if manifest.get("remoteJs") is not False:
-              raise SystemExit("BUNDLE.manifest must set remoteJs=false")
-          pinned = manifest.get("workletSha256")
-          if pinned != digest:
-              raise SystemExit(f"worklet hash {digest} != pinned {pinned}")
-          print(f"worklet.js sha256={digest}")
-          PY
-
-      - name: Transport plugin lifecycle
-        working-directory: packages/orbits_transport
-        run: flutter test
+          echo "analyze-root=$ANALYZE_ROOT"
+          echo "analyze-packages=$ANALYZE_PACKAGES"
+          echo "test-app=$TEST_APP"
+          echo "test-plugin=$TEST_PLUGIN"
+          echo "test-harness=$TEST_HARNESS"
+          echo "test-hyperswarm-join=$TEST_HYPERSWARM_JOIN"
+          echo "test-storage-peer=$TEST_STORAGE"
+          test "$ANALYZE_ROOT" = success
+          test "$ANALYZE_PACKAGES" = success
+          test "$TEST_APP" = success
+          test "$TEST_PLUGIN" = success
+          test "$TEST_HARNESS" = success
+          test "$TEST_HYPERSWARM_JOIN" = success
+          test "$TEST_STORAGE" = success
 
   # ────────────────────────────────────────────────────────────────────
   # Native platform folders are committed and must not be regenerated with
@@ -134,6 +318,21 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
+
+      - name: Cache official BareKit extract
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/orbits-bare/bare-kit
+          key: orbits-bare-kit-${{ hashFiles('tool/bare/pins.json') }}
+
+      - name: Fetch and link official BareKit
+        run: |
+          set -euo pipefail
+          bash tool/bare/fetch-official-runtime.sh --kit
+          bash tool/bare/verify-runtime.sh --kit
+          bash tool/bare/verify-kit-start.sh
+          npm ci --prefix tool/connectivity_harness
+          bash tool/bare/assemble-mobile-worklet.sh
 
       - name: Resolve dependencies and generate Drift code
         run: |
@@ -170,9 +369,13 @@ jobs:
             --dart-define=PEER_SECURE_SET="${PEER_SECURE:+true}"
           test -d build/ios/iphoneos/Runner.app
           test -f build/ios/iphoneos/Runner.app/PrivacyInfo.xcprivacy
+          bash tool/bare/verify-packaged-kit.sh ios build/ios/iphoneos/Runner.app
 
       - name: Build iOS Simulator debug app
-        run: flutter build ios --simulator --debug
+        run: |
+          flutter build ios --simulator --debug \
+            --dart-define=ORBITS_DEV_BARE_TRANSPORT=true
+          bash tool/bare/verify-packaged-kit.sh ios build/ios/iphonesimulator/Runner.app
 
   # Android release signing (GH-C01 / U-5) never uses the SDK debug key.
   # Tags/main use owner secrets; PRs use a cached CI sideload key.
@@ -200,6 +403,21 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: ${{ env.FLUTTER_CHANNEL }}
           cache: true
+
+      - name: Cache official BareKit extract
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/orbits-bare/bare-kit
+          key: orbits-bare-kit-${{ hashFiles('tool/bare/pins.json') }}
+
+      - name: Fetch and link official BareKit
+        run: |
+          set -euo pipefail
+          bash tool/bare/fetch-official-runtime.sh --kit
+          bash tool/bare/verify-runtime.sh --kit
+          bash tool/bare/verify-kit-start.sh
+          npm ci --prefix tool/connectivity_harness
+          bash tool/bare/assemble-mobile-worklet.sh
 
       - name: Cache CI sideload upload keystore
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
@@ -300,6 +518,12 @@ jobs:
       - name: flutter build apk (universal fallback)
         run: bash tool/ci/retry_flutter_apk.sh --release $DART_DEFINES
 
+      - name: Verify APK packages official BareKit
+        run: |
+          set -euo pipefail
+          bash tool/bare/verify-packaged-kit.sh apk build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+          bash tool/bare/verify-packaged-kit.sh apk build/app/outputs/flutter-apk/app-release.apk
+
       - name: Stage APKs for upload
         run: |
           mkdir -p dist
@@ -326,6 +550,23 @@ jobs:
           path: dist/*.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Build debug APKs for two-device Bare testing
+        run: |
+          set -euo pipefail
+          flutter build apk --debug --split-per-abi \
+            --dart-define=ORBITS_DEV_BARE_TRANSPORT=true
+          mkdir -p dist-dev
+          cp build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk dist-dev/orbits-android-arm64-dev-bare.apk
+          cp build/app/outputs/flutter-apk/app-armeabi-v7a-debug.apk dist-dev/orbits-android-arm32-dev-bare.apk
+          bash tool/bare/verify-packaged-kit.sh apk dist-dev/orbits-android-arm64-dev-bare.apk
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: orbits-android-dev-bare
+          path: dist-dev/*.apk
+          if-no-files-found: error
+          retention-days: 14
 
   # ────────────────────────────────────────────────────────────────────
   # Web. Static-site bundle, ship as a zip artifact. Two base-href
@@ -433,6 +674,74 @@ jobs:
           retention-days: 30
 
   # ────────────────────────────────────────────────────────────────────
+  # Linux desktop. Packages the official pinned bare-runtime CLI next to
+  # the runner when fetch/verify succeeds before the CMake install.
+  # ────────────────────────────────────────────────────────────────────
+  build-linux:
+    name: Build Linux (desktop)
+    needs: analyze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - name: Install Flutter Linux desktop dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libsecret-1-dev libjsoncpp-dev
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Cache official Bare runtime
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/orbits-bare
+          key: orbits-bare-${{ hashFiles('tool/bare/pins.json') }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Fetch and verify official Bare runtime
+        run: |
+          bash tool/bare/fetch-official-runtime.sh
+          bash tool/bare/verify-runtime.sh
+
+      - name: Install worklet dependencies
+        working-directory: tool/connectivity_harness
+        run: npm ci
+
+      - name: Enable linux desktop
+        run: flutter config --enable-linux-desktop
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Generate code (drift / build_runner)
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: flutter build linux (release)
+        run: flutter build linux --release
+
+      - name: Verify bundle contains official Bare and worklet
+        run: |
+          set -euo pipefail
+          bundle=build/linux/x64/release/bundle
+          ls -la "$bundle/lib" || true
+          ls -la "$bundle/data/orbits-worklet/src" || true
+          test -e "$bundle/lib/bare"
+          chmod +x "$bundle/lib/bare"
+          test -x "$bundle/lib/bare"
+          test -f "$bundle/lib/bare.sha256"
+          test -f "$bundle/data/orbits-worklet/src/worklet.js"
+          test -d "$bundle/data/orbits-worklet/node_modules/corestore"
+          bash tool/bare/verify-runtime.sh
+          echo "linux bundle contains verified bare + worklet"
+
+  # ────────────────────────────────────────────────────────────────────
   # Windows. Flutter's raw `Release/` folder contains an exe plus DLLs and
   # data files, so shipping only that runner exe would not start on a user's
   # machine. We wrap the full folder into a single Inno Setup installer exe
@@ -504,6 +813,27 @@ jobs:
       - name: Generate code (drift / build_runner)
         run: dart run build_runner build --delete-conflicting-outputs
 
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Cache official Bare runtime
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/orbits-bare
+          key: orbits-bare-${{ hashFiles('tool/bare/pins.json') }}-${{ runner.os }}-${{ runner.arch }}
+
+      - name: Fetch official Windows Bare runtime
+        shell: bash
+        run: |
+          bash tool/bare/fetch-official-runtime.sh
+          bash tool/bare/verify-runtime.sh
+
+      - name: Install worklet dependencies
+        working-directory: tool/connectivity_harness
+        shell: bash
+        run: npm ci
+
       - name: flutter build windows (release)
         env:
           TURN_URL: ${{ secrets.TURN_URL }}
@@ -528,6 +858,17 @@ jobs:
             "--dart-define=PEER_SECURE_SET=$(if ($env:PEER_SECURE) { 'true' } else { 'false' })"
           )
           flutter build windows --release @defines
+
+      - name: Verify Windows bundle contains official Bare
+        shell: bash
+        run: |
+          set -euo pipefail
+          rel=build/windows/x64/runner/Release
+          test -f "$rel/bare.exe"
+          test -f "$rel/bare.exe.sha256"
+          test -f "$rel/data/orbits-worklet/src/worklet.js"
+          test -d "$rel/data/orbits-worklet/node_modules/corestore"
+          echo "windows bundle contains verified bare + worklet"
 
       - name: Install Inno Setup
         shell: pwsh

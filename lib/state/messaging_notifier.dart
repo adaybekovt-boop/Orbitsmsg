@@ -25,6 +25,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/error_reporter.dart';
+import '../attachments/temp_attachment.dart';
+import '../transport/dev_bare_transport.dart';
+import '../transport/transport_api.dart';
 import '../utils/heavy_codec.dart';
 
 import '../messaging/lost_inbound_ledger.dart';
@@ -476,7 +479,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     if (normalized.isEmpty) return;
     if (_isPeerBlocked(normalized)) return;
     final conns = _ref.read(connectionsNotifierProvider.notifier);
-    if (conns.getConn(normalized, 'reliable')?.open != true) return;
+    if (!conns.hasReliable(normalized)) return;
 
     List<Map<String, Object?>> rows;
     try {
@@ -666,8 +669,15 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final ts = now();
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
+    // Always (re)kick the dial. Chat mount used to be the only caller of
+    // openReliable; sendText no-op'd when the channel looked open even if
+    // handshake never ran, leaving the row status=pending forever.
+    conns.openReliable(normalized);
     final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
+    final open =
+        conn?.open == true ||
+        conns.hasReliable(normalized) ||
+        isDevBareTransportRequested();
 
     final sanitizedReply = _sanitizeReplyTo(replyTo);
 
@@ -772,7 +782,10 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
     final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
+    final open =
+        conn?.open == true ||
+        conns.hasReliable(normalized) ||
+        isDevBareTransportRequested();
 
     // Clamp free-text fields on the sticker blob itself (packName, emoji,
     // label) so a custom pack with 100KB of text fields can't blow up the
@@ -873,7 +886,10 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
     final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
+    final open =
+        conn?.open == true ||
+        conns.hasReliable(normalized) ||
+        isDevBareTransportRequested();
 
     // Defensive clamp вЂ” recorder should produce values in 0..1 already,
     // but a broken input doesn't get to push the UI past that range.
@@ -1013,7 +1029,10 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
     final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
+    final open =
+        conn?.open == true ||
+        conns.hasReliable(normalized) ||
+        isDevBareTransportRequested();
 
     final safeName = name.length > _maxFileNameLen
         ? name.substring(0, _maxFileNameLen)
@@ -1088,6 +1107,56 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     unawaited(db.savePeer({'id': normalized, 'lastSeenAt': now()}));
 
     if (!open) return msgId;
+
+    if (conns.canUseNative(normalized) || isDevBareTransportRequested()) {
+      final desc = await writeTempAttachment(
+        bytes: bytes,
+        name: safeName,
+        mime: mime,
+      );
+      if (desc == null) {
+        if (isDevBareTransportRequested()) {
+          unawaited(db.updateMessageStatus(msgId, 'pending'));
+          return msgId;
+        }
+      } else {
+        try {
+          await conns.sendFile(
+            normalized,
+            TransportFileDescriptor(
+              path: desc.path,
+              sizeBytes: desc.sizeBytes,
+              fileName: safeName,
+              mime: mime,
+              transferId: msgId.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_'),
+            ),
+          );
+          final metaOk = await conns.sendEncrypted(normalized, {
+            'type': 'msg',
+            'id': msgId,
+            'text': '',
+            'ts': ts,
+            'from': selfId,
+            'msgType': 'file',
+            'attachment': <String, Object?>{
+              ...attachmentRef,
+              'transferId': msgId,
+              'native': true,
+            },
+            if (sanitizedReply != null) 'replyTo': sanitizedReply,
+          });
+          if (metaOk) {
+            _sentAckGuard.arm(msgId);
+          } else {
+            unawaited(db.updateMessageStatus(msgId, 'pending'));
+          }
+          return msgId;
+        } catch (_) {
+          unawaited(db.updateMessageStatus(msgId, 'pending'));
+          if (isDevBareTransportRequested()) return msgId;
+        }
+      }
+    }
 
     final b64 = await b64EncodeHeavy(bytes);
     if (b64.length > _maxFileB64Len) {

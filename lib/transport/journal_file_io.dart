@@ -4,12 +4,17 @@ import 'package:path_provider/path_provider.dart';
 
 import '../replication/file_journal.dart';
 
-Future<FileJournal?> openLocalFileJournal(String deviceId) async {
+Future<FileJournal?> openLocalFileJournal(
+  String deviceId, {
+  String ownerPeerId = '',
+}) async {
   try {
     final dir = await getApplicationSupportDirectory();
-    final file = File(
-      '${dir.path}${Platform.pathSeparator}orbits-hypercore.ndjson',
-    );
+    final owner = ownerPeerId.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
+    final name = owner.isEmpty
+        ? 'orbits-hypercore.ndjson'
+        : 'orbits-hypercore-$owner.ndjson';
+    final file = File('${dir.path}${Platform.pathSeparator}$name');
     return FileJournal(
       writerDeviceId: deviceId,
       writeLine: (line) =>

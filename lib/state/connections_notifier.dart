@@ -44,15 +44,18 @@ import '../peer/room_plaintext_gate.dart';
 import '../peer/peerjs_client.dart';
 import '../calls/hyperswarm_signaling.dart';
 import '../core/feature_flags.dart';
+import '../transport/dev_bare_transport.dart';
 import '../peer/wire_transport.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
 import '../replication/file_journal.dart';
+import '../replication/hypercore_store.dart';
 import '../replication/memory_journal.dart';
 import '../storage/db.dart' as db;
 import '../transport/dual_stack_bridge.dart';
 import '../transport/signed_capabilities.dart';
 import '../transport/transport_api.dart';
+import '../transport/trusted_identity_store.dart';
 import 'auth_notifier.dart';
 import 'local_profile_provider.dart';
 import 'peer_connection_provider.dart';
@@ -123,6 +126,11 @@ class _ConnBinding {
   final String channel; // 'reliable' | 'ephemeral'
   final List<StreamSubscription<dynamic>> subscriptions;
   Timer? connectTimer;
+
+  /// True after the first [onOpen] (or already-open catch-up) has run the
+  /// reliable handshake. Broadcast `onOpen` is not replayed, so attachConn
+  /// must catch a channel that was already Open before the listener was wired.
+  bool openHandled = false;
 
   Future<void> dispose() async {
     connectTimer?.cancel();
@@ -234,6 +242,11 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     String? mailboxWriterKey,
     CapabilityRecord? localCapabilities,
     DeviceRegistry? devices,
+    TrustedIdentityStore? identities,
+    Future<void> Function(String peerId, {required bool authorized})?
+        confirmPeerAuthorization,
+    Future<void> Function(JournalRecord record)? onRemoteRecord,
+    HypercoreLocalStore? hypercore,
   }) {
     _nativeJournal = journal ?? MemoryJournal(deviceId);
     _dual = DualStackBridge(
@@ -247,6 +260,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       mailboxWriterKey: mailboxWriterKey,
       localCapabilities: localCapabilities,
       devices: devices ?? deviceRegistry,
+      identities: identities ?? trustedIdentityStore,
+      confirmPeerAuthorization: confirmPeerAuthorization,
+      onRemoteRecord: onRemoteRecord,
+      hypercore: hypercore,
       onPacket: _dispatchNativeInbound,
       isBlocked: (rid) => _messaging.isPeerBlocked(rid),
     )
@@ -263,6 +280,13 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         _drop.handleInbound(peerId, packet);
       }
       ..attach();
+  }
+
+  Future<void> unbindNativeTransport() async {
+    await _dual?.detach();
+    _dual = null;
+    _nativeJournal = null;
+    _refreshConnectedIds();
   }
 
   ({String from, CallSignal signal})? _lastCallSignal;
@@ -292,21 +316,23 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// don't have a reliable connection to this peer.
   Future<bool> sendEncrypted(String remoteId, Object? msg) async {
     final dual = _dual;
+    final failClosed = isDevBareTransportRequested();
     if (dual != null && dual.nativeEnabled) {
       if (dual.canUseNative(remoteId)) {
         try {
           return await dual.sendEncrypted(remoteId, msg);
         } catch (_) {
-          if (!isPeerjsFallbackEnabled()) return false;
+          if (failClosed || !isPeerjsFallbackEnabled()) return false;
         }
       } else if (dual.mailbox != null && dual.secrets.get(remoteId) != null) {
         try {
           return await dual.sendEncrypted(remoteId, msg);
         } catch (_) {
-          if (!isPeerjsFallbackEnabled()) return false;
+          if (failClosed || !isPeerjsFallbackEnabled()) return false;
         }
       }
     }
+    if (failClosed) return false;
     final conn = getConn(remoteId, 'reliable');
     if (conn == null) return false;
     return _wire.sendEncryptedOn(conn, remoteId, msg);
@@ -315,13 +341,15 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// Same on the ephemeral channel (typing / heartbeat).
   Future<bool> sendEphemeral(String remoteId, Object? msg) async {
     final dual = _dual;
+    final failClosed = isDevBareTransportRequested();
     if (dual != null && dual.canUseNative(remoteId)) {
       try {
         return await dual.sendEphemeral(remoteId, msg);
       } catch (_) {
-        if (!isPeerjsFallbackEnabled()) return false;
+        if (failClosed || !isPeerjsFallbackEnabled()) return false;
       }
     }
+    if (failClosed) return false;
     final conn = getConn(remoteId, 'ephemeral');
     if (conn == null) return false;
     return _wire.sendEphemeralOn(conn, remoteId, msg);
@@ -331,6 +359,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// the peer picker / send button).
   bool hasReliable(String remoteId) {
     if (_dual?.isNativeConnected(remoteId) == true) return true;
+    if (isDevBareTransportRequested()) return false;
     final conn = getConn(remoteId, 'reliable');
     return conn != null && conn.open;
   }
@@ -341,10 +370,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// DTLS layer). Returns false if no open reliable connection exists.
   bool sendDrop(String remoteId, Object packet) {
     final dual = _dual;
+    final failClosed = isDevBareTransportRequested();
     if (dual != null && dual.canUseNative(remoteId)) {
       unawaited(dual.sendDrop(remoteId, packet));
       return true;
     }
+    if (failClosed) return false;
     final conn = getConn(remoteId, 'reliable');
     if (conn == null || !conn.open) return false;
     return conn.send(packet);
@@ -358,6 +389,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// no open reliable connection exists.
   bool sendRoomPacket(String remoteId, Map<String, Object?> packet) {
     final dual = _dual;
+    final failClosed = isDevBareTransportRequested();
     if (dual != null && dual.canUseNative(remoteId)) {
       return sendGuardedRoomPacket(
         packet,
@@ -365,6 +397,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         send: (p) => dual.sendRoomPacket(remoteId, p),
       );
     }
+    if (failClosed) return false;
     final conn = getConn(remoteId, 'reliable');
     return sendGuardedRoomPacket(
       packet,
@@ -377,6 +410,21 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     final dual = _dual;
     if (dual != null && dual.canUseNative(remoteId)) {
       await dual.sendCallSignal(remoteId, signal);
+      return;
+    }
+    if (isDevBareTransportRequested()) {
+      throw StateError('call signaling requires Bare/Hyperswarm');
+    }
+  }
+
+  Future<void> sendFile(String remoteId, TransportFileDescriptor file) async {
+    final dual = _dual;
+    if (dual != null && dual.canUseNative(remoteId)) {
+      await dual.sendFile(remoteId, file);
+      return;
+    }
+    if (isDevBareTransportRequested()) {
+      throw StateError('file transfer requires Bare/Hyperswarm');
     }
   }
 
@@ -432,6 +480,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     if (existing != null && existing.open) return;
     if (reliable) {
       unawaited(_dual?.dial(normalized));
+    }
+    if (isDevBareTransportRequested()) {
+      return;
     }
     final peer = _boundPeer;
     if (peer == null || peer.destroyed || !peer.open) {
@@ -546,16 +597,15 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
     // Wire events.
     binding.subscriptions.add(conn.onOpen.listen((_) {
-      binding.connectTimer?.cancel();
-      binding.connectTimer = null;
-      if (ch == 'reliable') {
-        _markPeerOnline(remoteId);
-        _refreshConnectedIds();
-        unawaited(_postReliableOpen(conn, remoteId));
-      } else {
-        // Ephemeral open — no handshake, just note the latency channel is up.
-      }
+      _noteChannelOpen(binding, remoteId);
     }));
+
+    // Already-open catch-up: if `_attachDataChannel` fired onOpen before
+    // this listener existed, the broadcast event is gone. `conn.open`
+    // still reflects the native channel, so kick handshake now.
+    if (conn.open) {
+      _noteChannelOpen(binding, remoteId);
+    }
 
     binding.subscriptions.add(conn.onClose.listen((_) {
       binding.connectTimer?.cancel();
@@ -706,7 +756,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   PacketRouterCtx _buildRouterCtx(PeerDataConnection conn, String remoteId) {
     return PacketRouterCtx(
-      conn: conn.send,
+      conn: (msg) => _sendPlaintext(conn, msg),
       flushOutbox: () => _messaging.flushOutboxForPeer(remoteId),
       reliable: _reliableCtx(remoteId),
       ephemeral: EphemeralInboundCtx(
@@ -722,6 +772,35 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       isBlocked: (rid) => _messaging.isPeerBlocked(rid),
       roomInbound: (rid, packet) => _room.handleInbound(rid, packet),
     );
+  }
+
+  /// Handshake replies ride [ConnSend] (void). If the DataChannel is already
+  /// Open but `_open` hasn't latched, [PeerDataConnection.send] used to drop
+  /// the hello. Retry once after [onOpen].
+  void _sendPlaintext(PeerDataConnection conn, Object? msg) {
+    if (conn.send(msg)) return;
+    if (conn.closed) return;
+    if (conn.open) {
+      conn.send(msg);
+      return;
+    }
+    unawaited(() async {
+      try {
+        await conn.onOpen.first.timeout(const Duration(seconds: 8));
+      } catch (_) {}
+      conn.send(msg);
+    }());
+  }
+
+  void _noteChannelOpen(_ConnBinding binding, String remoteId) {
+    binding.connectTimer?.cancel();
+    binding.connectTimer = null;
+    if (binding.channel != 'reliable') return;
+    if (binding.openHandled) return;
+    binding.openHandled = true;
+    _markPeerOnline(remoteId);
+    _refreshConnectedIds();
+    unawaited(_postReliableOpen(binding.conn, remoteId));
   }
 
   // ─── Reliable-open follow-up ──────────────────────────────────
@@ -831,10 +910,28 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     if (current == null) return;
 
     _peerSubs.add(current.onConnection.listen((conn) {
+      if (isDevBareTransportRequested()) {
+        try {
+          conn.close();
+        } catch (_) {}
+        return;
+      }
       final ch = (conn.metadata['channel'] as String?) == 'ephemeral'
           ? 'ephemeral'
           : 'reliable';
       unawaited(attachConn(conn, ch));
+    }));
+
+    _peerSubs.add(current.onError.listen((err) {
+      if (!mounted) return;
+      state = state.copyWith(
+        lastConnectError: ConnectError(
+          peerId: current.id ?? '',
+          channel: 'signaling',
+          message: err.toString(),
+          atMs: now(),
+        ),
+      );
     }));
 
     // Flush any reliable dials that were queued while PeerJS was still

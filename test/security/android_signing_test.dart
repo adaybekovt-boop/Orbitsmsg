@@ -134,6 +134,13 @@ void main() {
     }
 
     String listing(String store, String password) {
+      final keytool = Process.runSync('which', ['keytool']);
+      expect(
+        keytool.exitCode,
+        0,
+        reason: 'JDK keytool is required for Android signing tests. '
+            'Install a JDK locally and in CI (actions/setup-java).',
+      );
       final result = Process.runSync('keytool', [
         '-list',
         '-v',

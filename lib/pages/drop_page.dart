@@ -289,6 +289,7 @@ class _DropPageState extends ConsumerState<DropPage> {
             ),
             const SizedBox(height: 20),
             OrbitsGlassButton(
+              key: const Key('drop-add-contact'),
               label: 'Добавить контакт',
               icon: Icons.person_add_alt_1,
               variant: OrbitsGlassVariant.primary,

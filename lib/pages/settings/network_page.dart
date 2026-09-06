@@ -6,6 +6,7 @@
 // shell already surfaces the same status — this is the place to inspect
 // it in detail.
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -14,6 +15,8 @@ import '../../core/haptics.dart';
 import '../../state/connections_notifier.dart';
 import '../../state/local_profile_provider.dart';
 import '../../state/peer_connection_provider.dart';
+import '../../transport/dev_bare_transport.dart';
+import '../../transport/native_transport.dart';
 import '../../themes/orbits_tokens.dart';
 import '../../ui/primitives/orbits_glass_button.dart';
 import '../../ui/primitives/orbits_glass_list_tile.dart';
@@ -34,8 +37,11 @@ class NetworkPage extends ConsumerWidget {
     final conn = ref.watch(peerConnectionProvider);
     final turnConfigured = ref.watch(turnConfiguredProvider);
     final relayOnly = ref.watch(relayOnlyProvider);
-    final lastConnErr =
-        ref.watch(connectionsNotifierProvider.select((s) => s.lastConnectError));
+    final lastConnErr = ref.watch(
+      connectionsNotifierProvider.select((s) => s.lastConnectError),
+    );
+    final host = ref.watch(nativeTransportHostProvider);
+    final devBareOn = ref.watch(devBareTransportProvider);
 
     return Scaffold(
       appBar: OrbitsGlassAppBar(
@@ -51,188 +57,255 @@ class NetworkPage extends ConsumerWidget {
       body: AdaptivePageFrame(
         maxWidth: 760,
         child: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        children: [
-          // ── Peer ID ──────────────────────────────────────────
-          const OrbsSectionTitle('Мой код'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            child: OrbitsGlassSurface(
-              role: OrbitsGlassRole.card,
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  OrbitsGlassSurface(
-                    role: OrbitsGlassRole.input,
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
-                    ),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: SelectableText(
-                            user?.peerId ?? '—',
-                            style: TextStyle(
-                              fontFamily: tokens.fontMono,
-                              fontSize: 14,
-                              color: tokens.text,
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          children: [
+            // ── Peer ID ──────────────────────────────────────────
+            const OrbsSectionTitle('Мой код'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12),
+              child: OrbitsGlassSurface(
+                role: OrbitsGlassRole.card,
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    OrbitsGlassSurface(
+                      role: OrbitsGlassRole.input,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: SelectableText(
+                              user?.peerId ?? '—',
+                              style: TextStyle(
+                                fontFamily: tokens.fontMono,
+                                fontSize: 14,
+                                color: tokens.text,
+                              ),
                             ),
                           ),
-                        ),
-                        if (user != null) ...[
-                          OrbitsGlassIconButton(
-                            icon: Icons.qr_code_2,
-                            tooltip: 'QR-код',
-                            variant: OrbitsGlassVariant.subtle,
-                            size: OrbitsGlassSize.small,
-                            onPressed: () {
-                              hapticTap();
-                              Navigator.of(context).push(
-                                MaterialPageRoute(
-                                  builder: (_) =>
-                                      MyQrPage(peerId: user.peerId),
-                                ),
-                              );
-                            },
-                          ),
-                          const SizedBox(width: 4),
-                          OrbitsGlassIconButton(
-                            icon: Icons.copy_outlined,
-                            tooltip: 'Скопировать',
-                            variant: OrbitsGlassVariant.subtle,
-                            size: OrbitsGlassSize.small,
-                            onPressed: () async {
-                              hapticTap();
-                              await Clipboard.setData(
-                                ClipboardData(text: user.peerId),
-                              );
-                              if (!context.mounted) return;
-                              ScaffoldMessenger.of(context)
-                                ..clearSnackBars()
-                                ..showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Код скопирован'),
-                                    duration: Duration(seconds: 1),
+                          if (user != null) ...[
+                            OrbitsGlassIconButton(
+                              icon: Icons.qr_code_2,
+                              tooltip: 'QR-код',
+                              variant: OrbitsGlassVariant.subtle,
+                              size: OrbitsGlassSize.small,
+                              onPressed: () {
+                                hapticTap();
+                                Navigator.of(context).push(
+                                  MaterialPageRoute(
+                                    builder: (_) =>
+                                        MyQrPage(peerId: user.peerId),
                                   ),
                                 );
-                            },
-                          ),
+                              },
+                            ),
+                            const SizedBox(width: 4),
+                            OrbitsGlassIconButton(
+                              icon: Icons.copy_outlined,
+                              tooltip: 'Скопировать',
+                              variant: OrbitsGlassVariant.subtle,
+                              size: OrbitsGlassSize.small,
+                              onPressed: () async {
+                                hapticTap();
+                                await Clipboard.setData(
+                                  ClipboardData(text: user.peerId),
+                                );
+                                if (!context.mounted) return;
+                                ScaffoldMessenger.of(context)
+                                  ..clearSnackBars()
+                                  ..showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Код скопирован'),
+                                      duration: Duration(seconds: 1),
+                                    ),
+                                  );
+                              },
+                            ),
+                          ],
                         ],
-                      ],
+                      ),
                     ),
+                    const SizedBox(height: 10),
+                    Text(
+                      'Код присвоен навсегда и не может быть сброшен. Поделись им '
+                      'с друзьями — они смогут добавить тебя в контакты.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: tokens.muted,
+                        fontFamily: tokens.fontBody,
+                        height: 1.45,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+
+            if (user != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
+                child: OrbitsGlassListTile(
+                  title: const Text('Привязка устройства'),
+                  subtitle: const Text(
+                    'QR для второго устройства. Ratchet на каждом свой.',
                   ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Код присвоен навсегда и не может быть сброшен. Поделись им '
-                    'с друзьями — они смогут добавить тебя в контакты.',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: tokens.muted,
-                      fontFamily: tokens.fontBody,
-                      height: 1.45,
+                  onTap: () {
+                    hapticTap();
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => DeviceLinkPage(peerId: user.peerId),
+                      ),
+                    );
+                  },
+                ),
+              ),
+
+            const OrbsSectionTitle('Транспорт'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                title: const Text('Активный транспорт'),
+                subtitle: Text(host.visibleTransportLabel),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                title: const Text('Сигнальный сервер'),
+                subtitle: Text(
+                  conn.signalingHost == null || conn.signalingHost!.isEmpty
+                      ? '—'
+                      : conn.signalingHost!,
+                ),
+              ),
+            ),
+            if (!kReleaseMode)
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
+                child: OrbitsGlassListTile(
+                  title: const Text('Bare/Hyperswarm (dev)'),
+                  subtitle: Text(
+                    devBareOn || isDevBareTransportRequested()
+                        ? 'Включено. Без отката на PeerJS. Нужен перезапуск сессии.'
+                        : 'Только отладочная сборка. Выключено в release.',
+                  ),
+                  trailing: Switch(
+                    value: devBareOn || kDevBareTransportDartDefine,
+                    onChanged: kDevBareTransportDartDefine
+                        ? null
+                        : (value) => ref
+                              .read(devBareTransportProvider.notifier)
+                              .set(value),
+                  ),
+                ),
+              ),
+            if (host.lastError.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
+                child: OrbitsGlassListTile(
+                  title: const Text('Bare runtime'),
+                  subtitle: Text(host.lastError),
+                ),
+              ),
+
+            // ── Status ───────────────────────────────────────────
+            const OrbsSectionTitle('Статус'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                title: const Text('Соединение'),
+                subtitle: Text(_statusLabel(conn.status)),
+                trailing: _StatusDot(status: conn.status, tokens: tokens),
+              ),
+            ),
+            if (conn.error != null && conn.error!.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
+                child: OrbitsGlassListTile(
+                  title: const Text('Последняя ошибка'),
+                  subtitle: Text(conn.error ?? ''),
+                ),
+              ),
+
+            // ── Cross-network reachability (TURN) ────────────────
+            const OrbsSectionTitle('Связь между сетями'),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: OrbitsGlassListTile(
+                title: const Text('TURN-ретранслятор'),
+                subtitle: Text(
+                  turnConfigured
+                      ? (relayOnly
+                            ? 'Настроен — связь идёт только через ретранслятор'
+                            : 'Настроен — связь работает и между разными сетями')
+                      : 'Не настроен. Между разными сетями (моб. интернет ↔ домашний '
+                            'роутер) связь может не установиться — для надёжности '
+                            'нужен TURN-сервер.',
+                ),
+                trailing: Icon(
+                  turnConfigured ? Icons.check_circle : Icons.info_outline,
+                  color: turnConfigured ? tokens.success : tokens.muted,
+                ),
+              ),
+            ),
+            if (lastConnErr != null)
+              Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
+                child: OrbitsGlassListTile(
+                  title: const Text('Последняя ошибка соединения'),
+                  subtitle: Text(
+                    '${lastConnErr.peerId}: ${lastConnErr.message}',
+                  ),
+                ),
+              ),
+
+            // ── How it works ─────────────────────────────────────
+            const SizedBox(height: 8),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.info_outline, size: 16, color: tokens.muted),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Сообщения передаются напрямую к собеседнику без сервера. '
+                      'Если он офлайн, сообщения дойдут когда он появится в '
+                      'сети.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: tokens.muted,
+                        fontFamily: tokens.fontBody,
+                        height: 1.45,
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
-          ),
-
-          if (user != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: OrbitsGlassListTile(
-                title: const Text('Привязка устройства'),
-                subtitle: const Text(
-                  'QR для второго устройства. Ratchet на каждом свой.',
-                ),
-                onTap: () {
-                  hapticTap();
-                  Navigator.of(context).push(
-                    MaterialPageRoute(
-                      builder: (_) => DeviceLinkPage(peerId: user.peerId),
-                    ),
-                  );
-                },
-              ),
-            ),
-
-          // ── Status ───────────────────────────────────────────
-          const OrbsSectionTitle('Статус'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: OrbitsGlassListTile(
-              title: const Text('Соединение'),
-              subtitle: Text(_statusLabel(conn.status)),
-              trailing: _StatusDot(status: conn.status, tokens: tokens),
-            ),
-          ),
-          if (conn.error != null && conn.error!.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: OrbitsGlassListTile(
-                title: const Text('Последняя ошибка'),
-                subtitle: Text(conn.error ?? ''),
-              ),
-            ),
-
-          // ── Cross-network reachability (TURN) ────────────────
-          const OrbsSectionTitle('Связь между сетями'),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-            child: OrbitsGlassListTile(
-              title: const Text('TURN-ретранслятор'),
-              subtitle: Text(turnConfigured
-                  ? (relayOnly
-                      ? 'Настроен — связь идёт только через ретранслятор'
-                      : 'Настроен — связь работает и между разными сетями')
-                  : 'Не настроен. Между разными сетями (моб. интернет ↔ домашний '
-                      'роутер) связь может не установиться — для надёжности '
-                      'нужен TURN-сервер.'),
-              trailing: Icon(
-                turnConfigured ? Icons.check_circle : Icons.info_outline,
-                color: turnConfigured ? tokens.success : tokens.muted,
-              ),
-            ),
-          ),
-          if (lastConnErr != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-              child: OrbitsGlassListTile(
-                title: const Text('Последняя ошибка соединения'),
-                subtitle: Text('${lastConnErr.peerId}: ${lastConnErr.message}'),
-              ),
-            ),
-
-          // ── How it works ─────────────────────────────────────
-          const SizedBox(height: 8),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(Icons.info_outline, size: 16, color: tokens.muted),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Сообщения передаются напрямую к собеседнику без сервера. '
-                    'Если он офлайн, сообщения дойдут когда он появится в '
-                    'сети.',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: tokens.muted,
-                      fontFamily: tokens.fontBody,
-                      height: 1.45,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 24),
-        ],
-      ),
+            const SizedBox(height: 24),
+          ],
+        ),
       ),
     );
   }

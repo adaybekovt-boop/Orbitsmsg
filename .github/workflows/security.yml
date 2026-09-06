@@ -56,3 +56,47 @@ jobs:
             --exclude=build \
             --exclude=.dart_tool \
             --exclude=.fvm
+
+  license-sbom:
+    name: CycloneDX SBOM and license policy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: '3.44.7'
+          channel: stable
+          cache: true
+
+      - name: Resolve locked packages
+        run: flutter pub get
+
+      - name: Generate CycloneDX SBOM from pubspec.lock
+        run: python3 tool/ci/generate_sbom.py --lock pubspec.lock --out sbom/orbits.cdx.json
+
+      - name: SBOM must list packages, versions, and sources
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          bom = json.loads(Path("sbom/orbits.cdx.json").read_text())
+          assert bom["bomFormat"] == "CycloneDX"
+          assert bom["specVersion"] == "1.5"
+          comps = bom["components"]
+          assert len(comps) > 20, len(comps)
+          for c in comps:
+              assert c["name"]
+              assert c["version"]
+              props = {p["name"]: p["value"] for p in c.get("properties", [])}
+              assert "source" in props
+          print("sbom components", len(comps))
+          PY
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: orbits-sbom
+          path: sbom/orbits.cdx.json
+          if-no-files-found: error
+          retention-days: 30
