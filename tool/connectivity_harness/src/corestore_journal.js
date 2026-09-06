@@ -5,7 +5,6 @@
  * The in-memory adapter remains only for Node unit tests that do not
  * open a storage directory. Never stores plaintext or KEK material.
  */
-
 const FORBIDDEN = new Set([
   'plaintext',
   'password',
@@ -63,6 +62,10 @@ class CorestoreJournal {
   list() {
     return this.blocks.slice()
   }
+
+  publicKeyHex() {
+    return null
+  }
 }
 
 class RealCorestoreJournal {
@@ -108,6 +111,11 @@ class RealCorestoreJournal {
       blocks.push(JSON.parse(Buffer.from(raw).toString('utf8')))
     }
     return blocks
+  }
+
+  publicKeyHex() {
+    const key = this.core && this.core.key
+    return key ? Buffer.from(key).toString('hex') : null
   }
 
   async close() {
