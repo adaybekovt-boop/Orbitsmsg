@@ -316,12 +316,10 @@ class NativeTransportHost {
           hypercore: hypercore,
           confirmPeerAuthorization: (peerId, {required authorized}) async {
             final carrier = transport;
-            if (carrier is WorkletOrbitsTransport) {
-              await carrier.confirmAuthorization(
-                peerId,
-                authorized: authorized,
-              );
+            if (carrier == null) {
+              throw StateError('transport unavailable during authorization');
             }
+            await carrier.authorizePeer(peerId, authorized: authorized);
           },
           onRemoteRecord: (record) async {
             await projector?.apply(record);
