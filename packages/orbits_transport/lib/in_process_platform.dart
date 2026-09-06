@@ -52,6 +52,11 @@ class InProcessOrbitsTransportPlatform extends OrbitsTransportPlatform {
   }
 
   @override
+  Future<void> authorizePeer(String peerId, {required bool authorized}) async {
+    _run(() => machine.authorizePeer(peerId, authorized: authorized));
+  }
+
+  @override
   Future<void> send(String peerId, String channel, List<int> frame) async {
     _run(() => machine.send(peerId, channel, frame));
   }
