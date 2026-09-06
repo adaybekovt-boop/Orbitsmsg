@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/services.dart';
 import 'package:orbits_transport_platform_interface/orbits_transport_platform_interface.dart';
@@ -86,6 +87,14 @@ class MethodChannelOrbitsTransport extends OrbitsTransportPlatform {
   @override
   Future<void> disconnect(String peerId) =>
       _channel.invokeMethod<void>('disconnect', peerId);
+
+  @override
+  Future<void> authorizePeer(String peerId, {required bool authorized}) {
+    if (peerId.isEmpty) throw StateError('authorization requires peerId');
+    return _channel.invokeMethod<void>(authorized ? 'authorize' : 'deny', {
+      'peerId': peerId,
+    });
+  }
 
   @override
   Future<void> send(String peerId, String channel, List<int> frame) {
