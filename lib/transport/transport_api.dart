@@ -77,6 +77,19 @@ class TransportLocalConfiguration {
   final List<int>? noiseSeed;
 }
 
+/// Canonical OTP1 representation of a 32-byte Noise seed.
+///
+/// MethodChannel typed bytes are intentionally not allowed to leak into the
+/// JSON IPC layer: every native host and the worklet sees exactly 64 lowercase
+/// hex characters. Invalid material fails before the runtime can silently
+/// generate a different transport identity.
+String encodeNoiseSeedHex(List<int> seed) {
+  if (seed.length != 32 || seed.any((b) => b < 0 || b > 255)) {
+    throw StateError('noiseSeed must be exactly 32 bytes');
+  }
+  return seed.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+}
+
 sealed class TransportEvent {
   const TransportEvent();
 }
@@ -172,6 +185,12 @@ abstract class OrbitsTransport {
 
   Future<void> connect(PeerDescriptor peer);
   Future<void> disconnect(String peerId);
+
+  /// Complete a pending transport-identity decision on the runtime that owns
+  /// the connection. Implementations must remain fail-closed until this call
+  /// succeeds; denying one peer must not affect unrelated connections.
+  Future<void> authorizePeer(String peerId, {required bool authorized}) =>
+      Future<void>.error(UnimplementedError('authorizePeer'));
 
   Future<void> send(String peerId, TransportChannel channel, List<int> frame);
   Future<void> sendFile(String peerId, TransportFileDescriptor file);
