@@ -10,7 +10,6 @@ import io.flutter.embedding.engine.plugins.activity.ActivityAware
 import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
-import java.util.concurrent.Executors
 
 /// Android Bare host. The worklet bundle is embedded at build time.
 /// Production must not fetch remote JS. Official BareKit is linked
@@ -95,6 +94,8 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Ac
       "unpublish" -> ipcAsync("unpublish", emptyMap(), 15_000, result)
       "connect" -> connectAsync(call, result)
       "disconnect" -> disconnectAsync(call, result)
+      "authorize" -> authorizationAsync(call, result, true)
+      "deny" -> authorizationAsync(call, result, false)
       "send" -> sendAsync(call, result)
       "sendFile" -> sendFileAsync(call, result)
       "suspend" -> suspendAsync(result)
@@ -136,7 +137,6 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Ac
       return
     }
 
-    // Register event sink before completion so initial events are not missed
     OrbitsBareRuntime.setEventSink { event ->
       if (::channel.isInitialized) {
         channel.invokeMethod("event", event)
@@ -209,6 +209,22 @@ class OrbitsTransportPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, Ac
       else -> ""
     }
     OrbitsBareRuntime.request("disconnect", mapOf("peerId" to peerId), 10_000) { res ->
+      replyResult(result, res)
+    }
+  }
+
+  private fun authorizationAsync(call: MethodCall, result: MethodChannel.Result, authorized: Boolean) {
+    if (!checkStarted(result)) return
+    val peerId = call.argument<String>("peerId") ?: ""
+    if (peerId.isEmpty()) {
+      replyError(result, HostError("MALFORMED", "authorization requires peerId"))
+      return
+    }
+    OrbitsBareRuntime.request(
+      if (authorized) "authorize" else "deny",
+      mapOf("peerId" to peerId),
+      10_000,
+    ) { res ->
       replyResult(result, res)
     }
   }
