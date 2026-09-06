@@ -89,6 +89,14 @@ class BareHostMachine {
     calls.add('disconnect');
   }
 
+  void authorizePeer(String peerId, {required bool authorized}) {
+    _requireStarted();
+    if (peerId.isEmpty) {
+      throw BareHostException(kBareErrorMalformed, 'authorization requires peerId');
+    }
+    calls.add(authorized ? 'authorize' : 'deny');
+  }
+
   void send(String peerId, String channel, List<int> frame) {
     _requireLive();
     if (frame.length > kBareIpcMaxFrameBytes) {
