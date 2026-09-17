@@ -1,0 +1,19 @@
+{
+  "name": "Orbits (Flutter)",
+  "user": "ubuntu",
+  "install": "bash .cursor/install.sh",
+  "terminals": [
+    {
+      "name": "web",
+      "command": "flutter build web --release --base-href \"/\" --pwa-strategy none && dart run tool/serve_web.dart",
+      "description": "Builds the Flutter web bundle and serves it at http://localhost:8080 with the COOP/COEP headers Drift's wasm SQLite needs."
+    }
+  ],
+  "ports": [
+    {
+      "name": "web",
+      "port": 8080
+    }
+  ],
+  "chromeExecutablePath": "/usr/local/bin/google-chrome"
+}
