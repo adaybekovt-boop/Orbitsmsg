@@ -607,7 +607,7 @@ class DualStackBridge {
     }
     _rememberAuthorizedPending(transportId, binding);
     try {
-      await confirmPeerAuthorization?.call(transportId, authorized: true);
+      await _confirmAuthorization(transportId, authorized: true);
     } catch (_) {
       await _reject(transportId);
     }
@@ -633,7 +633,7 @@ class DualStackBridge {
     }
     _rememberAuthorizedPending(transportId, binding);
     try {
-      await confirmPeerAuthorization?.call(transportId, authorized: true);
+      await _confirmAuthorization(transportId, authorized: true);
     } catch (_) {
       await _reject(transportId);
       return;
@@ -747,13 +747,24 @@ class DualStackBridge {
     }
   }
 
+  Future<void> _confirmAuthorization(
+    String peerId, {
+    required bool authorized,
+  }) async {
+    if (confirmPeerAuthorization != null) {
+      await confirmPeerAuthorization!(peerId, authorized: authorized);
+      return;
+    }
+    await transport.authorizePeer(peerId, authorized: authorized);
+  }
+
   Future<void> _reject(String peerId) async {
     connecting.remove(peerId);
     connected.remove(peerId);
     authenticated.remove(peerId);
     _authorizedPending.remove(peerId);
     try {
-      await confirmPeerAuthorization?.call(peerId, authorized: false);
+      await _confirmAuthorization(peerId, authorized: false);
     } catch (_) {}
     try {
       await transport.disconnect(peerId);

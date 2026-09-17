@@ -634,9 +634,9 @@ internal object OrbitsBareRuntime {
     "loopback.js",
     "ipc.js",
     "swarm.js",
-    "stand.js",
     "corestore_journal.js",
     "bare_compat.js",
+    "incoming_paths.js",
   )
 
   private fun extractWorkletTree(

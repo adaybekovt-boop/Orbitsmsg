@@ -189,8 +189,7 @@ abstract class OrbitsTransport {
   /// Complete a pending transport-identity decision on the runtime that owns
   /// the connection. Implementations must remain fail-closed until this call
   /// succeeds; denying one peer must not affect unrelated connections.
-  Future<void> authorizePeer(String peerId, {required bool authorized}) =>
-      Future<void>.error(UnimplementedError('authorizePeer'));
+  Future<void> authorizePeer(String peerId, {required bool authorized});
 
   Future<void> send(String peerId, TransportChannel channel, List<int> frame);
   Future<void> sendFile(String peerId, TransportFileDescriptor file);

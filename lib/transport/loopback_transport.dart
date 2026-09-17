@@ -139,6 +139,14 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
   }
 
   @override
+  Future<void> authorizePeer(String peerId, {required bool authorized}) async {
+    _ensureStarted();
+    if (!authorized) {
+      await disconnect(peerId);
+    }
+  }
+
+  @override
   Future<void> send(
     String peerId,
     TransportChannel channel,

@@ -43,7 +43,8 @@ if [[ "$MODE" == "apk" ]]; then
     flutter_assets/tool/connectivity_harness/src/swarm.js \
     flutter_assets/tool/connectivity_harness/src/bare_compat.js \
     flutter_assets/tool/connectivity_harness/src/discovery.js \
-    flutter_assets/tool/connectivity_harness/src/corestore_journal.js
+    flutter_assets/tool/connectivity_harness/src/corestore_journal.js \
+    flutter_assets/tool/connectivity_harness/src/incoming_paths.js
   do
     if ! grep -q "$asset" <<<"$listing"; then
       echo "BARE_RUNTIME_MISSING: APK missing $asset" >&2
@@ -89,7 +90,7 @@ if [[ "$MODE" == "ios" ]]; then
     "$app/Frameworks/App.framework/flutter_assets/tool/connectivity_harness/src" \
     "$app/flutter_assets/tool/connectivity_harness/src"
   do
-    if [[ -f "$root/worklet.js" && -f "$root/ipc.js" && -f "$root/swarm.js" && -f "$root/bare_compat.js" ]]; then
+    if [[ -f "$root/worklet.js" && -f "$root/ipc.js" && -f "$root/swarm.js" && -f "$root/bare_compat.js" && -f "$root/incoming_paths.js" ]]; then
       worklet_ok=1
     fi
   done

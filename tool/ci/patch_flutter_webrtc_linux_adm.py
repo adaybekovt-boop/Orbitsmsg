@@ -216,7 +216,7 @@ def patch_third_party_cmake(base_cc: pathlib.Path) -> None:
         # Older hook swallowed a non-zero patcher. Replace the tail.
         start = text.find("# Orbits: force Dummy ADM")
         if start < 0:
-            start = text.find("execute_process(\n  COMMAND") 
+            start = text.find("execute_process(\n  COMMAND")
         text = text[:start] if start >= 0 else text
     cmake.write_text(text + hook)
     print("patched", cmake)

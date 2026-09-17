@@ -201,4 +201,3 @@ if [[ -f "$ROOT/tool/bare/assemble_ios_addons.py" ]]; then
   fi
   "$PYTHON_BIN" "$ROOT/tool/bare/assemble_ios_addons.py"
 fi
-

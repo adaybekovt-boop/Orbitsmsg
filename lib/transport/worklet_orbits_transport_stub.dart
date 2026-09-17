@@ -31,6 +31,14 @@ class WorkletOrbitsTransport implements OrbitsTransport {
   Future<void> disconnect(String peerId) async {}
 
   @override
+  Future<void> authorizePeer(String peerId, {required bool authorized}) async {}
+
+  Future<void> confirmAuthorization(
+    String peerId, {
+    required bool authorized,
+  }) => authorizePeer(peerId, authorized: authorized);
+
+  @override
   Future<void> send(
     String peerId,
     TransportChannel channel,
@@ -48,9 +56,4 @@ class WorkletOrbitsTransport implements OrbitsTransport {
 
   @override
   Future<void> refreshNetwork() async {}
-
-  Future<void> confirmAuthorization(
-    String peerId, {
-    required bool authorized,
-  }) async {}
 }

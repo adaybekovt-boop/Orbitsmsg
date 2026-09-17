@@ -3,7 +3,35 @@
 This report is evidence-only. It does **not** claim the Holepunch
 migration is code-complete or safe to merge.
 
-## Identity
+## 2026-09-17 green-baseline repair
+
+The previous identity table and CI claims below are **stale**. They
+describe earlier SHAs (`c2c02dcb`, `d01c54e`, `01fe55f`). Current
+`origin/main` is `e2441db26680d33d01fd5e8ffbb902b30390e45b`
+(Apache-2.0). PR #62 HEAD at audit time was
+`01fe55f5e08058573ffaa81ea27e0d53c0c8815b`. Merge-base remains
+`671c2e57875d62e56b371a7d4c651de9d2477836`.
+
+This pass restores compile/CI honesty on
+`cursor/orbits-holepunch-green-baseline-e7fb`. The first
+implementation commit is
+`9e545f63788faae931d761433f19c96e738dcbd1`. Treat the branch
+HEAD SHA after CI as the evidence pin.
+
+- Apache-2.0 commits from `main` merged onto the holepunch lineage
+- `OrbitsTransport.authorizePeer` is abstract and implemented by
+  loopback, worklet IO, worklet stub, plugin, and test fakes
+- Dual-stack decisions call `authorizePeer` when no host callback is set
+- Production worklet extraction includes `incoming_paths.js` and
+  excludes CLI-only `stand.js`
+- `BUNDLE.manifest` `corestore_journal.js` SHA-256 matches the file
+- `git diff --check` whitespace on the four flagged files is clean
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. Rooms stay host-plaintext. PeerJS remains the production
+default. Do not merge. Do not claim production-ready.
+
+## Identity (historical repair pass; do not treat as current HEAD)
 
 | Field | Value |
 |-------|--------|

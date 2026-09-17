@@ -11,6 +11,12 @@ PeerJS. `HyperswarmRollout` default remains **off**.
 `kRoomsApplicationE2eImplemented` remains **false**.
 `kPeerjsSupportWindowOpen` remains **true**.
 
+The SHA column below is historical. After 2026-09-17 the working
+lineage is `cursor/orbits-holepunch-green-baseline-e7fb` (PR #62 plus
+Apache-2.0 `main` plus the green-baseline compile/asset/whitespace
+repair). Treat CI on that branch as current evidence, not the older
+repair SHAs in this file.
+
 | Phase | Implemented in production path | Automated evidence on repair SHA | External/manual gate |
 |------:|--------------------------------|----------------------------------|----------------------|
 | 0 | ADRs and contracts in tree | `test/docs_consistency/migration_phase0_test.dart` | Closed |

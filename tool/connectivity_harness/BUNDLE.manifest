@@ -7,7 +7,7 @@
   "note": "Production Bare must ship this tree hashed with the app. Do not fetch executable JS.",
   "files": {
     "bare_compat.js": "1c7991f9fd0a7c52be690ffaf198969c09353fef1644ce8542dc23eb07104f0f",
-    "corestore_journal.js": "d44b39ed162b94c0cce3fed770e2d2ab80a080c2d1c8a5a557af22944d2f125c",
+    "corestore_journal.js": "6188a61285edff18ad152bf0295b55325c1ca5e9b0f7b4a48e16c6bf6ec47e89",
     "discovery.js": "66ed719a2e77a2be62e6a4133c0bac8a4964ad77ae4c1caff106e409d9277ea6",
     "incoming_paths.js": "32459eb31681a52ef60694e5aad28da733cad1270c6dd610923ef314a7a8f03f",
     "ipc.js": "d22e627a80b9216b2d31505e287d94733481011395e4443f1eea0fdd4e495d7f",

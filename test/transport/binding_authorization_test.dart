@@ -44,6 +44,9 @@ class _FakeTransport implements OrbitsTransport {
   }
 
   @override
+  Future<void> authorizePeer(String peerId, {required bool authorized}) async {}
+
+  @override
   Future<void> send(
     String peerId,
     TransportChannel channel,

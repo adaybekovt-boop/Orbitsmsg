@@ -40,6 +40,9 @@ class _ScriptedTransport implements OrbitsTransport {
   Future<void> disconnect(String peerId) async {}
 
   @override
+  Future<void> authorizePeer(String peerId, {required bool authorized}) async {}
+
+  @override
   Future<void> send(
     String peerId,
     TransportChannel channel,

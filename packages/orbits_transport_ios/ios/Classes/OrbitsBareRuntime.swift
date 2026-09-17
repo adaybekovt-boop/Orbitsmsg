@@ -321,7 +321,7 @@ enum OrbitsBareRuntime {
     try? FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
     let names = [
       "worklet.js", "mux.js", "discovery.js", "loopback.js", "ipc.js",
-      "swarm.js", "stand.js", "corestore_journal.js", "bare_compat.js",
+      "swarm.js", "corestore_journal.js", "bare_compat.js", "incoming_paths.js",
     ]
     for name in names {
       if let data = workletSourceData(registrar: registrar, file: name) {
