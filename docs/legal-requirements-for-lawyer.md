@@ -15,10 +15,10 @@ Placeholder in the UI: `[TEXT PENDING LEGAL REVIEW]`
 ## Product
 
 - Name in this repository: **Orbits** (Flutter client).
-- Repository: `https://github.com/adaybekovt-boop/tkmessenger`
-- `LICENSE` in this repo is proprietary ("All rights reserved"). Public
-  "open source" tags on the marketing site are **not** true until counsel
-  and the owner change `LICENSE`.
+- Repository: `https://github.com/adaybekovt-boop/Orbitsmsg`
+- The repository is open source under the **Apache License 2.0**. See
+  [`LICENSE`](../LICENSE). The licensing decision is separate from the legal
+  review of the messenger's terms, privacy disclosures, and operator details.
 - There is **no Orbits-operated chat backend** that stores message bodies.
   1:1 content is E2E (X3DH + Double Ratchet). Rooms are **host-plaintext**
   (the room organizer can read text/files/stickers). See
