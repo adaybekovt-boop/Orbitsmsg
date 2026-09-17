@@ -30,12 +30,16 @@ void main() {
   }
 
   group('LICENSE + SECURITY.md (GH-0.4 / GH-0.5)', () {
-    test('LICENSE is proprietary all-rights-reserved', () {
+    test('LICENSE is Apache-2.0', () {
       final text = read('LICENSE');
-      expect(text, contains('All rights reserved'));
-      expect(text.toLowerCase(), contains('proprietary'));
-      expect(text.toLowerCase(), isNot(contains('mit license')));
-      expect(text.toLowerCase(), isNot(contains('apache license')));
+      expect(text, contains('Apache License'));
+      expect(text, contains('Version 2.0, January 2004'));
+      expect(
+        text,
+        contains('TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION'),
+      );
+      expect(text.toLowerCase(), isNot(contains('proprietary software')));
+      expect(text.toLowerCase(), isNot(contains('all rights reserved')));
     });
 
     test('SECURITY.md documents reporting, supported versions, and SLA', () {

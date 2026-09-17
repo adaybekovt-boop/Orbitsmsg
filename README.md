@@ -68,8 +68,8 @@ Production still uses public PeerJS; Hyperswarm stays off.
 Questions and bug reports: please use
 [Issues](https://github.com/adaybekovt-boop/tkmessenger/issues).
 
----
+## License
 
-© Orbits. All rights reserved. This is proprietary software. Copying, modifying,
-or redistributing the source code, or creating derivative products based on it,
-without the author's written permission is prohibited.
+Orbits is open source under the [Apache License 2.0](LICENSE).
+
+Copyright © 2026 Tamirlan Adaybekov.

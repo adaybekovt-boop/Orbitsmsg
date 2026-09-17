@@ -16,7 +16,9 @@ Flutter `web/` on purpose — that folder is the PWA shell.
 Live `https://orbits-eeo.pages.dev/` still:
 
 - Title / brand: **Orbits Titan** (product name in this repo is **Orbits**)
-- Tags: `P2P · без серверов · open source` — all three are false or misleading
+- Tags: `P2P · без серверов · open source` — at the time of this audit, the
+  open-source claim conflicted with the then-proprietary repository license;
+  the repository has since moved to Apache-2.0
 - Demo bubble: «Шифрование подтверждено» with no verification step
 - Four themes (Obsidian / Paper / Matrix / Sakura); the app catalog is two
   (`orbits-dark`, `orbits-light` in `lib/themes/registry.dart`)
@@ -25,7 +27,8 @@ Live `https://orbits-eeo.pages.dev/` still:
   - `…/releases/download/v8.0.2/orbits-windows-x64.exe`
   - `…/releases/download/v8.0.2/orbits-android-*.apk`
 - Web button has no desktop-host caveat
-- Footer: «Бесплатно · open source» while `LICENSE` is proprietary
+- Footer: «Бесплатно · open source»; the license mismatch recorded in this
+  historical audit has since been resolved by the Apache-2.0 license
 
 ### Download check (same day)
 
@@ -63,17 +66,24 @@ Until that happens, D.1 is **not done**.
 | --- | --- |
 | Orbits Titan | Orbits |
 | без серверов | без хранения переписки на наших серверах. Соединение идёт через сигналинг PeerJS и STUN третьих сторон — это не «без серверов» |
-| open source | **убрать везде** (включая GitHub topics), **или** сменить LICENSE. Смешивать proprietary LICENSE с «open source» нельзя |
+| open source | Allowed: the repository is now licensed under Apache-2.0. Keep the claim tied to the software/source code, not to unrelated services. |
 | Шифрование подтверждено | убрать / «демо, не настоящий чат» |
 | 4 themes | 2 themes matching `lib/themes/registry.dart` |
 | 000 / 100 | delete from the production build |
 | `…/download/v8.0.2/…` | `https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-windows-x64.exe` (and the Android assets) |
 | Web CTA | «Веб открывается и на телефоне. Создать сервер можно только с компьютера» |
 
-## Open-source decision (record it once)
+## Open-source decision
 
-This repository's `LICENSE` is proprietary. Until a lawyer/owner changes
-that file, every public "open source" tag is a false statement.
+As of 2026-09-17, this repository is licensed under the
+**Apache License 2.0**. See [`LICENSE`](../LICENSE). The previous proprietary
+license was intentionally replaced by the owner. Public statements that the
+Orbits source code is open source are now consistent with the repository
+license.
+
+This licensing decision does not change the separate privacy/legal work for
+the product, including operator identity, terms, complaints, and accurate
+disclosure of third-party signalling/STUN infrastructure.
 
 The Flutter web app in **this** repo is **not** blocked on phones
 (`test/web/web_device_access_test.dart`). Do not reintroduce a pre-Flutter
@@ -82,4 +92,5 @@ phone gate.
 ## Earlier fetch
 
 2026-08-23: same live defects (Titan, open source, v8.0.2). Unchanged on
-2026-08-24.
+2026-08-24. The license-related finding in those historical fetches was
+resolved on 2026-09-17.

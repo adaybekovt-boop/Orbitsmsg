@@ -93,7 +93,7 @@ BEGIN
             VALUE "FileDescription", "orbits_flutter" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
             VALUE "InternalName", "orbits_flutter" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.orbits. All rights reserved." "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Tamirlan Adaybekov" "\0"
             VALUE "OriginalFilename", "orbits_flutter.exe" "\0"
             VALUE "ProductName", "orbits_flutter" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
