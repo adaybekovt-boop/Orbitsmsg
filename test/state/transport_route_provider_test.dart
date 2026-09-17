@@ -17,4 +17,14 @@ void main() {
     expect(decision.route, TransportRoute.peerjs);
     expect(describeTransportRoute(decision), contains('rollout=off'));
   });
+
+  test('rollout on advertises native caps so Hyperswarm can win', () {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final decision = container.read(
+      transportRouteProvider((remoteIsPwa: false, remoteHasHyperswarm: true)),
+    );
+    expect(decision.route, TransportRoute.hyperswarm);
+  });
 }

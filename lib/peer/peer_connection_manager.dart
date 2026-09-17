@@ -10,6 +10,9 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+
+import '../transport/peerjs_window.dart';
 import 'helpers.dart';
 import 'multi_tab_lock.dart';
 import 'peerjs_client.dart';
@@ -97,9 +100,23 @@ class PeerConnectionManager {
 
   String get currentPeerId => peer?.id ?? desiredPeerId;
 
-  /// Start the PeerJS pipeline. Returns null if a multi-tab lock conflict was
-  /// detected (caller should set status=multitab).
-  Future<PeerJsClient?> start() async {
+  /// Start the PeerJS pipeline. Returns null if isolation forbids PeerJS
+  /// (status=disconnected) or a multi-tab lock conflict was detected
+  /// (caller should set status=multitab).
+  ///
+  /// [isolationMode] defaults to the product [kPeerjsIsolationMode]. Tests
+  /// pass an explicit mode; do not flip the live constant.
+  Future<PeerJsClient?> start({String? isolationMode}) async {
+    // Phase 14 isolation: fail closed BEFORE signaling-host callback,
+    // MultiTabLock, or PeerJsClient. Product default-live still starts PeerJS.
+    final allowPeerJs = isolationMode != null
+        ? peerjsAllowedOnNativeFor(isolationMode, isWeb: kIsWeb)
+        : peerjsAllowedOnNative(isWeb: kIsWeb);
+    if (!allowPeerJs) {
+      cb.setStatus?.call('disconnected');
+      return null;
+    }
+
     signalingHosts ??= buildSignalingHosts(env);
     final currentHost = signalingHosts![signalingIndex];
     cb.setSignalingHost?.call(env.peerServer ?? currentHost);
@@ -135,6 +152,8 @@ class PeerConnectionManager {
     _initialConnectTimer?.cancel();
     _initialConnectTimer = Timer(const Duration(seconds: 30), () {
       _initialConnectTimer = null;
+      // Isolation fail-closed: a leftover timer must not flip PeerJS UX.
+      if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
       final p = peer;
       if (p != null && !p.open && !p.destroyed) {
         cb.setStatus?.call('disconnected');
@@ -173,6 +192,7 @@ class PeerConnectionManager {
   /// Recreate peer under a new id. Used for host rotation and
   /// `unavailable-id` recovery. Mirrors swapPeerId in JS.
   Future<void> swapPeerId(String nextId) async {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
     if (_swapping) return;
     if (isDropInProgress) return;
     // Rate-limit full client rebuilds. If we've swapped too often recently,
@@ -207,6 +227,7 @@ class PeerConnectionManager {
 
   /// Trigger a reconnect on the current peer (network-change path).
   void reconnectNow() {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
     final p = peer;
     if (p == null || p.destroyed) return;
     try {
@@ -225,6 +246,7 @@ class PeerConnectionManager {
   //   - every other error → show via mapPeerError
 
   void _scheduleReconnect(String reason) {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
     if (isDropInProgress) return;
     final p = peer;
     if (p != null && p.open && reason != 'offline') return;
@@ -250,6 +272,9 @@ class PeerConnectionManager {
   }
 
   Future<PeerJsClient> _createPeerNow(String id) async {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      throw StateError('peerjs isolation');
+    }
     final host = signalingHosts?[signalingIndex] ?? '';
     final endpoint = resolveEndpoint(host: host, env: env);
     final rtc = buildRtcConfig(env);
@@ -289,6 +314,9 @@ class PeerConnectionManager {
   }
 
   void _handleOpen(String id) {
+    // Isolation fail-closed: a leftover PeerJS client must not mark
+    // the product as connected. Product default-live still takes this path.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
     _initialConnectTimer?.cancel();
     _initialConnectTimer = null;
     reconnectAttempt = 0;
@@ -308,6 +336,12 @@ class PeerConnectionManager {
   }
 
   void _handleError(PeerError err) {
+    // Isolation fail-closed BEFORE unavailable-id timers, signaling UX,
+    // or host rotation. swapPeerId / _scheduleReconnect are also gated.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      cb.setStatus?.call('disconnected');
+      return;
+    }
     // ── unavailable-id: silent fast-retry (F5 zombie recovery) ─────
     if (err.type == 'unavailable-id') {
       _reconnectTimer?.cancel();
@@ -371,6 +405,12 @@ class PeerConnectionManager {
       if (hosts != null &&
           canRotateHosts(env, hosts) &&
           networkErrStreak >= 2) {
+        // Isolation must not rotate signaling hosts or rebuild a PeerJS
+        // client. Product default-live still takes this branch.
+        if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+          cb.setStatus?.call('disconnected');
+          return;
+        }
         networkErrStreak = 0;
         signalingIndex = (signalingIndex + 1) % hosts.length;
         _hostRotationCount += 1;

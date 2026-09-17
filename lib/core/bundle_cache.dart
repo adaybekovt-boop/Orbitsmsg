@@ -8,6 +8,7 @@
 // `peer-bundle-<peerId>` row id — one place for all per-peer long-term
 // trust state.
 
+import '../transport/layers.dart';
 import 'identity_key.dart' as identity_key;
 import 'key_store.dart';
 import 'peer_pins.dart';
@@ -165,6 +166,13 @@ Future<AcceptBundleResult> acceptIncomingBundle({
 }) async {
   if (senderPeerId.isEmpty) {
     return const AcceptBundleResult(ok: false, reason: 'missing senderPeerId');
+  }
+
+  if (!replicationValueIsSafe(wire)) {
+    return const AcceptBundleResult(
+      ok: false,
+      reason: 'bundle: forbidden fields',
+    );
   }
 
   PrekeyBundle bundle;

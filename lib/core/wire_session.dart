@@ -188,6 +188,7 @@ Future<Map<String, Uint8List>> _deserializeSkipped(Object? raw) async {
 }
 
 Future<void> _saveRatchetSnapshot(_Session session) async {
+  if (session.peerId.contains('://')) return;
   final state = session.state;
   if (state == null) return;
 
@@ -399,6 +400,11 @@ Future<Map<String, Object?>> _buildSignedHello({
     deviceId: 'local-device',
   );
   if (caps != null) hello['caps'] = caps;
+  // Belt-and-suspenders: refuse to return a secret-bearing hello even if
+  // localHelloCapabilities / caps were somehow hostile. Same gate as acceptHello.
+  if (!helloEnvelopeIsSafe(hello)) {
+    throw const FormatException('hello: forbidden fields');
+  }
   return hello;
 }
 
@@ -578,6 +584,11 @@ Future<AcceptHelloResult> acceptHello({
   // rejected hello (missing pub, downgrade, bad signature) must not leave a
   // half-initialised _Session вЂ” its readyCompleter would dangle with no
   // listener. Session creation is deferred to just before its first use.
+  // Envelope walk first: nested secrets / wake tokens / URL-ish keys must
+  // not reach pub decode, signature, or TOFU.
+  if (!helloEnvelopeIsSafe(hello)) {
+    throw const FormatException('hello: forbidden fields');
+  }
   final pubB64 = hello['pub'];
   if (pubB64 is! String || pubB64.isEmpty) {
     throw StateError('Hello missing pub');

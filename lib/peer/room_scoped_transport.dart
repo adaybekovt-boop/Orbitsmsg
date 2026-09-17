@@ -16,7 +16,11 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
+
+import '../calls/hyperswarm_signaling.dart';
 import '../state/connections_notifier.dart' show RoomBridge;
+import '../transport/peerjs_window.dart';
 import 'helpers.dart' show isValidPeerId, normalizePeerId;
 import 'peerjs_client.dart';
 import 'room_manager.dart' show RoomTransport;
@@ -45,12 +49,20 @@ class RoomScopedTransport implements RoomTransport {
   /// is constructed (before/after start() both fine — the stream is broadcast).
   void wire() {
     if (_wired || _disposed) return;
+    // Isolation already closes inbound leftovers in `_attach`, but wire
+    // must not subscribe `onConnection` when native isolation disallows
+    // PeerJS. Return before `_wired` so a later legal wire can still attach.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
     _wired = true;
     _clientSubs.add(_client.onConnection.listen(_attach));
   }
 
   void _attach(PeerDataConnection conn) {
     if (_disposed) return;
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      unawaited(conn.close());
+      return;
+    }
     final remoteId = normalizePeerId(conn.peer);
     if (remoteId.isEmpty) return;
 
@@ -90,12 +102,14 @@ class RoomScopedTransport implements RoomTransport {
 
   @override
   bool hasReliable(String peerId) {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
     final c = _reliable[normalizePeerId(peerId)];
     return c != null && c.open;
   }
 
   @override
   bool sendRoomPacket(String peerId, Map<String, Object?> packet) {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return false;
     final c = _reliable[normalizePeerId(peerId)];
     return sendGuardedRoomPacket(
       packet,
@@ -105,7 +119,20 @@ class RoomScopedTransport implements RoomTransport {
   }
 
   @override
+  bool canUseNative(String peerId) => false;
+
+  @override
+  bool remoteUnderstandsRoomVoice(String peerId) => false;
+
+  @override
+  Future<void> sendCallSignal(String peerId, CallSignal signal) async {}
+
+  @override
+  void bindRoomVoice(void Function(String from, CallSignal signal)? handler) {}
+
+  @override
   void openReliable(String peerId) {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
     if (_disposed) return;
     final id = normalizePeerId(peerId);
     if (!isValidPeerId(id)) return;

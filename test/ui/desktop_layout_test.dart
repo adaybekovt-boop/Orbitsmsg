@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/vault_kek.dart';
 import 'package:orbits_flutter/pages/servers_page.dart';
 import 'package:orbits_flutter/pages/settings_page.dart';
+import 'package:orbits_flutter/calls/hyperswarm_signaling.dart';
 import 'package:orbits_flutter/peer/peerjs_client.dart' show PeerJsClient;
 import 'package:orbits_flutter/peer/room_manager.dart';
 import 'package:orbits_flutter/state/auth_notifier.dart' show AuthedUser;
@@ -35,6 +36,14 @@ class _FakeTransport implements RoomTransport {
   bool hasReliable(String peerId) => true;
   @override
   void openReliable(String peerId) {}
+  @override
+  bool canUseNative(String peerId) => false;
+  @override
+  bool remoteUnderstandsRoomVoice(String peerId) => false;
+  @override
+  Future<void> sendCallSignal(String peerId, CallSignal signal) async {}
+  @override
+  void bindRoomVoice(void Function(String from, CallSignal signal)? handler) {}
   @override
   PeerJsClient? get rawPeer => null;
 }

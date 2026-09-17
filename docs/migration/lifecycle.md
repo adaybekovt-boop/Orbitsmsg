@@ -33,9 +33,36 @@ enabled — do not promise always-on P2P.
 - Foreground service only where a live call or an explicit user-visible
   transfer justifies it.
 - Doze: treat the socket as mortal; reconnect on resume / wake.
+- `MainActivity` listens for `PowerManager.ACTION_DEVICE_IDLE_MODE_CHANGED`
+  and forwards `{idle: true|false}` on `app.orbits/lifecycle`. Dart calls
+  `TransportLifecycle.onDoze` / `onDozeExit`. This is not a messaging
+  foreground service.
+- `MainActivity` also listens for `Intent.ACTION_BATTERY_LOW` /
+  `ACTION_BATTERY_OKAY` and forwards `{low: true|false}` on the same
+  channel. Dart calls `NativeTransportHost.onLowBattery` which suspends,
+  rolls back to PeerJS (`NativeRollbackReason.battery`), and abandons
+  the native carrier. `onBatteryOkay` must **not** re-enable native.
+- iOS `AppDelegate` mirrors low-battery onto `app.orbits/lifecycle`
+  from `UIDevice.batteryStateDidChangeNotification` /
+  `batteryLevelDidChangeNotification` (level ≤ 0.20 while unplugged).
 - FCM SDK is not a required dependency. `OpaqueWakeService` accepts only
   an opaque token. `OrbitsWakeReceiver` drops extras that carry text,
-  names, or peer IDs. A public push gateway is still not deployed.
+  names, or peer IDs, then forwards the allowlisted token onto
+  `app.orbits/push` (`wake`) when Flutter is attached. iOS APNs device
+  tokens arrive as `token` on the same channel and stay on-device.
+  A public push gateway is still not deployed.
+  Mailbox deposit wakes call `dispatchMailboxWake` with on-device
+  tokens (never a dummy `undeployed` token) and may POST the opaque
+  wake to loopback `ORBITS_PUSH_GATEWAY_ORIGIN` only.
+  `PushSender.sendApns` / `sendFcm` refuse while `kLiveApnsGateway` /
+  `kLiveFcmGateway` are false. An APNs provider ES256 JWT may be built
+  (Apple p8 scalar, not the identity key) and is still not sent.
+  `buildApnsSendHttp` / `dispatchApnsSendHttp` describe the Apple HTTPS
+  POST shape (injected `post`; not HTTP/2 HPACK) and are not called
+  while the flag is false. An FCM
+  service-account RS256 JWT and the OAuth JWT-bearer token request may
+  be built and are still not exchanged or sent. FCM HTTP v1 send
+  `Authorization` is an OAuth access_token, never that assertion JWT.
 - Foreground service is for an in-app Telecom call, not for keeping a
   messaging socket alive.
 

@@ -8,8 +8,10 @@ import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/vault_kek.dart';
+import 'package:orbits_flutter/calls/hyperswarm_signaling.dart';
 import 'package:orbits_flutter/peer/peerjs_client.dart' show PeerJsClient;
 import 'package:orbits_flutter/peer/room_manager.dart';
+import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
 import 'package:orbits_flutter/state/auth_notifier.dart' show AuthedUser;
 import 'package:orbits_flutter/state/connections_notifier.dart' show RoomBridge;
 import 'package:orbits_flutter/state/local_profile_provider.dart';
@@ -37,6 +39,18 @@ class _FlakyHostTransport implements RoomTransport {
   void openReliable(String peerId) {}
 
   @override
+  bool canUseNative(String peerId) => false;
+
+  @override
+  bool remoteUnderstandsRoomVoice(String peerId) => false;
+
+  @override
+  Future<void> sendCallSignal(String peerId, CallSignal signal) async {}
+
+  @override
+  void bindRoomVoice(void Function(String from, CallSignal signal)? handler) {}
+
+  @override
   PeerJsClient? get rawPeer => null;
 }
 
@@ -49,8 +63,10 @@ void main() {
     database = OrbitsDatabase.forTesting(NativeDatabase.memory());
     setOrbitsDatabase(database);
     await setVaultKek(List<int>.generate(32, (i) => (i * 11 + 5) & 0xff));
+    kRoomPlaintextSessionAck.setAcknowledged(true);
   });
   tearDown(() async {
+    kRoomPlaintextSessionAck.reset();
     clearVaultKek();
     setOrbitsDatabase(database);
     await closeOrbitsDatabase();

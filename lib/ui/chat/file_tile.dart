@@ -413,6 +413,24 @@ class _FileTileState extends State<FileTile> {
     if (_busy) return;
     setState(() => _busy = true);
     try {
+      final path = await _loadLocalPath();
+      if (path != null && !kIsWeb) {
+        if (!mounted || !context.mounted) return;
+        await Navigator.of(context).push(
+          PageRouteBuilder<void>(
+            opaque: true,
+            barrierDismissible: true,
+            barrierColor: Colors.black,
+            pageBuilder: (_, __, ___) => _ImageViewer(
+              filePath: path,
+              name: (widget.attachment['name'] as String?) ?? 'image',
+            ),
+            transitionsBuilder: (_, anim, __, child) =>
+                FadeTransition(opacity: anim, child: child),
+          ),
+        );
+        return;
+      }
       final bytes = await _loadBytes();
       if (!mounted || !context.mounted) return;
       if (bytes == null) {
@@ -443,6 +461,18 @@ class _FileTileState extends State<FileTile> {
     if (_busy || _failed) return;
     setState(() => _busy = true);
     try {
+      final path = await _loadLocalPath();
+      if (path != null && !kIsWeb) {
+        final name = (widget.attachment['name'] as String?) ?? 'file';
+        final safeName = _safeFilename(name);
+        final dir = await getApplicationDocumentsDirectory();
+        final finalName = await _uniqueFilename(dir.path, safeName);
+        await File(path).copy('${dir.path}${Platform.pathSeparator}$finalName');
+        if (!mounted) return;
+        HapticFeedback.mediumImpact();
+        _showToast('Сохранено: $finalName');
+        return;
+      }
       final bytes = await _loadBytes();
       if (!mounted) return;
       if (bytes == null) {
@@ -488,6 +518,22 @@ class _FileTileState extends State<FileTile> {
       _showToast('Не удалось сохранить файл');
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<String?> _loadLocalPath() async {
+    if (kIsWeb) return null;
+    try {
+      final row = await db.getFileBlob(widget.msgId);
+      Object? p = row?['localPath'];
+      if (p is! String || p.isEmpty) {
+        p = widget.attachment['localPath'];
+      }
+      if (p is! String || p.isEmpty || p.contains('://')) return null;
+      if (!File(p).existsSync()) return null;
+      return p;
+    } catch (_) {
+      return null;
     }
   }
 
@@ -627,13 +673,18 @@ class _FooterRow extends StatelessWidget {
 /// Full-screen image viewer used by the image tile. Pinch + pan, tap
 /// outside to close. Kept lean — no share menu yet (Day 5 item).
 class _ImageViewer extends StatelessWidget {
-  const _ImageViewer({required this.bytes, required this.name});
+  const _ImageViewer({this.bytes, this.filePath, required this.name});
 
-  final Uint8List bytes;
+  final Uint8List? bytes;
+  final String? filePath;
   final String name;
 
   @override
   Widget build(BuildContext context) {
+    final path = filePath;
+    final ImageProvider imageProvider = path != null && path.isNotEmpty
+        ? FileImage(File(path))
+        : MemoryImage(bytes ?? Uint8List(0));
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
@@ -653,8 +704,8 @@ class _ImageViewer extends StatelessWidget {
           child: InteractiveViewer(
             minScale: 0.5,
             maxScale: 6.0,
-            child: Image.memory(
-              bytes,
+            child: Image(
+              image: imageProvider,
               fit: BoxFit.contain,
               gaplessPlayback: true,
             ),

@@ -2,6 +2,14 @@
 
 ## PWA decision (transitional — locked)
 
+**Official mode today (DoD current-state answer):** PWA is a
+**compatibility client on PeerJS**. Packet fields:
+`pwaOfficialMode` = `compatibility-client-on-PeerJS`,
+`pwaFinalFateChosen` = false
+([store-data-safety.json](store-data-safety.json)). That is the written
+decision for the dual-stack period. It does **not** put Hyperswarm in
+the browser and does **not** retire PeerJS.
+
 Hyperswarm uses UDP and does not run in the browser.
 
 | Pair | Route |
@@ -24,6 +32,8 @@ web-pwa-v1
 mailbox-v1
 hypercore-v1
 multi-device-v1
+room-voice-v1
+call-v1
 ```
 
 Signed with the identity key when advertised. Cached per contact.

@@ -3,6 +3,7 @@
 // lazy migration — history is never bricked).
 
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:drift/native.dart';
@@ -157,6 +158,47 @@ void main() {
     final got = await db.getFileBlob('f1');
     expect(utf8.decode(got!['blob'] as List<int>), marker);
     expect(utf8.decode(got['thumb'] as List<int>), thumbMarker);
+  });
+
+  test('path-backed file blob stores a localPath, not plaintext bytes', () async {
+    const marker = 'FILE-PATH-BLOB-SECRET-zz99';
+    final dir = Directory.systemTemp.createTempSync('orbits-path-blob-');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final file = File('${dir.path}${Platform.pathSeparator}plain.bin')
+      ..writeAsBytesSync(utf8.encode(marker));
+
+    expect(
+      await db.saveFileBlobFromPath('fp-url', 'https://evil.example/x'),
+      isFalse,
+    );
+    expect(
+      await db.saveFileBlobFromPath('fp-file-url', 'file://${file.path}'),
+      isFalse,
+    );
+    expect(await db.saveFileBlobFromPath('fp-missing', '/nope/missing.bin'), isFalse);
+
+    final ok = await db.saveFileBlobFromPath(
+      'fp1',
+      file.path,
+      mime: 'text/plain',
+      name: 'note.txt',
+    );
+    expect(ok, isTrue);
+
+    final raw = await database.select(database.fileBlobsTable).getSingle();
+    expect(isBlobWrapped(raw.bytes), isTrue);
+    expect(utf8.decode(raw.bytes, allowMalformed: true), isNot(contains(marker)));
+    expect(isBlobWrapped(raw.data), isTrue);
+    expect(utf8.decode(raw.data, allowMalformed: true), isNot(contains(marker)));
+    expect(utf8.decode(raw.data, allowMalformed: true), isNot(contains(file.path)));
+
+    final got = await db.getFileBlob('fp1');
+    expect(got, isNotNull);
+    expect(got!['localPath'], file.path);
+    expect((got['blob'] as List<int>), isEmpty);
+    expect(utf8.decode(File(got['localPath']! as String).readAsBytesSync()), marker);
   });
 
   test('avatar is encrypted at rest and a legacy plaintext avatar still reads',

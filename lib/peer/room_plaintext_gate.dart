@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import '../transport/layers.dart';
+
 /// Checkbox on the create/join sheet and the in-chat banner.
 const Key kRoomPlaintextAckKey = Key('room-plaintext-ack');
 
@@ -23,9 +25,11 @@ class RoomPlaintextSessionAck {
   void reset() => _acked = false;
 
   /// Control packets (join/leave/members/…) always pass. `room_msg`
-  /// (text / sticker / file) requires the disclaimer ack.
+  /// (text / sticker / file) and host-plaintext `room_file_chunk`
+  /// require the disclaimer ack.
   bool allowsPacket(Map<String, Object?> packet) {
-    if (packet['type'] != 'room_msg') return true;
+    final type = packet['type'];
+    if (type != 'room_msg' && type != 'room_file_chunk') return true;
     return _acked;
   }
 }
@@ -40,6 +44,9 @@ bool sendGuardedRoomPacket(
   required bool connected,
   required void Function(Map<String, Object?>) send,
 }) {
+  if (!replicationValueIsSafe(packet)) return false;
+  final roomId = packet['roomId'];
+  if (roomId is String && roomId.contains('://')) return false;
   if (!kRoomPlaintextSessionAck.allowsPacket(packet)) return false;
   if (!connected) return false;
   send(packet);

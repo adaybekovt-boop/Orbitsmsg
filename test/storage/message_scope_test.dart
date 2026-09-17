@@ -78,4 +78,10 @@ void main() {
     expect((await db.getMessageById(roomKey))!['roomId'], 'room-1');
     expect((await db.getMessageById(dmId))!['payload'], dm['payload']);
   });
+
+  test('scopedRoomMessageId refuses URL-shaped room or raw ids', () {
+    expect(db.scopedRoomMessageId('https://evil', 'm1'), isEmpty);
+    expect(db.scopedRoomMessageId('room-1', 'https://evil'), isEmpty);
+    expect(db.scopedRoomMessageId('room-1', 'm1'), 'room:room-1:m1');
+  });
 }

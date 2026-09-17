@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'device_binding.dart';
 import 'transport_api.dart';
 
@@ -7,6 +9,8 @@ Future<WorkletOrbitsTransport?> spawnWorkletTransport({
     null;
 
 class WorkletOrbitsTransport implements OrbitsTransport {
+  Uint8List? noisePublicKey;
+
   @override
   Stream<TransportEvent> get events => const Stream.empty();
 
@@ -24,6 +28,9 @@ class WorkletOrbitsTransport implements OrbitsTransport {
 
   @override
   Future<void> connect(PeerDescriptor peer) async {}
+
+  @override
+  Future<void> rememberPeer(PeerDescriptor peer) async {}
 
   @override
   Future<void> disconnect(String peerId) async {}
@@ -46,4 +53,18 @@ class WorkletOrbitsTransport implements OrbitsTransport {
 
   @override
   Future<void> refreshNetwork() async {}
+
+  @override
+  Future<void> appendJournal(Map<String, Object?> record) async {}
+
+  @override
+  Future<List<Map<String, Object?>>> listJournal() async =>
+      const <Map<String, Object?>>[];
+
+  @override
+  Future<Map<String, Object?>> listAutobase() async =>
+      const <String, Object?>{};
+
+  @override
+  Future<void> hydrateAutobase([List<Map<String, Object?>>? rows]) async {}
 }

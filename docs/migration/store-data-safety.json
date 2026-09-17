@@ -1,0 +1,34 @@
+{
+  "filed": false,
+  "note": "Engineering packet only. Not submitted to App Store Connect or Play Data Safety until counsel replaces [TEXT PENDING LEGAL REVIEW].",
+  "defaultLivePath": "PeerJS",
+  "pwaOfficialMode": "compatibility-client-on-PeerJS",
+  "pwaFinalFateChosen": false,
+  "kCompletedMigrationPhase": 0,
+  "kRoomsApplicationE2eImplemented": false,
+  "kLiveApnsGateway": false,
+  "kLiveFcmGateway": false,
+  "kLiveStorageFleet": false,
+  "kLiveSignedRelayDirectory": false,
+  "kBareBinaryShipped": false,
+  "kHolepunchCorestoreAddonLinked": false,
+  "voipBackgroundMode": false,
+  "tracking": false,
+  "collectsMessageBodies": false,
+  "pushPayload": "opaqueWakeToken only",
+  "encryptionExport": {
+    "usesStandardHttps": true,
+    "oneToOne": "X3DH + Double Ratchet on device; bodies are not readable by relays",
+    "rooms": "host-plaintext; DTLS only protects the hop to the host",
+    "customMilitaryClaims": false
+  },
+  "dataSafety": {
+    "oneToOne": "X3DH + Double Ratchet; bodies stay on device",
+    "rooms": "host-plaintext; UI warning required",
+    "metadata": "PeerJS and STUN see connection metadata on the default live path",
+    "account": false,
+    "encryptionAtRest": "device vault",
+    "mailbox": "encrypted envelopes only, and only if a fleet is deployed (none today)",
+    "push": "not sent; APNs/FCM JWT and OAuth assertion may be built and are not exchanged; FCM send Authorization is an access_token, never the assertion JWT; APNs/FCM HTTPS POST shapes may be built (injected post; APNs is not HTTP/2 HPACK) and are not dispatched while live flags are false"
+  }
+}

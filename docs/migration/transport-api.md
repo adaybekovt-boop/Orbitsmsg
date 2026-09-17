@@ -42,9 +42,10 @@ Events: `connected`, `authenticated`, `frame`, `deliveryState`,
 ## Files
 
 `sendFile` takes a **path or platform descriptor**, not a `Uint8List`
-over Flutter IPC. Current Drop / chat attachments still buffer in Dart
-memory; that is a known limitation (`docs/security.md`). The new plugin
-must not copy that pattern.
+over Flutter IPC. Native chat `attach-chunk` sets `protocol:
+attach-chunk` and `fileId` on a **ciphertext** path (XOR stays in Dart;
+the worklet never sees `fileKey`). Drop / harness transfers omit
+`protocol`. PeerJS chat attachments still buffer in Dart on web.
 
 ## Dual-stack (Phase 4)
 
@@ -57,6 +58,21 @@ must not copy that pattern.
 3. Downgrade is logged. A contact may forbid fallback.
 
 Until Phase 4 the only live implementation remains `PeerJsClient`.
+
+`TransportLocalConfiguration.bootstrap` is the HyperDHT list. An empty
+list means the host must stay on loopback (or PeerJS) — it must not
+open Hyperswarm against the public DHT. Lab override:
+`ORBITS_DHT_BOOTSTRAP=127.0.0.1:port,…`. A local
+`ORBITS_RELAY_DIRECTORY` file may supply identity-signed or unsigned lab
+rows. Relay rows with `protocol: hyperdht` and a 32-byte hex
+`publicKey` become Hyperswarm `relayThrough` keys (DHT node keys, not
+identity). HTTP health relays are skipped. `kLiveSignedRelayDirectory`
+stays false until a public directory is actually deployed.
+`hyperswarmRelayForced` stays false by default so the swarm may still
+go direct.
+
+`transportSeed` is a 32-byte Hyperswarm Noise seed. It is not the
+identity key, not a discovery secret, and not stored in Hypercore.
 
 ## Compatibility
 

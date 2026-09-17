@@ -1,11 +1,39 @@
 // Content-addressed chunked attachment. Per-file key wraps bytes;
 // the mailbox/journal only store ciphertext + hashes.
 
+import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show sha256;
 
 const int kAttachmentChunkSize = 64 * 1024;
+
+/// PeerJS base64 chat/room cap (JS UI gate). Native path-streamed
+/// chat uses [kMaxNativeAttachBytes] instead.
+const int kMaxPeerJsFileRawBytes = 12 * 1024 * 1024;
+
+/// Native `attach-chunk` / path-streamed chat. Matches DualStackBridge
+/// inbound cipher cap. Not the PeerJS live path.
+const int kMaxNativeAttachBytes = 50 * 1024 * 1024;
+
+const int kNativeAttachFileKeyBytes = 32;
+
+/// XOR key from a local pending attachment map (Drift outbox). Null if
+/// missing or not 32 bytes. Hypercore / mailbox must still not store this.
+List<int>? nativeAttachFileKeyFromPayload(Map<String, Object?>? attachment) {
+  if (attachment == null) return null;
+  final b64 = attachment['fileKeyB64'];
+  if (b64 is! String || b64.isEmpty) return null;
+  if (b64.contains('://')) return null;
+  try {
+    final key = base64.decode(b64);
+    if (key.length != kNativeAttachFileKeyBytes) return null;
+    return key;
+  } catch (_) {
+    return null;
+  }
+}
 
 class AttachmentChunk {
   const AttachmentChunk({
@@ -62,6 +90,48 @@ class ResumableAttachment {
       );
     }
     return out;
+  }
+
+  /// Stream plaintext from disk (or any source) without requiring a single
+  /// in-memory `Uint8List` of the whole file.
+  static Future<List<AttachmentChunk>> chunkFromByteStream(
+    Stream<List<int>> incoming,
+    List<int> fileKey,
+  ) =>
+      chunkStream(incoming, fileKey).toList();
+
+  /// Yield ciphertext chunks as plaintext arrives. Callers that send
+  /// immediately must not collect the whole list.
+  static Stream<AttachmentChunk> chunkStream(
+    Stream<List<int>> incoming,
+    List<int> fileKey,
+  ) async* {
+    final pending = BytesBuilder(copy: false);
+    var offset = 0;
+    await for (final piece in incoming) {
+      pending.add(piece);
+      while (pending.length >= kAttachmentChunkSize) {
+        final buf = pending.takeBytes();
+        final slice = buf.sublist(0, kAttachmentChunkSize);
+        pending.add(buf.sublist(kAttachmentChunkSize));
+        yield _oneChunk(offset, slice, fileKey);
+        offset += slice.length;
+      }
+    }
+    final tail = pending.takeBytes();
+    if (tail.isNotEmpty) {
+      yield _oneChunk(offset, tail, fileKey);
+    }
+  }
+
+  static AttachmentChunk _oneChunk(int offset, List<int> slice, List<int> fileKey) {
+    final ct = _xor(slice, fileKey);
+    return AttachmentChunk(
+      index: offset ~/ kAttachmentChunkSize,
+      offset: offset,
+      ciphertext: Uint8List.fromList(ct),
+      hash: sha256.convert(ct).toString(),
+    );
   }
 
   static Uint8List decrypt(List<AttachmentChunk> chunks, List<int> fileKey) {

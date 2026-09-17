@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/feature_flags.dart';
 import '../transport/capabilities.dart';
 import '../transport/dual_stack.dart';
+import '../transport/hello_capabilities.dart';
 
 final transportRouteProvider =
     Provider.family<DualStackDecision, ({bool remoteIsPwa, bool remoteHasHyperswarm})>(
@@ -16,7 +17,9 @@ final transportRouteProvider =
       if (args.remoteIsPwa) TransportCapability.webPwaV1,
     };
     return decideDualStack(
-      local: defaultNativeCapabilities(),
+      local: isHyperswarmTransportEnabled()
+          ? advertisedLocalCapabilities()
+          : defaultNativeCapabilities(),
       remote: remote,
       localIsPwa: false,
       remoteIsPwa: args.remoteIsPwa,

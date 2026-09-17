@@ -21,3 +21,18 @@ Future<FileJournal?> openLocalFileJournal(String deviceId) async {
     return null;
   }
 }
+
+/// Local Corestore / JSONL directory for the worklet journal.
+/// Sibling of `orbits-hypercore.ndjson`. Never a remote URL.
+Future<String?> localWorkletJournalDir() async {
+  try {
+    final dir = await getApplicationSupportDirectory();
+    final root = Directory(
+      '${dir.path}${Platform.pathSeparator}orbits-corestore',
+    );
+    root.createSync(recursive: true);
+    return root.path;
+  } catch (_) {
+    return null;
+  }
+}

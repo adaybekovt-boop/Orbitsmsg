@@ -1,0 +1,362 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.5",
+  "version": 1,
+  "metadata": {
+    "component": {
+      "name": "orbitsmsg",
+      "type": "application"
+    },
+    "properties": [
+      {
+        "name": "note",
+        "value": "In-tree pin list for CI. Not a signed release SBOM. Dart never fetches Bare or worklet JS."
+      }
+    ]
+  },
+  "components": [
+    {
+      "type": "file",
+      "name": "orbits-connectivity-worklet",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "5d98cca3667cf1610aa490603598b027486ed7537e1e9488ad08261f326d6cc0"
+        }
+      ],
+      "properties": [
+        {
+          "name": "pinnedWorkletSha256",
+          "value": "5d98cca3667cf1610aa490603598b027486ed7537e1e9488ad08261f326d6cc0"
+        },
+        {
+          "name": "remoteJs",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "name": "orbits-connectivity-package.json",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "340fa7323037854f5b210b1373857e876a264e27bbdaca2fa11dc45588ab05f6"
+        }
+      ],
+      "properties": [
+        {
+          "name": "pinnedPackageJsonSha256",
+          "value": "340fa7323037854f5b210b1373857e876a264e27bbdaca2fa11dc45588ab05f6"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "name": "orbits-connectivity-autobase.js",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3bd3ca649e58a3997f81227d6a04384aedf7f8726198854ff604917906a3ef7a"
+        }
+      ],
+      "properties": [
+        {
+          "name": "pinnedSourceSha256",
+          "value": "3bd3ca649e58a3997f81227d6a04384aedf7f8726198854ff604917906a3ef7a"
+        },
+        {
+          "name": "remoteJs",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "name": "orbits-connectivity-corestore_journal.js",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "840c071bb9e8810ff5e80b15f21176b0f11cd65c06cce242d5553853829edcb5"
+        }
+      ],
+      "properties": [
+        {
+          "name": "pinnedSourceSha256",
+          "value": "840c071bb9e8810ff5e80b15f21176b0f11cd65c06cce242d5553853829edcb5"
+        },
+        {
+          "name": "remoteJs",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "name": "orbits-connectivity-discovery.js",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3cce3f021c9ff2118ab0e53a1f84d00ee535208c7f838f9061a0533da41ff66f"
+        }
+      ],
+      "properties": [
+        {
+          "name": "pinnedSourceSha256",
+          "value": "3cce3f021c9ff2118ab0e53a1f84d00ee535208c7f838f9061a0533da41ff66f"
+        },
+        {
+          "name": "remoteJs",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "name": "orbits-connectivity-ipc.js",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cf983e1ac28d0f8187edcf589708658d9209510ecd968801ba94e41b1d336aa9"
+        }
+      ],
+      "properties": [
+        {
+          "name": "pinnedSourceSha256",
+          "value": "cf983e1ac28d0f8187edcf589708658d9209510ecd968801ba94e41b1d336aa9"
+        },
+        {
+          "name": "remoteJs",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "name": "orbits-connectivity-loopback.js",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ee150635af14113a8ec8bd835d486953012390f88f2640ea5a625cd24783e230"
+        }
+      ],
+      "properties": [
+        {
+          "name": "pinnedSourceSha256",
+          "value": "ee150635af14113a8ec8bd835d486953012390f88f2640ea5a625cd24783e230"
+        },
+        {
+          "name": "remoteJs",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "name": "orbits-connectivity-mux.js",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3c43488c57c23913c4fc980ad81eda25645db70280cf8c74d7acc2461132afb6"
+        }
+      ],
+      "properties": [
+        {
+          "name": "pinnedSourceSha256",
+          "value": "3c43488c57c23913c4fc980ad81eda25645db70280cf8c74d7acc2461132afb6"
+        },
+        {
+          "name": "remoteJs",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "name": "orbits-connectivity-stand.js",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "d22402a34b2b80a59fc62a887ef8af748fdcdafb8ea6dde43b2c35236eb5af20"
+        }
+      ],
+      "properties": [
+        {
+          "name": "pinnedSourceSha256",
+          "value": "d22402a34b2b80a59fc62a887ef8af748fdcdafb8ea6dde43b2c35236eb5af20"
+        },
+        {
+          "name": "remoteJs",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "file",
+      "name": "orbits-connectivity-swarm.js",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "4d836eb862e892b58f4139f4ee1ce744a1370a59aaf41960de4af95c57d96d65"
+        }
+      ],
+      "properties": [
+        {
+          "name": "pinnedSourceSha256",
+          "value": "4d836eb862e892b58f4139f4ee1ce744a1370a59aaf41960de4af95c57d96d65"
+        },
+        {
+          "name": "remoteJs",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "bare-runtime-android-arm64",
+      "version": "1.31.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f80ff745710fd82bc2f5f68016c7e2375a8e0d0254a2270db36ae2e7e55cd3e6"
+        }
+      ],
+      "properties": [
+        {
+          "name": "shipped",
+          "value": "false"
+        },
+        {
+          "name": "remoteFetch",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "bare-runtime-darwin-arm64",
+      "version": "1.31.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3c0bbb33eab8c5147bb4af80366815c1d9c58015043d721c67f13a7d20b8d5f2"
+        }
+      ],
+      "properties": [
+        {
+          "name": "shipped",
+          "value": "false"
+        },
+        {
+          "name": "remoteFetch",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "bare-runtime-darwin-x64",
+      "version": "1.31.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "5efb7c26b5a95b5bfba3aa0d1177709dd9d71ba90096ccd50f62a04fc6e69cd1"
+        }
+      ],
+      "properties": [
+        {
+          "name": "shipped",
+          "value": "false"
+        },
+        {
+          "name": "remoteFetch",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "bare-runtime-ios-arm64",
+      "version": "1.31.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "5a19737fd26279ef57756cea4e40325be02967599952c569d3b46d1a6f2776b6"
+        }
+      ],
+      "properties": [
+        {
+          "name": "shipped",
+          "value": "false"
+        },
+        {
+          "name": "remoteFetch",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "bare-runtime-linux-arm64",
+      "version": "1.31.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "dedaeb43fb3315e69d215b262a02c7f74fcdc354076df363905c73fec3cc7119"
+        }
+      ],
+      "properties": [
+        {
+          "name": "shipped",
+          "value": "false"
+        },
+        {
+          "name": "remoteFetch",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "bare-runtime-linux-x64",
+      "version": "1.31.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "9408f82dd1344d7403acb93a0c66b50a4b2cc63c483c6bf48ef8df67203b6ec7"
+        }
+      ],
+      "properties": [
+        {
+          "name": "shipped",
+          "value": "false"
+        },
+        {
+          "name": "remoteFetch",
+          "value": "false"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "name": "bare-runtime-windows-x64",
+      "version": "1.31.0",
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "d31c7c79b445546416d37462808616482993bc85460856ff23a772fe2ed97527"
+        }
+      ],
+      "properties": [
+        {
+          "name": "shipped",
+          "value": "false"
+        },
+        {
+          "name": "remoteFetch",
+          "value": "false"
+        }
+      ]
+    }
+  ]
+}

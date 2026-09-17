@@ -1,0 +1,439 @@
+'use strict'
+
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const http = require('node:http')
+const { createServer, hasForbiddenKey, tokenIsSafe } = require('./server.js')
+
+function request(port, { method, path, body }) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      { hostname: '127.0.0.1', port, method, path },
+      (res) => {
+        const chunks = []
+        res.on('data', (c) => chunks.push(c))
+        res.on('end', () =>
+          resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString('utf8') }),
+        )
+      },
+    )
+    req.on('error', reject)
+    if (body) req.write(JSON.stringify(body))
+    req.end()
+  })
+}
+
+test('HTTP storage peer grants, rejects plaintext/anonymous, stores ciphertext', async (t) => {
+  const server = createServer({ token: 'cap-1' })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const port = server.address().port
+
+  const anon = await request(port, {
+    method: 'POST',
+    path: '/v1/grant',
+    body: { token: '' },
+  })
+  assert.equal(anon.status, 400)
+
+  const plain = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-1',
+      writerKey: 'w',
+      seq: 0,
+      b64: Buffer.from([1, 2, 3]).toString('base64'),
+      plaintext: 'nope',
+    },
+  })
+  assert.equal(plain.status, 400)
+
+  const put = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-1',
+      writerKey: 'w',
+      seq: 0,
+      b64: Buffer.from([1, 2, 3]).toString('base64'),
+    },
+  })
+  assert.equal(put.status, 200)
+
+  const got = await request(port, {
+    method: 'GET',
+    path: '/v1/blocks?token=cap-1&writerKey=w&fromSeq=0',
+  })
+  assert.equal(got.status, 200)
+  const json = JSON.parse(got.body)
+  assert.equal(json.blocks.length, 1)
+  assert.equal(json.blocks[0].b64, Buffer.from([1, 2, 3]).toString('base64'))
+
+  const st = await request(port, {
+    method: 'GET',
+    path: '/v1/stats?token=cap-1&writerKey=w',
+  })
+  assert.equal(st.status, 200)
+  const statsBody = JSON.parse(st.body)
+  assert.equal(statsBody.pendingCount, 1)
+  assert.equal(statsBody.usedBytes, 3)
+
+  const tomb = await request(port, {
+    method: 'POST',
+    path: '/v1/tombstone',
+    body: { token: 'cap-1', writerKey: 'w', seq: 0 },
+  })
+  assert.equal(tomb.status, 200)
+  const after = await request(port, {
+    method: 'GET',
+    path: '/v1/blocks?token=cap-1&writerKey=w&fromSeq=0',
+  })
+  assert.equal(JSON.parse(after.body).blocks.length, 0)
+})
+
+test('HTTP storage peer rejects fileKey and discoverySecret on /v1/blocks', async (t) => {
+  const server = createServer({ token: 'cap-forbid' })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const port = server.address().port
+
+  const fileKey = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-forbid',
+      writerKey: 'w',
+      seq: 0,
+      b64: Buffer.from([1, 2, 3]).toString('base64'),
+      fileKey: 'must-not-persist',
+    },
+  })
+  assert.equal(fileKey.status, 400)
+
+  const discovery = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-forbid',
+      writerKey: 'w',
+      seq: 1,
+      b64: Buffer.from([1, 2, 3]).toString('base64'),
+      discoverySecret: 'must-not-persist',
+    },
+  })
+  assert.equal(discovery.status, 400)
+
+  const ok = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-forbid',
+      writerKey: 'w',
+      seq: 0,
+      b64: Buffer.from([1, 2, 3]).toString('base64'),
+    },
+  })
+  assert.equal(ok.status, 200)
+})
+
+test('hasForbiddenKey walks nested objects/arrays and is cycle-safe', () => {
+  assert.equal(hasForbiddenKey({ token: 'cap' }), false)
+  assert.equal(hasForbiddenKey({ meta: { fileKey: 'x' } }), true)
+  assert.equal(hasForbiddenKey({ extra: { peerId: 'ORBIT-AA' } }), true)
+  assert.equal(hasForbiddenKey({ extra: { plaintext: 'nope' } }), true)
+  assert.equal(hasForbiddenKey({ items: [{ fileKey: 'x' }] }), true)
+  assert.equal(hasForbiddenKey({ note: 'fileKey' }), false)
+  const cyclic = { token: 'cap' }
+  cyclic.self = cyclic
+  assert.equal(hasForbiddenKey(cyclic), false)
+  const cyclicForbidden = { extra: {} }
+  cyclicForbidden.extra.loop = cyclicForbidden
+  cyclicForbidden.extra.fileKey = 'x'
+  assert.equal(hasForbiddenKey(cyclicForbidden), true)
+})
+
+test('HTTP storage peer rejects nested fileKey/peerId/plaintext and keeps ciphertext-only', async (t) => {
+  const server = createServer({ token: 'cap-nested' })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const port = server.address().port
+
+  const health = await request(port, { method: 'GET', path: '/health' })
+  assert.equal(health.status, 200)
+  const healthJson = JSON.parse(health.body)
+  assert.equal(healthJson.ok, true)
+  assert.notEqual(healthJson.deployed, true)
+  assert.equal(JSON.stringify(healthJson).includes('fleet'), false)
+
+  const nestedFileKey = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-nested',
+      writerKey: 'w-nested',
+      seq: 0,
+      b64: Buffer.from([1, 2, 3]).toString('base64'),
+      meta: { fileKey: 'x' },
+    },
+  })
+  assert.equal(nestedFileKey.status, 400)
+
+  const nestedPeerId = await request(port, {
+    method: 'POST',
+    path: '/v1/grant',
+    body: { token: 'cap-leaked', extra: { peerId: 'ORBIT-AA' } },
+  })
+  assert.equal(nestedPeerId.status, 400)
+
+  const nestedPlaintext = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-nested',
+      writerKey: 'w-nested',
+      seq: 1,
+      b64: Buffer.from([4, 5, 6]).toString('base64'),
+      extra: { plaintext: 'nope' },
+    },
+  })
+  assert.equal(nestedPlaintext.status, 400)
+
+  const leakedPut = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-leaked',
+      writerKey: 'w-leaked',
+      seq: 0,
+      b64: Buffer.from([7]).toString('base64'),
+    },
+  })
+  assert.equal(leakedPut.status, 400)
+
+  const empty = await request(port, {
+    method: 'GET',
+    path: '/v1/blocks?token=cap-nested&writerKey=w-nested&fromSeq=0',
+  })
+  assert.equal(empty.status, 200)
+  assert.equal(JSON.parse(empty.body).blocks.length, 0)
+
+  const grantOk = await request(port, {
+    method: 'POST',
+    path: '/v1/grant',
+    body: { token: 'cap-ok' },
+  })
+  assert.equal(grantOk.status, 200)
+
+  const put = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-ok',
+      writerKey: 'w-ok',
+      seq: 0,
+      b64: Buffer.from([1, 2, 3]).toString('base64'),
+    },
+  })
+  assert.equal(put.status, 200)
+
+  const got = await request(port, {
+    method: 'GET',
+    path: '/v1/blocks?token=cap-ok&writerKey=w-ok&fromSeq=0',
+  })
+  assert.equal(got.status, 200)
+  assert.equal(JSON.parse(got.body).blocks.length, 1)
+  assert.equal(JSON.parse(got.body).blocks[0].b64, Buffer.from([1, 2, 3]).toString('base64'))
+})
+
+test('tokenIsSafe rejects empty, URL, peerId, and secret fragments', () => {
+  assert.equal(tokenIsSafe('cap'), true)
+  assert.equal(tokenIsSafe(''), false)
+  assert.equal(tokenIsSafe('https://evil/tok'), false)
+  assert.equal(tokenIsSafe('ftp://x'), false)
+  assert.equal(tokenIsSafe('tok-peerId'), false)
+  assert.equal(tokenIsSafe('x-fileKey'), false)
+  assert.equal(tokenIsSafe('x-rootKey'), false)
+  assert.equal(tokenIsSafe('x-discoverySecret'), false)
+})
+
+test('HTTP storage peer rejects unsafe tokens on grant/put/get/tombstone/stats', async (t) => {
+  const server = createServer({ token: 'cap-token-safe' })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const port = server.address().port
+
+  const health = await request(port, { method: 'GET', path: '/health' })
+  assert.equal(health.status, 200)
+  const healthJson = JSON.parse(health.body)
+  assert.equal(healthJson.ok, true)
+  assert.equal(healthJson.role, 'storage')
+  assert.equal(healthJson.plaintext, false)
+  assert.notEqual(healthJson.deployed, true)
+
+  const ciphertext = Buffer.from([1, 2, 3]).toString('base64')
+  const unsafe = ['https://evil/tok', 'tok-peerId', 'x-fileKey']
+  for (const token of unsafe) {
+    const granted = await request(port, {
+      method: 'POST',
+      path: '/v1/grant',
+      body: { token },
+    })
+    assert.equal(granted.status, 400)
+
+    const put = await request(port, {
+      method: 'POST',
+      path: '/v1/blocks',
+      body: { token, writerKey: 'w-unsafe', seq: 0, b64: ciphertext },
+    })
+    assert.equal(put.status, 400)
+
+    const q = encodeURIComponent(token)
+    const got = await request(port, {
+      method: 'GET',
+      path: `/v1/blocks?token=${q}&writerKey=w-unsafe&fromSeq=0`,
+    })
+    assert.equal(got.status, 400)
+
+    const st = await request(port, {
+      method: 'GET',
+      path: `/v1/stats?token=${q}&writerKey=w-unsafe`,
+    })
+    assert.equal(st.status, 400)
+
+    const tomb = await request(port, {
+      method: 'POST',
+      path: '/v1/tombstone',
+      body: { token, writerKey: 'w-unsafe', seq: 0 },
+    })
+    assert.equal(tomb.status, 400)
+  }
+
+  const emptyDefault = await request(port, {
+    method: 'GET',
+    path: '/v1/blocks?token=cap-token-safe&writerKey=w-unsafe&fromSeq=0',
+  })
+  assert.equal(emptyDefault.status, 200)
+  assert.equal(JSON.parse(emptyDefault.body).blocks.length, 0)
+
+  const grantOk = await request(port, {
+    method: 'POST',
+    path: '/v1/grant',
+    body: { token: 'cap-cipher' },
+  })
+  assert.equal(grantOk.status, 200)
+
+  const putOk = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-cipher',
+      writerKey: 'w-cipher',
+      seq: 0,
+      b64: ciphertext,
+    },
+  })
+  assert.equal(putOk.status, 200)
+
+  const getOk = await request(port, {
+    method: 'GET',
+    path: '/v1/blocks?token=cap-cipher&writerKey=w-cipher&fromSeq=0',
+  })
+  assert.equal(getOk.status, 200)
+  const gotJson = JSON.parse(getOk.body)
+  assert.equal(gotJson.blocks.length, 1)
+  assert.equal(gotJson.blocks[0].b64, ciphertext)
+})
+
+test('HTTP storage peer caps body size, rate-limits, and GCs expired ciphertext', async (t) => {
+  const server = createServer({
+    token: 'cap-lim',
+    quotaBytes: 1024,
+    retentionMs: 20,
+    rateLimit: 2,
+    maxBodyBytes: 64,
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => server.close(resolve)))
+  const port = server.address().port
+
+  const first = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-lim',
+      writerKey: 'w',
+      seq: 0,
+      b64: Buffer.from([1]).toString('base64'),
+    },
+  })
+  assert.equal(first.status, 200)
+  const second = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-lim',
+      writerKey: 'w',
+      seq: 1,
+      b64: Buffer.from([2]).toString('base64'),
+    },
+  })
+  assert.equal(second.status, 200)
+  const third = await request(port, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-lim',
+      writerKey: 'w',
+      seq: 2,
+      b64: Buffer.from([3]).toString('base64'),
+    },
+  })
+  assert.equal(third.status, 429)
+
+  const oversized = await new Promise((resolve, reject) => {
+    const req = http.request(
+      { hostname: '127.0.0.1', port, method: 'POST', path: '/v1/blocks' },
+      (res) => {
+        res.resume()
+        res.on('end', () => resolve(res.statusCode))
+      },
+    )
+    req.on('error', reject)
+    req.write('x'.repeat(80))
+    req.end()
+  })
+  assert.equal(oversized, 413)
+
+  const gcServer = createServer({
+    token: 'cap-gc',
+    quotaBytes: 1024,
+    retentionMs: 15,
+  })
+  await new Promise((resolve) => gcServer.listen(0, '127.0.0.1', resolve))
+  t.after(() => new Promise((resolve) => gcServer.close(resolve)))
+  const gcPort = gcServer.address().port
+  const put = await request(gcPort, {
+    method: 'POST',
+    path: '/v1/blocks',
+    body: {
+      token: 'cap-gc',
+      writerKey: 'w',
+      seq: 0,
+      b64: Buffer.from([9]).toString('base64'),
+    },
+  })
+  assert.equal(put.status, 200)
+  await new Promise((resolve) => setTimeout(resolve, 30))
+  const got = await request(gcPort, {
+    method: 'GET',
+    path: '/v1/blocks?token=cap-gc&writerKey=w&fromSeq=0',
+  })
+  assert.equal(got.status, 200)
+  assert.equal(JSON.parse(got.body).blocks.length, 0)
+  const st = await request(gcPort, {
+    method: 'GET',
+    path: '/v1/stats?token=cap-gc&writerKey=w',
+  })
+  assert.equal(JSON.parse(st.body).pendingCount, 0)
+})

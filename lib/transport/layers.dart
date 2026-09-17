@@ -4,6 +4,8 @@
 // silently collapse identity, transport, replication, mailbox, and Drift
 // into one "key" or one store. They are not a runtime switch.
 
+import 'dart:collection';
+
 /// Highest completed Holepunch migration phase. 0 = ADRs and contracts only.
 const int kCompletedMigrationPhase = 0;
 
@@ -30,6 +32,8 @@ const Set<String> kForbiddenReplicationFields = <String>{
   'discoverySecret',
   'sharedDiscoverySecret',
   'attachmentBytes',
+  'fileKey',
+  'fileKeyB64',
   'privBytes',
 };
 
@@ -47,6 +51,38 @@ const List<String> kConnectBindingChecks = <String>[
 bool replicationFieldsAreSafe(Iterable<String> fields) {
   for (final name in fields) {
     if (kForbiddenReplicationFields.contains(name)) return false;
+  }
+  return true;
+}
+
+/// Returns false if [value] nests a forbidden replication key at any depth.
+///
+/// Walks [Map] and [Iterable] with identity-based cycle detection.
+/// Ciphertext [List<int>] / `Uint8List` leaves, and scalars, are allowed.
+bool replicationValueIsSafe(Object? value) {
+  return _replicationValueIsSafe(value, HashSet<Object>.identity());
+}
+
+bool _replicationValueIsSafe(Object? value, Set<Object> seen) {
+  if (value == null || value is bool || value is num || value is String) {
+    return true;
+  }
+  // Ciphertext bytes are leaves — do not walk them as Iterables.
+  if (value is List<int>) return true;
+  if (value is Map) {
+    if (!seen.add(value)) return true;
+    if (!replicationFieldsAreSafe(value.keys.map((k) => '$k'))) return false;
+    for (final nested in value.values) {
+      if (!_replicationValueIsSafe(nested, seen)) return false;
+    }
+    return true;
+  }
+  if (value is Iterable) {
+    if (!seen.add(value)) return true;
+    for (final item in value) {
+      if (!_replicationValueIsSafe(item, seen)) return false;
+    }
+    return true;
   }
   return true;
 }

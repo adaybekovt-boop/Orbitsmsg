@@ -17,16 +17,17 @@
 // silently, matching the web UX.
 
 import 'dart:async';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show compute;
+import 'package:flutter/foundation.dart' show compute, kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image/image.dart' as img;
 import 'package:mime/mime.dart';
 
+import '../attachments/resumable_blob.dart';
+import '../core/read_picked_bytes.dart';
 import '../state/calls_provider.dart';
 import '../state/chat_prefs_provider.dart';
 import '../state/connections_notifier.dart';
@@ -36,6 +37,7 @@ import '../state/peers_provider.dart';
 import '../state/strict_verify_provider.dart';
 import '../storage/db.dart' as db;
 import '../themes/orbits_tokens.dart';
+import '../transport/peerjs_window.dart';
 import '../ui/chat/chat_composer.dart';
 import '../ui/chat/chat_settings_sheet.dart';
 import '../ui/chat/message_bubble.dart';
@@ -93,11 +95,16 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
     // green and the first message goes out immediately rather than
     // sitting in the outbox until the next manual action. `openReliable`
     // is idempotent — if a channel is already open it's a no-op.
+    // Fail closed when isolation forbids PeerJS unless DualStack can
+    // take the peer (`canUseNative`). Product [kPeerjsIsolationMode]
+    // stays default-live, so this is a no-op on the live path.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      ref
-          .read(connectionsNotifierProvider.notifier)
-          .openReliable(widget.peerId);
+      final conns = ref.read(connectionsNotifierProvider.notifier);
+      if (peerjsAllowedOnNative(isWeb: kIsWeb) ||
+          conns.canUseNative(widget.peerId)) {
+        conns.openReliable(widget.peerId);
+      }
     });
     // The user opened the chat → everything up to *now* counts as read.
     // Stamping on mount ensures the badge clears even if no new inbound
@@ -281,14 +288,14 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
   Future<void> _runAttachmentPick() async {
     FilePickerResult? picked;
     try {
-      // `withData: true` pulls bytes into memory up front. Worst case
-      // is 12 MiB (our hard cap), which is fine to hold transiently;
-      // it avoids a race where iOS sweeps the picker-cached file
-      // between `pickFiles` resolving and our `readAsBytes` call.
+      // Native: path only. When the native carrier is live, chat streams
+      // from the path (no Dart Uint8List on the wire). Default PeerJS
+      // still uses [readPickedBytes] then base64. Web needs picker bytes.
       picked = await FilePicker.platform.pickFiles(
         type: FileType.any,
         allowMultiple: false,
-        withData: true,
+        withData: kIsWeb,
+        withReadStream: !kIsWeb,
       );
     } catch (_) {
       if (!mounted) return;
@@ -304,32 +311,75 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
     }
     if (picked == null || picked.files.isEmpty) return;
     final pf = picked.files.single;
-    Uint8List? bytes = pf.bytes;
-    // Some Android configurations still only return a path (no bytes),
-    // despite `withData: true`. Fall back to reading the path.
-    if ((bytes == null || bytes.isEmpty) && pf.path != null) {
-      try {
-        bytes = await File(pf.path!).readAsBytes();
-      } catch (_) {
-        bytes = null;
+    // PeerJS stays 12 MiB (base64). Native path-streamed chat may go
+    // to [kMaxNativeAttachBytes].
+    const int maxRaw = kMaxPeerJsFileRawBytes;
+    final name = pf.name;
+    final mime = lookupMimeType(name) ?? 'application/octet-stream';
+    final kind = _classifyKind(mime);
+    final notifier = ref.read(messagingNotifierProvider.notifier);
+    if (!kIsWeb &&
+        ref
+            .read(connectionsNotifierProvider.notifier)
+            .canUseNative(widget.peerId)) {
+      final material = await materializePickedLocalPath(
+        pf,
+        maxBytes: kMaxNativeAttachBytes,
+      );
+      if (material.tooLarge) {
+        if (!mounted) return;
+        final mb = (material.sizeBytes / (1024 * 1024)).ceil();
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(
+            SnackBar(
+              content: Text(
+                'Файл больше 50 МБ — отправка невозможна ($mb МБ).',
+              ),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        return;
       }
-    }
-    if (bytes == null || bytes.isEmpty) {
+      final nativePath = material.path;
+      if (nativePath == null || nativePath.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(
+            const SnackBar(content: Text('Не удалось прочитать файл')),
+          );
+        return;
+      }
+      final reply = _consumeReplyTarget();
+      final id = await notifier.sendFileFromPath(
+        widget.peerId,
+        nativePath,
+        name: name,
+        mime: mime,
+        kind: kind,
+        replyTo: reply,
+      );
       if (!mounted) return;
-      ScaffoldMessenger.of(context)
-        ..clearSnackBars()
-        ..showSnackBar(
-          const SnackBar(content: Text('Не удалось прочитать файл')),
-        );
+      if (id == null) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(
+            const SnackBar(
+              content: Text('Не удалось отправить файл'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        if (reply != null && _replyTo == null) {
+          setState(() => _replyTo = _restoreReplyRowFromPayload(reply));
+        }
+      }
       return;
     }
-    // 12 MiB raw cap — match the JS front gate so the user sees the
-    // error before we burn time encoding base64 to learn the same
-    // thing on the wire side.
-    const int maxRaw = 12 * 1024 * 1024;
-    if (bytes.length > maxRaw) {
+    final pickedBytes = await readPickedBytes(pf, maxRawBytes: maxRaw);
+    if (pickedBytes.tooLarge) {
       if (!mounted) return;
-      final mb = (bytes.length / (1024 * 1024)).ceil();
+      final mb = (pickedBytes.sizeBytes / (1024 * 1024)).ceil();
       ScaffoldMessenger.of(context)
         ..clearSnackBars()
         ..showSnackBar(
@@ -342,13 +392,16 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
         );
       return;
     }
-
-    final name = pf.name;
-    // `file_picker` doesn't always set `extension`; fall back to `mime`
-    // package which sniffs by filename (enough for the kind classifier —
-    // content-sniffing would require reading the bytes again).
-    final mime = lookupMimeType(name) ?? 'application/octet-stream';
-    final kind = _classifyKind(mime);
+    final bytes = pickedBytes.bytes;
+    if (bytes == null || bytes.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          const SnackBar(content: Text('Не удалось прочитать файл')),
+        );
+      return;
+    }
 
     // For images, synthesise a JPEG thumbnail so the peer's bubble
     // renders a preview instantly (before the full b64 lands). Matches
@@ -365,7 +418,6 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
       height = t.height;
     }
 
-    final notifier = ref.read(messagingNotifierProvider.notifier);
     final reply = _consumeReplyTarget();
     final id = await notifier.sendFile(
       widget.peerId,
