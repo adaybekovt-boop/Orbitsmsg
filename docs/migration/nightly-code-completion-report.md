@@ -47,6 +47,12 @@ as the evidence pin once CI is green.
 - Dead `DualStackBridge.sendAttachmentChunks` is removed
 - Worklet `sendFile` is marked harness-only
 - Auth wait uses a completer instead of a 10 ms poller
+- `JournalProjector.decrypt` now receives the journal record; live host
+  decrypts wire ciphertext with the sender ratchet and skips blocked
+  senders before decrypt. Missing session / non-ciphertext still
+  fail-closes to `null` (no plaintext stand-in)
+- Inbound journal envelopes record the remote `senderIdentity`
+- NativeTransportHost startup abort uses one cleanup helper
 
 ## Identity (historical repair pass; do not treat as current HEAD)
 
