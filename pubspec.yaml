@@ -1,7 +1,7 @@
 name: orbits_flutter
 description: Orbits — Flutter P2P messenger. 1:1 chats use X3DH + Double Ratchet; rooms are host-plaintext. Default signalling and STUN use public third-party servers.
 publish_to: 'none'
-version: 9.0.7+907
+version: 9.1.0+910
 
 environment:
   # Flutter 3.44 is the first project-pinned line validated against the 2026

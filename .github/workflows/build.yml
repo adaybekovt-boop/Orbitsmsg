@@ -1013,25 +1013,23 @@ jobs:
           body: |
             ## What's new
 
-            - Servers are now created only in the desktop app (Windows, macOS, Linux). The web version can still join servers, but it no longer creates them — so you won't end up with a "server" that has nowhere to actually run.
-            - On Windows, if a server can't start, Orbits now tells you exactly why — for example a blocked port, a firewall, or no local network — instead of quietly pretending it worked.
-            - "Remember me" now works on Windows: tick it when you sign in and Orbits can reopen without asking for your password. The key is kept in Windows' own secure storage, and your password is never saved.
-            - The Windows app, its installer, and the desktop and Start-menu shortcuts now show the Orbits icon instead of the default placeholder.
-            - The encryption core was not rewritten; this update is about where servers can be created, clearer error messages, easier sign-in on Windows, and correct branding.
+            - Closed the P0 audit holes: device-material lives in the vaulted keystore, Drop only accepts allowlisted control JSON and jailed paths, device-ratchet handshakes bind to the authenticated transport, own-account revoke/authorize records apply live and on replay, and mailbox sweep no longer invents a sender for unbucketed non-ciphertext.
+            - Closed the P1 fail-closed breadth: exclusive native calls/data (no PeerJS dual-send after native is usable), live projector never decrypts envelopes, 1:1 attachment jail keyed by remoteId, 50/12 MiB size caps, rooms stay host-plaintext and fail closed, no native base64 file fallback, QR identity pin, worklet hash-verify on every host.
+            - Lands the stacked Holepunch DualStack / mailbox / Autobase work behind the existing flags. Production default remains public PeerJS; Hyperswarm stays off; rooms stay host-plaintext.
+            - Default web download link stays https://orbits-eeo.pages.dev/.
 
             ## Что нового
 
-            - Серверы теперь создаются только в настольном приложении (Windows, macOS, Linux). Веб-версия по-прежнему может подключаться к серверам, но больше не создаёт их — чтобы не появлялся «сервер», которому негде работать.
-            - На Windows, если сервер не удаётся запустить, Orbits теперь честно показывает причину — например, занятый порт, брандмауэр или отсутствие локальной сети — а не делает вид, что всё получилось.
-            - На Windows заработала галочка «Запомнить меня»: отметьте её при входе, и Orbits сможет открываться без пароля. Ключ хранится в защищённом хранилище Windows, а сам пароль никогда не сохраняется.
-            - Приложение для Windows, его установщик и ярлыки (на рабочем столе и в меню «Пуск») теперь показывают значок Orbits вместо стандартной заглушки.
-            - Криптоядро не переписывалось; обновление про то, где можно создавать серверы, понятные сообщения об ошибках, удобный вход на Windows и правильный значок.
+            - Закрыты P0: device-material в vaulted keystore, Drop только allowlist JSON и jailed paths, handshake привязан к аутентифицированному транспорту, revoke/authorize применяются live и на replay, mailbox sweep не выдумывает отправителя.
+            - Закрыт P1 fail-closed объём: exclusive native calls/data, projector не расшифровывает конверты, jail 1:1 по remoteId, капы размера, комнаты остаются host-plaintext и закрываются при ошибке, нет b64-fallback, пин QR identity, hash-verify worklet на всех хостах.
+            - DualStack / mailbox / Autobase остаются за флагами. В production по умолчанию публичный PeerJS; Hyperswarm выключен; комнаты — host-plaintext.
+            - Веб-ссылка по умолчанию: https://orbits-eeo.pages.dev/.
 
             ## Download links / Ссылки
 
             - Windows EXE: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/orbits-windows-x64.exe
             - Android APK: ${{ github.server_url }}/${{ github.repository }}/releases/download/${{ github.ref_name }}/orbits-android-universal.apk
-            - Flutter Web: https://adaybekovt-boop.github.io/tkmessenger/
+            - Flutter Web: https://orbits-eeo.pages.dev/
           draft: false
           prerelease: false
 
