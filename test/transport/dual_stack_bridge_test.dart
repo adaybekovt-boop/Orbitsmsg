@@ -1074,6 +1074,16 @@ void main() {
         devices.transportTargets('ORBIT-BBBBBBBBBBBBBBBB'),
         isNot(contains('ORBIT-B2B2B2B2B2B2B2B2')),
       );
+      // revokeDevice journals async (sign-then-append): pump first.
+      final journalDeadline = DateTime.now().add(const Duration(seconds: 2));
+      while (DateTime.now().isBefore(journalDeadline)) {
+        if (a.journal.records.any(
+          (r) => r.kind == ReplicationEventKind.deviceRevoked,
+        )) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
       expect(
         a.journal.records.any(
           (r) => r.kind == ReplicationEventKind.deviceRevoked,
