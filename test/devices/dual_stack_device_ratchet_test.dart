@@ -143,4 +143,88 @@ void main() {
 
     await alice.detach();
   });
+
+  test('authenticated DualStack mints a per-device ratchet without a pre-bound session',
+      () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final secret = List<int>.generate(32, (i) => 13);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    final bindA = await signedDeviceBinding(
+      peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+      deviceId: 'dev-a',
+    );
+    final bindB = await signedDeviceBinding(
+      peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+      deviceId: 'dev-b',
+    );
+    final aliceIds = TrustedIdentityStore();
+    final bobIds = TrustedIdentityStore();
+    final aliceDev = DeviceRegistry();
+    final bobDev = DeviceRegistry();
+    trustContactPair(
+      aliceIdentities: aliceIds,
+      aliceDevices: aliceDev,
+      bobIdentities: bobIds,
+      bobDevices: bobDev,
+      aliceBinding: bindA,
+      bobBinding: bindB,
+    );
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(bindA);
+    await pair.$2.publish(bindB);
+
+    final packets = <Object?>[];
+    final alice = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('dev-a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'dev-a',
+      secrets: secrets,
+      devices: aliceDev,
+      identities: aliceIds,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('dev-b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'dev-b',
+      secrets: secrets,
+      devices: bobDev,
+      identities: bobIds,
+      isBlocked: (_) => false,
+      onPacket: (_, data) async => packets.add(data),
+    ).attach();
+
+    await alice.dial('ORBIT-BBBBBBBBBBBBBBBB');
+    expect(alice.isAuthenticated('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect(alice.ratchets.session('dev-a', 'dev-b'), isNotNull);
+    expect(
+      await alice.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'msg',
+        'text': 'minted',
+      }),
+      isTrue,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    final first = packets.whereType<AuthenticatedPlaintext>().first;
+    expect(first.data['text'], 'minted');
+    await alice.detach();
+  });
 }

@@ -22,6 +22,8 @@ const Set<String> kRatchetSecretSnapshotKeys = {
 
 /// Per-device ciphertext wrapper. Not an identity-layer wire envelope.
 const String kDeviceRatchetMessageType = 'deviceRatchetV1';
+const String kDeviceRatchetOfferType = 'deviceRatchetOffer';
+const String kDeviceRatchetAcceptType = 'deviceRatchetAccept';
 
 Map<String, Object?> encodeDeviceRatchetFrame({
   required String fromDeviceId,

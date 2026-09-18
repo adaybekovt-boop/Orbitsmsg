@@ -98,6 +98,10 @@ Future<Uint8List> exportSpkiBytes(EcKeyPair keyPair) async {
   return buildP256Spki(x: pub.x, y: pub.y);
 }
 
+/// ECDH(P-256) shared secret. Used to mint per-device ratchet roots.
+Future<Uint8List> ecdhSharedSecret(EcKeyPair priv, List<int> remoteSpki) =>
+    _dhShared(priv, remoteSpki);
+
 Future<Uint8List> _dhShared(EcKeyPair priv, List<int> remoteSpki) async {
   final point = parseP256Spki(remoteSpki);
   final remote = EcPublicKey(x: point.x, y: point.y, type: KeyPairType.p256);

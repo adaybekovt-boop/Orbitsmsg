@@ -271,20 +271,27 @@ class DropNotifier extends StateNotifier<DropState> {
       status: DropStatus.received,
     ));
     try {
-      final bytes = await readAttachmentPath(path);
-      if (bytes == null) {
+      final blobId = 'drop-$id';
+      final ok = await db.saveFileBlob(
+        blobId,
+        const <int>[],
+        mime: mime,
+        name: name,
+        size: size,
+        kind: _kindForMime(mime),
+        path: path,
+        sha256hex: packet['sha256'] as String? ?? '',
+      );
+      if (!ok) {
         throw StateError('received file missing');
       }
-      await _persistIncoming(
-        DropFileMeta(
-          fileId: id,
-          name: name,
-          size: bytes.length,
-          mime: mime,
-          hash: packet['sha256'] as String? ?? '',
-          totalChunks: 1,
+      _patch(
+        id,
+        (t) => t.copyWith(
+          status: DropStatus.completed,
+          transferred: size,
+          blobId: blobId,
         ),
-        Uint8List.fromList(bytes),
       );
     } catch (e) {
       _patch(id, (t) => t.copyWith(status: DropStatus.failed, error: '$e'));

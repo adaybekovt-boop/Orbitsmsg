@@ -6,10 +6,13 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:crypto/crypto.dart' show sha256;
+import 'package:cryptography/cryptography.dart';
 
 import '../attachments/attachment_keys.dart';
 import '../attachments/file_transfer_session.dart';
 import '../calls/hyperswarm_signaling.dart';
+import '../core/base64_helpers.dart';
+import '../core/double_ratchet.dart' hide isWireCiphertext;
 import '../core/feature_flags.dart';
 import '../core/wire_crypto.dart';
 import '../devices/device_ratchet_sessions.dart';
@@ -108,6 +111,7 @@ class DualStackBridge {
   final Map<String, String> _fingerprintOwner = <String, String>{};
   final Map<String, String> _fingerprintTransport = <String, String>{};
   final Map<String, Completer<void>> _authWaiters = <String, Completer<void>>{};
+  final Map<String, EcKeyPair> _ratchetHandshakeEph = <String, EcKeyPair>{};
   final FileTransferCoordinator files = FileTransferCoordinator();
 
   void attach() {
@@ -149,6 +153,7 @@ class DualStackBridge {
       if (!waiter.isCompleted) waiter.complete();
     }
     _authWaiters.clear();
+    _ratchetHandshakeEph.clear();
     files.forgetAll();
   }
 
@@ -861,6 +866,10 @@ class DualStackBridge {
       _completeAuthWaiter(transportId);
     }
     onPresence?.call(logical, true);
+    if (_expectedPeer.containsKey(transportId) ||
+        _expectedPeer.containsKey(logical)) {
+      unawaited(_offerDeviceRatchet(logical, binding.deviceId));
+    }
 
     final caps = localCapabilities;
     if (caps != null) {
@@ -920,6 +929,108 @@ class DualStackBridge {
     } catch (_) {}
     try {
       await transport.disconnect(peerId);
+    } catch (_) {}
+  }
+
+  Future<void> _offerDeviceRatchet(
+    String peerId,
+    String remoteDeviceId,
+  ) async {
+    if (remoteDeviceId.isEmpty) return;
+    if (ratchets.isRevoked(remoteDeviceId) ||
+        ratchets.isRevoked(selfDeviceId)) {
+      return;
+    }
+    if (ratchets.session(selfDeviceId, remoteDeviceId) != null) return;
+    try {
+      final eph = await generateDhKeyPair();
+      _ratchetHandshakeEph[remoteDeviceId] = eph;
+      await transport.send(
+        peerId,
+        TransportChannel.control,
+        jsonPayload(<String, Object?>{
+          'type': kDeviceRatchetOfferType,
+          'fromDeviceId': selfDeviceId,
+          'toDeviceId': remoteDeviceId,
+          'ephPub': bytesToBase64(await exportSpkiBytes(eph)),
+        }),
+      );
+    } catch (_) {
+      _ratchetHandshakeEph.remove(remoteDeviceId);
+    }
+  }
+
+  Future<void> _onDeviceRatchetOffer(
+    String peerId,
+    Map<String, Object?> decoded,
+  ) async {
+    final from = decoded['fromDeviceId'] as String? ?? '';
+    final to = decoded['toDeviceId'] as String? ?? '';
+    final ephB64 = decoded['ephPub'] as String? ?? '';
+    if (from.isEmpty || to != selfDeviceId || ephB64.isEmpty) return;
+    if (ratchets.isRevoked(from) || ratchets.isRevoked(to)) return;
+    if (ratchets.session(selfDeviceId, from) != null) return;
+    if (_ratchetHandshakeEph.containsKey(from) &&
+        selfDeviceId.compareTo(from) < 0) {
+      return;
+    }
+    try {
+      final remoteEph = base64ToBytes(ephB64);
+      final ourEph = await generateDhKeyPair();
+      final shared = await ecdhSharedSecret(ourEph, remoteEph);
+      final bobDh = await generateDhKeyPair();
+      final bobSpki = await exportSpkiBytes(bobDh);
+      final bob = await ratchetInitBob(
+        sharedSecret: shared,
+        dhKeyPair: bobDh,
+        dhPubSpki: bobSpki,
+      );
+      ratchets.bind(
+        localDeviceId: selfDeviceId,
+        remoteDeviceId: from,
+        state: bob,
+      );
+      _ratchetHandshakeEph.remove(from);
+      await transport.send(
+        peerId,
+        TransportChannel.control,
+        jsonPayload(<String, Object?>{
+          'type': kDeviceRatchetAcceptType,
+          'fromDeviceId': selfDeviceId,
+          'toDeviceId': from,
+          'ephPub': bytesToBase64(await exportSpkiBytes(ourEph)),
+          'ratchetPub': bytesToBase64(bobSpki),
+        }),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _onDeviceRatchetAccept(
+    String peerId,
+    Map<String, Object?> decoded,
+  ) async {
+    final from = decoded['fromDeviceId'] as String? ?? '';
+    final to = decoded['toDeviceId'] as String? ?? '';
+    final ephB64 = decoded['ephPub'] as String? ?? '';
+    final ratchetB64 = decoded['ratchetPub'] as String? ?? '';
+    if (from.isEmpty || to != selfDeviceId || ephB64.isEmpty || ratchetB64.isEmpty) {
+      return;
+    }
+    if (ratchets.isRevoked(from) || ratchets.isRevoked(to)) return;
+    if (ratchets.session(selfDeviceId, from) != null) return;
+    final eph = _ratchetHandshakeEph.remove(from);
+    if (eph == null) return;
+    try {
+      final shared = await ecdhSharedSecret(eph, base64ToBytes(ephB64));
+      final alice = await ratchetInitAlice(
+        sharedSecret: shared,
+        remoteDhPubSpki: base64ToBytes(ratchetB64),
+      );
+      ratchets.bind(
+        localDeviceId: selfDeviceId,
+        remoteDeviceId: from,
+        state: alice,
+      );
     } catch (_) {}
   }
 
@@ -1062,6 +1173,14 @@ class DualStackBridge {
         data = decoded;
         if (decoded['type'] == kDeviceRatchetMessageType) {
           unawaited(_onDeviceRatchetFrame(norm, decoded));
+          return;
+        }
+        if (decoded['type'] == kDeviceRatchetOfferType) {
+          unawaited(_onDeviceRatchetOffer(norm, decoded));
+          return;
+        }
+        if (decoded['type'] == kDeviceRatchetAcceptType) {
+          unawaited(_onDeviceRatchetAccept(norm, decoded));
           return;
         }
         if (decoded['type'] == kAttachmentKeyMessageType) {
