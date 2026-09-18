@@ -7,6 +7,7 @@ void main() {
       shouldOpenPeerjsCallFallback(
         fallbackEnabled: true,
         peerAvailable: true,
+        nativeUsable: false,
       ),
       isTrue,
     );
@@ -14,6 +15,7 @@ void main() {
       shouldOpenPeerjsCallFallback(
         fallbackEnabled: false,
         peerAvailable: true,
+        nativeUsable: false,
       ),
       isFalse,
     );
@@ -21,6 +23,15 @@ void main() {
       shouldOpenPeerjsCallFallback(
         fallbackEnabled: true,
         peerAvailable: false,
+        nativeUsable: false,
+      ),
+      isFalse,
+    );
+    expect(
+      shouldOpenPeerjsCallFallback(
+        fallbackEnabled: true,
+        peerAvailable: true,
+        nativeUsable: true,
       ),
       isFalse,
     );

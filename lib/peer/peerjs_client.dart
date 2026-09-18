@@ -37,6 +37,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
@@ -391,14 +392,33 @@ class PeerDataConnection {
   })  : _pc = pc,
         _client = client;
 
+  /// Test-only stub: no RTCPeerConnection, no client. [send] records
+  /// into [debugSent]; [debugEmitData] feeds [onData]; [close] latches.
+  @visibleForTesting
+  PeerDataConnection.stub({
+    required this.peer,
+    this.connectionId = 'stub',
+    this.label = 'reliable',
+    this.metadata = const {'channel': 'reliable'},
+    this.reliable = true,
+    this.initiator = true,
+    bool initiallyOpen = true,
+  })  : _pc = null,
+        _client = null {
+    _open = initiallyOpen;
+  }
+
   final String peer;
   final String connectionId;
   final String label;
   final Map<String, Object?> metadata;
   final bool reliable;
   final bool initiator;
-  final RTCPeerConnection _pc;
-  final PeerJsClient _client;
+  final RTCPeerConnection? _pc;
+  final PeerJsClient? _client;
+
+  /// Values passed to [send] on a stub connection, in order.
+  final List<Object?> debugSent = <Object?>[];
 
   RTCDataChannel? _dc;
   bool _open = false;
@@ -424,12 +444,18 @@ class PeerDataConnection {
   /// Raw DataChannel вЂ” exposed so callers that need to tune
   /// bufferedAmountLowThreshold (file transfer path) can reach it.
   RTCDataChannel? get dataChannel => _dc;
-  RTCPeerConnection get peerConnection => _pc;
+  RTCPeerConnection? get peerConnection => _pc;
 
   Stream<void> get onOpen => _openCtl.stream;
   Stream<void> get onClose => _closeCtl.stream;
   Stream<PeerError> get onError => _errorCtl.stream;
   Stream<Object?> get onData => _dataCtl.stream;
+
+  /// Test-only: feed an inbound frame into [onData] (no-op when closed).
+  @visibleForTesting
+  void debugEmitData(Object? data) {
+    if (!_closed) _dataCtl.add(data);
+  }
 
   void _emitOpen() {
     if (_closed || _open) return;
@@ -496,6 +522,12 @@ class PeerDataConnection {
   /// Returns `true` only when the DataChannel accepted the payload.
   bool send(Object? value) {
     if (_closed) return false;
+    if (_client == null) {
+      // Stub path: record only.
+      if (!_open) return false;
+      debugSent.add(value);
+      return true;
+    }
     final dc = _dc;
     if (dc == null) return false;
     if (!_open) {
@@ -526,9 +558,9 @@ class PeerDataConnection {
       await _dc?.close();
     } catch (_) {}
     try {
-      await _pc.close();
+      await _pc?.close();
     } catch (_) {}
-    _client._forgetConnection(connectionId);
+    _client?._forgetConnection(connectionId);
   }
 
   void _markClosed() {
@@ -544,7 +576,7 @@ class PeerDataConnection {
       await _dc?.close();
     } catch (_) {}
     try {
-      await _pc.close();
+      await _pc?.close();
     } catch (_) {}
     await _openCtl.close();
     await _closeCtl.close();
@@ -574,6 +606,16 @@ class PeerMediaConnection {
         _localStream = localStream,
         _pendingOffer = pendingOffer;
 
+  /// Test-only stub: [answer]/[close] only latch spy flags.
+  @visibleForTesting
+  PeerMediaConnection.stub({
+    required this.peer,
+    this.connectionId = 'stub-media',
+    this.initiator = false,
+    this.metadata = const <String, Object?>{},
+  })  : _pc = null,
+        _client = null;
+
   final String peer;
   final String connectionId;
   final bool initiator;
@@ -582,13 +624,16 @@ class PeerMediaConnection {
   /// with `{channel:'room-voice', roomId, channelId}` so CallsNotifier can skip
   /// them and RoomManager can claim them (audit item 6). Empty for 1:1 calls.
   final Map<String, Object?> metadata;
-  final RTCPeerConnection _pc;
-  final PeerJsClient _client;
+  final RTCPeerConnection? _pc;
+  final PeerJsClient? _client;
   MediaStream? _localStream;
   RTCSessionDescription? _pendingOffer;
   MediaStream? _remoteStream;
   bool _open = false;
   bool _closed = false;
+
+  /// Set by stub [answer].
+  bool debugAnswered = false;
 
   final _streamCtl = StreamController<MediaStream>.broadcast();
   final _closeCtl = StreamController<void>.broadcast();
@@ -598,14 +643,16 @@ class PeerMediaConnection {
   bool get closed => _closed;
   MediaStream? get localStream => _localStream;
   MediaStream? get remoteStream => _remoteStream;
-  RTCPeerConnection get peerConnection => _pc;
+  RTCPeerConnection? get peerConnection => _pc;
 
   Stream<MediaStream> get onStream => _streamCtl.stream;
   Stream<void> get onClose => _closeCtl.stream;
   Stream<PeerError> get onError => _errorCtl.stream;
 
   void _wireRemoteTracks() {
-    _pc.onTrack = (event) {
+    final pc = _pc;
+    if (pc == null) return;
+    pc.onTrack = (event) {
       if (_closed) return;
       if (event.streams.isEmpty) return;
       final stream = event.streams.first;
@@ -624,19 +671,27 @@ class PeerMediaConnection {
     if (initiator) {
       throw const PeerError('invalid-state', 'answer() is for incoming calls');
     }
+    final pc = _pc;
+    final client = _client;
+    if (pc == null || client == null) {
+      // Stub path: latch only.
+      debugAnswered = true;
+      _localStream = localStream;
+      return;
+    }
     _localStream = localStream;
     for (final track in localStream.getTracks()) {
-      await _pc.addTrack(track, localStream);
+      await pc.addTrack(track, localStream);
     }
     final offer = _pendingOffer;
     if (offer != null) {
-      await _pc.setRemoteDescription(offer);
+      await pc.setRemoteDescription(offer);
       _pendingOffer = null;
       // Apply any ICE candidates that arrived between OFFER and answer().
-      await _client._flushPendingIce(connectionId);
-      final answer = await _pc.createAnswer({});
-      await _pc.setLocalDescription(answer);
-      _client._sendFrame({
+      await client._flushPendingIce(connectionId);
+      final answer = await pc.createAnswer({});
+      await pc.setLocalDescription(answer);
+      client._sendFrame({
         'type': _ServerMessageType.answer,
         'dst': peer,
         'payload': {
@@ -652,9 +707,9 @@ class PeerMediaConnection {
     if (_closed) return;
     _markClosed();
     try {
-      await _pc.close();
+      await _pc?.close();
     } catch (_) {}
-    _client._forgetConnection(connectionId);
+    _client?._forgetConnection(connectionId);
   }
 
   void _markClosed() {
@@ -667,7 +722,7 @@ class PeerMediaConnection {
   Future<void> _dispose() async {
     _markClosed();
     try {
-      await _pc.close();
+      await _pc?.close();
     } catch (_) {}
     await _streamCtl.close();
     await _closeCtl.close();
@@ -687,7 +742,7 @@ class _Negotiator {
   final PeerDataConnection? data;
   final PeerMediaConnection? media;
 
-  RTCPeerConnection get pc => (data?._pc ?? media!._pc);
+  RTCPeerConnection? get pc => (data?._pc ?? media?._pc);
   String get remotePeerId => (data?.peer ?? media!.peer);
   Future<void> dispose() async {
     if (data != null) {
@@ -1289,7 +1344,9 @@ class PeerJsClient {
       sdpMap['type']?.toString() ?? 'answer',
     );
     try {
-      await n.pc.setRemoteDescription(sdp);
+      final pc = n.pc;
+      if (pc == null) return;
+      await pc.setRemoteDescription(sdp);
       await _flushPendingIce(cid);
     } catch (e) {
       _errorCtl.add(PeerError('webrtc', 'setRemoteDescription: $e'));
@@ -1319,12 +1376,14 @@ class PeerJsClient {
       return;
     }
     try {
-      final desc = await n.pc.getRemoteDescription();
+      final pc = n.pc;
+      if (pc == null) return;
+      final desc = await pc.getRemoteDescription();
       if (desc == null) {
         _bufferIce(cid, ice);
         return;
       }
-      await n.pc.addCandidate(ice);
+      await pc.addCandidate(ice);
     } catch (e) {
       _errorCtl.add(PeerError('webrtc', 'addCandidate: $e'));
     }
@@ -1443,9 +1502,11 @@ class PeerJsClient {
     if (list == null) return;
     final n = _conns[cid];
     if (n == null) return;
+    final pc = n.pc;
+    if (pc == null) return;
     for (final ice in list) {
       try {
-        await n.pc.addCandidate(ice);
+        await pc.addCandidate(ice);
       } catch (_) {}
     }
   }

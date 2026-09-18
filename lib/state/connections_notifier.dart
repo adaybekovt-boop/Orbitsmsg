@@ -35,7 +35,7 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/bundle_cache.dart';
-import '../core/wire_crypto.dart' show initWireSession;
+import '../core/wire_crypto.dart' show initWireSession, isWireReady;
 import '../core/wire_session.dart' show isVerified;
 import '../messaging/message_protocol.dart';
 import '../core/orbits_drop.dart' show dropMaxBufferSize;
@@ -64,14 +64,20 @@ import 'auth_notifier.dart';
 import 'local_profile_provider.dart';
 import 'peer_connection_provider.dart';
 
-/// PeerJS data channels are only for fallback after native is unusable.
+/// PeerJS data channels are only for fallback after native is unusable
+/// (and not merely slow: a pending native dial also suppresses PeerJS).
 bool shouldOpenPeerjsDataFallback({
   required bool fallbackEnabled,
   required bool failClosed,
   required bool nativeUsable,
   bool nativeRejected = false,
+  bool nativePending = false,
 }) =>
-    fallbackEnabled && !failClosed && !nativeUsable && !nativeRejected;
+    fallbackEnabled &&
+    !failClosed &&
+    !nativeUsable &&
+    !nativeRejected &&
+    !nativePending;
 
 // ─── Public state ─────────────────────────────────────────────────
 
@@ -318,8 +324,13 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         _refreshConnectedIds();
         if (up) {
           _nativeAuthRejected.remove(normalizePeerId(peerId));
-          unawaited(_closePeerjsFallback(peerId));
-          unawaited(_postNativeOpen(peerId));
+          // Ordered: close PeerJS before the native hello so a stale
+          // PeerJS slot can't dual-send in the unawaited window.
+          unawaited(() async {
+            await _closePeerjsFallback(peerId);
+            if (!mounted) return;
+            await _postNativeOpen(peerId);
+          }());
         }
       }
       ..onAuthorizationRejected = (peerId) {
@@ -384,11 +395,13 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     final failClosed = isDevBareTransportRequested();
     if (dual != null && dual.nativeEnabled) {
       if (dual.canUseNative(remoteId)) {
+        // Exclusive native: exactly one path. A native throw is a
+        // failure, never a silent PeerJS dual-send.
         try {
           return await dual.sendEncrypted(remoteId, msg);
         } catch (err) {
           dual.lastReplicationError = err.toString();
-          if (failClosed || !isPeerjsFallbackEnabled()) return false;
+          return false;
         }
       } else if (dual.storagePeer != null &&
           dual.mailboxCapability != null &&
@@ -401,7 +414,11 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
         }
       }
     }
+    // Re-check: native may have come up between the branch above and
+    // here. Never downgrade a usable native path to PeerJS.
+    if (dual != null && dual.canUseNative(remoteId)) return false;
     if (failClosed) return false;
+    if (!isPeerjsFallbackEnabled()) return false;
     _notePeerjsDowngrade(remoteId);
     final conn = getConn(remoteId, 'reliable');
     if (conn == null) return false;
@@ -482,7 +499,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   Future<void> sendCallSignal(String remoteId, CallSignal signal) async {
     final dual = _dual;
     if (dual != null && dual.canUseNative(remoteId)) {
-      await dual.sendCallSignal(remoteId, signal);
+      try {
+        await dual.sendCallSignal(remoteId, signal);
+      } catch (err) {
+        dual.lastCallSignalError = err.toString();
+        rethrow;
+      }
       return;
     }
     if (isDevBareTransportRequested()) {
@@ -582,7 +604,19 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       unawaited(_closePeerjsFallback(normalized));
       return;
     }
+    // Native dial still in flight (auth timeout, not failure): a late
+    // admit would flap PeerJS open→closed. Don't open PeerJS yet.
+    if (_nativePending(normalized)) return;
     _openPeerjsChannel(normalized, channel: channel, reliable: reliable);
+  }
+
+  bool _nativePending(String peerId) {
+    final dual = _dual;
+    if (dual == null || !dual.nativeEnabled) return false;
+    final norm = normalizePeerId(peerId);
+    if (_nativeAuthRejected.contains(norm)) return false;
+    return dual.connecting.contains(norm) ||
+        (dual.isNativeConnected(norm) && !canUseNative(norm));
   }
 
   /// PeerJS data channels are only for fallback after native is unusable.
@@ -597,6 +631,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       failClosed: isDevBareTransportRequested(),
       nativeUsable: canUseNative(normalized),
       nativeRejected: _nativeAuthRejected.contains(normalized),
+      nativePending: _nativePending(normalized),
     )) {
       return;
     }
@@ -759,16 +794,23 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   }
 
   Future<void> _closePeerjsFallback(String peerId) async {
-    _peerjsFallbackCloseCalls += 1;
     final norm = normalizePeerId(peerId);
     _pendingReliableTargets.remove(norm);
+    var closed = 0;
     for (final channel in const ['reliable', 'ephemeral']) {
       final key = connKey(norm, channel);
       final binding = _bindings.remove(key);
-      if (binding != null) await binding.dispose();
+      if (binding != null) {
+        await binding.dispose();
+        closed += 1;
+      }
       final debugDispose = _debugPeerjsSlots.remove(key);
-      if (debugDispose != null) await debugDispose();
+      if (debugDispose != null) {
+        await debugDispose();
+        closed += 1;
+      }
     }
+    if (closed > 0) _peerjsFallbackCloseCalls += 1;
     if (mounted) _refreshConnectedIds();
   }
 
@@ -945,7 +987,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     PeerDataConnection conn,
     String remoteId,
   ) async {
-    await _wire.initiateHandshakeOnOpen(conn, remoteId);
+    // Exclusive native: a usable native path owns the handshake.
+    if (!canUseNative(remoteId)) {
+      await _wire.initiateHandshakeOnOpen(conn, remoteId);
+    }
     final bridge = _messaging;
     unawaited(bridge.loadPendingForPeer(remoteId));
     unawaited(bridge.flushOutboxForPeer(remoteId));
@@ -1000,11 +1045,19 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   Future<void> _postNativeOpen(String remoteId) async {
     try {
-      final hello = await initWireSession(
-        peerId: remoteId,
-        myPeerId: _selfPeerId(),
-      );
-      await sendEncrypted(remoteId, hello.hello);
+      // One hello per peer: skip when the wire is ready or a PeerJS-open
+      // handshake already claimed the in-flight guard.
+      if (!isWireReady(remoteId) && _wire.tryBeginHandshake(remoteId)) {
+        try {
+          final hello = await initWireSession(
+            peerId: remoteId,
+            myPeerId: _selfPeerId(),
+          );
+          await sendEncrypted(remoteId, hello.hello);
+        } finally {
+          _wire.endHandshake(remoteId);
+        }
+      }
     } catch (_) {}
     final bridge = _messaging;
     unawaited(bridge.loadPendingForPeer(remoteId));

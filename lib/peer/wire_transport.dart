@@ -14,6 +14,8 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
+
 import '../core/wire_crypto.dart';
 import 'helpers.dart';
 import 'peerjs_client.dart';
@@ -29,6 +31,23 @@ class WireTransport {
   /// PeerIds whose handshake is currently in flight — prevents a second
   /// hello from racing the first when sendEncrypted and onOpen both kick.
   final Set<String> _handshakeInFlight = <String>{};
+
+  /// Test-only count of started handshakes (exactly one per peer).
+  @visibleForTesting
+  int debugHandshakeStarts = 0;
+
+  /// Begin a handshake unless one is already in flight. Shared by the
+  /// PeerJS-open path and the native-open path so a peer gets one hello.
+  bool tryBeginHandshake(String remoteId) {
+    final norm = normalizePeerId(remoteId);
+    if (!_handshakeInFlight.add(norm)) return false;
+    debugHandshakeStarts += 1;
+    return true;
+  }
+
+  void endHandshake(String remoteId) {
+    _handshakeInFlight.remove(normalizePeerId(remoteId));
+  }
 
   /// Reliable-channel send. Waits up to 8s for the wire session to become
   /// ready (handshake rebuild) before encrypting. Returns `false` on any
@@ -87,7 +106,7 @@ class WireTransport {
     String remoteId,
   ) async {
     final norm = normalizePeerId(remoteId);
-    if (!_handshakeInFlight.add(norm)) {
+    if (!tryBeginHandshake(norm)) {
       await waitForWireReady(norm, timeout: const Duration(seconds: 8))
           .catchError((_) {});
       return;
@@ -102,7 +121,7 @@ class WireTransport {
       // caller doesn't have to wrap. If the session never becomes ready,
       // the next sendEncryptedOn will surface the issue as `false`.
     } finally {
-      _handshakeInFlight.remove(norm);
+      endHandshake(norm);
     }
   }
 

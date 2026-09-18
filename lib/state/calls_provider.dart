@@ -33,6 +33,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
@@ -45,12 +46,14 @@ import '../peer/webrtc_audio_lifecycle.dart';
 import 'connections_notifier.dart';
 import 'peer_connection_provider.dart';
 
-/// PeerJS media is only for fallback after a native session failed.
+/// PeerJS media is only for fallback after a native session failed —
+/// and only while native is unusable for this peer.
 bool shouldOpenPeerjsCallFallback({
   required bool fallbackEnabled,
   required bool peerAvailable,
+  required bool nativeUsable,
 }) =>
-    fallbackEnabled && peerAvailable;
+    fallbackEnabled && peerAvailable && !nativeUsable;
 
 /// Lifecycle phases the UI needs to disambiguate. Names kept aligned
 /// with `src/call/state/initialCallState.js` so log parsing across
@@ -160,6 +163,10 @@ class CallsNotifier extends StateNotifier<CallState> {
       (_, __) => _bindToCurrentPeer(),
       fireImmediately: true,
     );
+    _ref.listen<ConnectionsState>(
+      connectionsNotifierProvider,
+      (_, __) => _dropPeerjsMediaIfNativeReady(),
+    );
   }
 
   final Ref _ref;
@@ -267,6 +274,7 @@ class CallsNotifier extends StateNotifier<CallState> {
           !shouldOpenPeerjsCallFallback(
             fallbackEnabled: isPeerjsFallbackEnabled(),
             peerAvailable: peer != null,
+            nativeUsable: conns.canUseNative(remotePeerId),
           )) {
         _starting = false;
         return;
@@ -340,8 +348,11 @@ class CallsNotifier extends StateNotifier<CallState> {
           localStream: local,
           localTracks: local.getTracks(),
         );
+        // Exactly one answer path: native won, drop any PeerJS media.
+        await _dropPeerjsMediaExclusive();
+        return;
       } catch (e) {
-        if (!isPeerjsFallbackEnabled()) {
+        if (!isPeerjsFallbackEnabled() || conn == null) {
           await WebRtcAudioLifecycle.instance.releaseStream(local);
           _resetIdleWithError(
             e is StateError ? e.message : kNativeCallsUnavailable,
@@ -349,7 +360,6 @@ class CallsNotifier extends StateNotifier<CallState> {
           return;
         }
       }
-      if (!isPeerjsFallbackEnabled()) return;
     }
     try {
       await conn?.answer(local);
@@ -540,7 +550,9 @@ class CallsNotifier extends StateNotifier<CallState> {
   ) async {
     final conn = _conn;
     if (conn == null) return;
-    final senders = await conn.peerConnection.getSenders();
+    final pc = conn.peerConnection;
+    if (pc == null) return;
+    final senders = await pc.getSenders();
     final videoSender = senders.firstWhere(
       (s) => s.track?.kind == 'video',
       orElse: () => senders.first,
@@ -654,27 +666,62 @@ class CallsNotifier extends StateNotifier<CallState> {
     _boundPeer = current;
     if (current == null) return;
 
-    _callSub = current.onCall.listen((conn) {
-      // Room voice calls carry a `room-voice` tag and are owned by RoomManager —
-      // never surface them as a 1:1 call (audit item 6). Normal 1:1 calls have
-      // no such tag and continue exactly as before.
-      if (conn.metadata['channel'] == 'room-voice') return;
-      // Only one call at a time. If we're already busy, decline so
-      // the caller's pill clears cleanly.
-      if (state.isActive) {
-        unawaited(conn.close().catchError((_) {}));
-        return;
-      }
-      _attachConnection(conn);
-      state = state.copyWith(
-        status: CallStatus.ringing,
-        remotePeerId: conn.peer,
-        video: false,
-        videoEnabled: false,
-        micEnabled: true,
-        lastError: null,
-      );
-    });
+    _callSub = current.onCall.listen(handlePeerjsInboundCall);
+  }
+
+  /// Inbound PeerJS media offer. Exclusive-native: when the peer is
+  /// natively usable the PeerJS leg is closed instead of ringing.
+  @visibleForTesting
+  void handlePeerjsInboundCall(PeerMediaConnection conn) {
+    // Room voice calls carry a `room-voice` tag and are owned by RoomManager —
+    // never surface them as a 1:1 call (audit item 6). Normal 1:1 calls have
+    // no such tag and continue exactly as before.
+    if (conn.metadata['channel'] == 'room-voice') return;
+    final nativeUsable = _ref
+        .read(connectionsNotifierProvider.notifier)
+        .canUseNative(conn.peer);
+    // Only one call at a time. If we're already busy, decline so
+    // the caller's pill clears cleanly.
+    if (nativeUsable || state.isActive) {
+      unawaited(conn.close().catchError((_) {}));
+      return;
+    }
+    _attachConnection(conn);
+    state = state.copyWith(
+      status: CallStatus.ringing,
+      remotePeerId: conn.peer,
+      video: false,
+      videoEnabled: false,
+      micEnabled: true,
+      lastError: null,
+    );
+  }
+
+  void _dropPeerjsMediaIfNativeReady() {
+    final remote = state.remotePeerId;
+    final conn = _conn;
+    if (remote == null || conn == null) return;
+    if (!_ref
+        .read(connectionsNotifierProvider.notifier)
+        .canUseNative(remote)) {
+      return;
+    }
+    unawaited(_dropPeerjsMediaExclusive());
+  }
+
+  /// Close the PeerJS media leg without touching the native session.
+  /// Cancels the close-listener first so it doesn't hangUp() the call.
+  Future<void> _dropPeerjsMediaExclusive() async {
+    final conn = _conn;
+    if (conn == null) return;
+    try {
+      await _closeSub?.cancel();
+    } catch (_) {}
+    _closeSub = null;
+    _conn = null;
+    try {
+      await conn.close();
+    } catch (_) {}
   }
 
   @override
