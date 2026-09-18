@@ -65,7 +65,16 @@ void main() {
     expect(conns, contains('shouldOpenPeerjsDataFallback'));
     expect(conns, contains('_closePeerjsFallback'));
     expect(conns, contains('onAuthorizationRejected'));
-    expect(conns, contains('if (canUseNative(normalized)) return;'));
+    expect(conns, contains('if (canUseNative(normalized))'));
+    expect(conns, contains('unawaited(_closePeerjsFallback(normalized))'));
+    final openChannel = conns.split('void _openChannel').elementAt(1);
+    final openBody =
+        openChannel.split('Future<void> _openNativeThenMaybePeerjs').first;
+    expect(openBody, contains('_dual!.nativeEnabled'));
+    expect(
+      openBody.indexOf('_dual!.nativeEnabled'),
+      lessThan(openBody.indexOf('existing != null && existing.open')),
+    );
     final presence = conns.split('..onPresence').elementAt(1);
     expect(
       presence.split('..onAuthorizationRejected').first,

@@ -2,6 +2,9 @@
 // Two in-process DBs still share orbitsDb(); inbound onPacket switches
 // the singleton so each side persists to its own store.
 
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -216,6 +219,141 @@ void main() {
               .any((m) => m['text'] == 'native-autobase'),
     );
     expect(kRoomsApplicationE2eImplemented, isFalse);
+    expect(hostConns.getConn(guestId, 'reliable'), isNull);
+  });
+
+  test('host sendRoomFile over DualStack is a path descriptor, not b64',
+      () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    const hostUser = AuthedUser(
+      peerId: hostId,
+      displayName: 'Host',
+      bio: '',
+      avatarDataUrl: null,
+    );
+    const guestUser = AuthedUser(
+      peerId: guestId,
+      displayName: 'Guest',
+      bio: '',
+      avatarDataUrl: guestAvatar,
+    );
+    final secret = List<int>.generate(32, (i) => 17);
+    final pair = loopbackPair();
+    final bindA =
+        await signedDeviceBinding(peerId: hostId, deviceId: 'host-dev');
+    final bindB =
+        await signedDeviceBinding(peerId: guestId, deviceId: 'guest-dev');
+    final hostIds = TrustedIdentityStore();
+    final guestIds = TrustedIdentityStore();
+    final hostDev = DeviceRegistry();
+    final guestDev = DeviceRegistry();
+    trustContactPair(
+      aliceIdentities: hostIds,
+      aliceDevices: hostDev,
+      bobIdentities: guestIds,
+      bobDevices: guestDev,
+      aliceBinding: bindA,
+      bobBinding: bindB,
+    );
+    discoverySecretStore
+      ..put(hostId, secret)
+      ..put(guestId, secret);
+    await pair.$1.start(
+      TransportLocalConfiguration(peerId: hostId, discoverySecret: secret),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(peerId: guestId, discoverySecret: secret),
+    );
+    await pair.$1.publish(bindA);
+    await pair.$2.publish(bindB);
+
+    final hostC = ProviderContainer(overrides: [
+      localProfileProvider.overrideWithValue(hostUser),
+    ]);
+    final guestC = ProviderContainer(overrides: [
+      localProfileProvider.overrideWithValue(guestUser),
+    ]);
+    containers.addAll([hostC, guestC]);
+
+    final hostConns = hostC.read(connectionsNotifierProvider.notifier);
+    final guestConns = guestC.read(connectionsNotifierProvider.notifier);
+    hostConns.bindNativeTransport(
+      pair.$1,
+      journal: MemoryJournal('host-dev'),
+      deviceId: 'host-dev',
+      devices: hostDev,
+      identities: hostIds,
+    );
+    guestConns.bindNativeTransport(
+      pair.$2,
+      journal: MemoryJournal('guest-dev'),
+      deviceId: 'guest-dev',
+      devices: guestDev,
+      identities: guestIds,
+    );
+
+    final hostDispatch = hostConns.nativeBridge!.onPacket;
+    hostConns.nativeBridge!.onPacket = (peer, data) async {
+      setOrbitsDatabase(hostDb);
+      await hostDispatch(peer, data);
+    };
+    final guestDispatch = guestConns.nativeBridge!.onPacket;
+    guestConns.nativeBridge!.onPacket = (peer, data) async {
+      setOrbitsDatabase(guestDb);
+      await guestDispatch(peer, data);
+    };
+
+    await hostConns.nativeBridge!.dial(guestId);
+    await pumpUntil(
+      () =>
+          hostConns.canUseNative(guestId) && guestConns.canUseNative(hostId),
+    );
+
+    final host = hostC.read(roomManagerProvider.notifier);
+    final guest = guestC.read(roomManagerProvider.notifier);
+    setOrbitsDatabase(hostDb);
+    await host.createRoom('Native Files');
+    setOrbitsDatabase(guestDb);
+    await guest.joinRoom(hostId, 'Guest');
+    await pumpUntil(
+      () => hostC.read(roomManagerProvider).guestPeerIds.contains(guestId),
+    );
+
+    setOrbitsDatabase(hostDb);
+    final hostChannels = await db.getRoomChannels(hostId);
+    final generalId = hostChannels.firstWhere((c) => c['type'] == 'text')['id']
+        as String;
+    final bytes = List<int>.generate(4096, (i) => i & 0xff);
+    await host.sendRoomFile(
+      hostId,
+      generalId,
+      Uint8List.fromList(bytes),
+      name: 'room.bin',
+      mime: 'application/octet-stream',
+      kind: 'file',
+    );
+
+    await pumpUntil(() {
+      setOrbitsDatabase(guestDb);
+      return guest.roomLog.projection.state.messages
+          .any((m) => m['text'] == 'file');
+    });
+
+    setOrbitsDatabase(guestDb);
+    final guestChannels = await db.getRoomChannels(hostId);
+    final guestGeneral = guestChannels.firstWhere((c) => c['type'] == 'text');
+    final msgs = await db.watchChannelMessages(guestGeneral['id'] as String).first;
+    expect(msgs, isNotEmpty);
+    final fileMsg = msgs.firstWhere(
+      (m) => (m['payload'] as Map)['type'] == 'file',
+    );
+    final blob = await db.getFileBlob(fileMsg['id'] as String);
+    expect(blob, isNotNull);
+    expect(blob!['path'], isNotEmpty);
+    expect(blob['path'] as String, contains('orbits-incoming'));
+    expect(File(blob['path'] as String).existsSync(), isTrue);
+    expect((blob['blob'] as List).length, bytes.length);
     expect(hostConns.getConn(guestId, 'reliable'), isNull);
   });
 }

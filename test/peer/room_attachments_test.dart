@@ -5,11 +5,13 @@
 // host relay, author canonicalisation, and the validation/size guards.
 
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbits_flutter/attachments/incoming_paths.dart';
 import 'package:orbits_flutter/core/vault_kek.dart';
 import 'package:orbits_flutter/peer/peerjs_client.dart' show PeerJsClient;
 import 'package:orbits_flutter/peer/room_manager.dart';
@@ -42,6 +44,28 @@ class _CaptureTransport implements RoomTransport {
 
   Iterable<Map<String, Object?>> ofType(String type) =>
       [for (final s in sent) if (s.packet['type'] == type) s.packet];
+}
+
+class _NativeCaptureTransport extends _CaptureTransport
+    implements RoomNativeFileSink {
+  final Set<String> nativePeers = <String>{};
+  final List<({String to, String path, String transferId})> files = [];
+
+  @override
+  bool canUseNative(String peerId) => nativePeers.contains(peerId);
+
+  @override
+  Future<bool> sendRoomFilePath(
+    String peerId, {
+    required String path,
+    required int sizeBytes,
+    required String fileName,
+    required String mime,
+    required String transferId,
+  }) async {
+    files.add((to: peerId, path: path, transferId: transferId));
+    return true;
+  }
 }
 
 Map<String, Object?> _sticker() => {
@@ -338,6 +362,161 @@ void main() {
       final relay = h.tx.ofType('room_msg').single;
       expect(relay['kind'], 'file');
       expect(relay['b64'], b64);
+    });
+
+    test('guest persists a host-relayed native path descriptor', () async {
+      final transferId = generateLocalTransferId();
+      final incoming = resolveIncomingDir(
+        base: Directory.systemTemp,
+        trustedSenderId: hostId,
+        localTransferId: transferId,
+      )..createSync(recursive: true);
+      blobFile(incoming).writeAsBytesSync(bytes);
+
+      final tx = _CaptureTransport();
+      final mgr = managerFor('ORBIT-BBBBBB', tx);
+      await mgr.joinRoom(hostId, 'Guest');
+      const channelId = 'chan-native';
+      await tx.bridge.handleInbound(hostId, {
+        'type': 'room_channel_create',
+        'roomId': hostId,
+        'channel': {
+          'id': channelId,
+          'roomId': hostId,
+          'name': 'general',
+          'type': 'text',
+          'position': 0,
+        },
+      });
+      await tx.bridge.handleInbound(hostId, {
+        'type': 'room_msg',
+        'kind': 'file',
+        'id': 'room:ORBIT-CCCCCC:2:cafe',
+        'roomId': hostId,
+        'channelId': channelId,
+        'attachment': {
+          'name': 'photo.jpg',
+          'size': bytes.length,
+          'mime': 'image/jpeg',
+          'kind': 'image',
+        },
+        'native': true,
+        'transferId': transferId,
+        'sha256': 'deadbeef',
+        'fromName': 'n',
+        'fromPeerId': 'ORBIT-CCCCCC',
+        'ts': 2,
+      });
+      final blob = await db.getFileBlob(
+        db.scopedRoomMessageId(hostId, 'room:ORBIT-CCCCCC:2:cafe'),
+      );
+      expect(blob, isNotNull);
+      expect(blob!['path'], blobFile(incoming).path);
+      expect((blob['blob'] as List).length, bytes.length);
+      expect(blob['sha256'], 'deadbeef');
+    });
+
+    test('native guest gets a path descriptor and no b64', () async {
+      final tx = _NativeCaptureTransport()..nativePeers.add('g1');
+      final mgr = managerFor(hostId, tx);
+      await mgr.createRoom('Test');
+      final chans = await db.getRoomChannels(hostId);
+      final generalId =
+          chans.firstWhere((c) => c['type'] == 'text')['id'] as String;
+      await tx.bridge.handleInbound('g1', {
+        'type': 'room_join',
+        'roomId': hostId,
+        'guestName': 'G',
+        'guestPeerId': 'g1',
+      });
+      tx.sent.clear();
+
+      await mgr.sendRoomFile(
+        hostId,
+        generalId,
+        Uint8List.fromList(bytes),
+        name: 'doc.pdf',
+        mime: 'application/pdf',
+        kind: 'file',
+      );
+
+      expect(tx.files, hasLength(1));
+      expect(tx.files.single.to, 'g1');
+      expect(File(tx.files.single.path).existsSync(), isTrue);
+      final relay = tx.ofType('room_msg').single;
+      expect(relay['kind'], 'file');
+      expect(relay['native'], isTrue);
+      expect(relay['b64'], isNull);
+      expect(relay['transferId'], tx.files.single.transferId);
+      expect(relay['sha256'], isNotNull);
+      final blob = await db.getFileBlob(
+        (await db.watchChannelMessages(generalId).first).single['id'] as String,
+      );
+      expect(blob?['path'], isNotEmpty);
+      expect(blob?['sha256'], relay['sha256']);
+    });
+
+    test('host relays native to native guests and b64 to PeerJS guests',
+        () async {
+      final tx = _NativeCaptureTransport()..nativePeers.add('g2');
+      final mgr = managerFor(hostId, tx);
+      await mgr.createRoom('Test');
+      final chans = await db.getRoomChannels(hostId);
+      final generalId =
+          chans.firstWhere((c) => c['type'] == 'text')['id'] as String;
+      await tx.bridge.handleInbound('g1', {
+        'type': 'room_join',
+        'roomId': hostId,
+        'guestName': 'G',
+        'guestPeerId': 'g1',
+      });
+      await tx.bridge.handleInbound('g2', {
+        'type': 'room_join',
+        'roomId': hostId,
+        'guestName': 'G2',
+        'guestPeerId': 'g2',
+      });
+      tx.sent.clear();
+      tx.files.clear();
+
+      final transferId = generateLocalTransferId();
+      final incoming = resolveIncomingDir(
+        base: Directory.systemTemp,
+        trustedSenderId: 'g1',
+        localTransferId: transferId,
+      )..createSync(recursive: true);
+      blobFile(incoming).writeAsBytesSync(bytes);
+      metaFile(incoming).writeAsStringSync(
+        '{"trustedSender":"${trustedSenderDirName('g1')}","externalTransferId":"$transferId","localTransferId":"$transferId","fileName":"photo.jpg","size":${bytes.length},"sha256":"abc","protocolVersion":1}',
+      );
+
+      await tx.bridge.handleInbound('g1', {
+        'type': 'room_msg',
+        'kind': 'file',
+        'roomId': hostId,
+        'channelId': generalId,
+        'attachment': {
+          'name': 'photo.jpg',
+          'size': bytes.length,
+          'mime': 'image/jpeg',
+          'kind': 'image',
+        },
+        'native': true,
+        'transferId': transferId,
+        'sha256': 'abc',
+        'fromName': 'n',
+        'fromPeerId': 'g1',
+        'ts': 1,
+      });
+
+      final toG2 = tx.sent.where((s) => s.to == 'g2').map((s) => s.packet);
+      final nativeRelay = toG2.firstWhere((p) => p['type'] == 'room_msg');
+      expect(nativeRelay['native'], isTrue);
+      expect(nativeRelay['b64'], isNull);
+      expect(tx.files.any((f) => f.to == 'g2'), isTrue);
+
+      final toNobodyElse = tx.sent.where((s) => s.to == 'g1');
+      expect(toNobodyElse.where((s) => s.packet['type'] == 'room_msg'), isEmpty);
     });
   });
 }

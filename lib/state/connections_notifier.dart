@@ -211,6 +211,27 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   @visibleForTesting
   int get peerjsFallbackCloseCalls => _peerjsFallbackCloseCalls;
 
+  /// Test-only open PeerJS slots. Used to prove exclusive-native teardown
+  /// without constructing a real [PeerDataConnection] / RTCPeerConnection.
+  final Map<String, Future<void> Function()> _debugPeerjsSlots = {};
+
+  @visibleForTesting
+  void debugAttachPeerjsSlot(
+    String peerId, {
+    String channel = 'reliable',
+    Future<void> Function()? onDispose,
+  }) {
+    final key = connKey(normalizePeerId(peerId), channel);
+    _debugPeerjsSlots[key] = onDispose ?? () async {};
+  }
+
+  @visibleForTesting
+  bool debugHasPeerjsSlot(String peerId, {String channel = 'reliable'}) {
+    return _debugPeerjsSlots.containsKey(
+      connKey(normalizePeerId(peerId), channel),
+    );
+  }
+
   /// Keyed by `connKey(peerId, channel)`.
   final Map<String, _ConnBinding> _bindings = {};
 
@@ -507,13 +528,12 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     if (!isValidPeerId(normalized)) return;
     if (normalized == _selfPeerId()) return;
     final channel = reliable ? 'reliable' : 'ephemeral';
-    final existing = getConn(normalized, channel);
-    // TODO(day2+): tighten dedup — also skip when `existing != null` but
-    // `!existing.open` (in-flight dial) to close the brief double-dial
-    // window between `peer.connect` and `conn.onOpen`. Glare resolver
-    // cleans the duplicate up today, so this is cosmetic only.
-    if (existing != null && existing.open) return;
-    if (canUseNative(normalized)) return;
+    // Native is exclusive when DualStack can carry the peer. A pre-opened
+    // PeerJS DataChannel must not skip the native dial or survive auth.
+    if (canUseNative(normalized)) {
+      unawaited(_closePeerjsFallback(normalized));
+      return;
+    }
     if (_dual != null && _dual!.nativeEnabled) {
       unawaited(_openNativeThenMaybePeerjs(
         normalized,
@@ -522,6 +542,13 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       ));
       return;
     }
+    final existing = getConn(normalized, channel);
+    // TODO(day2+): tighten dedup — also skip when `existing != null` but
+    // `!existing.open` (in-flight dial) to close the brief double-dial
+    // window between `peer.connect` and `conn.onOpen`. Glare resolver
+    // cleans the duplicate up today, so this is cosmetic only.
+    if (existing != null && existing.open) return;
+    if (_debugPeerjsSlots.containsKey(connKey(normalized, channel))) return;
     _openPeerjsChannel(normalized, channel: channel, reliable: reliable);
   }
 
@@ -723,6 +750,8 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       final key = connKey(norm, channel);
       final binding = _bindings.remove(key);
       if (binding != null) await binding.dispose();
+      final debugDispose = _debugPeerjsSlots.remove(key);
+      if (debugDispose != null) await debugDispose();
     }
     if (mounted) _refreshConnectedIds();
   }

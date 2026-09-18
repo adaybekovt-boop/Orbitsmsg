@@ -84,6 +84,85 @@ void main() {
     expect(conns.hasReliable(bob), isFalse);
   });
 
+  test('openReliable tears down a pre-opened PeerJS slot after native auth',
+      () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    hydrateDevBareTransportPref(true);
+    const alice = 'ORBIT-AAAAAAAAAAAAAAAA';
+    const bob = 'ORBIT-BBBBBBBBBBBBBBBB';
+    final secret = List<int>.generate(32, (i) => 6);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put(alice, secret)
+      ..put(bob, secret);
+    final bindA = await signedDeviceBinding(peerId: alice, deviceId: 'a');
+    final bindB = await signedDeviceBinding(peerId: bob, deviceId: 'b');
+    await pair.$1.start(
+      TransportLocalConfiguration(peerId: alice, discoverySecret: secret),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(peerId: bob, discoverySecret: secret),
+    );
+    await pair.$1.publish(bindA);
+    await pair.$2.publish(bindB);
+    final aliceIds = TrustedIdentityStore();
+    final bobIds = TrustedIdentityStore();
+    final aliceDev = DeviceRegistry();
+    final bobDev = DeviceRegistry();
+    trustContactPair(
+      aliceIdentities: aliceIds,
+      aliceDevices: aliceDev,
+      bobIdentities: bobIds,
+      bobDevices: bobDev,
+      aliceBinding: bindA,
+      bobBinding: bindB,
+    );
+    DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('b'),
+      selfPeerId: () => bob,
+      selfDeviceId: 'b',
+      secrets: secrets,
+      devices: bobDev,
+      identities: bobIds,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    ).attach();
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final conns = container.read(connectionsNotifierProvider.notifier);
+    var disposed = 0;
+    conns.debugAttachPeerjsSlot(bob, onDispose: () async {
+      disposed += 1;
+    });
+    expect(conns.debugHasPeerjsSlot(bob), isTrue);
+    conns.bindNativeTransport(
+      pair.$1,
+      journal: MemoryJournal('a'),
+      deviceId: 'a',
+      devices: aliceDev,
+      identities: aliceIds,
+    );
+    discoverySecretStore.put(alice, secret);
+    discoverySecretStore.put(bob, secret);
+    expect(conns.debugHasPeerjsSlot(bob), isTrue);
+    conns.openReliable(bob);
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(deadline)) {
+      if (conns.canUseNative(bob) &&
+          disposed > 0 &&
+          !conns.debugHasPeerjsSlot(bob)) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(conns.canUseNative(bob), isTrue);
+    expect(disposed, greaterThan(0));
+    expect(conns.debugHasPeerjsSlot(bob), isFalse);
+    expect(conns.peerjsFallbackCloseCalls, greaterThan(0));
+    expect(conns.getConn(bob, 'reliable'), isNull);
+  });
+
   test('PeerJS default still reports reliable from an open DataChannel', () {
     resetFlagsForTests();
     expect(isDevBareTransportRequested(), isFalse);

@@ -644,4 +644,187 @@ void main() {
     expect(alice.ratchets.session('dev-a', 'dev-b'), isNotNull);
     await alice.detach();
   });
+
+  test('DualStack + vault snapshot hydrates and revoke survives restart',
+      () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final secret = List<int>.generate(32, (i) => 31);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    final bindA = await signedDeviceBinding(
+      peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+      deviceId: 'dev-a',
+    );
+    final bindB = await signedDeviceBinding(
+      peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+      deviceId: 'dev-b',
+    );
+    final aliceIds = TrustedIdentityStore();
+    final bobIds = TrustedIdentityStore();
+    final aliceDev = DeviceRegistry();
+    final bobDev = DeviceRegistry();
+    trustContactPair(
+      aliceIdentities: aliceIds,
+      aliceDevices: aliceDev,
+      bobIdentities: bobIds,
+      bobDevices: bobDev,
+      aliceBinding: bindA,
+      bobBinding: bindB,
+    );
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(bindA);
+    await pair.$2.publish(bindB);
+
+    final savedA = <int>[];
+    final savedB = <int>[];
+    DeviceRatchetSessions makeA() => DeviceRatchetSessions(
+          localDeviceId: 'dev-a',
+          writeSnapshot: (bytes) async {
+            savedA
+              ..clear()
+              ..addAll(bytes);
+          },
+          readSnapshot: () async => Uint8List.fromList(savedA),
+        );
+    DeviceRatchetSessions makeB() => DeviceRatchetSessions(
+          localDeviceId: 'dev-b',
+          writeSnapshot: (bytes) async {
+            savedB
+              ..clear()
+              ..addAll(bytes);
+          },
+          readSnapshot: () async => Uint8List.fromList(savedB),
+        );
+
+    final liveA = makeA();
+    final liveB = makeB();
+    final firstPackets = <Object?>[];
+    final alice = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('dev-a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'dev-a',
+      secrets: secrets,
+      devices: aliceDev,
+      identities: aliceIds,
+      ratchets: liveA,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    final bob = DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('dev-b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'dev-b',
+      secrets: secrets,
+      devices: bobDev,
+      identities: bobIds,
+      ratchets: liveB,
+      isBlocked: (_) => false,
+      onPacket: (_, data) async => firstPackets.add(data),
+    )..attach();
+
+    await alice.dial('ORBIT-BBBBBBBBBBBBBBBB');
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(deadline)) {
+      if (liveA.session('dev-a', 'dev-b') != null &&
+          liveB.session('dev-b', 'dev-a') != null) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(liveA.session('dev-a', 'dev-b'), isNotNull);
+    expect(
+      await alice.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'msg',
+        'text': 'before-restart',
+      }),
+      isTrue,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(
+      firstPackets.whereType<AuthenticatedPlaintext>().any(
+            (p) => p.data['text'] == 'before-restart',
+          ),
+      isTrue,
+    );
+    await liveA.persist();
+    await liveB.persist();
+    expect(savedA, isNotEmpty);
+    expect(savedB, isNotEmpty);
+    await alice.detach();
+    await bob.detach();
+
+    final restoredA = makeA();
+    final restoredB = makeB();
+    await restoredA.hydrate();
+    await restoredB.hydrate();
+    expect(restoredA.session('dev-a', 'dev-b'), isNotNull);
+    expect(restoredB.session('dev-b', 'dev-a'), isNotNull);
+
+    final restartPackets = <Object?>[];
+    final alice2 = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('dev-a-2'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'dev-a',
+      secrets: secrets,
+      devices: aliceDev,
+      identities: aliceIds,
+      ratchets: restoredA,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    final bob2 = DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('dev-b-2'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'dev-b',
+      secrets: secrets,
+      devices: bobDev,
+      identities: bobIds,
+      ratchets: restoredB,
+      isBlocked: (_) => false,
+      onPacket: (_, data) async => restartPackets.add(data),
+    )..attach();
+
+    await alice2.dial('ORBIT-BBBBBBBBBBBBBBBB');
+    expect(
+      await alice2.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'msg',
+        'text': 'after-restart',
+      }),
+      isTrue,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(
+      restartPackets.whereType<AuthenticatedPlaintext>().any(
+            (p) => p.data['text'] == 'after-restart',
+          ),
+      isTrue,
+    );
+
+    alice2.revokeDevice('dev-b');
+    expect(restoredA.isRevoked('dev-b'), isTrue);
+    await restoredA.persist();
+    final afterRevoke = makeA();
+    await afterRevoke.hydrate();
+    expect(afterRevoke.isRevoked('dev-b'), isTrue);
+    expect(afterRevoke.session('dev-a', 'dev-b'), isNull);
+    await alice2.detach();
+    await bob2.detach();
+  });
 }

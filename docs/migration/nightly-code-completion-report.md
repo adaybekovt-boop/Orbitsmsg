@@ -1,5 +1,21 @@
 # PR #62 repair report
 
+## 2026-09-18 room path-descriptor / exclusive-native teardown / DualStack restart
+
+Software path only. External gates stay open.
+
+- Analyze unused_import on `room_manager.dart` is prefixed `dart:convert`
+- Room DualStack files send a path descriptor (`native`/`transferId`/`sha256`);
+  PeerJS guests still get host-plaintext `b64`. Host relay is per-peer.
+  Incoming native blobs look up the jail by the authenticated transport sender
+- `_openChannel` dials native even when a PeerJS slot is already open, then
+  `_closePeerjsFallback` tears that slot down (`debugAttachPeerjsSlot`)
+- Combined DualStack + vault-wrapped ratchet snapshot hydrates after restart
+  and revoke survives a second hydrate
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
 ## 2026-09-18 exclusive-native close counter / DeviceLinkPage hook
 
 Software path only. External gates stay open.
