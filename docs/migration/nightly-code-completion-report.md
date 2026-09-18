@@ -1,5 +1,24 @@
 # PR #62 repair report
 
+## 2026-09-18 exclusive-native call signal / host opaque-wake drain
+
+Software path only. External gates stay open.
+
+- `ConnectionsNotifier.sendCallSignal` uses DualStack when native is
+  authenticated and does not open PeerJS. A pre-opened PeerJS slot is
+  torn down (`peerjsFallbackCloseCalls`)
+- DualStack `lastCallSignalError` surfaces a malformed call frame
+- Mailbox journal append uses `mailboxWriterKey` when the live
+  `selfPeerId` callback is empty. Missing conversation members set
+  `lastReplicationError` and do not throw through opaque wake
+- `NativeTransportHost` resume drain wraps `drainKnownMailboxes`.
+  `OpaqueWakeService.handle` of a safe token drains known sender
+  buckets through `DozeAdapter`; a payload with `peerId` is rejected.
+  `kLiveApnsGateway` stays false
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
 ## 2026-09-18 remote mailbox sender buckets / DeviceLinkPage widget
 
 Software path only. External gates stay open.

@@ -348,7 +348,14 @@ class NativeTransportHost {
             .read(connectionsNotifierProvider.notifier)
             .nativeBridge;
         if (bridge == null) return 0;
-        return bridge.drainKnownMailboxes(discoverySecretStore.knownPeerIds);
+        try {
+          return await bridge.drainKnownMailboxes(
+            discoverySecretStore.knownPeerIds,
+          );
+        } catch (err) {
+          bridge.lastReplicationError = err.toString();
+          return 0;
+        }
       },
     );
     doze = DozeAdapter(lifecycle: lifecycle!);

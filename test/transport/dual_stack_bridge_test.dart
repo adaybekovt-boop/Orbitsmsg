@@ -557,6 +557,101 @@ void main() {
     await bridge.detach();
   });
 
+  test('mailbox drain without conversation members fails closed', () async {
+    final store = BlindMailboxStore()
+      ..grant(
+        MailboxCapability(
+          token: 'cap-1',
+          quotaBytes: 4096,
+          retentionMs: 60 * 1000,
+          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+        ),
+      );
+    final bridge = DualStackBridge(
+      transport: LoopbackOrbitsTransport(),
+      journal: MemoryJournal('b'),
+      selfPeerId: () => '',
+      selfDeviceId: 'b',
+      isBlocked: (_) => false,
+      mailbox: store,
+      mailboxToken: 'cap-1',
+      onPacket: (_, __) async {},
+    )..attach();
+    expect(
+      bridge.depositMailbox(
+        utf8.encode('v2:hdr:iv:ct'),
+        writerKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      ),
+      isTrue,
+    );
+    expect(
+      await bridge.drainKnownMailboxes(const ['ORBIT-AAAAAAAAAAAAAAAA']),
+      0,
+    );
+    expect(bridge.lastReplicationError, contains('conversation members required'));
+    expect(bridge.journal.length, 0);
+    await bridge.detach();
+  });
+
+  test('mailbox drain uses mailboxWriterKey when selfPeerId is empty', () async {
+    final store = BlindMailboxStore()
+      ..grant(
+        MailboxCapability(
+          token: 'cap-1',
+          quotaBytes: 4096,
+          retentionMs: 60 * 1000,
+          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+        ),
+      );
+    final bridge = DualStackBridge(
+      transport: LoopbackOrbitsTransport(),
+      journal: MemoryJournal('b'),
+      selfPeerId: () => '',
+      selfDeviceId: 'b',
+      isBlocked: (_) => false,
+      mailbox: store,
+      mailboxToken: 'cap-1',
+      mailboxWriterKey: 'ORBIT-BBBBBBBBBBBBBBBB',
+      onPacket: (_, __) async {},
+    )..attach();
+    expect(
+      bridge.depositMailbox(
+        utf8.encode('v2:hdr:iv:writer-key'),
+        writerKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      ),
+      isTrue,
+    );
+    expect(
+      await bridge.drainKnownMailboxes(const ['ORBIT-AAAAAAAAAAAAAAAA']),
+      1,
+    );
+    expect(bridge.journal.length, 1);
+    await bridge.detach();
+  });
+
+  test('malformed call frame is visible on lastCallSignalError', () async {
+    final (a, b, _) = await linked();
+    var seen = 0;
+    b.onCallSignal = (_, __) {
+      seen += 1;
+    };
+    await a.transport.send(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      TransportChannel.call,
+      utf8.encode('not-json'),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(seen, 0);
+    expect(b.lastCallSignalError, isNotEmpty);
+    await a.sendCallSignal(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      const CallSignal(type: CallSignalType.hangup, callId: 'c-ok'),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(seen, 1);
+    expect(b.lastCallSignalError, isEmpty);
+  });
+
   test('membership Hypercore append failure is visible and does not send',
       () async {
     setHyperswarmRollout(HyperswarmRollout.internal);

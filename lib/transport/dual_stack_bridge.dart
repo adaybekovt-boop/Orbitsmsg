@@ -108,6 +108,18 @@ class DualStackBridge {
   /// disappear into an empty catch.
   String lastDeviceRatchetError = '';
 
+  /// Last call-channel parse / dispatch failure. Empty after a successful
+  /// `CallSignal.fromJson`. Malformed frames must not disappear.
+  String lastCallSignalError = '';
+
+  /// Live auth peer id, or the host-bound mailbox writer when the
+  /// Riverpod current-user provider is still empty.
+  String _selfId() {
+    final live = normalizePeerId(selfPeerId());
+    if (live.isNotEmpty) return live;
+    return normalizePeerId(mailboxWriterKey ?? '');
+  }
+
   final Set<String> connecting = <String>{};
   final Set<String> connected = <String>{};
   final Set<String> authenticated = <String>{};
@@ -139,7 +151,7 @@ class DualStackBridge {
         attachmentKeyMessage(
           transferId: transferId,
           key: key,
-          sender: selfPeerId(),
+          sender: _selfId(),
           receiver: peer,
           name: meta['name'] as String? ?? '',
           size: (meta['size'] as num?)?.toInt() ?? 0,
@@ -311,7 +323,7 @@ class DualStackBridge {
       _appendEnvelope(
         sentTo,
         utf8.encode(entry.value),
-        senderIdentity: selfPeerId(),
+        senderIdentity: _selfId(),
         envelopeCipher: kDeviceRatchetMessageType,
         fromDeviceId: selfDeviceId,
         toDeviceId: entry.key,
@@ -398,7 +410,7 @@ class DualStackBridge {
     final token = mailboxToken;
     final writer = normalizePeerId(
       writerKey ??
-          (selfPeerId().isEmpty ? mailboxWriterKey : selfPeerId()) ??
+          (_selfId().isEmpty ? mailboxWriterKey : _selfId()) ??
           '',
     );
     if (store == null || token == null || writer.isEmpty) return false;
@@ -419,7 +431,7 @@ class DualStackBridge {
   }) async {
     final client = storagePeer;
     final cap = mailboxCapability;
-    final sender = normalizePeerId(writerKey ?? selfPeerId());
+    final sender = normalizePeerId(writerKey ?? _selfId());
     final bucket = _mailboxSenderBucket(sender);
     if (client == null || cap == null || bucket == null) return false;
     await _mailboxPump.depositRemote(
@@ -458,7 +470,7 @@ class DualStackBridge {
       ReplicationEventKind.deviceRevoked,
       <String, Object?>{
         'deviceId': deviceId,
-        'ownerPeerId': selfPeerId(),
+        'ownerPeerId': _selfId(),
         'audience': 'owner-devices',
         'createdAt': DateTime.now().millisecondsSinceEpoch,
       },
@@ -473,7 +485,7 @@ class DualStackBridge {
         'deviceId': device.deviceId,
         'ownerPeerId': device.ownerPeerId.isNotEmpty
             ? device.ownerPeerId
-            : selfPeerId(),
+            : _selfId(),
         'audience': 'owner-devices',
         'createdAt': device.createdAt,
       },
@@ -643,12 +655,24 @@ class DualStackBridge {
           projected += 1;
           continue;
         }
-        _appendEnvelope(from, block.bytes, senderIdentity: from);
-        await onPacket(from, decoded);
+        if (!_appendEnvelope(from, block.bytes, senderIdentity: from)) {
+          continue;
+        }
+        try {
+          await onPacket(from, decoded);
+        } catch (err) {
+          lastReplicationError = err.toString();
+        }
       } else {
         if (knownSenderSweep) continue;
-        _appendEnvelope(from, block.bytes, senderIdentity: from);
-        await onPacket(from, text);
+        if (!_appendEnvelope(from, block.bytes, senderIdentity: from)) {
+          continue;
+        }
+        try {
+          await onPacket(from, text);
+        } catch (err) {
+          lastReplicationError = err.toString();
+        }
       }
       _mailboxPump.markProjected(id);
       if (acknowledge != null) await acknowledge(id);
@@ -702,7 +726,7 @@ class DualStackBridge {
     final writer = packet['writerId'] as String? ?? selfDeviceId;
     final seq = (packet['seq'] as num?)?.toInt() ?? 0;
     final eventId = '$writer:$seq:$roomId';
-    final conversationId = conversationIdForPeers(selfPeerId(), peerId);
+    final conversationId = conversationIdForPeers(_selfId(), peerId);
     if (journal.records.any(
       (r) =>
           r.kind == ReplicationEventKind.roomMembershipChanged &&
@@ -717,7 +741,7 @@ class DualStackBridge {
       <String, Object?>{
         'eventId': eventId,
         'conversationId': conversationId,
-        'senderIdentity': selfPeerId(),
+        'senderIdentity': _selfId(),
         'senderDeviceId': selfDeviceId,
         'createdAt': DateTime.now().millisecondsSinceEpoch,
         'roomId': roomId,
@@ -794,7 +818,7 @@ class DualStackBridge {
     final sender = DeviceRegistry()
       ..replaceAll(
         registry.active.where(
-          (d) => normalizePeerId(d.ownerPeerId) == normalizePeerId(selfPeerId()),
+          (d) => normalizePeerId(d.ownerPeerId) == normalizePeerId(_selfId()),
         ),
       );
     return registry
@@ -829,7 +853,7 @@ class DualStackBridge {
     return false;
   }
 
-  void _appendEnvelope(
+  bool _appendEnvelope(
     String peerId,
     List<int> encrypted, {
     String? senderIdentity,
@@ -837,29 +861,41 @@ class DualStackBridge {
     String fromDeviceId = '',
     String toDeviceId = '',
   }) {
-    final id =
-        '${DateTime.now().millisecondsSinceEpoch}-$peerId-${encrypted.length}';
-    final record = journal.appendEnvelope(
-      MessageEnvelopeCreated(
-        eventId: id,
-        conversationId: conversationIdForPeers(selfPeerId(), peerId),
-        senderIdentity: senderIdentity ?? selfPeerId(),
-        senderDeviceId: fromDeviceId.isNotEmpty ? fromDeviceId : selfDeviceId,
-        logicalSequence: journal.length + 1,
-        createdAt: DateTime.now().millisecondsSinceEpoch,
-        encryptedEnvelope: encrypted,
-        envelopeCipher: envelopeCipher,
-        fromDeviceId: fromDeviceId,
-        toDeviceId: toDeviceId,
-      ),
-    );
-    hypercore.append(record);
-    _fanoutReplication(record);
-    unawaited(_commitJournal(record));
+    try {
+      final self = _selfId();
+      final other = normalizePeerId(peerId);
+      if (self.isEmpty || other.isEmpty) {
+        lastReplicationError = 'conversation members required';
+        return false;
+      }
+      final id =
+          '${DateTime.now().millisecondsSinceEpoch}-$peerId-${encrypted.length}';
+      final record = journal.appendEnvelope(
+        MessageEnvelopeCreated(
+          eventId: id,
+          conversationId: conversationIdForPeers(self, other),
+          senderIdentity: senderIdentity ?? self,
+          senderDeviceId: fromDeviceId.isNotEmpty ? fromDeviceId : selfDeviceId,
+          logicalSequence: journal.length + 1,
+          createdAt: DateTime.now().millisecondsSinceEpoch,
+          encryptedEnvelope: encrypted,
+          envelopeCipher: envelopeCipher,
+          fromDeviceId: fromDeviceId,
+          toDeviceId: toDeviceId,
+        ),
+      );
+      hypercore.append(record);
+      _fanoutReplication(record);
+      unawaited(_commitJournal(record));
+      return true;
+    } catch (err) {
+      lastReplicationError = err.toString();
+      return false;
+    }
   }
 
   void _fanoutReplication(JournalRecord record) {
-    final self = normalizePeerId(selfPeerId());
+    final self = normalizePeerId(_selfId());
     for (final peer in authenticated.toList(growable: false)) {
       if (peer == self) continue;
       if (!_maySendRecord(record, peer)) continue;
@@ -872,12 +908,14 @@ class DualStackBridge {
               hypercore.toReplicationFrame(
                 record,
                 authenticatedPeerId: peer,
-                selfPeerId: selfPeerId(),
+                selfPeerId: _selfId(),
                 peerIsOwnDevice: _isOwnDevice(peer),
               ),
             ),
           );
-        } catch (_) {}
+        } catch (err) {
+          lastReplicationError = err.toString();
+        }
       }());
     }
   }
@@ -886,7 +924,7 @@ class DualStackBridge {
     return recordMayReplicateTo(
       record,
       authenticatedPeerId: peerId,
-      selfPeerId: selfPeerId(),
+      selfPeerId: _selfId(),
       peerIsOwnDevice: _isOwnDevice(peerId),
     );
   }
@@ -894,7 +932,7 @@ class DualStackBridge {
   bool _isOwnDevice(String peerId, [DeviceBinding? binding]) {
     return registrySaysOwnDevice(
       peerId: peerId,
-      selfPeerId: selfPeerId(),
+      selfPeerId: _selfId(),
       devices: devices,
       binding: binding ?? _bindings[normalizePeerId(peerId)],
     );
@@ -1012,7 +1050,7 @@ class DualStackBridge {
       binding: binding,
       connectionNoisePublicKey: connectionNoisePublicKey,
       transportPeerId: transportId,
-      selfPeerId: selfPeerId(),
+      selfPeerId: _selfId(),
       identities: identities,
       devices: devices,
     );
@@ -1058,7 +1096,7 @@ class DualStackBridge {
     final logical = binding.ownerPeerId.isNotEmpty
         ? normalizePeerId(binding.ownerPeerId)
         : transportId;
-    final self = normalizePeerId(selfPeerId());
+    final self = normalizePeerId(_selfId());
     connecting.remove(transportId);
     connecting.remove(logical);
     connected.add(logical);
@@ -1095,7 +1133,7 @@ class DualStackBridge {
     final own = _isOwnDevice(peerId);
     for (final record in hypercore.recordsAuthorizedForPeer(
       authenticatedPeerId: peerId,
-      selfPeerId: selfPeerId(),
+      selfPeerId: _selfId(),
       peerIsOwnDevice: own,
     )) {
       unawaited(
@@ -1106,7 +1144,7 @@ class DualStackBridge {
             hypercore.toReplicationFrame(
               record,
               authenticatedPeerId: peerId,
-              selfPeerId: selfPeerId(),
+              selfPeerId: _selfId(),
               peerIsOwnDevice: own,
             ),
           ),
@@ -1331,7 +1369,7 @@ class DualStackBridge {
       final record = hypercore.applyRemote(
         frame,
         authenticatedPeerId: peerId,
-        selfPeerId: selfPeerId(),
+        selfPeerId: _selfId(),
         peerIsOwnDevice: _isOwnDevice(peerId),
         expectedWriterDeviceId: binding?.deviceId,
         acceptsWriter: devices?.acceptsWriter,
@@ -1395,7 +1433,10 @@ class DualStackBridge {
     if (channel == TransportChannel.call) {
       try {
         onCallSignal?.call(CallSignal.fromJson(decodeJsonPayload(bytes)), norm);
-      } catch (_) {}
+        lastCallSignalError = '';
+      } catch (err) {
+        lastCallSignalError = err.toString();
+      }
       return;
     }
     if (channel == TransportChannel.attachment) {

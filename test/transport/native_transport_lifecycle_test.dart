@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
@@ -6,8 +8,10 @@ import 'package:orbits_flutter/core/vault_kek.dart';
 import 'package:orbits_flutter/peer/room_manager.dart';
 import 'package:orbits_flutter/state/auth_notifier.dart';
 import 'package:orbits_flutter/state/connections_notifier.dart';
+import 'package:orbits_flutter/state/local_profile_provider.dart';
 import 'package:orbits_flutter/storage/secure_profile_store.dart';
 import 'package:orbits_flutter/transport/dev_bare_transport.dart';
+import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
 import 'package:orbits_flutter/transport/native_transport_host.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -169,6 +173,61 @@ void main() {
       container.read(roomManagerProvider.notifier).roomLog.writeSnapshot,
       isNotNull,
     );
+    await host.shutdown();
+  });
+
+  test('opaque wake drains known mailbox buckets through the host DozeAdapter',
+      () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    discoverySecretStore
+      ..clearMemory()
+      ..writeSnapshot = (_) async {};
+    addTearDown(() {
+      discoverySecretStore
+        ..clearMemory()
+        ..writeSnapshot = null;
+    });
+    final container = ProviderContainer(
+      overrides: [
+        currentPeerIdProvider.overrideWithValue('ORBIT-AAAAAAAAAAAAAAAA'),
+      ],
+    );
+    addTearDown(container.dispose);
+    final current = AuthAuthed(_user('ORBIT-AAAAAAAAAAAAAAAA'));
+    final host = _host(container, auth: () => current);
+    await host.ensureStarted();
+    expect(host.doze, isNotNull);
+    expect(host.wake, isNotNull);
+    expect(host.lifecycle, isNotNull);
+    final bridge = container.read(connectionsNotifierProvider.notifier).nativeBridge;
+    expect(bridge, isNotNull);
+    discoverySecretStore.put(
+      'ORBIT-CCCCCCCCCCCCCCCC',
+      List<int>.generate(32, (i) => i + 1),
+    );
+    expect(
+      bridge!.depositMailbox(
+        utf8.encode('v2:hdr:iv:wake-drain'),
+        writerKey: 'ORBIT-CCCCCCCCCCCCCCCC',
+      ),
+      isTrue,
+    );
+    final rejected = await host.wake!.handle({
+      'opaqueWakeToken': 'tok',
+      'collapseId': 'c',
+      'protocolVersion': 1,
+      'peerId': 'ORBIT-CCCCCCCCCCCCCCCC',
+    });
+    expect(rejected.accepted, isFalse);
+    expect(host.lifecycle!.lastDrained, 0);
+    final ok = await host.wake!.handle({
+      'opaqueWakeToken': 'tok',
+      'collapseId': 'c',
+      'protocolVersion': 1,
+    });
+    expect(ok.accepted, isTrue);
+    expect(host.lifecycle!.lastDrained, 1);
+    expect(bridge.journal.length, 1);
     await host.shutdown();
   });
 
