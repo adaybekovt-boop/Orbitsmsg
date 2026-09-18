@@ -119,7 +119,14 @@ class JournalProjector {
         if (read != null) messages[readId] = read.copyWith(status: 'read');
       case ReplicationEventKind.messageTombstoned:
         final id = record.fields['eventId'] as String?;
-        if (id != null) messages.remove(id);
+        if (id == null) return;
+        final existing = messages[id];
+        if (existing == null) return;
+        if (existing.senderDeviceId.isEmpty ||
+            existing.senderDeviceId != record.writerDeviceId) {
+          return;
+        }
+        messages.remove(id);
       default:
         break;
     }

@@ -224,4 +224,44 @@ void main() {
     expect(projector.messages['late']?.plaintext, 'F');
     expect(projector.seenEventIds, contains('late'));
   });
+
+  test('tombstone only applies for the original writer device', () async {
+    final journal = MemoryJournal('dev-a');
+    journal.appendEnvelope(
+      const MessageEnvelopeCreated(
+        eventId: 'keep',
+        conversationId: 'c1',
+        senderIdentity: 'alice',
+        senderDeviceId: 'dev-a',
+        logicalSequence: 1,
+        createdAt: 1,
+        encryptedEnvelope: <int>[65],
+      ),
+    );
+    final projector = JournalProjector(
+      decrypt: (enc, _) async => {'text': String.fromCharCodes(enc)},
+    );
+    await projector.applyAll(journal);
+    expect(projector.messages.containsKey('keep'), isTrue);
+
+    await projector.apply(
+      JournalRecord(
+        seq: 99,
+        writerDeviceId: 'eve-dev',
+        kind: ReplicationEventKind.messageTombstoned,
+        fields: {'eventId': 'keep'},
+      ),
+    );
+    expect(projector.messages.containsKey('keep'), isTrue);
+
+    await projector.apply(
+      JournalRecord(
+        seq: 100,
+        writerDeviceId: 'dev-a',
+        kind: ReplicationEventKind.messageTombstoned,
+        fields: {'eventId': 'keep'},
+      ),
+    );
+    expect(projector.messages.containsKey('keep'), isFalse);
+  });
 }

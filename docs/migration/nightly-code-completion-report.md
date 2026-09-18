@@ -114,6 +114,9 @@ mailbox HTTP, merge call machines, or add `room_crypto.dart`.
   forbidden fields on read
 - Windows Bare spawn hashes `bare.exe` against the sidecar
 - Desktop plugins answer `authorize` / `deny` / `runtimeInfo` fail-closed
+- Journal projector tombstones only if the writer device matches the
+  original `senderDeviceId` (a contact cannot delete someone else's
+  projected message)
 
 `kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
 **off**. Rooms stay host-plaintext. PeerJS remains the production
