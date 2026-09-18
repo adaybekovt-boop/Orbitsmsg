@@ -22,6 +22,7 @@ class PluginOrbitsTransport implements OrbitsTransport {
   final _events = StreamController<TransportEvent>.broadcast();
   StreamSubscription<Map<String, Object?>>? _sub;
   Uint8List? lastNoisePublicKey;
+  Uint8List? lastHypercorePublicKey;
 
   @override
   Stream<TransportEvent> get events => _events.stream;
@@ -41,6 +42,7 @@ class PluginOrbitsTransport implements OrbitsTransport {
     });
     final info = await plugin.runtimeInfo();
     lastNoisePublicKey = parseNoisePublicKey(info['noisePublicKey']);
+    lastHypercorePublicKey = parseNoisePublicKey(info['hypercorePublicKey']);
   }
 
   @override
@@ -126,8 +128,7 @@ class PluginOrbitsTransport implements OrbitsTransport {
               peerId,
               pending,
               connectionNoisePublicKey: parseNoisePublicKey(
-                event['connectionNoisePublicKey'] ??
-                    pending.transportPublicKey,
+                event['connectionNoisePublicKey'] ?? pending.transportPublicKey,
               ),
             ),
           );

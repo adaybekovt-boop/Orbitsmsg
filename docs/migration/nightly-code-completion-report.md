@@ -31,6 +31,23 @@ HEAD SHA after CI as the evidence pin.
 **off**. Rooms stay host-plaintext. PeerJS remains the production
 default. Do not merge. Do not claim production-ready.
 
+## 2026-09-17 correctness slice (after green baseline)
+
+Implemented on this branch after `00da452`. Treat the new HEAD SHA
+as the evidence pin once CI is green.
+
+- Incoming blob lookup covers canonical `sender/local-id/blob`,
+  `meta.json` external-id scan, and legacy `<transferId>/<name>`
+- Own-account replication records are identity-signed; unsigned and
+  writer-mismatched inbound frames are dropped
+- Binding remembers the worklet Corestore public key when
+  `runtime.info` / start returns one
+- Dummy journal projector decrypt is fail-closed (`null`), not a
+  length-as-plaintext stand-in
+- Dead `DualStackBridge.sendAttachmentChunks` is removed
+- Worklet `sendFile` is marked harness-only
+- Auth wait uses a completer instead of a 10 ms poller
+
 ## Identity (historical repair pass; do not treat as current HEAD)
 
 | Field | Value |

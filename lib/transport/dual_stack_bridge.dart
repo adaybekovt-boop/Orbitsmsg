@@ -9,7 +9,6 @@ import 'package:crypto/crypto.dart' show sha256;
 
 import '../attachments/attachment_keys.dart';
 import '../attachments/file_transfer_session.dart';
-import '../attachments/resumable_blob.dart';
 import '../calls/hyperswarm_signaling.dart';
 import '../core/feature_flags.dart';
 import '../core/wire_crypto.dart';
@@ -58,6 +57,7 @@ class DualStackBridge {
     TrustedIdentityStore? identities,
     this.confirmPeerAuthorization,
     this.onRemoteRecord,
+    this.signRecord,
     AttachmentKeyStore? attachmentKeys,
     HypercoreLocalStore? hypercore,
   }) : secrets = secrets ?? discoverySecretStore,
@@ -83,8 +83,9 @@ class DualStackBridge {
   final TrustedIdentityStore identities;
   final HypercoreLocalStore hypercore;
   final Future<void> Function(String peerId, {required bool authorized})?
-      confirmPeerAuthorization;
+  confirmPeerAuthorization;
   final Future<void> Function(JournalRecord record)? onRemoteRecord;
+  final Future<List<int>> Function(List<int> payload)? signRecord;
   final AttachmentKeyStore attachmentKeys;
   final MailboxPump _mailboxPump = MailboxPump();
   void Function(String peerId, Object packet)? onDrop;
@@ -102,16 +103,14 @@ class DualStackBridge {
   final Map<String, DeviceBinding> _bindings = <String, DeviceBinding>{};
   final Map<String, String> _fingerprintOwner = <String, String>{};
   final Map<String, String> _fingerprintTransport = <String, String>{};
+  final Map<String, Completer<void>> _authWaiters = <String, Completer<void>>{};
   final FileTransferCoordinator files = FileTransferCoordinator();
 
   void attach() {
     _sub ??= transport.events.listen(_onEvent);
     files.onDrop = (peer, packet) => onDrop?.call(peer, packet);
-    files.send = (peer, bytes) => transport.send(
-      peer,
-      TransportChannel.attachment,
-      bytes,
-    );
+    files.send = (peer, bytes) =>
+        transport.send(peer, TransportChannel.attachment, bytes);
     files.keys = attachmentKeys;
     files.announceKey = (peer, transferId, key, meta) async {
       await sendEncrypted(
@@ -127,7 +126,8 @@ class DualStackBridge {
         ),
       );
     };
-    files.fileKeyFor = (peer, transferId) => attachmentKeys.require(peer, transferId);
+    files.fileKeyFor = (peer, transferId) =>
+        attachmentKeys.require(peer, transferId);
   }
 
   Future<void> detach() async {
@@ -141,6 +141,10 @@ class DualStackBridge {
     _bindings.clear();
     _fingerprintOwner.clear();
     _fingerprintTransport.clear();
+    for (final waiter in _authWaiters.values) {
+      if (!waiter.isCompleted) waiter.complete();
+    }
+    _authWaiters.clear();
     files.forgetAll();
   }
 
@@ -195,13 +199,32 @@ class DualStackBridge {
   }
 
   Future<void> _waitForAuth(String peerId, {required Duration timeout}) async {
-    final deadline = DateTime.now().add(timeout);
-    while (DateTime.now().isBefore(deadline)) {
-      if (isAuthenticated(peerId)) return;
-      if (!connecting.contains(peerId) && !isNativeConnected(peerId)) {
-        return;
+    final norm = normalizePeerId(peerId);
+    if (isAuthenticated(norm)) return;
+    if (!connecting.contains(norm) && !isNativeConnected(norm)) {
+      return;
+    }
+    final waiter = _authWaiters.putIfAbsent(norm, Completer<void>.new);
+    if (isAuthenticated(norm) ||
+        (!connecting.contains(norm) && !isNativeConnected(norm))) {
+      _completeAuthWaiter(norm);
+      return;
+    }
+    try {
+      await waiter.future.timeout(timeout);
+    } on TimeoutException {
+      // Same contract as the old 10 ms poller: give up without throwing.
+    } finally {
+      if (identical(_authWaiters[norm], waiter)) {
+        _authWaiters.remove(norm);
       }
-      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+  }
+
+  void _completeAuthWaiter(String peerId) {
+    final waiter = _authWaiters.remove(normalizePeerId(peerId));
+    if (waiter != null && !waiter.isCompleted) {
+      waiter.complete();
     }
   }
 
@@ -315,7 +338,7 @@ class DualStackBridge {
   /// Authorization log: revoked writers are ignored on the next fan-out.
   void revokeDevice(String deviceId) {
     devices?.revoke(deviceId);
-    final record = journal.append(
+    _queueOwnAccountRecord(
       ReplicationEventKind.deviceRevoked,
       <String, Object?>{
         'deviceId': deviceId,
@@ -324,14 +347,11 @@ class DualStackBridge {
         'createdAt': DateTime.now().millisecondsSinceEpoch,
       },
     );
-    unawaited(durableJournal?.append(record));
-    hypercore.append(record);
-    _fanoutReplication(record);
   }
 
   void authorizeDevice(AuthorizedDevice device) {
     devices?.authorize(device);
-    final record = journal.append(
+    _queueOwnAccountRecord(
       ReplicationEventKind.deviceAuthorized,
       <String, Object?>{
         'deviceId': device.deviceId,
@@ -342,9 +362,53 @@ class DualStackBridge {
         'createdAt': device.createdAt,
       },
     );
+  }
+
+  void _queueOwnAccountRecord(
+    ReplicationEventKind kind,
+    Map<String, Object?> fields,
+  ) {
+    final record = journal.append(kind, fields);
     unawaited(durableJournal?.append(record));
     hypercore.append(record);
-    _fanoutReplication(record);
+    unawaited(_fanoutSignedOwnAccount(record));
+  }
+
+  Future<void> _fanoutSignedOwnAccount(JournalRecord record) async {
+    final signedFields = await _signOwnAccountFields(
+      kind: record.kind,
+      writerDeviceId: record.writerDeviceId,
+      fields: record.fields,
+    );
+    if (isOwnerDeviceScopedKind(record.kind) &&
+        decodeReplicationSignature(signedFields['signature']) == null) {
+      return;
+    }
+    _fanoutReplication(
+      JournalRecord(
+        seq: record.seq,
+        writerDeviceId: record.writerDeviceId,
+        kind: record.kind,
+        fields: signedFields,
+      ),
+    );
+  }
+
+  Future<Map<String, Object?>> _signOwnAccountFields({
+    required ReplicationEventKind kind,
+    required String writerDeviceId,
+    required Map<String, Object?> fields,
+  }) async {
+    final sign = signRecord;
+    if (sign == null) return fields;
+    final payload = canonicalReplicationRecordBytes(
+      kind: kind,
+      writerDeviceId: writerDeviceId,
+      fields: fields,
+    );
+    final signature = await sign(payload);
+    if (signature.isEmpty) return fields;
+    return <String, Object?>{...fields, 'signature': base64Encode(signature)};
   }
 
   Future<int> drainMailbox({String? fromPeerId}) async {
@@ -403,38 +467,6 @@ class DualStackBridge {
       projected += 1;
     }
     return projected;
-  }
-
-  Future<void> sendAttachmentChunks(
-    String peerId,
-    List<int> plaintext,
-    List<int> fileKey, {
-    required String fileId,
-  }) async {
-    if (!isAuthenticated(peerId)) {
-      throw StateError('attachment requires an authenticated peer');
-    }
-    final chunks = ResumableAttachment.chunk(
-      plaintext,
-      fileKey,
-      fileId: fileId,
-      totalBytes: plaintext.length,
-    );
-    for (final chunk in chunks) {
-      await transport.send(
-        normalizePeerId(peerId),
-        TransportChannel.attachment,
-        jsonPayload({
-          'type': 'attach-chunk',
-          'fileId': fileId,
-          'index': chunk.index,
-          'offset': chunk.offset,
-          'totalBytes': plaintext.length,
-          'hash': chunk.hash,
-          'b64': base64Encode(chunk.ciphertext),
-        }),
-      );
-    }
   }
 
   Future<bool> sendEphemeral(String peerId, Object? msg) async {
@@ -570,9 +602,7 @@ class DualStackBridge {
         :final binding,
         :final connectionNoisePublicKey,
       ):
-        unawaited(
-          _onAuthenticated(peerId, binding, connectionNoisePublicKey),
-        );
+        unawaited(_onAuthenticated(peerId, binding, connectionNoisePublicKey));
       case TransportDisconnected(:final peerId):
         final norm = normalizePeerId(peerId);
         connecting.remove(norm);
@@ -582,6 +612,7 @@ class DualStackBridge {
         _expectedPeer.remove(norm);
         _bindings.remove(norm);
         _fingerprintTransport.removeWhere((_, id) => id == norm);
+        _completeAuthWaiter(norm);
         files.forgetPeer(norm);
         onPresence?.call(peerId, false);
       case TransportFrame(:final peerId, :final channel, :final bytes):
@@ -601,7 +632,11 @@ class DualStackBridge {
         _authorizedPending.contains(transportId)) {
       return;
     }
-    if (!await _evaluateBinding(transportId, binding, connectionNoisePublicKey)) {
+    if (!await _evaluateBinding(
+      transportId,
+      binding,
+      connectionNoisePublicKey,
+    )) {
       await _reject(transportId);
       return;
     }
@@ -627,7 +662,11 @@ class DualStackBridge {
       return;
     }
     // In-process loopback emits authenticated without a prior pending event.
-    if (!await _evaluateBinding(transportId, binding, connectionNoisePublicKey)) {
+    if (!await _evaluateBinding(
+      transportId,
+      binding,
+      connectionNoisePublicKey,
+    )) {
       await _reject(transportId);
       return;
     }
@@ -708,6 +747,10 @@ class DualStackBridge {
       authenticated.add(transportId);
       _authorizedPending.remove(transportId);
     }
+    _completeAuthWaiter(logical);
+    if (transportId != logical) {
+      _completeAuthWaiter(transportId);
+    }
     onPresence?.call(logical, true);
 
     final caps = localCapabilities;
@@ -782,6 +825,63 @@ class DualStackBridge {
     } catch (_) {}
   }
 
+  Future<void> _onReplicationFrame(String peerId, List<int> bytes) async {
+    try {
+      final frame = decodeJsonPayload(bytes);
+      if (!await _authorizeInboundReplication(peerId, frame)) return;
+      final binding = _bindings[peerId];
+      final record = hypercore.applyRemote(
+        frame,
+        authenticatedPeerId: peerId,
+        selfPeerId: selfPeerId(),
+        peerIsOwnDevice: _isOwnDevice(peerId),
+        expectedWriterDeviceId: binding?.deviceId,
+        acceptsWriter: devices?.acceptsWriter,
+      );
+      if (record != null) {
+        unawaited(durableJournal?.append(record));
+        unawaited(onRemoteRecord?.call(record));
+      }
+    } catch (_) {}
+  }
+
+  Future<bool> _authorizeInboundReplication(
+    String peerId,
+    Map<String, Object?> frame,
+  ) async {
+    final binding = _bindings[peerId];
+    if (binding == null) return false;
+    final writer = frame['writerDeviceId'] as String? ?? '';
+    if (writer.isEmpty || writer != binding.deviceId) return false;
+    final kindName = frame['kind'] as String?;
+    if (kindName == null) return false;
+    final kinds = ReplicationEventKind.values.where((k) => k.name == kindName);
+    if (kinds.isEmpty) return false;
+    final kind = kinds.first;
+    if (!isOwnerDeviceScopedKind(kind)) return true;
+    final raw = frame['fields'];
+    if (raw is! Map) return false;
+    final fields = <String, Object?>{};
+    raw.forEach((k, v) {
+      fields[k as String] = v;
+    });
+    final signature = decodeReplicationSignature(fields['signature']);
+    if (signature == null || signature.isEmpty) return false;
+    final owner =
+        normalizedOwnerPeerId(fields) ?? normalizePeerId(binding.ownerPeerId);
+    final known = identities.lookup(owner);
+    if (known == null || known.tofuOnly) return false;
+    return verifyIdentitySignedBytes(
+      known.identityPublicKey,
+      canonicalReplicationRecordBytes(
+        kind: kind,
+        writerDeviceId: writer,
+        fields: fields,
+      ),
+      signature,
+    );
+  }
+
   void _onFrame(String peerId, TransportChannel channel, List<int> bytes) {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return;
@@ -797,18 +897,7 @@ class DualStackBridge {
       return;
     }
     if (channel == TransportChannel.replication) {
-      try {
-        final record = hypercore.applyRemote(
-          decodeJsonPayload(bytes),
-          authenticatedPeerId: norm,
-          selfPeerId: selfPeerId(),
-          peerIsOwnDevice: _isOwnDevice(norm),
-        );
-        if (record != null) {
-          unawaited(durableJournal?.append(record));
-          unawaited(onRemoteRecord?.call(record));
-        }
-      } catch (_) {}
+      unawaited(_onReplicationFrame(norm, bytes));
       return;
     }
     Object? data;

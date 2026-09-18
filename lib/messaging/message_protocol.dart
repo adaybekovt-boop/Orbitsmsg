@@ -664,6 +664,7 @@ Future<bool> dispatchReliablePlaintext(
         final incoming = await readIncomingTransfer(
           transferId: attachmentMeta['transferId'] as String? ?? '',
           name: name,
+          trustedSenderId: from,
         );
         if (incoming != null && incoming.isNotEmpty) {
           await db.saveFileBlob(
@@ -677,7 +678,11 @@ Future<bool> dispatchReliablePlaintext(
             height: height,
             duration: duration,
           );
-          attachmentRef = metaOut;
+          attachmentRef = <String, Object?>{
+            ...metaOut,
+            'path': attachmentMeta['path'],
+            'sha256': attachmentMeta['sha256'],
+          };
         } else {
           attachmentRef = <String, Object?>{...metaOut, 'missing': true};
         }

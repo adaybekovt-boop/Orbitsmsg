@@ -16,6 +16,7 @@ import 'package:orbits_flutter/transport/replication_schema.dart';
 import 'package:orbits_flutter/transport/transport_api.dart';
 import 'package:orbits_flutter/transport/trusted_identity_store.dart';
 
+import '../helpers/pointycastle_ecdh.dart';
 import '../helpers/signed_device_binding.dart';
 
 const aliceId = 'ORBIT-AAAAAAAAAAAAAAAA';
@@ -350,5 +351,269 @@ void main() {
       ),
       isTrue,
     );
+  });
+
+  test('canonical own-account bytes are stable after a JSON round-trip', () {
+    final fields = <String, Object?>{
+      'audience': 'owner-devices',
+      'createdAt': 9,
+      'deviceId': 'phone-2',
+      'ownerPeerId': aliceId,
+      'tag': Uint8List.fromList(const [1, 2, 3]),
+    };
+    final direct = canonicalReplicationRecordBytes(
+      kind: ReplicationEventKind.deviceAuthorized,
+      writerDeviceId: 'dev-alice',
+      fields: fields,
+    );
+    final decoded = jsonDecode(utf8.decode(direct)) as Map<String, Object?>;
+    final again = canonicalReplicationRecordBytes(
+      kind: ReplicationEventKind.deviceAuthorized,
+      writerDeviceId: 'dev-alice',
+      fields: Map<String, Object?>.from(decoded['fields'] as Map),
+    );
+    expect(again, direct);
+    expect(utf8.decode(direct).contains('signature'), isFalse);
+  });
+
+  test('inbound replication drops writer mismatch and unsigned own-account', () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final secret = List<int>.generate(32, (i) => 13);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put(aliceId, secret)
+      ..put(bobId, secret);
+    final bindA = await signedDeviceBinding(peerId: aliceId, deviceId: 'dev-alice');
+    final bindB = await signedDeviceBinding(peerId: bobId, deviceId: 'dev-bob');
+    await pair.$1.start(
+      TransportLocalConfiguration(peerId: aliceId, discoverySecret: secret),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(peerId: bobId, discoverySecret: secret),
+    );
+    await pair.$1.publish(bindA);
+    await pair.$2.publish(bindB);
+
+    final aliceIds = TrustedIdentityStore();
+    final bobIds = TrustedIdentityStore();
+    final aliceDev = DeviceRegistry();
+    final bobDev = DeviceRegistry();
+    trustContactPair(
+      aliceIdentities: aliceIds,
+      aliceDevices: aliceDev,
+      bobIdentities: bobIds,
+      bobDevices: bobDev,
+      aliceBinding: bindA,
+      bobBinding: bindB,
+    );
+    final alice = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('dev-alice'),
+      selfPeerId: () => aliceId,
+      selfDeviceId: 'dev-alice',
+      secrets: secrets,
+      devices: aliceDev,
+      identities: aliceIds,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('dev-bob'),
+      selfPeerId: () => bobId,
+      selfDeviceId: 'dev-bob',
+      secrets: secrets,
+      devices: bobDev,
+      identities: bobIds,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    ).attach();
+
+    await pair.$1.connect(PeerDescriptor(peerId: bobId, discoverySecret: secret));
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect(alice.isAuthenticated(bobId), isTrue);
+    final before = alice.hypercore.blocks.length;
+
+    await pair.$2.send(
+      aliceId,
+      TransportChannel.replication,
+      jsonPayload(<String, Object?>{
+        'type': 'repl-event',
+        'info': kReplicationEventInfo,
+        'kind': ReplicationEventKind.messageEnvelopeCreated.name,
+        'seq': 40,
+        'writerDeviceId': 'not-dev-bob',
+        'fields': <String, Object?>{
+          'conversationId': conversationIdForPeers(aliceId, bobId),
+          'encryptedEnvelope': base64Encode(utf8.encode('WRITER-MISMATCH')),
+          'senderIdentity': bobId,
+        },
+      }),
+    );
+    await pair.$2.send(
+      aliceId,
+      TransportChannel.replication,
+      jsonPayload(<String, Object?>{
+        'type': 'repl-event',
+        'info': kReplicationEventInfo,
+        'kind': ReplicationEventKind.deviceAuthorized.name,
+        'seq': 41,
+        'writerDeviceId': 'dev-bob',
+        'fields': <String, Object?>{
+          'deviceId': 'unsigned-device',
+          'ownerPeerId': bobId,
+          'audience': 'owner-devices',
+        },
+      }),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+
+    expect(alice.hypercore.blocks.length, before);
+    expect(
+      alice.hypercore.blocks.any((r) => r.fields['deviceId'] == 'unsigned-device'),
+      isFalse,
+    );
+    await alice.detach();
+  });
+
+  test('signed own-account record is accepted from a registered own device', () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    const tabletId = 'ORBIT-A2A2A2A2A2A2A2A2';
+    final secret = List<int>.generate(32, (i) => 14);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put(aliceId, secret)
+      ..put(tabletId, secret);
+    final identity = await signedIdentity(aliceId);
+    final bindPhone = await signedDeviceBinding(
+      peerId: aliceId,
+      deviceId: 'dev-phone',
+      identity: identity,
+    );
+    final bindTablet = await signedDeviceBinding(
+      peerId: aliceId,
+      deviceId: 'dev-tablet',
+      identity: identity,
+    );
+    await pair.$1.start(
+      TransportLocalConfiguration(peerId: aliceId, discoverySecret: secret),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(peerId: tabletId, discoverySecret: secret),
+    );
+    await pair.$1.publish(bindPhone);
+    await pair.$2.publish(bindTablet);
+
+    final phoneIds = TrustedIdentityStore();
+    final tabletIds = TrustedIdentityStore();
+    final phoneDev = DeviceRegistry();
+    final tabletDev = DeviceRegistry();
+    phoneIds.trust(
+      peerId: aliceId,
+      identityPublicKey: identity.spki,
+      isSelf: true,
+    );
+    tabletIds.trust(
+      peerId: aliceId,
+      identityPublicKey: identity.spki,
+      isSelf: true,
+    );
+    void registerOwn(DeviceRegistry registry) {
+      registry.authorize(
+        AuthorizedDevice(
+          deviceId: 'dev-phone',
+          transportPublicKey: bindPhone.transportPublicKey,
+          hypercorePublicKey: bindPhone.hypercorePublicKey,
+          name: 'phone',
+          kind: 'own',
+          createdAt: bindPhone.createdAt,
+          status: DeviceStatus.active,
+          ownerPeerId: aliceId,
+          transportPeerId: aliceId,
+        ),
+      );
+      registry.authorize(
+        AuthorizedDevice(
+          deviceId: 'dev-tablet',
+          transportPublicKey: bindTablet.transportPublicKey,
+          hypercorePublicKey: bindTablet.hypercorePublicKey,
+          name: 'tablet',
+          kind: 'own',
+          createdAt: bindTablet.createdAt,
+          status: DeviceStatus.active,
+          ownerPeerId: aliceId,
+          transportPeerId: tabletId,
+        ),
+      );
+    }
+
+    registerOwn(phoneDev);
+    registerOwn(tabletDev);
+
+    final phone = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('dev-phone'),
+      selfPeerId: () => aliceId,
+      selfDeviceId: 'dev-phone',
+      secrets: secrets,
+      devices: phoneDev,
+      identities: phoneIds,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('dev-tablet'),
+      selfPeerId: () => aliceId,
+      selfDeviceId: 'dev-tablet',
+      secrets: secrets,
+      devices: tabletDev,
+      identities: tabletIds,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    ).attach();
+
+    await pair.$1.connect(
+      PeerDescriptor(peerId: tabletId, discoverySecret: secret),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect(phone.isAuthenticated(tabletId), isTrue);
+    expect(phone.isOwnDevice(tabletId), isTrue);
+
+    final fields = <String, Object?>{
+      'deviceId': 'phone-3',
+      'ownerPeerId': aliceId,
+      'audience': 'owner-devices',
+      'createdAt': 1,
+    };
+    final signature = signP256Ecdsa(
+      identity.pair,
+      canonicalReplicationRecordBytes(
+        kind: ReplicationEventKind.deviceAuthorized,
+        writerDeviceId: 'dev-tablet',
+        fields: fields,
+      ),
+    );
+    await pair.$2.send(
+      aliceId,
+      TransportChannel.replication,
+      jsonPayload(<String, Object?>{
+        'type': 'repl-event',
+        'info': kReplicationEventInfo,
+        'kind': ReplicationEventKind.deviceAuthorized.name,
+        'seq': 7,
+        'writerDeviceId': 'dev-tablet',
+        'fields': <String, Object?>{
+          ...fields,
+          'signature': base64Encode(signature),
+        },
+      }),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(
+      phone.hypercore.blocks.any((r) => r.fields['deviceId'] == 'phone-3'),
+      isTrue,
+    );
+    await phone.detach();
   });
 }

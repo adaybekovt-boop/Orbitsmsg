@@ -14,8 +14,10 @@ PeerJS. `HyperswarmRollout` default remains **off**.
 The SHA column below is historical. After 2026-09-17 the working
 lineage is `cursor/orbits-holepunch-green-baseline-e7fb` (PR #62 plus
 Apache-2.0 `main` plus the green-baseline compile/asset/whitespace
-repair). Treat CI on that branch as current evidence, not the older
-repair SHAs in this file.
+repair, then the correctness slice: incoming-path lookup, identity-signed
+own-account replication, Corestore writer-key remember, fail-closed
+projector decrypt). Treat CI on that branch as current evidence, not
+the older repair SHAs in this file.
 
 | Phase | Implemented in production path | Automated evidence on repair SHA | External/manual gate |
 |------:|--------------------------------|----------------------------------|----------------------|
@@ -26,9 +28,9 @@ repair SHAs in this file.
 | 4 | App `NativeTransportHost` talks only through `PluginOrbitsTransport` when rollout ≠ off; default rollout still off so boot stays PeerJS | `test/transport/plugin_boundary_test.dart`, `native_backend_policy_test.dart` | Two physical natives **open** |
 | 5 | Identity-signed capabilities in tree | `test/transport/capability_matrix_test.dart` | Physical pair **open** |
 | 6 | In-app call machine; no PushKit | `test/calls/native_call_machine_test.dart` | Physical call / PushKit **open** |
-| 7 | Encrypted journal + revoked-writer projector; worklet production path uses official `corestore` 7.12.2 | `test/replication/journal_projector_test.dart`; `tool/connectivity_harness/test/corestore_persist.test.js` | Live multi-device Corestore hardware **open** |
+| 7 | Encrypted journal + revoked-writer projector; worklet can expose the Corestore public key; live `NativeTransportHost` projector still fail-closes (`decrypt` → `null`) until a real envelope decrypt is wired | `test/replication/journal_projector_test.dart`; `test/replication/replication_authorization_test.dart`; `tool/connectivity_harness/test/corestore_persist.test.js` | Live multi-device Corestore hardware **open** |
 | 8 | `/v1/mailbox` only; framed opaque envelope; `/v1/blocks` default off; replay persisted | `test/mailbox/storage_peer_http_test.dart`; `node --test tool/storage_peer/server.test.js` **6/6** | Public storage fleet / APNs **open** |
-| 9 | Worklet `sendFile` streams 64 KiB windows with resume; Dart still passes a path, not a giant `Uint8List` | `tool/connectivity_harness/test/echo_file.test.js` (10 MiB + 50 MiB) | PeerJS Drop path still in-memory **open** |
+| 9 | Product path is `orbits-file-v1` / `FileTransferCoordinator`; worklet `sendFile` is harness-only (`harness-file-*`). Incoming lookup covers canonical + legacy layouts. Dart still persists some blobs in SQLite | `test/attachments/incoming_paths_test.dart`; `tool/connectivity_harness/test/echo_file.test.js` (10 MiB + 50 MiB) | Unified path-based Drift refs + PeerJS Drop path **open** |
 | 10 | Distinct persisted transport/writer keys + signed local binding | `test/devices/local_device_material_test.dart` | Live multi-device hardware **open** |
 | 11–12 | Autobase helpers only; rooms stay host-plaintext | `test/rooms/autobase_and_epoch_test.dart` | Live rooms still PeerJS **open** |
 | 13 | Sender-key helpers; flag false | `test/rooms/autobase_and_epoch_test.dart` | Independent crypto audit **open** |

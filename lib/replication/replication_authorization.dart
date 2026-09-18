@@ -2,6 +2,9 @@
 // Conversation records stay on that conversation's authenticated peer.
 // Device / block-list records stay on the owner's other devices.
 
+import 'dart:convert';
+import 'dart:typed_data';
+
 import '../peer/helpers.dart';
 import '../transport/replication_schema.dart';
 import 'conversation_id.dart';
@@ -89,12 +92,7 @@ bool frameMayAcceptFrom(
   required bool peerIsOwnDevice,
 }) {
   return recordMayReplicateTo(
-    JournalRecord(
-      seq: 0,
-      writerDeviceId: '',
-      kind: kind,
-      fields: fields,
-    ),
+    JournalRecord(seq: 0, writerDeviceId: '', kind: kind, fields: fields),
     authenticatedPeerId: authenticatedPeerId,
     selfPeerId: selfPeerId,
     peerIsOwnDevice: peerIsOwnDevice,
@@ -108,4 +106,54 @@ String bindingFingerprint({
 }) {
   final sig = signature.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   return '${normalizePeerId(deviceId)}|$createdAt|$sig';
+}
+
+/// Canonical bytes for identity-key signatures on own-account records.
+/// Excludes `signature`. Field keys are sorted. Byte arrays become JSON
+/// number lists so `Uint8List`, `List<int>`, and `jsonDecode` arrays
+/// sign and verify to the same payload after a wire round-trip.
+List<int> canonicalReplicationRecordBytes({
+  required ReplicationEventKind kind,
+  required String writerDeviceId,
+  required Map<String, Object?> fields,
+}) {
+  final keys = fields.keys.where((k) => k != 'signature').toList()..sort();
+  final body = <String, Object?>{};
+  for (final key in keys) {
+    body[key] = _canonicalReplicationField(fields[key]);
+  }
+  return utf8.encode(
+    jsonEncode(<String, Object?>{
+      'v': 1,
+      'kind': kind.name,
+      'writerDeviceId': writerDeviceId,
+      'fields': body,
+    }),
+  );
+}
+
+Object? _canonicalReplicationField(Object? value) {
+  if (value is Uint8List) {
+    return value.toList(growable: false);
+  }
+  if (value is List) {
+    return value.map(_canonicalReplicationField).toList(growable: false);
+  }
+  if (value is Map) {
+    final keys = value.keys.map((k) => '$k').toList()..sort();
+    return <String, Object?>{
+      for (final key in keys) key: _canonicalReplicationField(value[key]),
+    };
+  }
+  return value;
+}
+
+List<int>? decodeReplicationSignature(Object? value) {
+  if (value is List<int>) return List<int>.from(value);
+  if (value is! String || value.isEmpty) return null;
+  try {
+    return base64Decode(value);
+  } catch (_) {
+    return null;
+  }
 }

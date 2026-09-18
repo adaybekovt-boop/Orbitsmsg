@@ -24,13 +24,17 @@ class HypercoreLocalStore {
   }
 
   /// Contact-scoped filter. Unscoped / device records are excluded.
-  List<JournalRecord> recordsForConversations(Set<String> authorizedConversations) {
+  List<JournalRecord> recordsForConversations(
+    Set<String> authorizedConversations,
+  ) {
     final allowed = authorizedConversations.map(normalizePeerId).toSet();
-    return blocks.where((r) {
-      if (isOwnerDeviceScopedKind(r.kind)) return false;
-      final cid = normalizedConversationId(r.fields);
-      return cid != null && allowed.contains(cid);
-    }).toList(growable: false);
+    return blocks
+        .where((r) {
+          if (isOwnerDeviceScopedKind(r.kind)) return false;
+          final cid = normalizedConversationId(r.fields);
+          return cid != null && allowed.contains(cid);
+        })
+        .toList(growable: false);
   }
 
   List<JournalRecord> recordsAuthorizedForPeer({
@@ -96,6 +100,8 @@ class HypercoreLocalStore {
     String? authenticatedPeerId,
     String? selfPeerId,
     bool peerIsOwnDevice = false,
+    String? expectedWriterDeviceId,
+    bool Function(String writerDeviceId)? acceptsWriter,
   }) {
     if (frame['type'] != 'repl-event') return null;
     if (frame['info'] != kReplicationEventInfo) return null;
@@ -114,6 +120,18 @@ class HypercoreLocalStore {
       }
     });
     if (!replicationFieldsAreSafe(fields.keys)) return null;
+
+    final writerDeviceId = frame['writerDeviceId'] as String? ?? '';
+    if (expectedWriterDeviceId != null &&
+        expectedWriterDeviceId.isNotEmpty &&
+        writerDeviceId != expectedWriterDeviceId) {
+      return null;
+    }
+    if (acceptsWriter != null &&
+        writerDeviceId.isNotEmpty &&
+        !acceptsWriter(writerDeviceId)) {
+      return null;
+    }
 
     if (authenticatedPeerId != null) {
       if (!frameMayAcceptFrom(
@@ -135,7 +153,7 @@ class HypercoreLocalStore {
 
     final record = JournalRecord(
       seq: frame['seq'] as int? ?? blocks.length,
-      writerDeviceId: frame['writerDeviceId'] as String? ?? '',
+      writerDeviceId: writerDeviceId,
       kind: kind.first,
       fields: fields,
     );

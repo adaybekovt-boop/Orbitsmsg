@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -6,12 +7,27 @@ import 'package:orbits_flutter/attachments/incoming_paths.dart';
 void main() {
   test('rejects traversal, absolute, drive, encoded, and NUL fragments', () {
     expect(() => assertSafePathFragment('../x', label: 'id'), throwsStateError);
-    expect(() => assertSafePathFragment('..\\x', label: 'id'), throwsStateError);
-    expect(() => assertSafePathFragment('/tmp/x', label: 'id'), throwsStateError);
-    expect(() => assertSafePathFragment('C:\\Windows', label: 'id'), throwsStateError);
+    expect(
+      () => assertSafePathFragment('..\\x', label: 'id'),
+      throwsStateError,
+    );
+    expect(
+      () => assertSafePathFragment('/tmp/x', label: 'id'),
+      throwsStateError,
+    );
+    expect(
+      () => assertSafePathFragment('C:\\Windows', label: 'id'),
+      throwsStateError,
+    );
     expect(() => assertSafePathFragment('a/b', label: 'id'), throwsStateError);
-    expect(() => assertSafePathFragment('%2e%2e', label: 'id'), throwsStateError);
-    expect(() => assertSafePathFragment('x\u0000y', label: 'id'), throwsStateError);
+    expect(
+      () => assertSafePathFragment('%2e%2e', label: 'id'),
+      throwsStateError,
+    );
+    expect(
+      () => assertSafePathFragment('x\u0000y', label: 'id'),
+      throwsStateError,
+    );
   });
 
   test('resolved incoming dir stays inside the incoming root', () {
@@ -27,5 +43,93 @@ void main() {
     assertInsideRoot(incomingRoot(base), dir);
     expect(dir.path.contains('orbits-incoming'), isTrue);
     expect(dir.path.contains('..'), isFalse);
+  });
+
+  test('lookupIncomingBlob finds canonical, meta, and legacy layouts', () {
+    final base = Directory.systemTemp.createTempSync('orbits-lookup-');
+    addTearDown(() {
+      if (base.existsSync()) base.deleteSync(recursive: true);
+    });
+    const sender = 'ORBIT-AAAAAAAAAAAAAAAA';
+    const localId = 'localid01';
+    const externalId = 'ext-transfer-1';
+    final canonical = resolveIncomingDir(
+      base: base,
+      trustedSenderId: sender,
+      localTransferId: localId,
+    );
+    canonical.createSync(recursive: true);
+    blobFile(canonical).writeAsBytesSync(const [1, 2, 3]);
+    metaFile(canonical).writeAsStringSync(
+      jsonEncode(<String, Object?>{
+        'trustedSender': trustedSenderDirName(sender),
+        'externalTransferId': externalId,
+        'localTransferId': localId,
+      }),
+    );
+
+    expect(
+      lookupIncomingBlob(
+        base: base,
+        trustedSenderId: sender,
+        localTransferId: localId,
+      )?.readAsBytesSync(),
+      const [1, 2, 3],
+    );
+    expect(
+      lookupIncomingBlob(
+        base: base,
+        trustedSenderId: sender,
+        externalTransferId: externalId,
+      )?.readAsBytesSync(),
+      const [1, 2, 3],
+    );
+
+    final legacyDir = Directory(
+      '${incomingRoot(base).path}${Platform.pathSeparator}legacyid01',
+    );
+    legacyDir.createSync(recursive: true);
+    File(
+      '${legacyDir.path}${Platform.pathSeparator}photo.jpg',
+    ).writeAsBytesSync(const [9, 8, 7]);
+    expect(
+      lookupIncomingBlob(
+        base: base,
+        externalTransferId: 'legacyid01',
+        legacyName: 'photo.jpg',
+      )?.readAsBytesSync(),
+      const [9, 8, 7],
+    );
+  });
+
+  test('lookupIncomingBlob refuses traversal and directory aliases', () {
+    final base = Directory.systemTemp.createTempSync('orbits-lookup-bad-');
+    addTearDown(() {
+      if (base.existsSync()) base.deleteSync(recursive: true);
+    });
+    expect(
+      lookupIncomingBlob(
+        base: base,
+        trustedSenderId: '../escape',
+        localTransferId: 'localid01',
+      ),
+      isNull,
+    );
+    expect(
+      lookupIncomingBlob(
+        base: base,
+        externalTransferId: '../escape',
+        legacyName: 'blob',
+      ),
+      isNull,
+    );
+    expect(
+      lookupIncomingBlob(
+        base: base,
+        externalTransferId: 'safeid01',
+        legacyName: '..',
+      ),
+      isNull,
+    );
   });
 }

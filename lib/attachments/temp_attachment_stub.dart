@@ -13,7 +13,8 @@ Future<List<int>?> readAttachmentPath(String path) async => null;
 Future<List<int>?> readIncomingTransfer({
   required String transferId,
   required String name,
-}) async =>
-    null;
+  String? trustedSenderId,
+  Object? base,
+}) async => null;
 
 Future<void> deleteTempAttachment(String? path) async {}

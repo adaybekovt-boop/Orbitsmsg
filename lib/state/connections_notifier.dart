@@ -246,6 +246,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     Future<void> Function(String peerId, {required bool authorized})?
         confirmPeerAuthorization,
     Future<void> Function(JournalRecord record)? onRemoteRecord,
+    Future<List<int>> Function(List<int> payload)? signRecord,
     HypercoreLocalStore? hypercore,
   }) {
     _nativeJournal = journal ?? MemoryJournal(deviceId);
@@ -263,6 +264,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       identities: identities ?? trustedIdentityStore,
       confirmPeerAuthorization: confirmPeerAuthorization,
       onRemoteRecord: onRemoteRecord,
+      signRecord: signRecord,
       hypercore: hypercore,
       onPacket: _dispatchNativeInbound,
       isBlocked: (rid) => _messaging.isPeerBlocked(rid),

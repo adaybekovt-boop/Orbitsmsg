@@ -152,6 +152,7 @@ class Worklet {
       backend: this.backend,
       port: this._loop.port,
       noisePublicKey: this.noisePublicKey(),
+      hypercorePublicKey: this.journalPublicKeyHex(),
     })
   }
 
@@ -302,6 +303,13 @@ class Worklet {
     return this._peers.keys().next().value || null
   }
 
+  journalPublicKeyHex() {
+    if (!this._journal || typeof this._journal.publicKeyHex !== 'function') {
+      return null
+    }
+    return this._journal.publicKeyHex()
+  }
+
   noisePublicKey() {
     const key = this._swarm && this._swarm.swarm && this._swarm.swarm.keyPair
     if (key && key.publicKey) return key.publicKey.toString('hex')
@@ -449,6 +457,8 @@ class Worklet {
     waiter(authorized)
   }
 
+  // Harness-only file protocol (`harness-file-*`). Product attachments
+  // use orbits-file-v1 / FileTransferCoordinator, not this path.
   async sendFile(peerId, file) {
     const peer = this._peers.get(peerId)
     if (!peer || peer.authState !== AUTH_AUTHENTICATED) {
@@ -1066,7 +1076,11 @@ async function handleIpcRequest(worklet, body) {
   switch (method) {
     case 'start':
       await worklet.start(params)
-      return { port: worklet._loop.port, noisePublicKey: worklet.noisePublicKey() }
+      return {
+        port: worklet._loop.port,
+        noisePublicKey: worklet.noisePublicKey(),
+        hypercorePublicKey: worklet.journalPublicKeyHex(),
+      }
     case 'dht.bootstrap':
       return await worklet.dhtBootstrap(params)
     case 'dht.listen':
@@ -1128,6 +1142,7 @@ async function handleIpcRequest(worklet, body) {
         published: Boolean(worklet._publishedTopic),
         peerCount: worklet._peers.size,
         noisePublicKey: worklet.noisePublicKey(),
+        hypercorePublicKey: worklet.journalPublicKeyHex(),
       }
     default:
       throw new Error('unknown method ' + method)

@@ -204,9 +204,7 @@ class NativeTransportHost {
     for (final record in memory.records) {
       hypercore!.append(record);
     }
-    projector = JournalProjector(
-      decrypt: (enc) async => <String, Object?>{'bytes': enc.length},
-    );
+    projector = JournalProjector(decrypt: (enc) async => null);
     await projector!.applyAll(memory);
     final secret = discoverySecretStore.getOrCreateLocal();
     if (_startupAborted(generation)) {
@@ -244,8 +242,15 @@ class NativeTransportHost {
     final noise = _localNoisePublicKey(transport);
     if (noise != null) {
       boundMaterial = await rememberTransportPublicKey(
-        material: material,
+        material: boundMaterial,
         transportPublicKey: noise,
+      );
+    }
+    final writer = _localHypercorePublicKey(transport);
+    if (writer != null) {
+      boundMaterial = await rememberHypercorePublicKey(
+        material: boundMaterial,
+        hypercorePublicKey: writer,
       );
     }
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -324,6 +329,7 @@ class NativeTransportHost {
           onRemoteRecord: (record) async {
             await projector?.apply(record);
           },
+          signRecord: signBytes,
         );
     lifecycle = TransportLifecycle(
       transport: transport!,
@@ -473,7 +479,9 @@ class NativeTransportHost {
     }
     await lifecycle?.onBackground();
     try {
-      await _ref.read(connectionsNotifierProvider.notifier).unbindNativeTransport();
+      await _ref
+          .read(connectionsNotifierProvider.notifier)
+          .unbindNativeTransport();
     } catch (_) {}
     try {
       await transport?.stop();
@@ -503,6 +511,16 @@ class NativeTransportHost {
   List<int>? _localNoisePublicKey(OrbitsTransport? carrier) {
     if (carrier is PluginOrbitsTransport) return carrier.lastNoisePublicKey;
     if (carrier is WorkletOrbitsTransport) return carrier.lastNoisePublicKey;
+    return null;
+  }
+
+  List<int>? _localHypercorePublicKey(OrbitsTransport? carrier) {
+    if (carrier is PluginOrbitsTransport) {
+      return carrier.lastHypercorePublicKey;
+    }
+    if (carrier is WorkletOrbitsTransport) {
+      return carrier.lastHypercorePublicKey;
+    }
     return null;
   }
 

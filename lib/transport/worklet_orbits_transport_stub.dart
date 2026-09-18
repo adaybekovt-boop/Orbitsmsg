@@ -8,6 +8,7 @@ Future<WorkletOrbitsTransport?> spawnWorkletTransport({
 class WorkletOrbitsTransport implements OrbitsTransport {
   String get runtime => 'missing';
   List<int>? lastNoisePublicKey;
+  List<int>? lastHypercorePublicKey;
 
   @override
   Stream<TransportEvent> get events => const Stream.empty();

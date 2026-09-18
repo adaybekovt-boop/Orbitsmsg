@@ -104,6 +104,30 @@ Future<LocalDeviceMaterial> rememberTransportPublicKey({
   );
 }
 
+Future<LocalDeviceMaterial> rememberHypercorePublicKey({
+  required LocalDeviceMaterial material,
+  required List<int> hypercorePublicKey,
+  KeyStore? store,
+}) async {
+  final next = Uint8List.fromList(hypercorePublicKey);
+  if (next.length != 32) return material;
+  if (_bytesEqual(material.hypercorePublicKey, next)) return material;
+  final keys = store ?? keyStore();
+  await keys.put(kLocalDeviceMaterialTable, {
+    'id': kLocalDeviceMaterialId,
+    'deviceId': material.deviceId,
+    'transportPublicKey': bytesToBase64(material.transportPublicKey),
+    'hypercorePublicKey': bytesToBase64(next),
+    'transportSecretSeed': bytesToBase64(material.transportSecretSeed),
+  });
+  return LocalDeviceMaterial(
+    deviceId: material.deviceId,
+    transportPublicKey: material.transportPublicKey,
+    hypercorePublicKey: next,
+    transportSecretSeed: material.transportSecretSeed,
+  );
+}
+
 Future<DeviceBinding> issueLocalDeviceBinding({
   required LocalDeviceMaterial material,
   required List<String> capabilities,

@@ -69,6 +69,33 @@ void main() {
     );
   });
 
+  test(
+    'rememberHypercorePublicKey persists a real 32-byte writer key',
+    () async {
+      final store = InMemoryKeyStore();
+      final material = await loadOrCreateLocalDeviceMaterial(store: store);
+      final next = List<int>.generate(32, (i) => i + 7);
+      final updated = await rememberHypercorePublicKey(
+        material: material,
+        hypercorePublicKey: next,
+        store: store,
+      );
+      expect(updated.hypercorePublicKey, next);
+      expect(updated.deviceId, material.deviceId);
+      expect(updated.transportPublicKey, material.transportPublicKey);
+
+      final rejected = await rememberHypercorePublicKey(
+        material: updated,
+        hypercorePublicKey: List<int>.filled(16, 1),
+        store: store,
+      );
+      expect(rejected.hypercorePublicKey, next);
+
+      final reloaded = await loadOrCreateLocalDeviceMaterial(store: store);
+      expect(reloaded.hypercorePublicKey, next);
+    },
+  );
+
   test('two devices never share transport or writer keys', () async {
     final a = await loadOrCreateLocalDeviceMaterial(store: InMemoryKeyStore());
     final b = await loadOrCreateLocalDeviceMaterial(store: InMemoryKeyStore());

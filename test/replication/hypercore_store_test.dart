@@ -84,6 +84,38 @@ void main() {
     expect(appliedC1, isNotNull);
     expect(remoteStore.blocks, hasLength(1));
   });
+
+  test('applyRemote drops writer mismatch and revoked writers', () {
+    final store = HypercoreLocalStore('dev-a');
+    final journal = MemoryJournal('dev-a');
+    final rec = journal.appendEnvelope(
+      const MessageEnvelopeCreated(
+        eventId: 'e1',
+        conversationId: 'c1',
+        senderIdentity: 'alice',
+        senderDeviceId: 'dev-a',
+        logicalSequence: 1,
+        createdAt: 1,
+        encryptedEnvelope: <int>[1, 2, 3],
+      ),
+    );
+    final frame = HypercoreLocalStore('dev-a').toReplicationFrame(rec);
+    expect(
+      store.applyRemote(frame, expectedWriterDeviceId: 'other-device'),
+      isNull,
+    );
+    expect(store.blocks, isEmpty);
+    expect(
+      store.applyRemote(frame, acceptsWriter: (id) => id != 'dev-a'),
+      isNull,
+    );
+    expect(store.blocks, isEmpty);
+    expect(
+      store.applyRemote(frame, expectedWriterDeviceId: 'dev-a'),
+      isNotNull,
+    );
+    expect(store.blocks, hasLength(1));
+  });
 }
 
 bool jsonFieldsHavePlaintext(Map<String, Object?> frame) {

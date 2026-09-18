@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import '../transport/transport_api.dart';
+import 'incoming_paths.dart';
 
 Future<TransportFileDescriptor?> writeTempAttachment({
   required List<int> bytes,
@@ -28,13 +29,18 @@ Future<List<int>?> readAttachmentPath(String path) async {
 Future<List<int>?> readIncomingTransfer({
   required String transferId,
   required String name,
+  String? trustedSenderId,
+  Directory? base,
 }) async {
-  final safeId = transferId.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
-  final safeName = name.replaceAll(RegExp(r'[\x00-\x1f\\/:*?"<>|]'), '_');
-  if (safeId.isEmpty || safeName.isEmpty) return null;
-  final path =
-      '${Directory.systemTemp.path}${Platform.pathSeparator}orbits-incoming${Platform.pathSeparator}$safeId${Platform.pathSeparator}$safeName';
-  return readAttachmentPath(path);
+  final found = lookupIncomingBlob(
+    base: base ?? Directory.systemTemp,
+    trustedSenderId: trustedSenderId,
+    localTransferId: transferId,
+    externalTransferId: transferId,
+    legacyName: name,
+  );
+  if (found == null) return null;
+  return readAttachmentPath(found.path);
 }
 
 Future<void> deleteTempAttachment(String? path) async {
