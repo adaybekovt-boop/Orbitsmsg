@@ -160,4 +160,32 @@ void main() {
       isFalse,
     );
   });
+
+  test('recordTransportDowngrade stays empty while rollout prefers PeerJS', () {
+    clearTransportDowngradeLogForTests();
+    addTearDown(clearTransportDowngradeLogForTests);
+    final event = recordTransportDowngrade(
+      selected: TransportRoute.peerjs,
+      preferHyperswarm: false,
+      localIsPwa: false,
+      remoteIsPwa: false,
+    );
+    expect(event, isNull);
+    expect(transportDowngradeLog, isEmpty);
+  });
+
+  test('recordTransportDowngrade appends a native-to-PeerJS fallback', () {
+    clearTransportDowngradeLogForTests();
+    addTearDown(clearTransportDowngradeLogForTests);
+    final event = recordTransportDowngrade(
+      selected: TransportRoute.peerjs,
+      preferHyperswarm: true,
+      localIsPwa: false,
+      remoteIsPwa: false,
+    );
+    expect(event?.reason, 'remote-missing-hyperswarm-v1');
+    expect(transportDowngradeLog, hasLength(1));
+    expect(transportDowngradeLog.single.from, TransportRoute.hyperswarm);
+    expect(transportDowngradeLog.single.to, TransportRoute.peerjs);
+  });
 }

@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
 import 'package:orbits_flutter/devices/device_registry.dart';
 import 'package:orbits_flutter/peer/helpers.dart';
+import 'package:orbits_flutter/replication/file_journal.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/replication/conversation_id.dart';
 import 'package:orbits_flutter/replication/replication_authorization.dart';
@@ -615,5 +616,135 @@ void main() {
       isTrue,
     );
     await phone.detach();
+  });
+
+  test('rejected replication is absent after FileJournal replay', () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final secret = List<int>.generate(32, (i) => 15);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put(aliceId, secret)
+      ..put(bobId, secret);
+    final bindA = await signedDeviceBinding(
+      peerId: aliceId,
+      deviceId: 'dev-alice',
+    );
+    final bindB = await signedDeviceBinding(peerId: bobId, deviceId: 'dev-bob');
+    await pair.$1.start(
+      TransportLocalConfiguration(peerId: aliceId, discoverySecret: secret),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(peerId: bobId, discoverySecret: secret),
+    );
+    await pair.$1.publish(bindA);
+    await pair.$2.publish(bindB);
+
+    final aliceIds = TrustedIdentityStore();
+    final bobIds = TrustedIdentityStore();
+    final aliceDev = DeviceRegistry();
+    final bobDev = DeviceRegistry();
+    trustContactPair(
+      aliceIdentities: aliceIds,
+      aliceDevices: aliceDev,
+      bobIdentities: bobIds,
+      bobDevices: bobDev,
+      aliceBinding: bindA,
+      bobBinding: bindB,
+    );
+    final aliceDurable = FileJournal.memory('dev-alice');
+    final alice = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('dev-alice'),
+      durableJournal: aliceDurable,
+      selfPeerId: () => aliceId,
+      selfDeviceId: 'dev-alice',
+      secrets: secrets,
+      devices: aliceDev,
+      identities: aliceIds,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+
+    await pair.$1.connect(PeerDescriptor(peerId: bobId, discoverySecret: secret));
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect(alice.isAuthenticated(bobId), isTrue);
+
+    alice.appendAndReplicate(
+      _envelope(
+        conversationId: conversationIdForPeers(aliceId, bobId),
+        ciphertext: utf8.encode('ALICE-OK'),
+      ),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    await pair.$2.send(
+      aliceId,
+      TransportChannel.replication,
+      jsonPayload(<String, Object?>{
+        'type': 'repl-event',
+        'info': kReplicationEventInfo,
+        'kind': ReplicationEventKind.messageEnvelopeCreated.name,
+        'seq': 99,
+        'writerDeviceId': 'forger',
+        'fields': <String, Object?>{
+          'conversationId': conversationIdForPeers(aliceId, carolId),
+          'encryptedEnvelope': base64Encode(utf8.encode('INJECTED-CAROL')),
+          'senderIdentity': bobId,
+        },
+      }),
+    );
+    await pair.$2.send(
+      aliceId,
+      TransportChannel.replication,
+      jsonPayload(<String, Object?>{
+        'type': 'repl-event',
+        'info': kReplicationEventInfo,
+        'kind': ReplicationEventKind.deviceAuthorized.name,
+        'seq': 100,
+        'writerDeviceId': 'dev-bob',
+        'fields': <String, Object?>{
+          'deviceId': 'unsigned-device',
+          'ownerPeerId': aliceId,
+          'audience': 'owner-devices',
+        },
+      }),
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+
+    final replayed = await aliceDurable.replay();
+    expect(
+      replayed.records.any((r) {
+        final env = r.fields['encryptedEnvelope'];
+        if (env is List<int>) {
+          return utf8
+              .decode(env, allowMalformed: true)
+              .contains('INJECTED-CAROL');
+        }
+        return false;
+      }),
+      isFalse,
+    );
+    expect(
+      replayed.records.any((r) => r.fields['deviceId'] == 'unsigned-device'),
+      isFalse,
+    );
+    expect(
+      replayed.records.any((r) {
+        final env = r.fields['encryptedEnvelope'];
+        if (env is List<int>) {
+          return utf8.decode(env, allowMalformed: true).contains('ALICE-OK');
+        }
+        return false;
+      }),
+      isTrue,
+    );
+    expect(
+      replayed.records.any((r) {
+        return normalizedConversationId(r.fields) ==
+            conversationIdForPeers(aliceId, carolId);
+      }),
+      isFalse,
+    );
+    await alice.detach();
   });
 }

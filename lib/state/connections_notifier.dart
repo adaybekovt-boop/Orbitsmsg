@@ -30,7 +30,7 @@
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/bundle_cache.dart';
@@ -52,7 +52,9 @@ import '../replication/file_journal.dart';
 import '../replication/hypercore_store.dart';
 import '../replication/memory_journal.dart';
 import '../storage/db.dart' as db;
+import '../transport/capabilities.dart';
 import '../transport/dual_stack_bridge.dart';
+import '../transport/hello_capabilities.dart';
 import '../transport/signed_capabilities.dart';
 import '../transport/transport_api.dart';
 import '../transport/trusted_identity_store.dart';
@@ -335,6 +337,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       }
     }
     if (failClosed) return false;
+    _notePeerjsDowngrade(remoteId);
     final conn = getConn(remoteId, 'reliable');
     if (conn == null) return false;
     return _wire.sendEncryptedOn(conn, remoteId, msg);
@@ -352,6 +355,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       }
     }
     if (failClosed) return false;
+    _notePeerjsDowngrade(remoteId);
     final conn = getConn(remoteId, 'ephemeral');
     if (conn == null) return false;
     return _wire.sendEphemeralOn(conn, remoteId, msg);
@@ -378,6 +382,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       return true;
     }
     if (failClosed) return false;
+    _notePeerjsDowngrade(remoteId);
     final conn = getConn(remoteId, 'reliable');
     if (conn == null || !conn.open) return false;
     return conn.send(packet);
@@ -875,6 +880,19 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     final bridge = _messaging;
     unawaited(bridge.loadPendingForPeer(remoteId));
     unawaited(bridge.flushOutboxForPeer(remoteId));
+  }
+
+  /// Live native→PeerJS downgrade. No-op while rollout is off.
+  void _notePeerjsDowngrade(String remoteId) {
+    final cached = remoteCapabilityCache.get(remoteId);
+    final remoteIsPwa =
+        cached?.capabilities.contains(TransportCapability.webPwaV1) == true;
+    recordTransportDowngrade(
+      selected: TransportRoute.peerjs,
+      preferHyperswarm: isHyperswarmTransportEnabled(),
+      localIsPwa: kIsWeb,
+      remoteIsPwa: remoteIsPwa,
+    );
   }
 
   void _refreshConnectedIds() {

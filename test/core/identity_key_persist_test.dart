@@ -70,4 +70,12 @@ void main() {
     final second = await exportIdentityPubSpki();
     expect(second, equals(first));
   });
+
+  test('cachedIdentityPubSpki is empty until export loads the key', () async {
+    expect(cachedIdentityPubSpki(), isNull);
+    final exported = await exportIdentityPubSpki();
+    expect(cachedIdentityPubSpki(), equals(exported));
+    resetIdentityCaches();
+    expect(cachedIdentityPubSpki(), isNull);
+  });
 }

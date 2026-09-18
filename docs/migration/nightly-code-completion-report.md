@@ -54,6 +54,27 @@ as the evidence pin once CI is green.
 - Inbound journal envelopes record the remote `senderIdentity`
 - NativeTransportHost startup abort uses one cleanup helper
 
+## 2026-09-17 side-branch port slice
+
+Ported only the file-scoped pieces marked PORT-WORTHY from the
+semantic compare of `f2` / `f3` / `mailbox-relay` / `worklet-preauth` /
+the 2026-09-02 audit snapshot. Did **not** port XOR, DualStack
+wholesale, mailbox HTTP rewrite, `harnessAuth=local`,
+`conversationScopedToPeer`, `room_crypto.dart`, or turning Hyperswarm
+on.
+
+- `recordTransportDowngrade` + `_notePeerjsDowngrade` — no-op while
+  `HyperswarmRollout` is `off`; log is capped at 64
+- Fail-closed APNs HTTP *shape* (`lib/push/apns_send.dart`,
+  `apns_send_http.dart`). `kLiveApnsGateway` is false. `sendApns`
+  never posts
+- Own-account inbound also requires
+  `identityKeysEqual(known, binding)` before signature verify
+- `cachedIdentityPubSpki()` — cache read only; does not create keys
+- FileJournal rejected-replay assertion uses hashed
+  `conversationIdForPeers` and `FileJournal.memory` as
+  `durableJournal`
+
 ## Identity (historical repair pass; do not treat as current HEAD)
 
 | Field | Value |

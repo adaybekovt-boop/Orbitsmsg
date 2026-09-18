@@ -187,6 +187,9 @@ Future<Uint8List> exportIdentityPubSpki() async {
   return spki;
 }
 
+/// Cached identity SPKI if already loaded. Does not create keys.
+Uint8List? cachedIdentityPubSpki() => _cachedSigningPubSpki;
+
 /// SHA-256 fingerprint (lowercase hex) over raw SPKI bytes.
 Future<String> computeFingerprint(List<int> spkiBytes) async {
   final hash = await Sha256().hash(spkiBytes);

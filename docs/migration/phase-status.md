@@ -16,8 +16,10 @@ lineage is `cursor/orbits-holepunch-green-baseline-e7fb` (PR #62 plus
 Apache-2.0 `main` plus the green-baseline compile/asset/whitespace
 repair, then the correctness slice: incoming-path lookup, identity-signed
 own-account replication, Corestore writer-key remember, fail-closed
-projector decrypt). Treat CI on that branch as current evidence, not
-the older repair SHAs in this file.
+projector decrypt, then the side-branch port slice: refuse-to-send APNs
+shape, capped transport-downgrade log, identity-key match on
+own-account inbound, FileJournal rejected-replay). Treat CI on that
+branch as current evidence, not the older repair SHAs in this file.
 
 | Phase | Implemented in production path | Automated evidence on repair SHA | External/manual gate |
 |------:|--------------------------------|----------------------------------|----------------------|

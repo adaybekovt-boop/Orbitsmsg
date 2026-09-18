@@ -875,6 +875,12 @@ class DualStackBridge {
         normalizedOwnerPeerId(fields) ?? normalizePeerId(binding.ownerPeerId);
     final known = identities.lookup(owner);
     if (known == null || known.tofuOnly) return false;
+    if (!identityKeysEqual(
+      known.identityPublicKey,
+      binding.identityPublicKey,
+    )) {
+      return false;
+    }
     return verifyIdentitySignedBytes(
       known.identityPublicKey,
       canonicalReplicationRecordBytes(
