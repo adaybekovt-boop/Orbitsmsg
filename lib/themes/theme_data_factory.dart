@@ -39,9 +39,9 @@ import 'orbits_tokens.dart';
 glassPaletteForBrightness(Brightness brightness) {
   final isDark = brightness == Brightness.dark;
   return (
-    tint: isDark ? const Color(0x610A0A0A) : const Color(0x8CFFFFFF),
+    tint: isDark ? const Color(0x3D0A0A0A) : const Color(0x59FFFFFF),
     border: isDark ? const Color(0x29FFFFFF) : const Color(0xD9FFFFFF),
-    highlight: isDark ? const Color(0x40FFFFFF) : const Color(0xF2FFFFFF),
+    highlight: isDark ? const Color(0x59FFFFFF) : const Color(0xF2FFFFFF),
     shadow: isDark ? const Color(0xBF000000) : const Color(0x2E64748B),
     // React chrome uses blur(16px). Flutter sigma is not a CSS px; 16/14
     // reads as the same frost without overspending GPU on Impeller.

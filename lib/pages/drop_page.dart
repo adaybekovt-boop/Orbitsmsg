@@ -228,17 +228,18 @@ class _DropPageState extends ConsumerState<DropPage> {
               Container(
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  border: Border.all(color: tokens.border),
+                  border: Border.all(
+                    color: tokens.glassHighlight.withValues(alpha: 0.35),
+                  ),
                 ),
               ),
               Container(
-                width: 152,
-                height: 152,
+                width: 124,
+                height: 124,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: tokens.border,
-                    style: BorderStyle.solid,
+                    color: tokens.glassHighlight.withValues(alpha: 0.22),
                   ),
                 ),
               ),

@@ -148,6 +148,7 @@ class AppShell extends ConsumerWidget {
                                   child: OrbitsGlassSurface(
                                     role: OrbitsGlassRole.card,
                                     realBlur: true,
+                                    intensity: 0.72,
                                     borderRadius: BorderRadius.circular(
                                       tokens.radiusModal,
                                     ),
@@ -180,6 +181,7 @@ class AppShell extends ConsumerWidget {
                                   child: OrbitsGlassSurface(
                                     role: OrbitsGlassRole.card,
                                     realBlur: true,
+                                    intensity: 0.72,
                                     borderRadius: BorderRadius.circular(
                                       tokens.radiusModal,
                                     ),
@@ -296,15 +298,30 @@ class _GlassBottomNav extends StatelessWidget {
             child: Row(
               children: [
                 for (final d in _primaryDestinations)
-                  Expanded(
-                    child: _NavItem(
-                      dest: d,
-                      active: active == d.tab,
-                      unread: d.tab == AppTab.chats ? unread : 0,
-                      horizontal: true,
-                      onTap: () => onTap(d.tab),
+                  if (d.tab != AppTab.rooms)
+                    Expanded(
+                      child: _NavItem(
+                        dest: d,
+                        active: active == d.tab,
+                        unread: d.tab == AppTab.chats ? unread : 0,
+                        horizontal: true,
+                        onTap: () => onTap(d.tab),
+                      ),
                     ),
+                Expanded(
+                  child: _NavItem(
+                    dest: const _NavDest(
+                      AppTab.settings,
+                      Icons.settings_outlined,
+                      Icons.settings,
+                      'Ещё',
+                    ),
+                    active: active == AppTab.settings,
+                    unread: 0,
+                    horizontal: true,
+                    onTap: () => onTap(AppTab.settings),
                   ),
+                ),
                 _RailAvatar(active: active, onTap: onTap),
               ],
             ),

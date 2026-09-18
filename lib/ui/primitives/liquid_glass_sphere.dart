@@ -69,12 +69,27 @@ class _SpherePainter extends CustomPainter {
           center: const Alignment(-0.35, -0.4),
           radius: 1.05,
           colors: [
-            Colors.white.withValues(alpha: isDark ? 0.38 : 0.72),
-            Colors.white.withValues(alpha: isDark ? 0.08 : 0.28),
-            Colors.black.withValues(alpha: isDark ? 0.22 : 0.06),
-            Colors.white.withValues(alpha: isDark ? 0.16 : 0.35),
+            Colors.white.withValues(alpha: isDark ? 0.55 : 0.82),
+            Colors.white.withValues(alpha: isDark ? 0.16 : 0.36),
+            Colors.black.withValues(alpha: isDark ? 0.18 : 0.05),
+            Colors.white.withValues(alpha: isDark ? 0.28 : 0.48),
           ],
           stops: const [0.0, 0.28, 0.78, 1.0],
+        ).createShader(Rect.fromCircle(center: c, radius: r * 0.78)),
+    );
+    canvas.drawCircle(
+      c,
+      r * 0.78,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.4
+        ..shader = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.white.withValues(alpha: isDark ? 0.7 : 0.95),
+            Colors.white.withValues(alpha: isDark ? 0.12 : 0.28),
+          ],
         ).createShader(Rect.fromCircle(center: c, radius: r * 0.78)),
     );
 
