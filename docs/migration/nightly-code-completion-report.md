@@ -1,5 +1,17 @@
 # PR #62 repair report
 
+## 2026-09-18 exclusive-native close counter / DeviceLinkPage hook
+
+Software path only. External gates stay open.
+
+- Native auth increments `peerjsFallbackCloseCalls` and leaves no
+  PeerJS DataChannel (`test/state/outbox_reliable_transport_test.dart`)
+- `DeviceLinkPage` source still calls DualStack authorize/revoke and
+  keeps private ratchet material out of the QR JSON
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
 ## 2026-09-18 native outbound path persist / host restart bind
 
 Software path only. External gates stay open.

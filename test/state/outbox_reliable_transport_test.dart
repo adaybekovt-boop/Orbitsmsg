@@ -77,6 +77,7 @@ void main() {
     expect(conns.nativeBridge!.isAuthenticated(bob), isTrue);
     expect(conns.hasReliable(bob), isTrue);
     expect(conns.getConn(bob, 'reliable'), isNull);
+    expect(conns.peerjsFallbackCloseCalls, greaterThan(0));
 
     await pair.$1.disconnect(bob);
     await Future<void>.delayed(const Duration(milliseconds: 20));

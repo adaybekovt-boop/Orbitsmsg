@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -127,5 +128,14 @@ void main() {
       }),
       throwsFormatException,
     );
+  });
+
+  test('DeviceLinkPage calls DualStack authorize and revoke', () {
+    final src = File('lib/ui/profile/device_link_page.dart').readAsStringSync();
+    expect(src, contains('nativeBridge'));
+    expect(src, contains('authorizeDevice'));
+    expect(src, contains('revokeDevice'));
+    expect(src, contains('onAuthorized:'));
+    expect(src.toLowerCase(), isNot(contains('rootkey')));
   });
 }

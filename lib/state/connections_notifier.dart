@@ -30,7 +30,8 @@
 
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
+import 'package:flutter/foundation.dart'
+    show debugPrint, kIsWeb, visibleForTesting;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/bundle_cache.dart';
@@ -205,6 +206,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   DualStackBridge? _dual;
   MemoryJournal? _nativeJournal;
   void Function(String from, CallSignal signal)? _callHandler;
+  int _peerjsFallbackCloseCalls = 0;
+
+  @visibleForTesting
+  int get peerjsFallbackCloseCalls => _peerjsFallbackCloseCalls;
 
   /// Keyed by `connKey(peerId, channel)`.
   final Map<String, _ConnBinding> _bindings = {};
@@ -711,6 +716,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   }
 
   Future<void> _closePeerjsFallback(String peerId) async {
+    _peerjsFallbackCloseCalls += 1;
     final norm = normalizePeerId(peerId);
     _pendingReliableTargets.remove(norm);
     for (final channel in const ['reliable', 'ephemeral']) {
