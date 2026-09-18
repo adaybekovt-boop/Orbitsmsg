@@ -106,6 +106,7 @@ class DualStackBridge {
   StreamSubscription<TransportEvent>? _sub;
   void Function(CallSignal signal, String from)? onCallSignal;
   void Function(String peerId, bool connected)? onPresence;
+  void Function(String peerId)? onAuthorizationRejected;
 
   final Map<String, String> _expectedPeer = <String, String>{};
   final Map<String, DeviceBinding> _bindings = <String, DeviceBinding>{};
@@ -305,7 +306,7 @@ class DualStackBridge {
       final dest = _transportIdForDevice(entry.key, fallback: norm);
       final sentTo = isAuthenticated(dest) ? dest : norm;
       if (!isAuthenticated(sentTo)) {
-        if (await enqueueMailbox(utf8.encode(entry.value))) any = true;
+        if (await enqueueMailbox(jsonPayload(frame))) any = true;
         continue;
       }
       await transport.send(
@@ -567,12 +568,22 @@ class DualStackBridge {
     for (final block in blocks) {
       final id = block.envelopeId ?? _stableEnvelopeId(block.bytes);
       if (_mailboxPump.projectedEnvelopeIds.contains(id)) continue;
-      _appendEnvelope(from, block.bytes, senderIdentity: from);
       final text = utf8.decode(block.bytes);
-      await onPacket(
-        from,
-        isWireCiphertext(text) ? text : decodeJsonPayload(block.bytes),
-      );
+      if (!isWireCiphertext(text)) {
+        final decoded = decodeJsonPayload(block.bytes);
+        if (decoded['type'] == kDeviceRatchetMessageType) {
+          await _onDeviceRatchetFrame(from, decoded);
+          _mailboxPump.markProjected(id);
+          if (acknowledge != null) await acknowledge(id);
+          projected += 1;
+          continue;
+        }
+        _appendEnvelope(from, block.bytes, senderIdentity: from);
+        await onPacket(from, decoded);
+      } else {
+        _appendEnvelope(from, block.bytes, senderIdentity: from);
+        await onPacket(from, text);
+      }
       _mailboxPump.markProjected(id);
       if (acknowledge != null) await acknowledge(id);
       projected += 1;
@@ -977,6 +988,7 @@ class DualStackBridge {
     try {
       await transport.disconnect(peerId);
     } catch (_) {}
+    onAuthorizationRejected?.call(peerId);
   }
 
   Future<void> _offerDeviceRatchet(

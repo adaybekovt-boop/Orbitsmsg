@@ -62,6 +62,8 @@ void main() {
     expect(conns, contains('if (isDevBareTransportRequested())'));
     expect(conns, contains('await _dual?.dial(normalized)'));
     expect(conns, contains('shouldOpenPeerjsDataFallback'));
+    expect(conns, contains('_closePeerjsFallback'));
+    expect(conns, contains('onAuthorizationRejected'));
     expect(conns, contains('if (canUseNative(normalized)) return;'));
     final openPeerjs = conns.split('void _openPeerjsChannel').last;
     expect(

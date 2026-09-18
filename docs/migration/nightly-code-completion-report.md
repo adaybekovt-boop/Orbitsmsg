@@ -3,6 +3,22 @@
 This report is evidence-only. It does **not** claim the Holepunch
 migration is code-complete or safe to merge.
 
+## 2026-09-18 exclusive native / mailbox device-ratchet / Noise gate
+
+Software path only. External gates stay open.
+
+- When DualStack authenticates a peer, PeerJS data channels for that
+  peer are closed. A native binding reject is recorded and does not
+  fall back to PeerJS. Inbound PeerJS is ignored while native is
+  authoritative
+- Offline device-ratchet fan-out deposits a `deviceRatchetV1` frame.
+  Mailbox drain decrypts through `_onDeviceRatchetFrame`, not the
+  contact-level ratchet
+- Connect-time Dart auth rejects a missing `connectionNoisePublicKey`
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
 ## 2026-09-18 persist / Autobase / Drift-replay slice
 
 Software path only. External gates stay open.

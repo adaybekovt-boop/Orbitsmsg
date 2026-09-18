@@ -214,6 +214,24 @@ void main() {
     await dual.detach();
   });
 
+  test('F-01 missing connection Noise key is rejected', () async {
+    final transport = _FakeTransport();
+    final devices = DeviceRegistry();
+    final identities = TrustedIdentityStore();
+    final bind = await signedDeviceBinding(peerId: bob, deviceId: 'dev-b');
+    trustBinding(identities: identities, devices: devices, binding: bind);
+    final dual = await open(
+      transport: transport,
+      devices: devices,
+      identities: identities,
+    );
+    transport.emit(TransportAuthenticated(bob, bind));
+    await Future<void>.delayed(const Duration(milliseconds: 30));
+    expect(dual.isAuthenticated(bob), isFalse);
+    expect(transport.disconnected, contains(bob));
+    await dual.detach();
+  });
+
   test('F-01 trusted identity and device with wrong Noise key is rejected', () async {
     final transport = _FakeTransport();
     final devices = DeviceRegistry();

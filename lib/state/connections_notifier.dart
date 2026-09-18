@@ -68,8 +68,9 @@ bool shouldOpenPeerjsDataFallback({
   required bool fallbackEnabled,
   required bool failClosed,
   required bool nativeUsable,
+  bool nativeRejected = false,
 }) =>
-    fallbackEnabled && !failClosed && !nativeUsable;
+    fallbackEnabled && !failClosed && !nativeUsable && !nativeRejected;
 
 // ─── Public state ─────────────────────────────────────────────────
 
@@ -217,6 +218,10 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   /// the next typing event anyway.
   final Set<String> _pendingReliableTargets = <String>{};
 
+  /// Native binding reject must not fall back to an already-open PeerJS
+  /// channel (weaker connect-time gate).
+  final Set<String> _nativeAuthRejected = <String>{};
+
   /// Subscriptions to the currently-bound `PeerJsClient` (onConnection,
   /// onCall). Cancelled and rebuilt when the peer manager swaps instances.
   final List<StreamSubscription<dynamic>> _peerSubs = [];
@@ -285,7 +290,15 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       ..onPresence = (peerId, up) {
         if (!mounted) return;
         _refreshConnectedIds();
-        if (up) unawaited(_postNativeOpen(peerId));
+        if (up) {
+          _nativeAuthRejected.remove(normalizePeerId(peerId));
+          unawaited(_closePeerjsFallback(peerId));
+          unawaited(_postNativeOpen(peerId));
+        }
+      }
+      ..onAuthorizationRejected = (peerId) {
+        _nativeAuthRejected.add(normalizePeerId(peerId));
+        unawaited(_closePeerjsFallback(peerId));
       }
       ..onCallSignal = (signal, from) {
         _lastCallSignal = (from: from, signal: signal);
@@ -516,7 +529,11 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       await _dual?.dial(normalized);
     } catch (_) {}
     if (!mounted) return;
-    if (canUseNative(normalized)) return;
+    if (_nativeAuthRejected.contains(normalized)) return;
+    if (canUseNative(normalized)) {
+      unawaited(_closePeerjsFallback(normalized));
+      return;
+    }
     _openPeerjsChannel(normalized, channel: channel, reliable: reliable);
   }
 
@@ -531,6 +548,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       fallbackEnabled: isPeerjsFallbackEnabled(),
       failClosed: isDevBareTransportRequested(),
       nativeUsable: canUseNative(normalized),
+      nativeRejected: _nativeAuthRejected.contains(normalized),
     )) {
       return;
     }
@@ -581,7 +599,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   Future<void> attachConn(PeerDataConnection conn, String channel) async {
     final remoteId = normalizePeerId(conn.peer);
     if (remoteId.isEmpty) return;
-    if (_messaging.isPeerBlocked(remoteId)) {
+    if (_messaging.isPeerBlocked(remoteId) ||
+        canUseNative(remoteId) ||
+        _nativeAuthRejected.contains(remoteId)) {
       try {
         unawaited(conn.close());
       } catch (_) {}
@@ -683,8 +703,22 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       // Errors inside the router bubble up here as async exceptions on the
       // stream — we swallow them so a single malformed packet doesn't kill
       // the subscription and freeze the channel.
+      if (canUseNative(remoteId) || _nativeAuthRejected.contains(remoteId)) {
+        return;
+      }
       unawaited(Future.sync(() => onData(data)).catchError((_) {}));
     }));
+  }
+
+  Future<void> _closePeerjsFallback(String peerId) async {
+    final norm = normalizePeerId(peerId);
+    _pendingReliableTargets.remove(norm);
+    for (final channel in const ['reliable', 'ephemeral']) {
+      final key = connKey(norm, channel);
+      final binding = _bindings.remove(key);
+      if (binding != null) await binding.dispose();
+    }
+    if (mounted) _refreshConnectedIds();
   }
 
   // ─── Glare resolver ───────────────────────────────────────────

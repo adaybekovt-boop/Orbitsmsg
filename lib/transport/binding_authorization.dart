@@ -53,12 +53,13 @@ Future<BindingAuthResult> authorizeIncomingBinding({
   if (!await verifyDeviceBinding(binding, nowMs: nowMs)) {
     return const BindingAuthResult.reject('signature-or-clock');
   }
-  if (connectionNoisePublicKey != null &&
-      connectionNoisePublicKey.isNotEmpty &&
-      !noiseKeyMatchesBinding(
-        connectionNoisePublicKey: connectionNoisePublicKey,
-        binding: binding,
-      )) {
+  if (connectionNoisePublicKey == null || connectionNoisePublicKey.isEmpty) {
+    return const BindingAuthResult.reject('noise-key-missing');
+  }
+  if (!noiseKeyMatchesBinding(
+    connectionNoisePublicKey: connectionNoisePublicKey,
+    binding: binding,
+  )) {
     return const BindingAuthResult.reject('noise-mismatch');
   }
 

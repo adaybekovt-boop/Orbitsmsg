@@ -35,5 +35,14 @@ void main() {
       ),
       isFalse,
     );
+    expect(
+      shouldOpenPeerjsDataFallback(
+        fallbackEnabled: true,
+        failClosed: false,
+        nativeUsable: false,
+        nativeRejected: true,
+      ),
+      isFalse,
+    );
   });
 }
