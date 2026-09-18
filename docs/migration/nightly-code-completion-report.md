@@ -88,6 +88,19 @@ share `sanitizeTransferId`. Lookup compares sanitized external ids so
 receive. Traversal checks stay. The blob is still copied into Drift
 for the chat decoder (path-only persist is a later slice).
 
+## 2026-09-18 plan DoD software slice
+
+Moved the live DualStack path closer to the master-plan DoD without
+turning rollout on or claiming production-ready.
+
+- Resume drain walks `discoverySecretStore.knownPeerIds` via
+  `drainKnownMailboxes`. Blocked / missing senders stay 0. No invented
+  writer/mailbox-id sender
+- Native outgoing calls that successfully start a `NativeCallSession`
+  no longer also open PeerJS media. PeerJS is fallback-only
+- Native inbound attachments persist a path + sha256 in Drift `data`,
+  not the file bytes. `getFileBlob` reads the path on demand
+
 ## 2026-09-18 fail-closed handwritten slice
 
 Ported leftover fail-open defects found in the handwritten review.

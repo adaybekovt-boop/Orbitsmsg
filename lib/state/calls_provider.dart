@@ -45,6 +45,13 @@ import '../peer/webrtc_audio_lifecycle.dart';
 import 'connections_notifier.dart';
 import 'peer_connection_provider.dart';
 
+/// PeerJS media is only for fallback after a native session failed.
+bool shouldOpenPeerjsCallFallback({
+  required bool fallbackEnabled,
+  required bool peerAvailable,
+}) =>
+    fallbackEnabled && peerAvailable;
+
 /// Lifecycle phases the UI needs to disambiguate. Names kept aligned
 /// with `src/call/state/initialCallState.js` so log parsing across
 /// platforms shares a vocabulary.
@@ -233,6 +240,7 @@ class CallsNotifier extends StateNotifier<CallState> {
     state = state.copyWith(localStream: local);
 
     if (conns.canUseNative(remotePeerId)) {
+      var nativeStarted = false;
       try {
         _nativeSession = _newNativeSession(remotePeerId);
         await _nativeSession!.startOutgoing(
@@ -241,7 +249,9 @@ class CallsNotifier extends StateNotifier<CallState> {
           localTracks: local.getTracks(),
           media: {'video': video},
         );
+        nativeStarted = true;
       } catch (e) {
+        _nativeSession = null;
         if (!isPeerjsFallbackEnabled() || peer == null) {
           _starting = false;
           _resetIdleWithError(
@@ -251,7 +261,13 @@ class CallsNotifier extends StateNotifier<CallState> {
           return;
         }
       }
-      if (!isPeerjsFallbackEnabled() || peer == null) {
+      // New natives must not also open PeerJS media. Fallback is only
+      // when the native session failed to start.
+      if (nativeStarted ||
+          !shouldOpenPeerjsCallFallback(
+            fallbackEnabled: isPeerjsFallbackEnabled(),
+            peerAvailable: peer != null,
+          )) {
         _starting = false;
         return;
       }

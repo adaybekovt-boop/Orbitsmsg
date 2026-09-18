@@ -3,6 +3,7 @@
 // lazy migration — history is never bricked).
 
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:drift/native.dart';
@@ -157,6 +158,41 @@ void main() {
     final got = await db.getFileBlob('f1');
     expect(utf8.decode(got!['blob'] as List<int>), marker);
     expect(utf8.decode(got['thumb'] as List<int>), thumbMarker);
+  });
+
+  test('native incoming file persists a path, not payload bytes', () async {
+    final dir = await Directory.systemTemp.createTemp('orbits-path-blob-');
+    addTearDown(() {
+      if (dir.existsSync()) dir.deleteSync(recursive: true);
+    });
+    final file = File('${dir.path}/payload.bin');
+    final payload = utf8.encode('PATH-ONLY-NATIVE-FILE');
+    await file.writeAsBytes(payload, flush: true);
+
+    expect(
+      await db.saveFileBlob(
+        'native-1',
+        const <int>[],
+        mime: 'application/octet-stream',
+        name: 'payload.bin',
+        size: payload.length,
+        path: file.path,
+        sha256hex: 'abc',
+      ),
+      isTrue,
+    );
+
+    final raw = await database.select(database.fileBlobsTable).getSingle();
+    expect(isBlobWrapped(raw.bytes), isTrue);
+    expect(
+      utf8.decode(raw.bytes, allowMalformed: true),
+      isNot(contains('PATH-ONLY-NATIVE-FILE')),
+    );
+
+    final got = await db.getFileBlob('native-1');
+    expect(got!['path'], file.path);
+    expect(got['sha256'], 'abc');
+    expect(utf8.decode(got['blob'] as List<int>), 'PATH-ONLY-NATIVE-FILE');
   });
 
   test('avatar is encrypted at rest and a legacy plaintext avatar still reads',

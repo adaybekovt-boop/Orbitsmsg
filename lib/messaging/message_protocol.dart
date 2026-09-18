@@ -674,26 +674,28 @@ Future<bool> dispatchReliablePlaintext(
           attachmentRef = <String, Object?>{...metaOut, 'missing': true};
         }
       } else if (attachmentMeta['native'] == true) {
-        final incoming = await readIncomingTransfer(
+        final path = lookupIncomingTransferPath(
           transferId: attachmentMeta['transferId'] as String? ?? '',
           name: name,
           trustedSenderId: from,
         );
-        if (incoming != null && incoming.isNotEmpty) {
+        if (path != null && path.isNotEmpty) {
           await db.saveFileBlob(
             msgId,
-            incoming,
+            const <int>[],
             mime: mime,
             name: name,
             kind: kind,
-            size: incoming.length,
+            size: size,
             width: width,
             height: height,
             duration: duration,
+            path: path,
+            sha256hex: attachmentMeta['sha256'] as String?,
           );
           attachmentRef = <String, Object?>{
             ...metaOut,
-            'path': attachmentMeta['path'],
+            'path': path,
             'sha256': attachmentMeta['sha256'],
           };
         } else {

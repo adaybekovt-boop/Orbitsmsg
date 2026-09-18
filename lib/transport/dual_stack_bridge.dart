@@ -447,6 +447,18 @@ class DualStackBridge {
     );
   }
 
+  /// Drain once per known contact. Never invents a sender from the
+  /// mailbox writer key. Blocked peers are skipped before collect/project.
+  Future<int> drainKnownMailboxes(Iterable<String> peerIds) async {
+    var projected = 0;
+    for (final raw in peerIds) {
+      final peerId = normalizePeerId(raw);
+      if (peerId.isEmpty || isBlocked(peerId)) continue;
+      projected += await drainMailbox(fromPeerId: peerId);
+    }
+    return projected;
+  }
+
   /// Project collected envelopes. [fromPeerId] is required — the store is
   /// blind and must not invent a sender from the writer key or mailbox id.
   /// Blocked senders are skipped before journal / Hypercore / onPacket.

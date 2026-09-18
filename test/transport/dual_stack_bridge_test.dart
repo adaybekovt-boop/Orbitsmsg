@@ -358,6 +358,41 @@ void main() {
     await blocked.detach();
   });
 
+  test('drainKnownMailboxes projects only unblocked known senders', () async {
+    final store = BlindMailboxStore()
+      ..grant(
+        MailboxCapability(
+          token: 'cap-1',
+          quotaBytes: 4096,
+          retentionMs: 60 * 1000,
+          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+        ),
+      );
+    final seen = <String>[];
+    final bridge = DualStackBridge(
+      transport: LoopbackOrbitsTransport(),
+      journal: MemoryJournal('b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'b',
+      isBlocked: (id) => id == 'ORBIT-CCCCCCCCCCCCCCCC',
+      mailbox: store,
+      mailboxToken: 'cap-1',
+      mailboxWriterKey: 'ORBIT-BBBBBBBBBBBBBBBB',
+      onPacket: (peer, _) async => seen.add(peer),
+    )..attach();
+    expect(bridge.depositMailbox(utf8.encode('v2:hdr:iv:ct')), isTrue);
+    expect(await bridge.drainKnownMailboxes(const <String>[]), 0);
+    expect(
+      await bridge.drainKnownMailboxes(const [
+        'ORBIT-CCCCCCCCCCCCCCCC',
+        'ORBIT-AAAAAAAAAAAAAAAA',
+      ]),
+      1,
+    );
+    expect(seen, ['ORBIT-AAAAAAAAAAAAAAAA']);
+    await bridge.detach();
+  });
+
   test('drop chunks and hypercore replication ride native channels', () async {
     final (a, b, _) = await linked();
     final dropped = <Object>[];

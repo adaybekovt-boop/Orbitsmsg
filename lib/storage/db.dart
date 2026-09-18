@@ -23,9 +23,11 @@
 
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'package:drift/drift.dart';
 
+import '../attachments/temp_attachment.dart';
 import '../core/vault_kek.dart';
 import '../utils/common.dart';
 import 'database.dart';
@@ -305,11 +307,14 @@ Future<bool> saveFileBlob(
   int width = 0,
   int height = 0,
   int duration = 0,
+  String? path,
+  String? sha256hex,
 }) async {
   if (id.isEmpty) return false;
+  final pathOnly = path != null && path.isNotEmpty;
   // Defense-in-depth byte cap (audit finding 4): mirror the send-side raw cap
-  // `_maxFileRawBytes` (12 MiB).
-  if (bytes.length > 12 * 1024 * 1024) return false;
+  // `_maxFileRawBytes` (12 MiB). Path-backed native files stay on disk.
+  if (!pathOnly && bytes.length > 12 * 1024 * 1024) return false;
   // JS trims name to 200 chars — keep parity so inbound rows don't diverge.
   final trimmedName = _clipName(name ?? 'file');
   final db = orbitsDb();
@@ -324,11 +329,14 @@ Future<bool> saveFileBlob(
           height: Value(height),
           duration: Value(duration),
           createdAt: Value(_now()),
-          bytes: _secureBytesEncode(bytes),
+          bytes: _secureBytesEncode(pathOnly ? const <int>[] : bytes),
           thumb: thumb == null
               ? const Value.absent()
               : Value(_secureBytesEncode(thumb)),
-          data: encodeRow(<String, Object?>{}),
+          data: encodeRow(<String, Object?>{
+            if (pathOnly) 'path': path,
+            if (sha256hex != null && sha256hex.isNotEmpty) 'sha256': sha256hex,
+          }),
         ),
       );
   return true;
@@ -341,6 +349,13 @@ Future<Map<String, Object?>?> getFileBlob(String id) async {
         ..where((t) => t.id.equals(id)))
       .getSingleOrNull();
   if (row == null) return null;
+  final extra = decodeRow(row.data);
+  final path = extra['path'] as String? ?? '';
+  var blob = _secureBytesDecode(row.bytes);
+  if (blob.isEmpty && path.isNotEmpty) {
+    final fromDisk = await readAttachmentPath(path);
+    if (fromDisk != null) blob = Uint8List.fromList(fromDisk);
+  }
   return <String, Object?>{
     'id': row.id,
     'mime': row.mime,
@@ -352,8 +367,10 @@ Future<Map<String, Object?>?> getFileBlob(String id) async {
     'duration': row.duration,
     'createdAt': row.createdAt,
     // See note in getVoiceBlob — map key stays 'blob' for caller contract.
-    'blob': _secureBytesDecode(row.bytes),
+    'blob': blob,
     'thumb': row.thumb == null ? null : _secureBytesDecode(row.thumb!),
+    if (path.isNotEmpty) 'path': path,
+    if (extra['sha256'] is String) 'sha256': extra['sha256'],
   };
 }
 

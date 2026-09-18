@@ -10,11 +10,20 @@ Future<TransportFileDescriptor?> writeTempAttachment({
 
 Future<List<int>?> readAttachmentPath(String path) async => null;
 
+String? lookupIncomingTransferPath({
+  required String transferId,
+  required String name,
+  String? trustedSenderId,
+  Object? base,
+}) =>
+    null;
+
 Future<List<int>?> readIncomingTransfer({
   required String transferId,
   required String name,
   String? trustedSenderId,
   Object? base,
-}) async => null;
+}) async =>
+    null;
 
 Future<void> deleteTempAttachment(String? path) async {}

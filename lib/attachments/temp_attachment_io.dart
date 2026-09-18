@@ -26,12 +26,12 @@ Future<List<int>?> readAttachmentPath(String path) async {
   return file.readAsBytes();
 }
 
-Future<List<int>?> readIncomingTransfer({
+String? lookupIncomingTransferPath({
   required String transferId,
   required String name,
   String? trustedSenderId,
   Directory? base,
-}) async {
+}) {
   final sanitized = trySanitizeTransferId(transferId);
   final alreadySafe = sanitized != null && sanitized == transferId.trim();
   final found = lookupIncomingBlob(
@@ -44,8 +44,23 @@ Future<List<int>?> readIncomingTransfer({
     externalTransferId: transferId,
     legacyName: name,
   );
-  if (found == null) return null;
-  return readAttachmentPath(found.path);
+  return found?.path;
+}
+
+Future<List<int>?> readIncomingTransfer({
+  required String transferId,
+  required String name,
+  String? trustedSenderId,
+  Directory? base,
+}) async {
+  final path = lookupIncomingTransferPath(
+    transferId: transferId,
+    name: name,
+    trustedSenderId: trustedSenderId,
+    base: base,
+  );
+  if (path == null) return null;
+  return readAttachmentPath(path);
 }
 
 Future<void> deleteTempAttachment(String? path) async {
