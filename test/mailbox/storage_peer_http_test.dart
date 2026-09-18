@@ -387,6 +387,61 @@ void main() {
   );
 
   test(
+    'unbucketed wireHello is not attributed in known-sender sweep',
+    () async {
+      final server = StoragePeerHttp(
+        BlindMailboxStore(),
+        grantSecret: grantSecret,
+      );
+      await server.start();
+      addTearDown(server.stop);
+      final client = httpStoragePeerClient(server.origin);
+
+      // Legacy unbucketed deposit: no senderBucket → storageKey == mailboxId.
+      await client.deposit(
+        depositRequest(
+          capability: cap,
+          envelopeId: 'hello-legacy',
+          ciphertext: wrapOpaqueEnvelope(
+            utf8.encode(
+              jsonEncode({
+                'type': 'wireHello',
+                'v': 2,
+                'from': 'ORBIT-CCCCCCCCCCCCCCCC',
+              }),
+            ),
+          ),
+          requestId: 'dep-hello',
+        ),
+      );
+
+      final seen = <String>[];
+      final bob = DualStackBridge(
+        transport: LoopbackOrbitsTransport(),
+        journal: MemoryJournal('bob-dev'),
+        selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+        selfDeviceId: 'bob-dev',
+        isBlocked: (_) => false,
+        storagePeer: client,
+        mailboxCapability: cap,
+        onPacket: (peer, data) async => seen.add('$peer|$data'),
+      )..attach();
+
+      expect(
+        await bob.drainKnownMailboxes(const [
+          'ORBIT-CCCCCCCCCCCCCCCC',
+          'ORBIT-AAAAAAAAAAAAAAAA',
+        ]),
+        0,
+      );
+      expect(seen, isEmpty);
+      expect(bob.journal.length, 0);
+      expect(bob.lastReplicationError, 'unbucketed-legacy-skipped');
+      await bob.detach();
+    },
+  );
+
+  test(
     'duplicate deposit is idempotent and drain then ack hides the envelope',
     () async {
       final server = StoragePeerHttp(

@@ -228,3 +228,78 @@ test('corrupt persist fails closed', async () => {
   assert.throws(() => createServer({ persistPath }))
   fs.rmSync(dir, { recursive: true, force: true })
 })
+
+test('senderBucket isolates cores; peer id is rejected', async () => {
+  const secret = Buffer.alloc(32, 7)
+  const server = createServer({ grantSecret: secret })
+  const origin = await listen(server)
+  const now = Date.now()
+  const cap = capFor(secret, now)
+  const bucketFor = (sender) => require('node:crypto')
+    .createHash('sha256')
+    .update(`orbits-mailbox-sender-v1|mb-1|${sender}`)
+    .digest('hex')
+  const alice = bucketFor('ORBIT-AAAAAAAAAAAAAAAA')
+  const carol = bucketFor('ORBIT-CCCCCCCCCCCCCCCC')
+  assert.match(alice, /^[a-f0-9]{64}$/)
+
+  const bad = await fetch(`${origin}/v1/mailbox`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      v: VERSION,
+      op: 'deposit',
+      requestId: 'bad-b',
+      issuedAt: now,
+      capability: cap,
+      mailboxId: 'mb-1',
+      envelopeId: 'e-bad',
+      senderBucket: 'ORBIT-AAAAAAAAAAAAAAAA',
+      ciphertextB64: wrapOpaqueEnvelope(Buffer.from('v2:a:b:c')).toString('base64'),
+    }),
+  })
+  assert.equal(bad.status, 400)
+
+  async function deposit(id, bucket, requestId) {
+    return fetch(`${origin}/v1/mailbox`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        v: VERSION,
+        op: 'deposit',
+        requestId,
+        issuedAt: now,
+        capability: cap,
+        mailboxId: 'mb-1',
+        envelopeId: id,
+        senderBucket: bucket,
+        ciphertextB64: wrapOpaqueEnvelope(Buffer.from('v2:hdr:iv:' + id)).toString('base64'),
+      }),
+    })
+  }
+  assert.equal((await deposit('alice-1', alice, 'd-a')).status, 200)
+  assert.equal((await deposit('carol-1', carol, 'd-c')).status, 200)
+
+  async function drain(bucket, requestId) {
+    const body = {
+      v: VERSION, op: 'drain', requestId, issuedAt: now,
+      capability: cap, mailboxId: 'mb-1',
+    }
+    if (bucket != null) body.senderBucket = bucket
+    const res = await fetch(`${origin}/v1/mailbox`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    return res.json()
+  }
+  const unbucketed = await drain(null, 'r0')
+  assert.equal(unbucketed.envelopes.length, 0)
+  const drainedAlice = await drain(alice, 'r-a')
+  assert.equal(drainedAlice.envelopes.length, 1)
+  assert.equal(drainedAlice.envelopes[0].envelopeId, 'alice-1')
+  const drainedCarol = await drain(carol, 'r-c')
+  assert.equal(drainedCarol.envelopes.length, 1)
+  assert.equal(drainedCarol.envelopes[0].envelopeId, 'carol-1')
+  server.close()
+})

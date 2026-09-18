@@ -1224,39 +1224,44 @@ class DualStackBridge {
       peerIsOwnDevice: own,
     )) {
       unawaited(() async {
-        var frameRecord = record;
-        // Late-join: pre-fix journals hold unsigned own-account records.
-        // Sign at send time so the receiver's inbound auth passes.
-        if (isOwnerDeviceScopedKind(record.kind) &&
-            decodeReplicationSignature(record.fields['signature']) == null &&
-            signRecord != null) {
-          final signedFields = await _signOwnAccountFields(
-            kind: record.kind,
-            writerDeviceId: record.writerDeviceId,
-            fields: record.fields,
-          );
-          if (decodeReplicationSignature(signedFields['signature']) == null) {
-            return;
+        try {
+          var frameRecord = record;
+          // Late-join: pre-fix journals hold unsigned own-account records.
+          // Sign at send time so the receiver's inbound auth passes.
+          if (isOwnerDeviceScopedKind(record.kind) &&
+              decodeReplicationSignature(record.fields['signature']) == null &&
+              signRecord != null) {
+            final signedFields = await _signOwnAccountFields(
+              kind: record.kind,
+              writerDeviceId: record.writerDeviceId,
+              fields: record.fields,
+            );
+            if (decodeReplicationSignature(signedFields['signature']) ==
+                null) {
+              return;
+            }
+            frameRecord = JournalRecord(
+              seq: record.seq,
+              writerDeviceId: record.writerDeviceId,
+              kind: record.kind,
+              fields: signedFields,
+            );
           }
-          frameRecord = JournalRecord(
-            seq: record.seq,
-            writerDeviceId: record.writerDeviceId,
-            kind: record.kind,
-            fields: signedFields,
-          );
-        }
-        await transport.send(
-          peerId,
-          TransportChannel.replication,
-          jsonPayload(
-            hypercore.toReplicationFrame(
-              frameRecord,
-              authenticatedPeerId: peerId,
-              selfPeerId: _selfId(),
-              peerIsOwnDevice: own,
+          await transport.send(
+            peerId,
+            TransportChannel.replication,
+            jsonPayload(
+              hypercore.toReplicationFrame(
+                frameRecord,
+                authenticatedPeerId: peerId,
+                selfPeerId: _selfId(),
+                peerIsOwnDevice: own,
+              ),
             ),
-          ),
-        );
+          );
+        } catch (err) {
+          lastReplicationError = err.toString();
+        }
       }());
     }
   }

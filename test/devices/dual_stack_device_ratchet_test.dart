@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbits_flutter/core/base64_helpers.dart';
 import 'package:orbits_flutter/core/double_ratchet.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
 import 'package:orbits_flutter/devices/device_link.dart';
@@ -10,6 +11,8 @@ import 'package:orbits_flutter/devices/device_registry.dart';
 import 'package:orbits_flutter/mailbox/blind_store.dart';
 import 'package:orbits_flutter/mailbox/mailbox_protocol.dart';
 import 'package:orbits_flutter/mailbox/storage_peer_client.dart';
+import 'package:orbits_flutter/replication/drift_projector.dart';
+import 'package:orbits_flutter/replication/file_journal.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
@@ -986,5 +989,426 @@ void main() {
     expect(bob.lastDeviceRatchetError, isNotEmpty);
     await alice.detach();
     await bob.detach();
+  });
+
+  test('device-ratchet offer fromDeviceId must match authenticated binding',
+      () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final secret = List<int>.generate(32, (i) => 41);
+    final triple = loopbackTriple();
+    const alice = 'ORBIT-AAAAAAAAAAAAAAAA';
+    const xPeer = 'ORBIT-BBBBBBBBBBBBBBBB';
+    const otherTransport = 'ORBIT-CCCCCCCCCCCCCCCC';
+    final secrets = DiscoverySecretStore()
+      ..put(alice, secret)
+      ..put(xPeer, secret)
+      ..put(otherTransport, secret);
+    final aliceId = await signedIdentity(alice);
+    final xId = await signedIdentity(xPeer);
+    final bindA = await signedDeviceBinding(
+      peerId: alice,
+      deviceId: 'dev-a',
+      identity: aliceId,
+    );
+    final bindX = await signedDeviceBinding(
+      peerId: xPeer,
+      deviceId: 'dx',
+      identity: xId,
+    );
+    final bindOther = await signedDeviceBinding(
+      peerId: alice,
+      deviceId: 'd_other',
+      identity: aliceId,
+    );
+
+    final aIds = TrustedIdentityStore();
+    final xIds = TrustedIdentityStore();
+    final otherIds = TrustedIdentityStore();
+    final aDev = DeviceRegistry();
+    final xDev = DeviceRegistry();
+    final otherDev = DeviceRegistry();
+
+    void trustAliceSide(TrustedIdentityStore ids, DeviceRegistry devices) {
+      trustBinding(
+        identities: ids,
+        devices: devices,
+        binding: bindA,
+        isSelf: true,
+        transportPeerId: alice,
+      );
+      trustBinding(
+        identities: ids,
+        devices: devices,
+        binding: bindOther,
+        isSelf: true,
+        transportPeerId: otherTransport,
+      );
+      trustBinding(
+        identities: ids,
+        devices: devices,
+        binding: bindX,
+        transportPeerId: xPeer,
+      );
+    }
+
+    trustAliceSide(aIds, aDev);
+    trustAliceSide(otherIds, otherDev);
+    trustBinding(
+      identities: xIds,
+      devices: xDev,
+      binding: bindX,
+      isSelf: true,
+      transportPeerId: xPeer,
+    );
+    trustBinding(
+      identities: xIds,
+      devices: xDev,
+      binding: bindA,
+      transportPeerId: alice,
+    );
+
+    await triple.$1.start(
+      TransportLocalConfiguration(peerId: alice, discoverySecret: secret),
+    );
+    await triple.$2.start(
+      TransportLocalConfiguration(
+        peerId: otherTransport,
+        discoverySecret: secret,
+      ),
+    );
+    await triple.$3.start(
+      TransportLocalConfiguration(peerId: xPeer, discoverySecret: secret),
+    );
+    await triple.$1.publish(bindA);
+    await triple.$2.publish(bindOther);
+    await triple.$3.publish(bindX);
+
+    final aliceBridge = DualStackBridge(
+      transport: triple.$1,
+      journal: MemoryJournal('dev-a'),
+      selfPeerId: () => alice,
+      selfDeviceId: 'dev-a',
+      secrets: secrets,
+      devices: aDev,
+      identities: aIds,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    final otherBridge = DualStackBridge(
+      transport: triple.$2,
+      journal: MemoryJournal('d_other'),
+      selfPeerId: () => alice,
+      selfDeviceId: 'd_other',
+      secrets: secrets,
+      devices: otherDev,
+      identities: otherIds,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    DualStackBridge(
+      transport: triple.$3,
+      journal: MemoryJournal('dx'),
+      selfPeerId: () => xPeer,
+      selfDeviceId: 'dx',
+      secrets: secrets,
+      devices: xDev,
+      identities: xIds,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    ).attach();
+
+    await aliceBridge.dial(xPeer);
+    final authDeadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(authDeadline)) {
+      if (aliceBridge.isAuthenticated(xPeer) &&
+          aliceBridge.ratchets.session('dev-a', 'dx') != null) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(aliceBridge.isAuthenticated(xPeer), isTrue);
+    expect(aliceBridge.ratchets.session('dev-a', 'dx'), isNotNull);
+    expect(aliceBridge.ratchets.session('dev-a', 'd_other'), isNull);
+    expect(aDev.byId('d_other'), isNotNull);
+    expect(aDev.ownerPeerIdFor('d_other'), alice);
+    expect(aDev.ownerPeerIdFor('dx'), xPeer);
+
+    // Attacker X claims to be Alice's other device.
+    final spoofEph = await generateDhKeyPair();
+    await triple.$3.send(
+      alice,
+      TransportChannel.control,
+      utf8.encode(
+        jsonEncode(<String, Object?>{
+          'type': kDeviceRatchetOfferType,
+          'fromDeviceId': 'd_other',
+          'toDeviceId': 'dev-a',
+          'ephPub': bytesToBase64(await exportSpkiBytes(spoofEph)),
+        }),
+      ),
+    );
+    final errDeadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(errDeadline)) {
+      if (aliceBridge.lastDeviceRatchetError.isNotEmpty) break;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(aliceBridge.ratchets.session('dev-a', 'd_other'), isNull);
+    expect(aliceBridge.lastDeviceRatchetError, 'device-id-mismatch');
+
+    // The real device can still mint its session afterwards.
+    await aliceBridge.dial(otherTransport);
+    final mintDeadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(mintDeadline)) {
+      if (aliceBridge.ratchets.session('dev-a', 'd_other') != null) break;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(aliceBridge.ratchets.session('dev-a', 'd_other'), isNotNull);
+
+    await aliceBridge.detach();
+    await otherBridge.detach();
+  });
+
+  test('A-phone revokeDevice(C) reaches A-tablet without local revoke',
+      () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final secret = List<int>.generate(32, (i) => 43);
+    final triple = loopbackTriple();
+    const alice = 'ORBIT-AAAAAAAAAAAAAAAA';
+    const tabletTransport = 'ORBIT-TTTTTTTTTTTTTTTT';
+    const carol = 'ORBIT-CCCCCCCCCCCCCCCC';
+    final secrets = DiscoverySecretStore()
+      ..put(alice, secret)
+      ..put(tabletTransport, secret)
+      ..put(carol, secret);
+
+    final aliceId = await signedIdentity(alice);
+    final carolId = await signedIdentity(carol);
+    final bindPhone = await signedDeviceBinding(
+      peerId: alice,
+      deviceId: 'A-phone',
+      identity: aliceId,
+    );
+    final bindTablet = await signedDeviceBinding(
+      peerId: alice,
+      deviceId: 'A-tablet',
+      identity: aliceId,
+    );
+    final bindC = await signedDeviceBinding(
+      peerId: carol,
+      deviceId: 'C',
+      identity: carolId,
+    );
+
+    final phoneIds = TrustedIdentityStore();
+    final tabletIds = TrustedIdentityStore();
+    final cIds = TrustedIdentityStore();
+    final phoneDev = DeviceRegistry();
+    final tabletDev = DeviceRegistry();
+    final cDev = DeviceRegistry();
+
+    void trustAliceSide(TrustedIdentityStore ids, DeviceRegistry devices) {
+      trustBinding(
+        identities: ids,
+        devices: devices,
+        binding: bindPhone,
+        isSelf: true,
+        transportPeerId: alice,
+      );
+      trustBinding(
+        identities: ids,
+        devices: devices,
+        binding: bindTablet,
+        isSelf: true,
+        transportPeerId: tabletTransport,
+      );
+      trustBinding(
+        identities: ids,
+        devices: devices,
+        binding: bindC,
+        transportPeerId: carol,
+      );
+    }
+
+    trustAliceSide(phoneIds, phoneDev);
+    trustAliceSide(tabletIds, tabletDev);
+    trustBinding(
+      identities: cIds,
+      devices: cDev,
+      binding: bindC,
+      isSelf: true,
+      transportPeerId: carol,
+    );
+    trustBinding(
+      identities: cIds,
+      devices: cDev,
+      binding: bindPhone,
+      transportPeerId: alice,
+    );
+    trustBinding(
+      identities: cIds,
+      devices: cDev,
+      binding: bindTablet,
+      transportPeerId: tabletTransport,
+    );
+
+    await triple.$1.start(
+      TransportLocalConfiguration(peerId: alice, discoverySecret: secret),
+    );
+    await triple.$2.start(
+      TransportLocalConfiguration(
+        peerId: tabletTransport,
+        discoverySecret: secret,
+      ),
+    );
+    await triple.$3.start(
+      TransportLocalConfiguration(peerId: carol, discoverySecret: secret),
+    );
+    await triple.$1.publish(bindPhone);
+    await triple.$2.publish(bindTablet);
+    await triple.$3.publish(bindC);
+
+    List<int> signAlice(List<int> payload) =>
+        signP256Ecdsa(aliceId.pair, payload).toList();
+
+    final tabletDurable = FileJournal.memory('A-tablet');
+    final tabletRejected = <String>[];
+    final phone = DualStackBridge(
+      transport: triple.$1,
+      journal: MemoryJournal('A-phone'),
+      selfPeerId: () => alice,
+      selfDeviceId: 'A-phone',
+      secrets: secrets,
+      devices: phoneDev,
+      identities: phoneIds,
+      signRecord: (p) async => signAlice(p),
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    final tablet = DualStackBridge(
+      transport: triple.$2,
+      journal: MemoryJournal('A-tablet'),
+      durableJournal: tabletDurable,
+      selfPeerId: () => alice,
+      selfDeviceId: 'A-tablet',
+      secrets: secrets,
+      devices: tabletDev,
+      identities: tabletIds,
+      signRecord: (p) async => signAlice(p),
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    tablet.onAuthorizationRejected = tabletRejected.add;
+    final cBridge = DualStackBridge(
+      transport: triple.$3,
+      journal: MemoryJournal('C'),
+      selfPeerId: () => carol,
+      selfDeviceId: 'C',
+      secrets: secrets,
+      devices: cDev,
+      identities: cIds,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+
+    await phone.dial(tabletTransport);
+    await phone.dial(carol);
+    await tablet.dial(carol);
+    final linked = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(linked)) {
+      if (phone.isOwnDevice(tabletTransport) &&
+          tablet.isAuthenticated(carol) &&
+          phone.isAuthenticated(carol)) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(phone.isOwnDevice(tabletTransport), isTrue);
+    expect(tabletDev.byId('C')!.status, DeviceStatus.active);
+    expect(tablet.ratchets.isRevoked('C'), isFalse);
+
+    // Revoke ONLY on the phone. The tablet must learn it over replication.
+    phone.revokeDevice('C');
+
+    final seen = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(seen)) {
+      if (tabletDev.byId('C')?.status == DeviceStatus.revoked &&
+          tablet.ratchets.isRevoked('C')) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(tabletDev.byId('C')!.status, DeviceStatus.revoked);
+    expect(tablet.ratchets.isRevoked('C'), isTrue);
+
+    // Reconnect C → tablet admit fails closed on the replicated revoke.
+    await tablet.detach();
+    try {
+      await triple.$2.disconnect(carol);
+    } catch (_) {}
+    try {
+      await triple.$3.disconnect(tabletTransport);
+    } catch (_) {}
+
+    final tablet2Rejected = <String>[];
+    final tablet2 = DualStackBridge(
+      transport: triple.$2,
+      journal: MemoryJournal('A-tablet-live-2'),
+      selfPeerId: () => alice,
+      selfDeviceId: 'A-tablet',
+      secrets: secrets,
+      devices: tabletDev,
+      identities: tabletIds,
+      signRecord: (p) async => signAlice(p),
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    tablet2.onAuthorizationRejected = tablet2Rejected.add;
+    await tablet2.dial(carol);
+    await cBridge.dial(tabletTransport);
+    await Future<void>.delayed(const Duration(milliseconds: 150));
+    expect(tablet2.isAuthenticated(carol), isFalse);
+    expect(tablet2Rejected, isNotEmpty);
+    await tablet2.detach();
+
+    // Restart + journal replay on a FRESH registry (pre-revoke snapshot):
+    // the projector applies the replicated revoke too.
+    final replayIds = TrustedIdentityStore();
+    final replayDev = DeviceRegistry();
+    trustBinding(
+      identities: replayIds,
+      devices: replayDev,
+      binding: bindPhone,
+      isSelf: true,
+      transportPeerId: alice,
+    );
+    trustBinding(
+      identities: replayIds,
+      devices: replayDev,
+      binding: bindTablet,
+      isSelf: true,
+      transportPeerId: tabletTransport,
+    );
+    trustBinding(
+      identities: replayIds,
+      devices: replayDev,
+      binding: bindC,
+      transportPeerId: carol,
+    );
+    expect(replayDev.byId('C')!.status, DeviceStatus.active);
+    final replayRatchets = DeviceRatchetSessions(localDeviceId: 'A-tablet');
+    final replayed = await tabletDurable.replay();
+    final projector = JournalProjector(
+      decrypt: (_, __) async => null,
+      devices: replayDev,
+      ratchets: replayRatchets,
+      selfPeerId: alice,
+      localDeviceId: 'A-tablet',
+    );
+    await projector.applyAll(replayed);
+    expect(replayDev.byId('C')!.status, DeviceStatus.revoked);
+    expect(replayRatchets.isRevoked('C'), isTrue);
+
+    await phone.detach();
+    await cBridge.detach();
   });
 }

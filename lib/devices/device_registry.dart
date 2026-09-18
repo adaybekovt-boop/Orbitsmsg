@@ -227,9 +227,16 @@ class DeviceRegistry {
 
   Future<void> hydrate() async {
     final reader = readSnapshot ?? readDeviceRegistrySnapshot;
+    Uint8List? bytes;
     try {
-      final bytes = await reader();
-      if (bytes == null || bytes.isEmpty) return;
+      bytes = await reader();
+    } catch (_) {
+      // The reader itself is unavailable (missing file, no platform
+      // snapshot backend): same as no snapshot, not a failure.
+      return;
+    }
+    if (bytes == null || bytes.isEmpty) return;
+    try {
       final raw = jsonDecode(utf8.decode(bytes));
       if (raw is! Map || raw['devices'] is! List) {
         _failHydrate('registry-snapshot-incomplete');

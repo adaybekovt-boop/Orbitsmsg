@@ -278,9 +278,16 @@ class DeviceRatchetSessions {
 
   Future<void> hydrate() async {
     final reader = readSnapshot ?? readDeviceRatchetSnapshot;
+    Uint8List? bytes;
     try {
-      final bytes = await reader();
-      if (bytes == null || bytes.isEmpty) return;
+      bytes = await reader();
+    } catch (_) {
+      // The reader itself is unavailable (missing file, no platform
+      // snapshot backend): same as no snapshot, not a failure.
+      return;
+    }
+    if (bytes == null || bytes.isEmpty) return;
+    try {
       final raw = jsonDecode(utf8.decode(bytes));
       if (raw is! Map || raw['revoked'] is! List || raw['sessions'] is! List) {
         _failHydrate('ratchet-snapshot-incomplete');
