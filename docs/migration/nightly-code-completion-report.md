@@ -1,5 +1,17 @@
 # PR #62 repair report
 
+## 2026-09-18 room DualStack resume-after-loss
+
+Software path only. External gates stay open.
+
+- Host `sendRoomFile` over DualStack resumes a pre-seeded partial
+  `orbits-incoming` blob (`file-accept.resumeOffset` = 64 KiB) and
+  persists the completed jail path + sha256 with no `b64` and no
+  PeerJS DataChannel
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
 ## 2026-09-18 CallsNotifier DualStack ringing / send errors
 
 Software path only. External gates stay open.

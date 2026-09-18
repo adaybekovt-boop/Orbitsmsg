@@ -2,12 +2,15 @@
 // Two in-process DBs still share orbitsDb(); inbound onPacket switches
 // the singleton so each side persists to its own store.
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbits_flutter/attachments/incoming_paths.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
 import 'package:orbits_flutter/core/vault_kek.dart';
 import 'package:orbits_flutter/devices/device_registry.dart';
@@ -22,6 +25,7 @@ import 'package:orbits_flutter/storage/database.dart';
 import 'package:orbits_flutter/storage/db.dart' as db;
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
+import 'package:orbits_flutter/transport/mux_frames.dart';
 import 'package:orbits_flutter/transport/replication_schema.dart';
 import 'package:orbits_flutter/transport/transport_api.dart';
 import 'package:orbits_flutter/transport/trusted_identity_store.dart';
@@ -359,6 +363,192 @@ void main() {
     expect(blob['path'] as String, contains('orbits-incoming'));
     expect(File(blob['path'] as String).existsSync(), isTrue);
     expect((blob['blob'] as List).length, bytes.length);
+    expect(hostConns.getConn(guestId, 'reliable'), isNull);
+  });
+
+  test('host sendRoomFile resumes a partial DualStack blob after loss',
+      () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    const hostUser = AuthedUser(
+      peerId: hostId,
+      displayName: 'Host',
+      bio: '',
+      avatarDataUrl: null,
+    );
+    const guestUser = AuthedUser(
+      peerId: guestId,
+      displayName: 'Guest',
+      bio: '',
+      avatarDataUrl: guestAvatar,
+    );
+    final secret = List<int>.generate(32, (i) => 19);
+    final pair = loopbackPair();
+    final bindA =
+        await signedDeviceBinding(peerId: hostId, deviceId: 'host-dev');
+    final bindB =
+        await signedDeviceBinding(peerId: guestId, deviceId: 'guest-dev');
+    final hostIds = TrustedIdentityStore();
+    final guestIds = TrustedIdentityStore();
+    final hostDev = DeviceRegistry();
+    final guestDev = DeviceRegistry();
+    trustContactPair(
+      aliceIdentities: hostIds,
+      aliceDevices: hostDev,
+      bobIdentities: guestIds,
+      bobDevices: guestDev,
+      aliceBinding: bindA,
+      bobBinding: bindB,
+    );
+    discoverySecretStore
+      ..put(hostId, secret)
+      ..put(guestId, secret);
+    await pair.$1.start(
+      TransportLocalConfiguration(peerId: hostId, discoverySecret: secret),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(peerId: guestId, discoverySecret: secret),
+    );
+    await pair.$1.publish(bindA);
+    await pair.$2.publish(bindB);
+
+    final hostC = ProviderContainer(overrides: [
+      localProfileProvider.overrideWithValue(hostUser),
+    ]);
+    final guestC = ProviderContainer(overrides: [
+      localProfileProvider.overrideWithValue(guestUser),
+    ]);
+    containers.addAll([hostC, guestC]);
+
+    final hostConns = hostC.read(connectionsNotifierProvider.notifier);
+    final guestConns = guestC.read(connectionsNotifierProvider.notifier);
+    hostConns.bindNativeTransport(
+      pair.$1,
+      journal: MemoryJournal('host-dev'),
+      deviceId: 'host-dev',
+      devices: hostDev,
+      identities: hostIds,
+    );
+    guestConns.bindNativeTransport(
+      pair.$2,
+      journal: MemoryJournal('guest-dev'),
+      deviceId: 'guest-dev',
+      devices: guestDev,
+      identities: guestIds,
+    );
+
+    final hostDispatch = hostConns.nativeBridge!.onPacket;
+    hostConns.nativeBridge!.onPacket = (peer, data) async {
+      setOrbitsDatabase(hostDb);
+      await hostDispatch(peer, data);
+    };
+    final guestDispatch = guestConns.nativeBridge!.onPacket;
+    guestConns.nativeBridge!.onPacket = (peer, data) async {
+      setOrbitsDatabase(guestDb);
+      await guestDispatch(peer, data);
+    };
+
+    await hostConns.nativeBridge!.dial(guestId);
+    await pumpUntil(
+      () =>
+          hostConns.canUseNative(guestId) && guestConns.canUseNative(hostId),
+    );
+    await pumpUntil(
+      () => hostConns.nativeBridge!.ratchets.sessionCount > 0,
+    );
+
+    final host = hostC.read(roomManagerProvider.notifier);
+    final guest = guestC.read(roomManagerProvider.notifier);
+    setOrbitsDatabase(hostDb);
+    await host.createRoom('Resume Files');
+    setOrbitsDatabase(guestDb);
+    await guest.joinRoom(hostId, 'Guest');
+    await pumpUntil(
+      () => hostC.read(roomManagerProvider).guestPeerIds.contains(guestId),
+    );
+
+    setOrbitsDatabase(hostDb);
+    final hostChannels = await db.getRoomChannels(hostId);
+    final generalId = hostChannels.firstWhere((c) => c['type'] == 'text')['id']
+        as String;
+    final bytes = List<int>.generate(200000, (i) => i % 251);
+    final digest = sha256.convert(bytes).toString();
+    const prefix = 64 * 1024;
+    var resumeOffset = -1;
+    final hostSend = hostConns.nativeBridge!.files.send;
+    hostConns.nativeBridge!.files.send = (peer, frame) async {
+      try {
+        final body = decodeJsonPayload(frame);
+        if (body['type'] == 'file-offer') {
+          final transferId = body['transferId'] as String;
+          final localId = generateLocalTransferId();
+          final incoming = resolveIncomingDir(
+            base: Directory.systemTemp,
+            trustedSenderId: hostId,
+            localTransferId: localId,
+          );
+          incoming.createSync(recursive: true);
+          blobFile(incoming).writeAsBytesSync(bytes.sublist(0, prefix));
+          metaFile(incoming).writeAsStringSync(
+            jsonEncode(<String, Object?>{
+              'trustedSender': trustedSenderDirName(hostId),
+              'externalTransferId': transferId,
+              'localTransferId': localId,
+              'fileName': 'resume.bin',
+              'size': bytes.length,
+              'sha256': digest,
+              'protocolVersion': 1,
+            }),
+          );
+        }
+      } catch (_) {}
+      await hostSend!(peer, frame);
+    };
+    final guestSend = guestConns.nativeBridge!.files.send;
+    guestConns.nativeBridge!.files.send = (peer, frame) async {
+      try {
+        final body = decodeJsonPayload(frame);
+        if (body['type'] == 'file-accept') {
+          resumeOffset = (body['resumeOffset'] as num?)?.toInt() ?? -1;
+        }
+      } catch (_) {}
+      await guestSend!(peer, frame);
+    };
+
+    await host.sendRoomFile(
+      hostId,
+      generalId,
+      Uint8List.fromList(bytes),
+      name: 'resume.bin',
+      mime: 'application/octet-stream',
+      kind: 'file',
+    );
+
+    await pumpUntil(() {
+      setOrbitsDatabase(guestDb);
+      return guest.roomLog.projection.state.messages
+          .any((m) => m['text'] == 'file');
+    });
+
+    expect(resumeOffset, prefix);
+    setOrbitsDatabase(guestDb);
+    final guestChannels = await db.getRoomChannels(hostId);
+    final guestGeneral = guestChannels.firstWhere((c) => c['type'] == 'text');
+    final msgs = await db.watchChannelMessages(guestGeneral['id'] as String).first;
+    expect(msgs, isNotEmpty);
+    final fileMsg = msgs.firstWhere(
+      (m) => (m['payload'] as Map)['type'] == 'file',
+    );
+    final payload = fileMsg['payload'] as Map;
+    expect(payload.containsKey('b64'), isFalse);
+    final blob = await db.getFileBlob(fileMsg['id'] as String);
+    expect(blob, isNotNull);
+    expect(blob!['path'], isNotEmpty);
+    expect(blob['path'] as String, contains('orbits-incoming'));
+    expect(File(blob['path'] as String).existsSync(), isTrue);
+    expect(File(blob['path'] as String).lengthSync(), bytes.length);
+    expect(blob['sha256'], digest);
+    expect(blob['blob'] as List, bytes);
     expect(hostConns.getConn(guestId, 'reliable'), isNull);
   });
 }
