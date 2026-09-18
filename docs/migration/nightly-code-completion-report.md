@@ -13,8 +13,11 @@ Software path only. External gates stay open.
   DualStack. RoomManager replays the log to late joiners. Membership
   metadata is appended as `roomMembershipChanged` (no chat bodies,
   no `displayName`)
-- `JournalProjector` live Drift persist and journal replay write the
-  same inbound rows. Membership events replay to the same list
+- `JournalProjector` live Drift persist, MemoryJournal replay, and
+  FileJournal restart replay write the same inbound rows. Membership
+  events replay to the same list
+- Host+guest `RoomManager` Autobase projections match after join and
+  after a relayed message (`test/peer/room_network_test.dart`)
 - Autobase `message` events require the same plaintext ack as `room_msg`
 
 `kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
