@@ -1489,10 +1489,13 @@ class DualStackBridge {
             } else {
               unawaited(rememberHelloCapabilities(norm, decoded));
             }
-          } catch (_) {}
+          } catch (err) {
+            lastReplicationError = err.toString();
+          }
         }
       }
-    } catch (_) {
+    } catch (err) {
+      lastReplicationError = err.toString();
       return;
     }
     unawaited(onPacket(norm, data));

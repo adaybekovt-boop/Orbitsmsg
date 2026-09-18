@@ -6,7 +6,8 @@ Software path only. External gates stay open.
 
 - `ConnectionsNotifier.sendCallSignal` uses DualStack when native is
   authenticated and does not open PeerJS. A pre-opened PeerJS slot is
-  torn down (`peerjsFallbackCloseCalls`)
+  torn down (`peerjsFallbackCloseCalls`). An inbound DualStack offer
+  reaches `bindCallHandler` / `lastCallSignal` the same way
 - DualStack `lastCallSignalError` surfaces a malformed call frame
 - Mailbox journal append uses `mailboxWriterKey` when the live
   `selfPeerId` callback is empty. Missing conversation members set
