@@ -12,7 +12,9 @@ Software path only. External gates stay open.
 - `JournalProjector` persists decrypted inbound rows into Drift and
   applies writer-matched tombstones
 - DualStack send/recv uses `DeviceRatchetSessions` when sessions are
-  bound; `revokeDevice` drops those sessions
+  bound; after admit the dialer mints a per-device ratchet over a
+  DH offer/accept; `revokeDevice` drops those sessions
+- Native Drop inbound persists a path/sha256 descriptor, not blob bytes
 - `RoomManager` records host-plaintext Autobase membership / channel /
   message events (`kRoomsApplicationE2eImplemented` stays false)
 - `NativeTransportHost` owns `DozeAdapter` and drains mailboxes on
