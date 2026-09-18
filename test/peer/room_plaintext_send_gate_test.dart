@@ -14,7 +14,10 @@ void main() {
     final ok = sendGuardedRoomPacket(
       {'type': 'room_msg', 'text': 'hello from bypass'},
       connected: true,
-      send: sent.add,
+      send: (p) {
+        sent.add(p);
+        return true;
+      },
     );
     expect(ok, isFalse, reason: 'wire send must refuse un-acked room_msg');
     expect(sent, isEmpty);
@@ -27,7 +30,10 @@ void main() {
     final ok = sendGuardedRoomPacket(
       packet,
       connected: true,
-      send: sent.add,
+      send: (p) {
+        sent.add(p);
+        return true;
+      },
     );
     expect(ok, isTrue);
     expect(sent, [packet]);
@@ -38,7 +44,10 @@ void main() {
     final ok = sendGuardedRoomPacket(
       {'type': 'room_join', 'roomId': 'r'},
       connected: true,
-      send: sent.add,
+      send: (p) {
+        sent.add(p);
+        return true;
+      },
     );
     expect(ok, isTrue);
     expect(sent.single['type'], 'room_join');
@@ -54,7 +63,10 @@ void main() {
           'payload': {'text': 'bypass'},
         },
         connected: true,
-        send: sent.add,
+        send: (p) {
+        sent.add(p);
+        return true;
+      },
       ),
       isFalse,
     );
@@ -67,7 +79,10 @@ void main() {
           'payload': {'peerId': 'g', 'action': 'join'},
         },
         connected: true,
-        send: sent.add,
+        send: (p) {
+        sent.add(p);
+        return true;
+      },
       ),
       isTrue,
     );
@@ -80,7 +95,10 @@ void main() {
       sendGuardedRoomPacket(
         {'type': 'room_msg', 'text': 'x'},
         connected: false,
-        send: sent.add,
+        send: (p) {
+        sent.add(p);
+        return true;
+      },
       ),
       isFalse,
     );

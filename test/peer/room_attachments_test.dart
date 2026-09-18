@@ -15,6 +15,7 @@ import 'package:orbits_flutter/attachments/incoming_paths.dart';
 import 'package:orbits_flutter/core/vault_kek.dart';
 import 'package:orbits_flutter/peer/peerjs_client.dart' show PeerJsClient;
 import 'package:orbits_flutter/peer/room_manager.dart';
+import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
 import 'package:orbits_flutter/state/auth_notifier.dart' show AuthedUser;
 import 'package:orbits_flutter/state/connections_notifier.dart' show RoomBridge;
 import 'package:orbits_flutter/state/local_profile_provider.dart';
@@ -68,6 +69,21 @@ class _NativeCaptureTransport extends _CaptureTransport
   }
 }
 
+class _FailingNativeTransport extends _NativeCaptureTransport {
+  @override
+  Future<bool> sendRoomFilePath(
+    String peerId, {
+    required String path,
+    required int sizeBytes,
+    required String fileName,
+    required String mime,
+    required String transferId,
+  }) async {
+    files.add((to: peerId, path: path, transferId: transferId));
+    return false;
+  }
+}
+
 Map<String, Object?> _sticker() => {
       'stickerId': 's1',
       'url': 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==',
@@ -86,9 +102,11 @@ void main() {
     database = OrbitsDatabase.forTesting(NativeDatabase.memory());
     setOrbitsDatabase(database);
     await setVaultKek(List<int>.generate(32, (i) => (i * 3 + 4) & 0xff));
+    kRoomPlaintextSessionAck.setAcknowledged(true);
   });
 
   tearDown(() async {
+    kRoomPlaintextSessionAck.reset();
     for (final c in containers) {
       try {
         c.dispose();
@@ -517,6 +535,66 @@ void main() {
 
       final toNobodyElse = tx.sent.where((s) => s.to == 'g1');
       expect(toNobodyElse.where((s) => s.packet['type'] == 'room_msg'), isEmpty);
+    });
+
+    test('plaintext ack gate runs before native file bytes', () async {
+      kRoomPlaintextSessionAck.reset();
+      final tx = _NativeCaptureTransport()..nativePeers.add('g1');
+      final mgr = managerFor(hostId, tx);
+      await mgr.createRoom('Test');
+      final chans = await db.getRoomChannels(hostId);
+      final generalId =
+          chans.firstWhere((c) => c['type'] == 'text')['id'] as String;
+      await tx.bridge.handleInbound('g1', {
+        'type': 'room_join',
+        'roomId': hostId,
+        'guestName': 'G',
+        'guestPeerId': 'g1',
+      });
+      tx.sent.clear();
+      tx.files.clear();
+
+      await mgr.sendRoomFile(
+        hostId,
+        generalId,
+        Uint8List.fromList(bytes),
+        name: 'doc.pdf',
+        mime: 'application/pdf',
+        kind: 'file',
+      );
+
+      expect(tx.files, isEmpty,
+          reason: 'attachment path must not run before ack');
+      expect(tx.ofType('room_msg'), isEmpty);
+    });
+
+    test('native throw does not send b64 to a native guest', () async {
+      final tx = _FailingNativeTransport()..nativePeers.add('g1');
+      final mgr = managerFor(hostId, tx);
+      await mgr.createRoom('Test');
+      final chans = await db.getRoomChannels(hostId);
+      final generalId =
+          chans.firstWhere((c) => c['type'] == 'text')['id'] as String;
+      await tx.bridge.handleInbound('g1', {
+        'type': 'room_join',
+        'roomId': hostId,
+        'guestName': 'G',
+        'guestPeerId': 'g1',
+      });
+      tx.sent.clear();
+      tx.files.clear();
+
+      await mgr.sendRoomFile(
+        hostId,
+        generalId,
+        Uint8List.fromList(bytes),
+        name: 'doc.pdf',
+        mime: 'application/pdf',
+        kind: 'file',
+      );
+
+      expect(tx.ofType('room_msg'), isEmpty);
+      expect(tx.sent.where((s) => s.packet.containsKey('b64')), isEmpty);
     });
   });
 }

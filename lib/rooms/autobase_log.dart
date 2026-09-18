@@ -12,6 +12,10 @@ import '../storage/wrapped_snapshot.dart';
 /// Host-plaintext Autobase event on the room control channel.
 const String kRoomAutobaseType = 'room_autobase';
 
+/// Fail-closed cap on the local Autobase event list. Replay refuses to
+/// send past this instead of streaming an unbounded log.
+const int kMaxRoomAutobaseEvents = 2048;
+
 Map<String, Object?> encodeRoomAutobasePacket(String roomId, RoomEvent event) =>
     <String, Object?>{
       'type': kRoomAutobaseType,
@@ -136,6 +140,9 @@ class RoomAutobaseLog {
   bool _restoring = false;
   String lastPersistError = '';
 
+  /// Room this log belongs to. Hydrate rejects foreign snapshots.
+  String? roomId;
+
   int nextSeq(String writerId) =>
       _seq[writerId] = (_seq[writerId] ?? -1) + 1;
 
@@ -145,11 +152,24 @@ class RoomAutobaseLog {
     required Map<String, Object?> payload,
     int? seq,
   }) {
+    final current = _seq[writerId] ?? -1;
     final resolved = seq ?? nextSeq(writerId);
-    if (seq != null) {
-      final current = _seq[writerId] ?? -1;
-      if (seq > current) _seq[writerId] = seq;
+    if (seq != null && seq <= current) {
+      // Rewind: idempotent redelivery is a no-op, anything else is
+      // rejected without touching the projection.
+      final probe = RoomEvent(
+        writerId: writerId,
+        seq: seq,
+        kind: kind,
+        payload: payload,
+      );
+      if (projection.state.applied.contains(projection.state.keyOf(probe))) {
+        return probe;
+      }
+      lastPersistError = 'autobase-seq-rewind';
+      return probe;
     }
+    if (seq != null) _seq[writerId] = seq;
     final event = RoomEvent(
       writerId: writerId,
       seq: resolved,
@@ -157,6 +177,10 @@ class RoomAutobaseLog {
       payload: payload,
     );
     final already = projection.state.applied.contains(projection.state.keyOf(event));
+    if (!already && events.length >= kMaxRoomAutobaseEvents) {
+      lastPersistError = 'autobase-cap';
+      return event;
+    }
     projection.apply(event);
     if (!already) {
       events.add(event);
@@ -166,6 +190,7 @@ class RoomAutobaseLog {
   }
 
   Map<String, Object?> snapshot() => <String, Object?>{
+        if (roomId != null && roomId!.isNotEmpty) 'roomId': roomId,
         'revoked': (projection.revokedWriters.toList()..sort()),
         'events': [
           for (final event in events)
@@ -181,7 +206,22 @@ class RoomAutobaseLog {
   void restore(Map<String, Object?> row) {
     _restoring = true;
     try {
+      final incomingRoom = row['roomId'] as String? ?? '';
+      if (incomingRoom.isNotEmpty &&
+          roomId != null &&
+          roomId!.isNotEmpty &&
+          incomingRoom != roomId) {
+        lastPersistError = 'autobase-room-mismatch';
+        return;
+      }
+      if (incomingRoom.isEmpty && roomId != null && roomId!.isNotEmpty) {
+        // Legacy room-less snapshot into a bound log: reject rather
+        // than merge foreign history.
+        lastPersistError = 'autobase-room-mismatch';
+        return;
+      }
       clear();
+      if (incomingRoom.isNotEmpty) roomId = incomingRoom;
       final revoked = row['revoked'];
       if (revoked is List) {
         for (final id in revoked) {
@@ -248,5 +288,6 @@ class RoomAutobaseLog {
     projection.state.applied.clear();
     _seq.clear();
     events.clear();
+    roomId = null;
   }
 }

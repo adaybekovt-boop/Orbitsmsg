@@ -255,4 +255,60 @@ void main() {
     expect(log.lastPersistError, contains('autobase-persist-failed'));
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
+
+  test('hydrate rejects a snapshot from another roomId', () async {
+    final saved = <int>[];
+    final a = RoomAutobaseLog(
+      writeSnapshot: (b) async {
+        saved
+          ..clear()
+          ..addAll(b);
+      },
+      readSnapshot: () async =>
+          saved.isEmpty ? null : Uint8List.fromList(saved),
+    )..roomId = 'ORBIT-AAAAAA';
+    a.append(
+      writerId: 'host',
+      kind: 'membership',
+      payload: {'peerId': 'g-a', 'action': 'join', 'displayName': 'A'},
+    );
+    await a.persist();
+    expect(saved, isNotEmpty);
+
+    final b = RoomAutobaseLog(
+      readSnapshot: () async => Uint8List.fromList(saved),
+    )..roomId = 'ORBIT-BBBBBB';
+    await b.hydrate();
+    expect(b.lastPersistError, contains('autobase-room-mismatch'));
+    expect(b.events, isEmpty);
+    expect(b.projection.state.members.containsKey('g-a'), isFalse);
+  });
+
+  test('append rejects non-monotonic seq', () {
+    final log = RoomAutobaseLog();
+    log.append(
+      writerId: 'host',
+      kind: 'membership',
+      payload: {'peerId': 'h', 'action': 'join'},
+    );
+    log.append(
+      writerId: 'host',
+      kind: 'message',
+      payload: {'id': 'm-stale', 'text': 'no'},
+      seq: 0,
+    );
+    expect(log.lastPersistError, 'autobase-seq-rewind');
+    expect(log.projection.state.messages, isEmpty);
+    expect(log.events, hasLength(1));
+  });
+
+  test('append refuses to grow past kMaxRoomAutobaseEvents', () {
+    final log = RoomAutobaseLog();
+    for (var i = 0; i < kMaxRoomAutobaseEvents; i++) {
+      log.append(writerId: 'host', kind: 'message', payload: {'id': 'm$i'});
+    }
+    log.append(writerId: 'host', kind: 'message', payload: {'id': 'overflow'});
+    expect(log.events.length, kMaxRoomAutobaseEvents);
+    expect(log.lastPersistError, 'autobase-cap');
+  });
 }

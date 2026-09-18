@@ -871,6 +871,28 @@ void main() {
     expect(alice.lastReplicationError, contains('hypercore-append-failed'));
     await Future<void>.delayed(const Duration(milliseconds: 20));
     expect(seen, isEmpty);
+    // A retry must not slip through the journal dedup without Hypercore.
+    expect(
+      alice.sendRoomPacket(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        encodeRoomAutobasePacket(
+          'room-1',
+          const RoomEvent(
+            writerId: 'host',
+            seq: 0,
+            kind: 'membership',
+            payload: {
+              'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+              'action': 'join',
+            },
+          ),
+        ),
+      ),
+      isFalse,
+    );
+    expect(alice.lastReplicationError, contains('hypercore-append-failed'));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(seen, isEmpty);
     await alice.detach();
   });
 
@@ -1137,7 +1159,20 @@ void main() {
       sendGuardedRoomPacket(
         {'type': 'room_msg', 'text': 'x'},
         connected: true,
-        send: (_) {},
+        send: (_) => true,
+      ),
+      isFalse,
+    );
+  });
+
+  test('sendGuardedRoomPacket propagates send() false', () {
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    addTearDown(kRoomPlaintextSessionAck.reset);
+    expect(
+      sendGuardedRoomPacket(
+        {'type': 'room_autobase', 'kind': 'membership'},
+        connected: true,
+        send: (_) => false,
       ),
       isFalse,
     );

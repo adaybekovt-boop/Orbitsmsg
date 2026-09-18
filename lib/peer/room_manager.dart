@@ -151,6 +151,7 @@ class RoomState {
     this.micAvailable = false,
     this.selfHostInvite,
     this.internetAccessMessage,
+    this.lastReplicationError = '',
   });
 
   /// Current role.
@@ -210,6 +211,11 @@ class RoomState {
   /// sharing the invite. Null for guests / cloud rooms.
   final String? internetAccessMessage;
 
+  /// Last Autobase broadcast/replay failure. Empty when the last
+  /// host broadcast succeeded. A failed replication is never reported
+  /// as sent: callers check the bool result, this is diagnostics.
+  final String lastReplicationError;
+
   /// True when this session runs its own embedded signaling server.
   bool get isSelfHosted => selfHostInvite != null;
 
@@ -232,6 +238,7 @@ class RoomState {
     bool? micAvailable,
     Object? selfHostInvite = _unset,
     Object? internetAccessMessage = _unset,
+    String? lastReplicationError,
   }) =>
       RoomState(
         role: role ?? this.role,
@@ -262,6 +269,8 @@ class RoomState {
         internetAccessMessage: identical(internetAccessMessage, _unset)
             ? this.internetAccessMessage
             : internetAccessMessage as String?,
+        lastReplicationError:
+            lastReplicationError ?? this.lastReplicationError,
       );
 }
 
@@ -437,6 +446,11 @@ class RoomManager extends StateNotifier<RoomState> {
     }
 
     final roomId = selfId; // host peer code IS the room code
+
+    // Fresh Autobase log per room: a hydrated foreign log must never
+    // replay room A history into room B.
+    roomLog.clear();
+    roomLog.roomId = roomId;
 
     // Self-hosted: stand up the embedded signaling server + the host's loopback
     // client BEFORE persisting anything. A start failure must surface a SPECIFIC
@@ -625,6 +639,9 @@ class RoomManager extends StateNotifier<RoomState> {
     }
     final roomId = hostPeerId;
 
+    roomLog.clear();
+    roomLog.roomId = roomId;
+
     await db.saveRoom({
       'id': roomId,
       'name': '',
@@ -704,6 +721,8 @@ class RoomManager extends StateNotifier<RoomState> {
     }
 
     final roomId = hostPeerId;
+    roomLog.clear();
+    roomLog.roomId = roomId;
     await db.saveRoom({
       'id': roomId,
       'name': '',
@@ -1049,7 +1068,10 @@ class RoomManager extends StateNotifier<RoomState> {
   ///     link leaves the message queued instead of silently dropped.
   bool _dispatchRoomPacket(Map<String, Object?> packet) {
     if (state.role == RoomRole.host) {
-      _broadcastToGuests(packet);
+      final ok = _broadcastToGuests(packet);
+      // Autobase events are replicated state, not best-effort chat:
+      // report the broadcast result so callers don't claim replication.
+      if (packet['type'] == kRoomAutobaseType) return ok;
       return true;
     }
     if (state.role == RoomRole.guest) {
@@ -1175,6 +1197,9 @@ class RoomManager extends StateNotifier<RoomState> {
       'ts': ts,
       ...extra,
     };
+    // Plaintext-ack gate BEFORE any file bytes move: a rejected packet
+    // must not leave the file on the guest's disk.
+    if (!kRoomPlaintextSessionAck.allowsPacket(packet)) return false;
     if (_peerCanUseNative(to) &&
         localPath != null &&
         localPath.isNotEmpty) {
@@ -1204,10 +1229,30 @@ class RoomManager extends StateNotifier<RoomState> {
           }
           return _connections.sendRoomPacket(to, packet);
         }
+        // Native peer, native failed: fail closed, never whole-file b64.
+        return false;
       }
     }
-    if (bytes.isEmpty) return false;
-    final b64 = convert.base64Encode(bytes);
+    if (_peerCanUseNative(to)) return false;
+    var payload = bytes;
+    if (payload.isEmpty && localPath != null && localPath.isNotEmpty) {
+      // Native-sourced relay to a PeerJS guest: read capped bytes from
+      // the jail path (stat-checked, never unbounded).
+      final onDisk = attachmentPathSize(localPath);
+      if (onDisk <= 0 || onDisk > kMaxRoomFileRawBytes) return false;
+      try {
+        final fromDisk = await readAttachmentPath(
+          localPath,
+          maxBytes: kMaxRoomFileRawBytes,
+        );
+        if (fromDisk == null || fromDisk.isEmpty) return false;
+        payload = Uint8List.fromList(fromDisk);
+      } catch (_) {
+        return false;
+      }
+    }
+    if (payload.isEmpty) return false;
+    final b64 = convert.base64Encode(payload);
     if (b64.length > kMaxRoomFileB64Len) return false;
     packet['attachment'] = attachment;
     packet['b64'] = b64;
@@ -1798,12 +1843,33 @@ class RoomManager extends StateNotifier<RoomState> {
         }
         String? filePath;
         var fileSha = content.sha256hex;
-        final stored = await db.getFileBlob(canonicalId);
-        if (stored != null) {
-          filePath = stored['path'] as String?;
-          fileSha = stored['sha256'] as String? ?? fileSha;
-          final raw = stored['blob'];
-          if (raw is Uint8List && raw.isNotEmpty) fileBytes = raw;
+        if (content.native) {
+          // Native descriptor: resolve the jail path without reading the
+          // bytes into RAM. Relay re-sends from disk for native guests.
+          filePath = lookupIncomingTransferPath(
+            transferId: content.transferId ?? '',
+            name: content.attachment?['name']?.toString() ?? 'file',
+            trustedSenderId: remoteId,
+          );
+          if (filePath != null) {
+            final onDisk = attachmentPathSize(filePath);
+            if (onDisk <= 0 || onDisk > kMaxRoomFileRawBytes) {
+              return;
+            }
+          }
+        } else {
+          Map<String, Object?>? stored;
+          try {
+            stored = await db.getFileBlob(canonicalId);
+          } catch (_) {
+            return;
+          }
+          if (stored != null) {
+            filePath = stored['path'] as String?;
+            fileSha = stored['sha256'] as String? ?? fileSha;
+            final raw = stored['blob'];
+            if (raw is Uint8List && raw.isNotEmpty) fileBytes = raw;
+          }
         }
         await _dispatchRoomFile(
           id: canonicalId,
@@ -1962,29 +2028,60 @@ class RoomManager extends StateNotifier<RoomState> {
     });
   }
 
-  void _broadcastToGuests(Map<String, Object?> packet, {String? except}) {
-    final conns = _connections;
+  String _replicationFailureReason() {
+    final t = _transport;
+    if (t is _ConnRoomTransport) {
+      final err = t.lastReplicationError;
+      if (err.isNotEmpty) return err;
+    }
+    return 'room-packet-not-sent';
+  }
+
+  void _noteReplicationFailure() {
+    state = state.copyWith(
+      lastReplicationError: _replicationFailureReason(),
+    );
+  }
+
+  bool _broadcastToGuests(Map<String, Object?> packet, {String? except}) {
+    var ok = true;
     for (final g in state.guestPeerIds) {
       if (g == except) continue;
-      conns.sendRoomPacket(g, packet);
+      if (!_connections.sendRoomPacket(g, packet)) {
+        ok = false;
+        _noteReplicationFailure();
+      }
     }
+    return ok;
   }
 
-  void _replicateAutobase(RoomEvent event, {String? except}) {
+  bool _replicateAutobase(RoomEvent event, {String? except}) {
     final roomId = state.roomId;
-    if (roomId == null) return;
-    _broadcastToGuests(encodeRoomAutobasePacket(roomId, event), except: except);
+    if (roomId == null) return false;
+    return _broadcastToGuests(
+      encodeRoomAutobasePacket(roomId, event),
+      except: except,
+    );
   }
 
-  void _replayAutobaseTo(String guestId) {
+  bool _replayAutobaseTo(String guestId) {
     final roomId = state.roomId;
-    if (roomId == null) return;
+    if (roomId == null) return false;
+    if (roomLog.events.length > kMaxRoomAutobaseEvents) {
+      state = state.copyWith(lastReplicationError: 'autobase-cap');
+      return false;
+    }
+    var ok = true;
     for (final event in roomLog.events) {
-      _connections.sendRoomPacket(
+      if (!_connections.sendRoomPacket(
         guestId,
         encodeRoomAutobasePacket(roomId, event),
-      );
+      )) {
+        ok = false;
+        _noteReplicationFailure();
+      }
     }
+    return ok;
   }
 
   /// Guest-only. Host writes Autobase; guests apply stamped events.
@@ -2026,6 +2123,9 @@ class RoomManager extends StateNotifier<RoomState> {
         trustedSenderId: trustedSenderId,
       );
       if (path != null && path.isNotEmpty) {
+        // Stat the actual bytes: claimed att['size'] is untrusted.
+        final onDisk = attachmentPathSize(path);
+        if (onDisk <= 0 || onDisk > kMaxRoomFileRawBytes) return;
         await db.saveFileBlob(
           id,
           const <int>[],
@@ -2102,6 +2202,11 @@ class RoomManager extends StateNotifier<RoomState> {
         final digest = (packet['sha256'] ?? att['sha256'])?.toString();
         final native = packet['native'] == true || att['native'] == true;
         if (native && transferId.isNotEmpty) {
+          // Claimed size is untrusted metadata: cap it here (the
+          // coordinator also caps the actual bytes at 50 MiB; rooms cap
+          // lower and the on-disk file is stat-checked on save).
+          final claimed = (att['size'] as num?)?.toInt() ?? 0;
+          if (claimed <= 0 || claimed > kMaxRoomFileRawBytes) return null;
           return _RoomContent(
             kind: 'file',
             attachment: <String, Object?>{
@@ -2459,6 +2564,10 @@ class _ConnRoomTransport implements RoomTransport, RoomNativeFileSink {
   @override
   bool sendRoomPacket(String peerId, Map<String, Object?> packet) =>
       _c.sendRoomPacket(peerId, packet);
+
+  /// Last DualStack send failure, for RoomState diagnostics.
+  String get lastReplicationError =>
+      _c.nativeBridge?.lastReplicationError ?? '';
 
   @override
   bool hasReliable(String peerId) => _c.hasReliable(peerId);

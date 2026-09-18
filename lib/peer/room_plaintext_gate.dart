@@ -36,14 +36,14 @@ final RoomPlaintextSessionAck kRoomPlaintextSessionAck =
     RoomPlaintextSessionAck();
 
 /// Shared wire send used by [ConnectionsNotifier.sendRoomPacket] and
-/// [RoomScopedTransport.sendRoomPacket].
+/// [RoomScopedTransport.sendRoomPacket]. Propagates the send result so a
+/// fail-closed bridge is visible to RoomManager.
 bool sendGuardedRoomPacket(
   Map<String, Object?> packet, {
   required bool connected,
-  required void Function(Map<String, Object?>) send,
+  required bool Function(Map<String, Object?>) send,
 }) {
   if (!kRoomPlaintextSessionAck.allowsPacket(packet)) return false;
   if (!connected) return false;
-  send(packet);
-  return true;
+  return send(packet);
 }

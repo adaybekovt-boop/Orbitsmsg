@@ -1136,10 +1136,8 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
 
     if (useNativePath) {
       if (outboundPath == null) {
-        if (isDevBareTransportRequested()) {
-          unawaited(db.updateMessageStatus(msgId, 'pending'));
-          return msgId;
-        }
+        unawaited(db.updateMessageStatus(msgId, 'pending'));
+        return msgId;
       } else {
         try {
           final fileTransferId = sanitizeTransferId(msgId);
@@ -1174,9 +1172,12 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
             unawaited(db.updateMessageStatus(msgId, 'pending'));
           }
           return msgId;
-        } catch (_) {
+        } catch (err) {
+          // Native path failed: stay pending, record the error. Never
+          // fall through to whole-file base64 on a native peer.
           unawaited(db.updateMessageStatus(msgId, 'pending'));
-          if (isDevBareTransportRequested()) return msgId;
+          conns.nativeBridge?.lastReplicationError = err.toString();
+          return msgId;
         }
       }
     }

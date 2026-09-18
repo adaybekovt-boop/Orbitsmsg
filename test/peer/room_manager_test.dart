@@ -9,6 +9,7 @@
 //     and NO room session (role stays none) — never a silent no-op.
 //   • clearJoinError resets the error.
 
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:drift/native.dart';
@@ -44,6 +45,15 @@ class _FakeTransport implements RoomTransport {
   void openReliable(String peerId) {}
   @override
   PeerJsClient? get rawPeer => null;
+}
+
+class _FailingTransport extends _FakeTransport {
+  final List<Map<String, Object?>> sent = [];
+  @override
+  bool sendRoomPacket(String peerId, Map<String, Object?> packet) {
+    sent.add(packet);
+    return false;
+  }
 }
 
 /// A [RoomSignalingHost] whose `start()` always throws a chosen
@@ -161,6 +171,78 @@ void main() {
     expect(
       next.roomLog.projection.state.channels,
       rooms.roomLog.projection.state.channels,
+    );
+  });
+
+  test('hydrate room A then createRoom B leaves B log empty of A', () async {
+    final c = makeContainer();
+    final rooms = c.read(roomManagerProvider.notifier);
+    final saved = utf8.encode(jsonEncode({
+      'roomId': 'ORBIT-FOREIGNHOST',
+      'revoked': <String>[],
+      'events': [
+        {
+          'writerId': 'foreign',
+          'seq': 0,
+          'kind': 'membership',
+          'payload': {
+            'peerId': 'leaked',
+            'action': 'join',
+            'displayName': 'Leak',
+          },
+        },
+        {
+          'writerId': 'foreign',
+          'seq': 1,
+          'kind': 'message',
+          'payload': {'id': 'm-leak', 'text': 'should-not-survive'},
+        },
+      ],
+    }));
+    rooms.bindAutobaseSnapshot(
+      write: (_) async {},
+      read: () async => Uint8List.fromList(saved),
+    );
+    await rooms.roomLog.hydrate();
+    expect(
+      rooms.roomLog.projection.state.members.containsKey('leaked'),
+      isTrue,
+    );
+
+    await rooms.createRoom('Server B');
+
+    expect(rooms.roomLog.roomId, hostId);
+    expect(
+      rooms.roomLog.projection.state.members.containsKey('leaked'),
+      isFalse,
+    );
+    expect(
+      rooms.roomLog.projection.state.messages.any((m) => m['id'] == 'm-leak'),
+      isFalse,
+    );
+    expect(rooms.roomLog.projection.state.members[hostId], isNotNull);
+  });
+
+  test('failed Autobase broadcast surfaces lastReplicationError', () async {
+    final tx = _FailingTransport();
+    final c = ProviderContainer(overrides: [
+      localProfileProvider.overrideWithValue(hostUser),
+      roomTransportProvider.overrideWithValue(tx),
+    ]);
+    containers.add(c);
+    final rooms = c.read(roomManagerProvider.notifier);
+    await rooms.createRoom('S');
+    await tx.bridge.handleInbound('ORBIT-BBBBBB', {
+      'type': 'room_join',
+      'roomId': hostId,
+      'guestName': 'G',
+      'guestPeerId': 'ORBIT-BBBBBB',
+    });
+    expect(c.read(roomManagerProvider).lastReplicationError, isNotEmpty);
+    // Sends were attempted (and reported false) — never silently dropped.
+    expect(
+      tx.sent.where((p) => p['type'] == 'room_autobase'),
+      isNotEmpty,
     );
   });
 

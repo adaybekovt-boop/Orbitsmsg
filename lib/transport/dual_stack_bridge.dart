@@ -768,31 +768,46 @@ class DualStackBridge {
     final seq = (packet['seq'] as num?)?.toInt() ?? 0;
     final eventId = '$writer:$seq:$roomId';
     final conversationId = conversationIdForPeers(_selfId(), peerId);
-    if (journal.records.any(
-      (r) =>
-          r.kind == ReplicationEventKind.roomMembershipChanged &&
-          r.fields['eventId'] == eventId &&
-          r.fields['conversationId'] == conversationId,
-    )) {
-      return true;
-    }
+    final fields = <String, Object?>{
+      'eventId': eventId,
+      'conversationId': conversationId,
+      'senderIdentity': _selfId(),
+      'senderDeviceId': selfDeviceId,
+      'createdAt': DateTime.now().millisecondsSinceEpoch,
+      'roomId': roomId,
+      'action': action,
+      'memberPeerId': member,
+      'abWriter': writer,
+      'abSeq': seq,
+    };
+    bool same(JournalRecord r) =>
+        r.kind == ReplicationEventKind.roomMembershipChanged &&
+        r.fields['eventId'] == eventId &&
+        r.fields['conversationId'] == conversationId;
+    final alreadyJournaled = journal.records.any(same);
+    final alreadyInCore = hypercore.blocks.any(same);
+    // Dedup only counts when BOTH stores hold the event. A journal row
+    // left behind by a failed Hypercore append must not green-light
+    // the packet on retry.
+    if (alreadyJournaled && alreadyInCore) return true;
     lastReplicationError = '';
-    final record = journal.append(
-      ReplicationEventKind.roomMembershipChanged,
-      <String, Object?>{
-        'eventId': eventId,
-        'conversationId': conversationId,
-        'senderIdentity': _selfId(),
-        'senderDeviceId': selfDeviceId,
-        'createdAt': DateTime.now().millisecondsSinceEpoch,
-        'roomId': roomId,
-        'action': action,
-        'memberPeerId': member,
-        'abWriter': writer,
-        'abSeq': seq,
-      },
-    );
-    hypercore.append(record);
+    // Hypercore first: if it throws, the journal stays clean and
+    // sendRoomPacket reports false without sending.
+    if (!alreadyInCore) {
+      hypercore.append(
+        JournalRecord(
+          seq: alreadyJournaled
+              ? journal.records.firstWhere(same).seq
+              : journal.length,
+          writerDeviceId: selfDeviceId,
+          kind: ReplicationEventKind.roomMembershipChanged,
+          fields: fields,
+        ),
+      );
+    }
+    final record = alreadyJournaled
+        ? journal.records.firstWhere(same)
+        : journal.append(ReplicationEventKind.roomMembershipChanged, fields);
     _fanoutReplication(record);
     unawaited(_commitJournal(record, projectLive: true));
     return true;

@@ -36,6 +36,19 @@ Future<List<int>?> readAttachmentPath(
   return file.readAsBytes();
 }
 
+/// On-disk size of a jailed attachment path, or -1 when absent/unallowed.
+/// Lets callers cap by stat instead of materializing bytes.
+int attachmentPathSize(String path) {
+  if (!isAllowedAttachmentPath(path)) return -1;
+  try {
+    final file = File(path);
+    if (!file.existsSync()) return -1;
+    return file.lengthSync();
+  } catch (_) {
+    return -1;
+  }
+}
+
 String? lookupIncomingTransferPath({
   required String transferId,
   required String name,

@@ -16,6 +16,8 @@ Future<List<int>?> readAttachmentPath(
 
 bool isAllowedAttachmentPath(String path, {Object? incomingBase}) => false;
 
+int attachmentPathSize(String path) => -1;
+
 String? lookupIncomingTransferPath({
   required String transferId,
   required String name,
