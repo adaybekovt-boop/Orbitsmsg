@@ -1,5 +1,21 @@
 # PR #62 repair report
 
+## 2026-09-18 Autobase persist / live membership projector
+
+Software path only. External gates stay open.
+
+- `RoomAutobaseLog` vault-wraps the writer log when IO is injected.
+  `RoomManager.bindAutobaseSnapshot` hydrates after unlock;
+  `NativeTransportHost` binds the production prefs wrappers. Room
+  tests that set a vault KEK do not touch SharedPreferences
+- DualStack membership / own-account records append FileJournal and
+  live-project through `onRemoteRecord`. Ciphertext envelopes stay
+  off that path (`onPacket` owns decrypt)
+- Live `JournalProjector` membership list matches FileJournal replay
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
 ## 2026-09-18 mailbox buckets / journal clone / 3-device mesh
 
 Software path only. External gates stay open.

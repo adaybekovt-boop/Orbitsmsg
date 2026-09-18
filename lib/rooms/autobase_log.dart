@@ -1,6 +1,13 @@
 // Deterministic multiwriter projection for rooms (Phase 12).
 // Does not encrypt. Host-plaintext warning stays in place.
 // DualStack carries [kRoomAutobaseType] as a room_* control packet.
+// The writer log is vault-wrapped locally so a host restart can still
+// replay Autobase events. Message bodies never enter Hypercore.
+
+import 'dart:async';
+import 'dart:convert';
+
+import '../storage/wrapped_snapshot.dart';
 
 /// Host-plaintext Autobase event on the room control channel.
 const String kRoomAutobaseType = 'room_autobase';
@@ -114,12 +121,19 @@ class AutobaseProjection {
 
 /// Local writer-seq tracker used by RoomManager. Payload stays host-plaintext.
 class RoomAutobaseLog {
-  RoomAutobaseLog({Set<String>? revokedWriters})
-      : projection = AutobaseProjection(revokedWriters: revokedWriters);
+  RoomAutobaseLog({
+    Set<String>? revokedWriters,
+    this.writeSnapshot,
+    this.readSnapshot,
+  }) : projection = AutobaseProjection(revokedWriters: revokedWriters);
 
   final AutobaseProjection projection;
+  WrappedSnapshotWriter? writeSnapshot;
+  WrappedSnapshotReader? readSnapshot;
   final Map<String, int> _seq = <String, int>{};
   final List<RoomEvent> events = <RoomEvent>[];
+  Future<void> _persistChain = Future<void>.value();
+  bool _restoring = false;
 
   int nextSeq(String writerId) =>
       _seq[writerId] = (_seq[writerId] ?? -1) + 1;
@@ -143,8 +157,80 @@ class RoomAutobaseLog {
     );
     final already = projection.state.applied.contains(projection.state.keyOf(event));
     projection.apply(event);
-    if (!already) events.add(event);
+    if (!already) {
+      events.add(event);
+      if (!_restoring) unawaited(persist());
+    }
     return event;
+  }
+
+  Map<String, Object?> snapshot() => <String, Object?>{
+        'revoked': (projection.revokedWriters.toList()..sort()),
+        'events': [
+          for (final event in events)
+            <String, Object?>{
+              'writerId': event.writerId,
+              'seq': event.seq,
+              'kind': event.kind,
+              'payload': event.payload,
+            },
+        ],
+      };
+
+  void restore(Map<String, Object?> row) {
+    _restoring = true;
+    try {
+      clear();
+      final revoked = row['revoked'];
+      if (revoked is List) {
+        for (final id in revoked) {
+          if (id is String && id.isNotEmpty) projection.revokeWriter(id);
+        }
+      }
+      final list = row['events'];
+      if (list is! List) return;
+      for (final item in list) {
+        if (item is! Map) continue;
+        final raw = item['payload'];
+        append(
+          writerId: item['writerId'] as String? ?? '',
+          kind: item['kind'] as String? ?? '',
+          payload: raw is Map
+              ? Map<String, Object?>.from(raw)
+              : <String, Object?>{},
+          seq: (item['seq'] as num?)?.toInt(),
+        );
+      }
+    } finally {
+      _restoring = false;
+    }
+  }
+
+  Future<void> hydrate() async {
+    final reader = readSnapshot;
+    if (reader == null) return;
+    try {
+      final bytes = await reader();
+      if (bytes == null || bytes.isEmpty) return;
+      final raw = jsonDecode(utf8.decode(bytes));
+      if (raw is! Map) return;
+      restore(Map<String, Object?>.from(raw));
+    } catch (_) {}
+  }
+
+  Future<void> persist() {
+    if (writeSnapshot == null) return Future<void>.value();
+    final next = _persistChain.then((_) => _persistNow());
+    _persistChain = next.catchError((_) {});
+    return next;
+  }
+
+  Future<void> _persistNow() async {
+    final writer = writeSnapshot;
+    if (writer == null) return;
+    try {
+      await writer(utf8.encode(jsonEncode(snapshot())));
+    } catch (_) {}
   }
 
   void clear() {

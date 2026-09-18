@@ -9,6 +9,8 @@
 //     and NO room session (role stays none) — never a silent no-op.
 //   • clearJoinError resets the error.
 
+import 'dart:typed_data';
+
 import 'package:drift/native.dart';
 import 'package:flutter/foundation.dart'
     show TargetPlatform, debugDefaultTargetPlatformOverride;
@@ -127,6 +129,39 @@ void main() {
     expect(members.any((m) => m['peerId'] == hostId), isTrue);
     expect(rooms.roomLog.projection.state.members[hostId], isNotNull);
     expect(rooms.roomLog.projection.state.channels, isNotEmpty);
+  });
+
+  test('bindAutobaseSnapshot hydrates writer log after restart', () async {
+    final c = makeContainer();
+    final rooms = c.read(roomManagerProvider.notifier);
+    await rooms.createRoom('My Server');
+    final saved = <int>[];
+    rooms.bindAutobaseSnapshot(
+      write: (bytes) async {
+        saved
+          ..clear()
+          ..addAll(bytes);
+      },
+      read: () async => saved.isEmpty ? null : Uint8List.fromList(saved),
+    );
+    await rooms.roomLog.persist();
+    expect(saved, isNotEmpty);
+
+    final restarted = makeContainer();
+    final next = restarted.read(roomManagerProvider.notifier);
+    next.bindAutobaseSnapshot(
+      write: (bytes) async {},
+      read: () async => Uint8List.fromList(saved),
+    );
+    await next.roomLog.hydrate();
+    expect(
+      next.roomLog.projection.state.members.keys,
+      rooms.roomLog.projection.state.members.keys,
+    );
+    expect(
+      next.roomLog.projection.state.channels,
+      rooms.roomLog.projection.state.channels,
+    );
   });
 
   test('createRoom(selfHosted) on a non-desktop platform sets a clear error',

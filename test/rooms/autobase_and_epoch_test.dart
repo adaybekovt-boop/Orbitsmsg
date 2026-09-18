@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/rooms/autobase_log.dart';
@@ -188,6 +190,53 @@ void main() {
     }
     expect(guest.projection.state.members, host.projection.state.members);
     expect(guest.projection.state.channels, host.projection.state.channels);
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('Autobase writer log hydrates after restart and still converges',
+      () async {
+    final saved = <int>[];
+    final live = RoomAutobaseLog(
+      writeSnapshot: (bytes) async {
+        saved
+          ..clear()
+          ..addAll(bytes);
+      },
+      readSnapshot: () async => saved.isEmpty ? null : Uint8List.fromList(saved),
+    );
+    live.append(
+      writerId: 'host',
+      kind: 'membership',
+      payload: {'peerId': 'g1', 'action': 'join'},
+    );
+    live.append(
+      writerId: 'host',
+      kind: 'channel',
+      payload: {'id': 'c1', 'name': 'general'},
+    );
+    live.append(
+      writerId: 'host',
+      kind: 'message',
+      payload: {'id': 'm1', 'text': 'hi'},
+    );
+    await live.persist();
+    expect(saved, isNotEmpty);
+
+    final restarted = RoomAutobaseLog(
+      writeSnapshot: (bytes) async {},
+      readSnapshot: () async => Uint8List.fromList(saved),
+    );
+    await restarted.hydrate();
+    expect(restarted.events.length, live.events.length);
+    expect(
+      restarted.projection.state.members.keys,
+      live.projection.state.members.keys,
+    );
+    expect(restarted.projection.state.channels, live.projection.state.channels);
+    expect(
+      restarted.projection.state.messages.any((m) => m['text'] == 'hi'),
+      isTrue,
+    );
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
 }

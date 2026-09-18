@@ -481,9 +481,9 @@ class DualStackBridge {
     Map<String, Object?> fields,
   ) {
     final record = journal.append(kind, fields);
-    unawaited(durableJournal?.append(record));
     hypercore.append(record);
     unawaited(_fanoutSignedOwnAccount(record));
+    unawaited(_commitJournal(record, projectLive: true));
   }
 
   Future<void> _fanoutSignedOwnAccount(JournalRecord record) async {
@@ -715,10 +715,22 @@ class DualStackBridge {
         'abSeq': seq,
       },
     );
-    unawaited(durableJournal?.append(record));
     hypercore.append(record);
     _fanoutReplication(record);
+    unawaited(_commitJournal(record, projectLive: true));
     return true;
+  }
+
+  Future<void> _commitJournal(
+    JournalRecord record, {
+    bool projectLive = false,
+  }) async {
+    try {
+      await durableJournal?.append(record);
+      if (projectLive) await onRemoteRecord?.call(record);
+    } catch (err) {
+      lastReplicationError = err.toString();
+    }
   }
 
   Future<void> sendCallSignal(String peerId, CallSignal signal) {
@@ -783,9 +795,9 @@ class DualStackBridge {
         toDeviceId: toDeviceId,
       ),
     );
-    unawaited(durableJournal?.append(record));
     hypercore.append(record);
     _fanoutReplication(record);
+    unawaited(_commitJournal(record));
   }
 
   void _fanoutReplication(JournalRecord record) {

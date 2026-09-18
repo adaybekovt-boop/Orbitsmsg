@@ -44,6 +44,7 @@ import '../state/connections_notifier.dart';
 import '../state/local_profile_provider.dart';
 import '../state/peer_connection_provider.dart';
 import '../storage/db.dart' as db;
+import '../storage/wrapped_snapshot.dart';
 import '../utils/common.dart' show safeAvatarDataUrl;
 import 'helpers.dart';
 import 'peerjs_client.dart';
@@ -316,6 +317,17 @@ class RoomManager extends StateNotifier<RoomState> {
     _defaultTransport.bindRoom(RoomBridge(handleInbound: _handleInbound));
   }
 
+  /// Vault-wrapped Autobase writer log. Tests inject memory IO; the
+  /// native host binds the production prefs wrappers after unlock.
+  void bindAutobaseSnapshot({
+    WrappedSnapshotWriter? write,
+    WrappedSnapshotReader? read,
+  }) {
+    roomLog.writeSnapshot = write ?? writeRoomAutobaseSnapshot;
+    roomLog.readSnapshot = read ?? readRoomAutobaseSnapshot;
+    unawaited(roomLog.hydrate());
+  }
+
   final Ref _ref;
 
   /// The peerjs.com-backed transport (production) or a test fake. Always present.
@@ -365,6 +377,7 @@ class RoomManager extends StateNotifier<RoomState> {
   final SecurityMonitor _security = SecurityMonitor();
 
   /// Host-plaintext Autobase log. Writers converge; no room_crypto.
+  /// Vault-wrapped locally so a host restart can still replay events.
   final RoomAutobaseLog roomLog = RoomAutobaseLog();
 
   /// Delegates to the (possibly faked) transport. Named `_connections` for

@@ -10,6 +10,8 @@ import 'package:orbits_flutter/transport/replication_schema.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
 import 'package:orbits_flutter/rooms/autobase_log.dart';
+import 'package:orbits_flutter/replication/drift_projector.dart';
+import 'package:orbits_flutter/replication/file_journal.dart';
 import 'package:orbits_flutter/replication/hypercore_store.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/transport/dev_bare_transport.dart';
@@ -608,6 +610,106 @@ void main() {
     expect(alice.lastReplicationError, contains('hypercore-append-failed'));
     await Future<void>.delayed(const Duration(milliseconds: 20));
     expect(seen, isEmpty);
+    await alice.detach();
+  });
+
+  test('live membership projector matches FileJournal replay', () async {
+    final durable = FileJournal.memory('a');
+    Future<Map<String, Object?>?> decrypt(List<int> _, JournalRecord __) async =>
+        null;
+    final live = JournalProjector(decrypt: decrypt);
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    final aliceIds = TrustedIdentityStore();
+    final bobIds = TrustedIdentityStore();
+    final aliceDev = DeviceRegistry();
+    final bobDev = DeviceRegistry();
+    trustContactPair(
+      aliceIdentities: aliceIds,
+      aliceDevices: aliceDev,
+      bobIdentities: bobIds,
+      bobDevices: bobDev,
+      aliceBinding: bindA,
+      bobBinding: bindB,
+    );
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(bindA);
+    await pair.$2.publish(bindB);
+    final alice = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: secrets,
+      devices: aliceDev,
+      identities: aliceIds,
+      durableJournal: durable,
+      onRemoteRecord: live.apply,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'b',
+      secrets: secrets,
+      devices: bobDev,
+      identities: bobIds,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    ).attach();
+    await alice.dial('ORBIT-BBBBBBBBBBBBBBBB');
+    expect(
+      alice.sendRoomPacket(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        encodeRoomAutobasePacket(
+          'room-1',
+          const RoomEvent(
+            writerId: 'host',
+            seq: 0,
+            kind: 'membership',
+            payload: {
+              'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+              'action': 'join',
+            },
+          ),
+        ),
+      ),
+      isTrue,
+    );
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (live.membershipChanges.isEmpty &&
+        DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+    }
+    expect(live.membershipChanges, isNotEmpty);
+    expect(live.membershipChanges.single['action'], 'join');
+    expect(
+      live.membershipChanges.single['memberPeerId'],
+      'ORBIT-BBBBBBBBBBBBBBBB',
+    );
+    expect(live.membershipChanges.single['roomId'], 'room-1');
+
+    final replay = JournalProjector(decrypt: decrypt);
+    await replay.applyAll(await durable.replay());
+    expect(replay.membershipChanges, live.membershipChanges);
+    expect(live.messages, isEmpty);
+    expect(kRoomsApplicationE2eImplemented, isFalse);
     await alice.detach();
   });
 

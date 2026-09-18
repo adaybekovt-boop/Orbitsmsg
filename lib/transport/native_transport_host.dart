@@ -17,6 +17,7 @@ import '../devices/device_ratchet_sessions.dart';
 import '../devices/device_registry.dart';
 import '../devices/local_device_material.dart';
 import '../mailbox/blind_store.dart';
+import '../peer/room_manager.dart';
 import '../peer/signaling.dart';
 import '../push/doze_adapter.dart';
 import '../push/opaque_wake.dart';
@@ -332,6 +333,7 @@ class NativeTransportHost {
           },
           signRecord: signBytes,
         );
+    _ref.read(roomManagerProvider.notifier).bindAutobaseSnapshot();
     lifecycle = TransportLifecycle(
       transport: transport!,
       onResumeDrain: () async {
