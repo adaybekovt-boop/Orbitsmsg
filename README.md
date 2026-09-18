@@ -36,7 +36,7 @@ Or download directly from GitHub:
 |----------|------|
 | Android (APK) | https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-android-universal.apk |
 | Windows (EXE) | https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-windows-x64.exe |
-| Web | https://orbits-eeo.pages.dev/ |
+| Web | https://orbits-site.pages.dev/ |
 
 > On Android you may need to allow installs from unknown sources.
 
