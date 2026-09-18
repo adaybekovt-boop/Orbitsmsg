@@ -1360,7 +1360,9 @@ class DualStackBridge {
     }
     try {
       onDrop?.call(peerId, decodeJsonPayload(bytes));
-    } catch (_) {}
+    } catch (err) {
+      lastReplicationError = err.toString();
+    }
   }
 
   Future<void> _onReplicationFrame(String peerId, List<int> bytes) async {

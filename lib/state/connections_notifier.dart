@@ -386,13 +386,15 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       if (dual.canUseNative(remoteId)) {
         try {
           return await dual.sendEncrypted(remoteId, msg);
-        } catch (_) {
+        } catch (err) {
+          dual.lastReplicationError = err.toString();
           if (failClosed || !isPeerjsFallbackEnabled()) return false;
         }
       } else if (dual.mailbox != null && dual.secrets.get(remoteId) != null) {
         try {
           return await dual.sendEncrypted(remoteId, msg);
-        } catch (_) {
+        } catch (err) {
+          dual.lastReplicationError = err.toString();
           if (failClosed || !isPeerjsFallbackEnabled()) return false;
         }
       }
@@ -411,7 +413,8 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     if (dual != null && dual.canUseNative(remoteId)) {
       try {
         return await dual.sendEphemeral(remoteId, msg);
-      } catch (_) {
+      } catch (err) {
+        dual.lastReplicationError = err.toString();
         if (failClosed || !isPeerjsFallbackEnabled()) return false;
       }
     }

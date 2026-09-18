@@ -1,5 +1,17 @@
 # PR #62 repair report
 
+## 2026-09-18 CallsNotifier DualStack ringing / send errors
+
+Software path only. External gates stay open.
+
+- An inbound DualStack offer sets `CallsNotifier` to `CallStatus.ringing`
+  with no PeerJS DataChannel
+- DualStack send/ephemeral failures and room native file-send failures
+  are visible on `lastReplicationError`
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
 ## 2026-09-18 journal clone-decrypt / OS wake hop
 
 Software path only. External gates stay open.

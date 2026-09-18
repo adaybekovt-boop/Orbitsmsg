@@ -2491,6 +2491,7 @@ class _ConnRoomTransport implements RoomTransport, RoomNativeFileSink {
       );
       return true;
     } catch (err) {
+      _c.nativeBridge?.lastReplicationError = err.toString();
       debugPrint('[room] native file send to $peerId failed: $err');
       return false;
     }
