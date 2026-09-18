@@ -26,8 +26,9 @@ Future<TransportFileDescriptor?> writeTempAttachment({
 Future<List<int>?> readAttachmentPath(
   String path, {
   int maxBytes = kAttachmentMaxObjectBytes,
+  Directory? incomingBase,
 }) async {
-  if (!isAllowedAttachmentPath(path)) return null;
+  if (!isAllowedAttachmentPath(path, incomingBase: incomingBase)) return null;
   final file = File(path);
   if (!file.existsSync()) return null;
   if (file.lengthSync() > maxBytes) {
@@ -83,7 +84,7 @@ Future<List<int>?> readIncomingTransfer({
     base: base,
   );
   if (path == null) return null;
-  return readAttachmentPath(path);
+  return readAttachmentPath(path, incomingBase: base);
 }
 
 Future<void> deleteTempAttachment(String? path) async {

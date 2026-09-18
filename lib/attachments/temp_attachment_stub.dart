@@ -11,6 +11,7 @@ Future<TransportFileDescriptor?> writeTempAttachment({
 Future<List<int>?> readAttachmentPath(
   String path, {
   int maxBytes = 50 * 1024 * 1024,
+  Object? incomingBase,
 }) async =>
     null;
 

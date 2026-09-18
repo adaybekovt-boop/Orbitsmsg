@@ -134,6 +134,12 @@ class DualStackBridge {
   final Map<String, TransportPath> paths = <String, TransportPath>{};
   final Map<String, String> _expectedPeer = <String, String>{};
   final Map<String, DeviceBinding> _bindings = <String, DeviceBinding>{};
+  // Transport-id → binding WITHOUT the logical-owner aliasing of
+  // [_bindings]: two own-devices share one owner id, so the logical key
+  // can only hold one of them. Security checks that must attribute a
+  // frame to the connection it arrived on use this map.
+  final Map<String, DeviceBinding> _transportBindings =
+      <String, DeviceBinding>{};
   final Map<String, String> _fingerprintOwner = <String, String>{};
   final Map<String, String> _fingerprintTransport = <String, String>{};
   final Map<String, Completer<void>> _authWaiters = <String, Completer<void>>{};
@@ -173,6 +179,7 @@ class DualStackBridge {
     _authorizedPending.clear();
     _expectedPeer.clear();
     _bindings.clear();
+    _transportBindings.clear();
     _fingerprintOwner.clear();
     _fingerprintTransport.clear();
     for (final waiter in _authWaiters.values) {
@@ -1056,6 +1063,7 @@ class DualStackBridge {
         _authorizedPending.remove(norm);
         _expectedPeer.remove(norm);
         _bindings.remove(norm);
+        _transportBindings.remove(norm);
         _fingerprintTransport.removeWhere((_, id) => id == norm);
         _completeAuthWaiter(norm);
         files.forgetPeer(norm);
@@ -1173,6 +1181,7 @@ class DualStackBridge {
     if (transportId != logical) {
       _bindings[transportId] = binding;
     }
+    _transportBindings[transportId] = binding;
     _authorizedPending.add(logical);
     if (transportId != logical) {
       _authorizedPending.add(transportId);
@@ -1328,7 +1337,10 @@ class DualStackBridge {
     final norm = normalizePeerId(peerId);
     if (fromDeviceId.isEmpty) return 'missing-from-device';
     if (isAuthenticated(norm)) {
-      final binding = _bindings[norm];
+      // Transport-keyed binding: the logical-owner key aliases when two
+      // own-devices share an owner, so only the per-connection entry can
+      // attribute this frame.
+      final binding = _transportBindings[norm];
       if (binding == null || binding.deviceId.isEmpty) {
         return 'binding-required';
       }
@@ -1495,7 +1507,7 @@ class DualStackBridge {
         senderIdentity: peerId,
         envelopeCipher: kDeviceRatchetMessageType,
         fromDeviceId:
-            _bindings[normalizePeerId(peerId)]?.deviceId ?? fromDevice,
+            _transportBindings[normalizePeerId(peerId)]?.deviceId ?? fromDevice,
         toDeviceId: toDevice,
       );
       await onPacket(

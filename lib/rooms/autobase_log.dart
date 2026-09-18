@@ -155,16 +155,29 @@ class RoomAutobaseLog {
     final current = _seq[writerId] ?? -1;
     final resolved = seq ?? nextSeq(writerId);
     if (seq != null && seq <= current) {
-      // Rewind: idempotent redelivery is a no-op, anything else is
-      // rejected without touching the projection.
+      // Same writer:seq as an applied event is an idempotent redelivery
+      // only when it is the SAME event; same seq with different content
+      // is a rewind/fork and is rejected without touching projection.
       final probe = RoomEvent(
         writerId: writerId,
         seq: seq,
         kind: kind,
         payload: payload,
       );
-      if (projection.state.applied.contains(projection.state.keyOf(probe))) {
-        return probe;
+      final key = projection.state.keyOf(probe);
+      if (projection.state.applied.contains(key)) {
+        RoomEvent? prior;
+        for (final e in events) {
+          if (projection.state.keyOf(e) == key) {
+            prior = e;
+            break;
+          }
+        }
+        if (prior != null &&
+            prior.kind == kind &&
+            _payloadsEqual(prior.payload, payload)) {
+          return probe;
+        }
       }
       lastPersistError = 'autobase-seq-rewind';
       return probe;
@@ -220,6 +233,7 @@ class RoomAutobaseLog {
         lastPersistError = 'autobase-room-mismatch';
         return;
       }
+      lastPersistError = '';
       clear();
       if (incomingRoom.isNotEmpty) roomId = incomingRoom;
       final revoked = row['revoked'];
@@ -256,7 +270,6 @@ class RoomAutobaseLog {
       final raw = jsonDecode(utf8.decode(bytes));
       if (raw is! Map) return;
       restore(Map<String, Object?>.from(raw));
-      lastPersistError = '';
     } catch (err) {
       lastPersistError = err.toString();
     }
@@ -290,4 +303,30 @@ class RoomAutobaseLog {
     events.clear();
     roomId = null;
   }
+}
+
+bool _payloadsEqual(Map<String, Object?> a, Map<String, Object?> b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (final key in a.keys) {
+    if (!b.containsKey(key)) return false;
+    final va = a[key];
+    final vb = b[key];
+    if (va is Map && vb is Map) {
+      if (!_payloadsEqual(
+        Map<String, Object?>.from(va),
+        Map<String, Object?>.from(vb),
+      )) {
+        return false;
+      }
+    } else if (va is List && vb is List) {
+      if (va.length != vb.length) return false;
+      for (var i = 0; i < va.length; i++) {
+        if (va[i] != vb[i]) return false;
+      }
+    } else if (va != vb) {
+      return false;
+    }
+  }
+  return true;
 }
