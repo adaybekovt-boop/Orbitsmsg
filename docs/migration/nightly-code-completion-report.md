@@ -88,6 +88,19 @@ share `sanitizeTransferId`. Lookup compares sanitized external ids so
 receive. Traversal checks stay. The blob is still copied into Drift
 for the chat decoder (path-only persist is a later slice).
 
+## 2026-09-17 event codec + host teardown
+
+- One `platformMapToTransportEvent` /
+  `transportEventToPlatformMap` /
+  `deviceBindingToWire` shared by plugin, worklet IPC, and
+  `LocalWorkletPlatform`
+- Missing `connectionNoisePublicKey` stays null (never copied from
+  the binding transport key)
+- `LocalWorkletPlatform` forwards every `TransportEvent` and returns
+  `hypercorePublicKey` from `runtime.info`
+- `NativeTransportHost` uses one `_teardownAttached` for post-bind
+  abort, shutdown, and crash recover
+
 ## Identity (historical repair pass; do not treat as current HEAD)
 
 | Field | Value |
