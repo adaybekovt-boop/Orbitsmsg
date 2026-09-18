@@ -1,5 +1,21 @@
 # PR #62 repair report
 
+## 2026-09-18 journal clone-decrypt / OS wake hop
+
+Software path only. External gates stay open.
+
+- Contact-level journal decrypt uses `decryptWirePayload(commit: false)`.
+  DualStack-shaped `v2` rows project the chat `id` into Drift. A second
+  replay after the live consume fail-closes. Host decrypt errors are
+  visible on `lastProjectorError`
+- iOS `didReceiveRemoteNotification` and Android `OrbitsWakeReceiver`
+  hop only `opaqueWakeToken` / `collapseId` / `protocolVersion` onto
+  `app.orbits/wake`. `NativeTransportHost` binds `OpaqueWakeChannel`.
+  `kLiveApnsGateway` stays false. No `voip` / PushKit
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
 ## 2026-09-18 exclusive-native call signal / host opaque-wake drain
 
 Software path only. External gates stay open.

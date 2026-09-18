@@ -140,8 +140,10 @@ class JournalProjector {
         final plain = await decrypt(enc, record);
         if (plain == null) return;
         seenEventIds.add(id);
+        final chatId = (plain['id'] as String?) ?? '';
+        final persistId = chatId.isNotEmpty ? chatId : id;
         final projected = ProjectedMessage(
-          eventId: id,
+          eventId: persistId,
           conversationId: record.fields['conversationId'] as String? ?? '',
           senderIdentity: record.fields['senderIdentity'] as String? ?? '',
           senderDeviceId: record.fields['senderDeviceId'] as String? ?? '',
@@ -150,6 +152,7 @@ class JournalProjector {
           createdAt: (record.fields['createdAt'] as num?)?.toInt() ?? 0,
         );
         messages[id] = projected;
+        if (persistId != id) messages[persistId] = projected;
         await persist?.call(projected);
       case ReplicationEventKind.deliveryAcknowledged:
         final ackId = record.fields['eventId'] as String?;

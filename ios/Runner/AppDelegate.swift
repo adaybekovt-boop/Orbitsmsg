@@ -47,7 +47,61 @@ import UIKit
         }
       }
     }
+    if let registrar = self.registrar(forPlugin: "OrbitsWake") {
+      wakeChannel = FlutterMethodChannel(
+        name: "app.orbits/wake",
+        binaryMessenger: registrar.messenger()
+      )
+      flushPendingWake()
+    }
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  override func application(
+    _ application: UIApplication,
+    didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+    fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+  ) {
+    let forbidden: Set<String> = [
+      "text", "body", "title", "senderName", "displayName",
+      "peerId", "conversationId", "attachment", "mime", "fileName",
+    ]
+    let keys = Set(userInfo.keys.compactMap { $0 as? String })
+    if !keys.isDisjoint(with: forbidden) {
+      completionHandler(.noData)
+      return
+    }
+    guard
+      let token = userInfo["opaqueWakeToken"] as? String, !token.isEmpty,
+      let collapse = userInfo["collapseId"] as? String,
+      let version = userInfo["protocolVersion"] as? Int, version >= 1
+    else {
+      completionHandler(.noData)
+      return
+    }
+    deliverWake([
+      "opaqueWakeToken": token,
+      "collapseId": collapse,
+      "protocolVersion": version,
+    ])
+    completionHandler(.newData)
+  }
+
+  private var wakeChannel: FlutterMethodChannel?
+  private var pendingWake: [String: Any]?
+
+  private func deliverWake(_ payload: [String: Any]) {
+    if let channel = wakeChannel {
+      channel.invokeMethod("opaqueWake", arguments: payload)
+      return
+    }
+    pendingWake = payload
+  }
+
+  private func flushPendingWake() {
+    guard let payload = pendingWake else { return }
+    pendingWake = nil
+    wakeChannel?.invokeMethod("opaqueWake", arguments: payload)
   }
 
   func providerDidReset(_ provider: CXProvider) {}

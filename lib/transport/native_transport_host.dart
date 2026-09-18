@@ -21,6 +21,7 @@ import '../peer/room_manager.dart';
 import '../peer/signaling.dart';
 import '../push/doze_adapter.dart';
 import '../push/opaque_wake.dart';
+import '../push/opaque_wake_channel.dart';
 import '../push/wake_service.dart';
 import '../replication/drift_projector.dart';
 import '../storage/db.dart' as db;
@@ -71,6 +72,7 @@ class NativeTransportHost {
   OpaqueWakeService? wake;
   DozeAdapter? doze;
   DeviceRatchetSessions? ratchets;
+  OpaqueWakeChannel? _wakeChannel;
 
   Map<String, Object?> get routeDiagnostics =>
       lastDecision?.diagnostics() ??
@@ -360,6 +362,9 @@ class NativeTransportHost {
     );
     doze = DozeAdapter(lifecycle: lifecycle!);
     wake = OpaqueWakeService(onAccepted: (_) => doze!.onOpaqueWake());
+    _wakeChannel?.detach();
+    _wakeChannel = OpaqueWakeChannel(onWake: (payload) => wake!.handle(payload))
+      ..attach();
     if (_startupAborted(generation)) {
       await _teardownAttached(chosen: chosen, unbind: true);
       return;
@@ -528,6 +533,8 @@ class NativeTransportHost {
     if (chosen == null || identical(transport, chosen)) {
       transport = null;
     }
+    _wakeChannel?.detach();
+    _wakeChannel = null;
     lifecycle = null;
     wake = null;
     doze = null;
@@ -563,7 +570,8 @@ class NativeTransportHost {
     final String wire;
     try {
       wire = utf8.decode(enc);
-    } catch (_) {
+    } catch (err) {
+      lastProjectorError = err.toString();
       return null;
     }
     if (record.fields['envelopeCipher'] == kDeviceRatchetMessageType) {
@@ -586,20 +594,30 @@ class NativeTransportHost {
         );
         final decoded = jsonDecode(utf8.decode(bytes));
         if (decoded is Map) {
-          return <String, Object?>{'text': '${decoded['text'] ?? ''}'};
+          return <String, Object?>{
+            'text': '${decoded['text'] ?? ''}',
+            if (decoded['id'] != null) 'id': decoded['id'],
+          };
         }
         if (decoded is String) return <String, Object?>{'text': decoded};
-      } catch (_) {}
+      } catch (err) {
+        lastProjectorError = err.toString();
+      }
       return null;
     }
     if (!isWireCiphertext(wire)) return null;
     try {
-      final plain = await decryptWirePayload(sender, wire);
+      final plain = await decryptWirePayload(sender, wire, commit: false);
       if (plain is Map) {
-        return <String, Object?>{'text': '${plain['text'] ?? ''}'};
+        return <String, Object?>{
+          'text': '${plain['text'] ?? ''}',
+          if (plain['id'] != null) 'id': plain['id'],
+        };
       }
       if (plain is String) return <String, Object?>{'text': plain};
-    } catch (_) {}
+    } catch (err) {
+      lastProjectorError = err.toString();
+    }
     return null;
   }
 

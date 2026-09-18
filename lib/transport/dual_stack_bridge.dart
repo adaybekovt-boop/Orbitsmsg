@@ -351,7 +351,9 @@ class DualStackBridge {
       if (isDevBareTransportRequested() && secrets.get(norm) != null) {
         try {
           await dial(norm);
-        } catch (_) {}
+        } catch (err) {
+          lastReplicationError = err.toString();
+        }
       }
       if (!isAuthenticated(norm)) {
         if (isDevBareTransportRequested()) return false;

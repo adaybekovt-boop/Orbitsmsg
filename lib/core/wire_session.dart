@@ -806,13 +806,20 @@ Future<String> encryptOutbound(String peerId, Object? obj) {
 
 /// Decrypt a wire string в†’ Dart object. Buffers ciphertexts that arrive
 /// before the handshake completes; they're drained when acceptHello finishes.
-Future<Object?> decryptInbound(String peerId, String wireStr) async {
+Future<Object?> decryptInbound(
+  String peerId,
+  String wireStr, {
+  bool commit = true,
+}) async {
   var session = _sessions[peerId];
   if (session == null || session.state == null) {
     await _hydrateSession(peerId);
     session = _sessions[peerId];
   }
   if (session == null || session.state == null) {
+    if (!commit) {
+      throw StateError('journal decrypt requires a hydrated session');
+    }
     // Ratchet not ready yet вЂ” buffer the ciphertext and wait for acceptHello
     // to complete. Avoids silently dropping messages that arrive mid-race.
     return _bufferPendingInbound(peerId, wireStr);
@@ -836,14 +843,20 @@ Future<Object?> decryptInbound(String peerId, String wireStr) async {
   }
   final live = session;
   return live.runExclusive(() async {
-    final plaintext = await ratchet.ratchetDecrypt(live.state!, envelope);
-    if (!live.ready) {
-      live.ready = true;
-      if (!live.readyCompleter.isCompleted) {
-        live.readyCompleter.complete();
+    final plaintext = await ratchet.ratchetDecrypt(
+      live.state!,
+      envelope,
+      commit: commit,
+    );
+    if (commit) {
+      if (!live.ready) {
+        live.ready = true;
+        if (!live.readyCompleter.isCompleted) {
+          live.readyCompleter.complete();
+        }
       }
+      unawaited(_persistSession(live));
     }
-    unawaited(_persistSession(live));
     return jsonDecodeHeavy(plaintext);
   });
 }

@@ -47,8 +47,12 @@ Future<void> teardownWireSession(String peerId) =>
 Future<String> encryptWirePayload(String peerId, Object? obj) =>
     session.encryptOutbound(peerId, obj);
 
-Future<Object?> decryptWirePayload(String peerId, String wireStr) =>
-    session.decryptInbound(peerId, wireStr);
+Future<Object?> decryptWirePayload(
+  String peerId,
+  String wireStr, {
+  bool commit = true,
+}) =>
+    session.decryptInbound(peerId, wireStr, commit: commit);
 
 bool isWireReady(String peerId) => session.isReady(peerId);
 
