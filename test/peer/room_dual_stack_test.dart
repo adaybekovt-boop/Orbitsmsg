@@ -27,9 +27,11 @@ import 'package:orbits_flutter/transport/transport_api.dart';
 import 'package:orbits_flutter/transport/trusted_identity_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../helpers/pointycastle_ecdh.dart';
 import '../helpers/signed_device_binding.dart';
 
 void main() {
+  installPointyCastleEcdh();
   const hostId = 'ORBIT-AAAAAAAAAAAAAAAA';
   const guestId = 'ORBIT-BBBBBBBBBBBBBBBB';
   const guestAvatar =
@@ -308,6 +310,9 @@ void main() {
     await pumpUntil(
       () =>
           hostConns.canUseNative(guestId) && guestConns.canUseNative(hostId),
+    );
+    await pumpUntil(
+      () => hostConns.nativeBridge!.ratchets.sessionCount > 0,
     );
 
     final host = hostC.read(roomManagerProvider.notifier);

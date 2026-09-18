@@ -227,8 +227,12 @@ void main() {
       isTrue,
     );
     await Future<void>.delayed(const Duration(milliseconds: 40));
-    final first = packets.whereType<AuthenticatedPlaintext>().first;
-    expect(first.data['text'], 'minted');
+    expect(
+      packets.whereType<AuthenticatedPlaintext>().any(
+            (p) => p.data['text'] == 'minted',
+          ),
+      isTrue,
+    );
     await alice.detach();
   });
 
@@ -332,8 +336,12 @@ void main() {
     );
     final n = await bob.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA');
     expect(n, greaterThan(0));
-    final plain = packets.whereType<AuthenticatedPlaintext>().first;
-    expect(plain.data['text'], 'mailbox-device');
+    expect(
+      packets.whereType<AuthenticatedPlaintext>().any(
+            (p) => p.data['text'] == 'mailbox-device',
+          ),
+      isTrue,
+    );
     await alice.detach();
     await bob.detach();
   });
@@ -767,6 +775,12 @@ void main() {
     expect(savedB, isNotEmpty);
     await alice.detach();
     await bob.detach();
+    try {
+      await pair.$1.disconnect('ORBIT-BBBBBBBBBBBBBBBB');
+    } catch (_) {}
+    try {
+      await pair.$2.disconnect('ORBIT-AAAAAAAAAAAAAAAA');
+    } catch (_) {}
 
     final restoredA = makeA();
     final restoredB = makeB();
@@ -802,6 +816,16 @@ void main() {
     )..attach();
 
     await alice2.dial('ORBIT-BBBBBBBBBBBBBBBB');
+    final authDeadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(authDeadline)) {
+      if (alice2.isAuthenticated('ORBIT-BBBBBBBBBBBBBBBB') &&
+          bob2.isAuthenticated('ORBIT-AAAAAAAAAAAAAAAA')) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(alice2.isAuthenticated('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    expect(bob2.isAuthenticated('ORBIT-AAAAAAAAAAAAAAAA'), isTrue);
     expect(
       await alice2.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
         'type': 'msg',
@@ -809,7 +833,15 @@ void main() {
       }),
       isTrue,
     );
-    await Future<void>.delayed(const Duration(milliseconds: 50));
+    final recvDeadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(recvDeadline)) {
+      if (restartPackets.whereType<AuthenticatedPlaintext>().any(
+            (p) => p.data['text'] == 'after-restart',
+          )) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
     expect(
       restartPackets.whereType<AuthenticatedPlaintext>().any(
             (p) => p.data['text'] == 'after-restart',

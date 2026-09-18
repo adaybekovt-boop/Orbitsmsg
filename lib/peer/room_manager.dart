@@ -2490,7 +2490,8 @@ class _ConnRoomTransport implements RoomTransport, RoomNativeFileSink {
         ),
       );
       return true;
-    } catch (_) {
+    } catch (err) {
+      debugPrint('[room] native file send to $peerId failed: $err');
       return false;
     }
   }

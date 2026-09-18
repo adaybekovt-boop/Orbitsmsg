@@ -252,6 +252,13 @@ class DualStackBridge {
     if (await _sendEncryptedDeviceFanout(peerId, msg)) {
       return true;
     }
+    final normForFanout = normalizePeerId(peerId);
+    if (isAuthenticated(normForFanout)) {
+      await _waitForDeviceFanoutReady(normForFanout);
+      if (await _sendEncryptedDeviceFanout(peerId, msg)) {
+        return true;
+      }
+    }
     final targets =
         devices?.transportTargets(peerId) ?? <String>{normalizePeerId(peerId)};
     if (targets.length > 1) {
@@ -265,34 +272,10 @@ class DualStackBridge {
   }
 
   Future<bool> _sendEncryptedDeviceFanout(String peerId, Object? msg) async {
-    final registry = devices;
-    if (registry == null) return false;
+    if (devices == null) return false;
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm)) return false;
-    final recipient = DeviceRegistry()
-      ..replaceAll(
-        registry.active.where(
-          (d) => normalizePeerId(d.ownerPeerId) == norm,
-        ),
-      );
-    final sender = DeviceRegistry()
-      ..replaceAll(
-        registry.active.where(
-          (d) => normalizePeerId(d.ownerPeerId) == normalizePeerId(selfPeerId()),
-        ),
-      );
-    final targets = registry
-        .fanout(
-          recipient: recipient,
-          sender: sender,
-          sendingDeviceId: selfDeviceId,
-        )
-        .where(
-          (d) =>
-              !ratchets.isRevoked(d.deviceId) &&
-              ratchets.session(selfDeviceId, d.deviceId) != null,
-        )
-        .toList();
+    final targets = _deviceFanoutTargets(peerId);
     if (targets.isEmpty) return false;
     final encoded = msg is String ? msg : jsonEncode(msg);
     final wires = await ratchets.fanoutEncrypt(
@@ -750,7 +733,53 @@ class DualStackBridge {
     if (isBlocked(norm) || !isAuthenticated(norm)) {
       throw StateError('file transfer requires an authenticated peer');
     }
+    await _waitForDeviceFanoutReady(norm);
     await files.sendPath(norm, file);
+  }
+
+  Future<void> _waitForDeviceFanoutReady(String peerId) async {
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(deadline)) {
+      final targets = _deviceFanoutTargets(peerId);
+      if (targets.isNotEmpty &&
+          targets.every((d) {
+            final session = ratchets.session(selfDeviceId, d.deviceId);
+            return session?.sendCk != null;
+          })) {
+        return;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+  }
+
+  List<AuthorizedDevice> _deviceFanoutTargets(String peerId) {
+    final registry = devices;
+    if (registry == null) return const <AuthorizedDevice>[];
+    final norm = normalizePeerId(peerId);
+    final recipient = DeviceRegistry()
+      ..replaceAll(
+        registry.active.where(
+          (d) => normalizePeerId(d.ownerPeerId) == norm,
+        ),
+      );
+    final sender = DeviceRegistry()
+      ..replaceAll(
+        registry.active.where(
+          (d) => normalizePeerId(d.ownerPeerId) == normalizePeerId(selfPeerId()),
+        ),
+      );
+    return registry
+        .fanout(
+          recipient: recipient,
+          sender: sender,
+          sendingDeviceId: selfDeviceId,
+        )
+        .where(
+          (d) =>
+              !ratchets.isRevoked(d.deviceId) &&
+              ratchets.session(selfDeviceId, d.deviceId) != null,
+        )
+        .toList();
   }
 
   Future<bool> sendDrop(String peerId, Object packet) async {
@@ -1178,6 +1207,23 @@ class DualStackBridge {
         remoteDeviceId: from,
         state: alice,
       );
+      // Bob cannot send until he decrypts one Alice frame. Bidirectional
+      // admit otherwise leaves the larger deviceId unable to send first.
+      final ready = await ratchetEncrypt(
+        alice,
+        jsonEncode(<String, Object?>{'type': 'deviceRatchetReady'}),
+      );
+      await transport.send(
+        peerId,
+        TransportChannel.message,
+        jsonPayload(
+          encodeDeviceRatchetFrame(
+            fromDeviceId: selfDeviceId,
+            toDeviceId: from,
+            wire: encodeWire(ready),
+          ),
+        ),
+      );
     } catch (_) {}
   }
 
@@ -1207,6 +1253,8 @@ class DualStackBridge {
         return;
       }
       if (plain is! Map) return;
+      final map = Map<String, Object?>.from(plain);
+      tryAcceptAttachmentKeyMessage(attachmentKeys, peerId, map);
       _appendEnvelope(
         peerId,
         utf8.encode(wire),
@@ -1217,7 +1265,7 @@ class DualStackBridge {
       );
       await onPacket(
         peerId,
-        AuthenticatedPlaintext(Map<String, Object?>.from(plain)),
+        AuthenticatedPlaintext(map),
       );
     } catch (_) {}
   }
@@ -1340,7 +1388,7 @@ class DualStackBridge {
           return;
         }
         if (decoded['type'] == kAttachmentKeyMessageType) {
-          return;
+          tryAcceptAttachmentKeyMessage(attachmentKeys, norm, decoded);
         }
         if (decoded['type'] == 'capabilities' ||
             decoded['type'] == 'wireHello') {

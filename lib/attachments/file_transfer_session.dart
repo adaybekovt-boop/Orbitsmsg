@@ -98,6 +98,7 @@ class FileTransferCoordinator {
         'sha256': digest,
         'protocol': kFileTransferProtocol,
       });
+      await Future<void>.delayed(Duration.zero);
     }
     final accept = _wait(peerId, 'file-accept|$transferId');
     try {
@@ -206,6 +207,7 @@ class FileTransferCoordinator {
       return true;
     }
     if (type == 'file-offer') {
+      await _waitForAttachmentKey(peerId, id);
       await _acceptOffer(peerId, body);
       return true;
     }
@@ -221,6 +223,16 @@ class FileTransferCoordinator {
       return true;
     }
     return false;
+  }
+
+  Future<void> _waitForAttachmentKey(String peerId, String transferId) async {
+    final store = keys;
+    if (store == null || store.has(peerId, transferId)) return;
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(deadline)) {
+      if (store.has(peerId, transferId)) return;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
   }
 
   Future<void> _acceptOffer(String peerId, Map<String, Object?> body) async {

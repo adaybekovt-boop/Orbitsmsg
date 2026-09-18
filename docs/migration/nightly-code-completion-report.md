@@ -12,6 +12,9 @@ Software path only. External gates stay open.
   `_closePeerjsFallback` tears that slot down (`debugAttachPeerjsSlot`)
 - Combined DualStack + vault-wrapped ratchet snapshot hydrates after restart
   and revoke survives a second hydrate
+- DualStack applies attachment keys from device-ratchet frames and waits for
+  `sendCk` before native `sendFile`. Alice sends `deviceRatchetReady` after
+  accept so the Bob side can send first after bidirectional admit
 
 `kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
 **off**. PeerJS remains the production default.
