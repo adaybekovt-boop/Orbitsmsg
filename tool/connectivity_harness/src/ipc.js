@@ -5,6 +5,7 @@ const VERSION = 1
 const REQUEST = 1
 const RESPONSE = 2
 const EVENT = 3
+const MAX_PAYLOAD = 256 * 1024
 
 function encode(type, body) {
   const payload = Buffer.from(JSON.stringify(body), 'utf8')
@@ -18,6 +19,10 @@ function encode(type, body) {
 
 class Decoder {
   constructor() {
+    this.reset()
+  }
+
+  reset() {
     this._buf = Buffer.alloc(0)
   }
 
@@ -26,18 +31,33 @@ class Decoder {
     const out = []
     while (this._buf.length >= 10) {
       const magic = this._buf.readUInt32BE(0)
-      if (magic !== MAGIC) throw new Error('bad IPC magic')
+      if (magic !== MAGIC) {
+        this.reset()
+        throw new Error('bad IPC magic')
+      }
       const version = this._buf.readUInt8(4)
-      if (version !== VERSION) throw new Error('unsupported IPC version')
+      if (version !== VERSION) {
+        this.reset()
+        throw new Error('unsupported IPC version')
+      }
       const type = this._buf.readUInt8(5)
       const len = this._buf.readUInt32BE(6)
+      if (len > MAX_PAYLOAD) {
+        this.reset()
+        throw new Error('IPC payload exceeds cap')
+      }
       if (this._buf.length < 10 + len) break
       const payload = this._buf.subarray(10, 10 + len)
-      out.push({ type, body: JSON.parse(payload.toString('utf8')) })
+      try {
+        out.push({ type, body: JSON.parse(payload.toString('utf8')) })
+      } catch (err) {
+        this.reset()
+        throw err
+      }
       this._buf = this._buf.subarray(10 + len)
     }
     return out
   }
 }
 
-module.exports = { MAGIC, VERSION, REQUEST, RESPONSE, EVENT, encode, Decoder }
+module.exports = { MAGIC, VERSION, REQUEST, RESPONSE, EVENT, MAX_PAYLOAD, encode, Decoder }

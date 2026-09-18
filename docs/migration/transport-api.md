@@ -41,10 +41,16 @@ Events: `connected`, `authenticated`, `frame`, `deliveryState`,
 
 ## Files
 
-`sendFile` takes a **path or platform descriptor**, not a `Uint8List`
-over Flutter IPC. Current Drop / chat attachments still buffer in Dart
-memory; that is a known limitation (`docs/security.md`). The new plugin
-must not copy that pattern.
+Product files are the Dart `FileTransferCoordinator` (`orbits-file-v1`):
+`DualStackBridge.sendFile` → `files.sendPath` → 64 KiB attachment frames
+via `transport.send`. The path is read in Dart; whole-file `Uint8List`
+payloads never cross IPC in one frame, but the descriptor is consumed by
+the Dart coordinator — Bare/plugin `sendFile` is harness-only
+(`harness-file-*`) and is not on the chat/room path. A native send
+failure is fail-closed (`pending` + `lastReplicationError`); it must not
+fall back to whole-file base64 / PeerJS. Current Drop / chat attachments
+still buffer in Dart memory on some paths; that is a known limitation
+(`docs/security.md`).
 
 ## Dual-stack (Phase 4)
 

@@ -23,10 +23,12 @@ class RoomPlaintextSessionAck {
   void reset() => _acked = false;
 
   /// Control packets (join/leave/members/…) always pass. `room_msg`
-  /// (text / sticker / file) requires the disclaimer ack.
+  /// and Autobase `message` events require the disclaimer ack.
   bool allowsPacket(Map<String, Object?> packet) {
-    if (packet['type'] != 'room_msg') return true;
-    return _acked;
+    final type = packet['type'];
+    if (type == 'room_msg') return _acked;
+    if (type == 'room_autobase' && packet['kind'] == 'message') return _acked;
+    return true;
   }
 }
 
@@ -34,14 +36,14 @@ final RoomPlaintextSessionAck kRoomPlaintextSessionAck =
     RoomPlaintextSessionAck();
 
 /// Shared wire send used by [ConnectionsNotifier.sendRoomPacket] and
-/// [RoomScopedTransport.sendRoomPacket].
+/// [RoomScopedTransport.sendRoomPacket]. Propagates the send result so a
+/// fail-closed bridge is visible to RoomManager.
 bool sendGuardedRoomPacket(
   Map<String, Object?> packet, {
   required bool connected,
-  required void Function(Map<String, Object?>) send,
+  required bool Function(Map<String, Object?>) send,
 }) {
   if (!kRoomPlaintextSessionAck.allowsPacket(packet)) return false;
   if (!connected) return false;
-  send(packet);
-  return true;
+  return send(packet);
 }

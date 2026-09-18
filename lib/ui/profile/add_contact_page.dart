@@ -25,7 +25,9 @@ import '../../core/haptics.dart';
 import '../../pages/chat_view_page.dart';
 import '../../peer/helpers.dart';
 import '../../state/local_profile_provider.dart';
+import '../../devices/device_registry.dart';
 import '../../transport/discovery_secret_store.dart';
+import '../../transport/trusted_identity_store.dart';
 import '../../storage/db.dart' as db;
 import '../../themes/orbits_tokens.dart';
 import '../primitives/orbits_glass_button.dart';
@@ -95,6 +97,30 @@ class _AddContactPageState extends ConsumerState<AddContactPage>
     final disco = parseContactDiscoverySecret(raw);
     if (disco != null) {
       discoverySecretStore.put(pid, disco);
+    }
+    final identity = parseContactIdentityPublicKey(raw);
+    if (identity != null && identity.isNotEmpty) {
+      trustedIdentityStore.trust(peerId: pid, identityPublicKey: identity);
+    }
+    final deviceId = parseContactDeviceId(raw);
+    final transportKey = parseContactTransportPublicKey(raw);
+    if (deviceId != null &&
+        deviceId.isNotEmpty &&
+        transportKey != null &&
+        transportKey.length == 32) {
+      deviceRegistry.authorize(
+        AuthorizedDevice(
+          deviceId: deviceId,
+          transportPublicKey: transportKey,
+          hypercorePublicKey: const <int>[],
+          name: pid,
+          kind: 'contact',
+          createdAt: DateTime.now().millisecondsSinceEpoch,
+          status: DeviceStatus.active,
+          ownerPeerId: pid,
+          transportPeerId: pid,
+        ),
+      );
     }
     final selfId = normalizePeerId(ref.read(currentPeerIdProvider) ?? '');
     if (pid == selfId) {

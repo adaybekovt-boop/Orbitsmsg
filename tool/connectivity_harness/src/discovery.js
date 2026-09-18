@@ -1,9 +1,11 @@
 'use strict'
 
-const { createHash } = require('node:crypto')
+const { crypto } = require('./bare_compat')
+const { createHash } = crypto
 
 const CONTACT_INFO = 'orbits-contact-discovery-v1'
 const ROOM_INFO = 'orbits-room-discovery-v1'
+const REPLICATION_INFO = 'orbits-replication-discovery-v1'
 
 function topic(info, secret) {
   if (!secret || secret.length === 0) {
@@ -23,9 +25,15 @@ function roomDiscoveryTopic(secret) {
   return topic(ROOM_INFO, secret)
 }
 
+function replicationDiscoveryTopic(secret) {
+  return topic(REPLICATION_INFO, secret)
+}
+
 module.exports = {
   CONTACT_INFO,
   ROOM_INFO,
+  REPLICATION_INFO,
   contactDiscoveryTopic,
   roomDiscoveryTopic,
+  replicationDiscoveryTopic,
 }

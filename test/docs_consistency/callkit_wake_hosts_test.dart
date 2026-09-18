@@ -8,18 +8,24 @@ void main() {
     expect(ios, contains('CallKit'));
     expect(ios, contains('must not receive a peer id'));
     expect(ios, contains('localizedCallerName = "Orbits"'));
+    expect(ios, contains('didReceiveRemoteNotification'));
+    expect(ios, contains('app.orbits/wake'));
     expect(ios, isNot(contains('voip')));
 
     final android =
         File('android/app/src/main/kotlin/com/orbits/orbits_flutter/MainActivity.kt')
             .readAsStringSync();
     expect(android, contains('must not receive a peer id'));
+    expect(android, contains('app.orbits/wake'));
+    expect(android, contains('OrbitsWakeReceiver.bind'));
 
     final wake = File(
       'android/app/src/main/kotlin/com/orbits/orbits_flutter/OrbitsWakeReceiver.kt',
     ).readAsStringSync();
     expect(wake, contains('opaqueWakeToken'));
     expect(wake, contains('peerId'));
+    expect(wake, contains('app.orbits/wake'));
+    expect(wake, contains('invokeMethod'));
 
     final phase13 = File('docs/migration/phase13-group-e2e-review.md')
         .readAsStringSync();

@@ -98,6 +98,10 @@ Future<Uint8List> exportSpkiBytes(EcKeyPair keyPair) async {
   return buildP256Spki(x: pub.x, y: pub.y);
 }
 
+/// ECDH(P-256) shared secret. Used to mint per-device ratchet roots.
+Future<Uint8List> ecdhSharedSecret(EcKeyPair priv, List<int> remoteSpki) =>
+    _dhShared(priv, remoteSpki);
+
 Future<Uint8List> _dhShared(EcKeyPair priv, List<int> remoteSpki) async {
   final point = parseP256Spki(remoteSpki);
   final remote = EcPublicKey(x: point.x, y: point.y, type: KeyPairType.p256);
@@ -487,21 +491,27 @@ Future<RatchetEnvelope> _ratchetEncryptUnlocked(
   );
 }
 
-/// Decrypt one wire envelope. Mutates [state] **only if** AES-GCM succeeds.
+/// Decrypt one wire envelope. Mutates [state] **only if** AES-GCM succeeds
+/// and [commit] is true.
 ///
 /// Speculative work (skipped-key removal, skip-forward, DH ratchet step,
 /// Nr/Ck advance) runs on a [RatchetState.clone]. [RatchetState.adopt] copies
 /// that clone back only after the tag verifies. Tampered ct/tag/AAD therefore
 /// cannot burn skipped message keys or commit a DH step (transactional decrypt).
+///
+/// Journal replay uses [commit] = false so a historical envelope cannot
+/// advance or burn the live session. Already-consumed messages still throw
+/// (Double Ratchet cannot rebuild wiped Drift from an advanced chain).
 /// Throws on tamper, replay, or too-many-skipped.
 Future<Uint8List> ratchetDecrypt(
   RatchetState state,
-  RatchetEnvelope envelope,
-) {
+  RatchetEnvelope envelope, {
+  bool commit = true,
+}) {
   return state.opQueue.enqueue(() async {
     final work = state.clone();
     final plaintext = await _ratchetDecryptInPlace(work, envelope);
-    state.adopt(work);
+    if (commit) state.adopt(work);
     return plaintext;
   });
 }

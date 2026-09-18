@@ -26,6 +26,7 @@ class PowerSaverPage extends ConsumerWidget {
     final tokens = OrbitsTokens.of(context);
     final powerSaver = ref.watch(powerSaverProvider);
     return Scaffold(
+      key: const Key('page-power-saving'),
       appBar: OrbitsGlassAppBar(
         leading: Navigator.of(context).canPop()
             ? Center(

@@ -147,4 +147,22 @@ void main() {
     expect(rows.first.data[1], 0x42);
     expect(rows.first.data[2], 0x31);
   });
+
+  test('device-material row is OB1-sealed and round-trips', () async {
+    await keyStore().put('device-material', {
+      'id': 'local',
+      'deviceId': 'deadbeef',
+      'transportSecretSeed': 'orb-wrap-v1:not-decoded-here',
+    });
+    final rows = await (database.select(database.deviceMaterialTable)).get();
+    expect(rows, hasLength(1));
+    expect(rows.first.id, 'local');
+    expect(rows.first.data[0], 0x4F);
+    expect(isBlobWrapped(rows.first.data), isTrue);
+    final asText = utf8.decode(rows.first.data, allowMalformed: true);
+    expect(asText.contains('deviceId'), isFalse);
+    expect(asText.contains('deadbeef'), isFalse);
+    final back = await keyStore().get('device-material', 'local');
+    expect(back!['deviceId'], 'deadbeef');
+  });
 }

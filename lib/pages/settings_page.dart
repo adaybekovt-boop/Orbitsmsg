@@ -81,30 +81,35 @@ class SettingsPage extends ConsumerWidget {
             // ── Основное ── (technical screens live deeper under "Дополнительно")
             _SectionLabel(text: 'Основное', tokens: tokens),
             _ActionRow(
+              rowKey: const Key('settings-row-appearance'),
               icon: Icons.palette,
               title: 'Внешний вид',
               subtitle: 'Тема оформления',
               onTap: () => _push(context, const ThemesPage()),
             ),
             _ActionRow(
+              rowKey: const Key('settings-row-chats'),
               icon: Icons.chat_bubble,
               title: 'Чаты',
               subtitle: 'Поведение, форма сообщений, шрифт',
               onTap: () => _push(context, const ChatPrefsPage()),
             ),
             _ActionRow(
+              rowKey: const Key('settings-row-notifications'),
               icon: Icons.notifications,
               title: 'Уведомления',
               subtitle: 'Пока недоступны',
               onTap: () => _push(context, const NotificationsPage()),
             ),
             _ActionRow(
+              rowKey: const Key('settings-row-security'),
               icon: Icons.lock,
               title: 'Безопасность',
               subtitle: 'Блокировка, пароль, проверка контактов',
               onTap: () => _push(context, const SecurityPage()),
             ),
             _ActionRow(
+              rowKey: const Key('settings-row-updates'),
               icon: Icons.system_update_alt,
               title: 'Обновления',
               subtitle: 'Проверить и установить новую версию',
@@ -112,6 +117,7 @@ class SettingsPage extends ConsumerWidget {
             ),
             const SizedBox(height: 8),
             _ActionRow(
+              rowKey: const Key('settings-row-advanced'),
               icon: Icons.tune,
               title: 'Дополнительно',
               subtitle: 'Соединение, микрофон, диагностика',
@@ -236,6 +242,7 @@ class _ProfileCard extends StatelessWidget {
       child: Material(
         color: Colors.transparent,
         child: InkWell(
+          key: const Key('settings-row-profile'),
           onTap: () {
             Navigator.of(
               context,
@@ -335,12 +342,14 @@ class _ProfileCard extends StatelessWidget {
 
 class _ActionRow extends StatelessWidget {
   const _ActionRow({
+    this.rowKey,
     required this.icon,
     required this.title,
     required this.subtitle,
     required this.onTap,
   });
 
+  final Key? rowKey;
   final IconData icon;
   final String title;
   final String subtitle;
@@ -352,6 +361,7 @@ class _ActionRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: OrbitsGlassListTile(
+        key: rowKey,
         onTap: onTap,
         leading: Container(
           width: 36,

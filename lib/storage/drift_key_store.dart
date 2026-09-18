@@ -2,9 +2,10 @@
 //
 // Scope: the three tables the crypto modules write to.
 //
-//   'keys'      → KeysTable      (identity, peer pins, cached bundles)
-//   'prekeys'   → PrekeysTable   (indexed by kind / used)
-//   'ratchets'  → RatchetsTable  (indexed by peerId)
+//   'keys'             → KeysTable             (identity, peer pins, cached bundles)
+//   'prekeys'          → PrekeysTable          (indexed by kind / used)
+//   'ratchets'         → RatchetsTable         (indexed by peerId)
+//   'device-material'  → DeviceMaterialTable   (transport seed, device ids)
 //
 // High-level domain data (peers, messages, avatars, stickers, blobs) is
 // handled by `lib/storage/db.dart` via typed methods — don't reach for it
@@ -69,6 +70,11 @@ class DriftKeyStore implements KeyStore {
               ..where((t) => t.id.equals(id)))
             .getSingleOrNull();
         return row == null ? null : decodeRow(unwrapBlobSync(row.data));
+      case 'device-material':
+        final row = await (_db.select(_db.deviceMaterialTable)
+              ..where((t) => t.id.equals(id)))
+            .getSingleOrNull();
+        return row == null ? null : decodeRow(unwrapBlobSync(row.data));
       default:
         throw ArgumentError(
             'DriftKeyStore: unsupported table "$table" (use storage/db.dart '
@@ -112,6 +118,11 @@ class DriftKeyStore implements KeyStore {
               ),
             );
         break;
+      case 'device-material':
+        await _db.into(_db.deviceMaterialTable).insertOnConflictUpdate(
+              DeviceMaterialTableCompanion.insert(id: id, data: data),
+            );
+        break;
       default:
         throw ArgumentError(
             'DriftKeyStore: unsupported table "$table" (use storage/db.dart '
@@ -131,6 +142,11 @@ class DriftKeyStore implements KeyStore {
         break;
       case 'ratchets':
         await (_db.delete(_db.ratchetsTable)..where((t) => t.id.equals(id)))
+            .go();
+        break;
+      case 'device-material':
+        await (_db.delete(_db.deviceMaterialTable)
+              ..where((t) => t.id.equals(id)))
             .go();
         break;
       default:
@@ -168,6 +184,10 @@ class DriftKeyStore implements KeyStore {
           query.where((t) => t.peerId.equals(indexValue));
         }
         final rows = await query.get();
+        return _filter(rows.map((r) => decodeRow(unwrapBlobSync(r.data))),
+            indexField, indexValue);
+      case 'device-material':
+        final rows = await _db.select(_db.deviceMaterialTable).get();
         return _filter(rows.map((r) => decodeRow(unwrapBlobSync(r.data))),
             indexField, indexValue);
       default:
@@ -218,6 +238,7 @@ class DriftKeyStore implements KeyStore {
     n += await _reseal('keys');
     n += await _reseal('prekeys');
     n += await _reseal('ratchets');
+    n += await _reseal('device-material');
     return n;
   }
 
@@ -249,6 +270,11 @@ class DriftKeyStore implements KeyStore {
         return row?.data;
       case 'ratchets':
         final row = await (_db.select(_db.ratchetsTable)
+              ..where((t) => t.id.equals(id)))
+            .getSingleOrNull();
+        return row?.data;
+      case 'device-material':
+        final row = await (_db.select(_db.deviceMaterialTable)
               ..where((t) => t.id.equals(id)))
             .getSingleOrNull();
         return row?.data;

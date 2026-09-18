@@ -36,7 +36,7 @@ Or download directly from GitHub:
 |----------|------|
 | Android (APK) | https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-android-universal.apk |
 | Windows (EXE) | https://github.com/adaybekovt-boop/tkmessenger/releases/latest/download/orbits-windows-x64.exe |
-| Web | https://orbits-site.pages.dev/ |
+| Web | https://orbits-eeo.pages.dev/ |
 
 > On Android you may need to allow installs from unknown sources.
 
@@ -59,7 +59,9 @@ cannot be recovered — that's part of the security model.
 | GitHub Releases API | Update checks and installer downloads |
 | Theme fonts | Bundled in the app; no Google Fonts CDN |
 
-Details: [docs/privacy.md](docs/privacy.md).
+Details: [docs/privacy.md](docs/privacy.md). Two isolated localhost clients
+must pin signaling explicitly — see [docs/local-testnet.md](docs/local-testnet.md).
+Production still uses public PeerJS; Hyperswarm stays off.
 
 ## Support
 

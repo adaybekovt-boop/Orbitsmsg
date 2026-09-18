@@ -169,6 +169,33 @@ void main() {
     await b.stop();
   });
 
+  test('deny authorizePeer drops only that peer', () async {
+    final (a, b) = await paired();
+    final lost = a.events
+        .where((e) => e is TransportDisconnected)
+        .cast<TransportDisconnected>()
+        .first;
+    await a.authorizePeer('ORBIT-BBBBBBBBBBBBBBBB', authorized: true);
+    await a.send(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      TransportChannel.message,
+      jsonPayload({'type': 'harness-echo', 'id': 'auth-ok', 'text': 'ok'}),
+    );
+    await a.authorizePeer('ORBIT-BBBBBBBBBBBBBBBB', authorized: false);
+    final event = await lost.timeout(const Duration(seconds: 2));
+    expect(event.peerId, 'ORBIT-BBBBBBBBBBBBBBBB');
+    await expectLater(
+      a.send(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        TransportChannel.message,
+        jsonPayload({'type': 'harness-echo', 'id': 'auth-deny', 'text': 'no'}),
+      ),
+      throwsA(isA<StateError>()),
+    );
+    await a.stop();
+    await b.stop();
+  });
+
   test('path is direct and Noise key is not the identity key', () async {
     final pair = loopbackPair();
     final a = pair.$1;

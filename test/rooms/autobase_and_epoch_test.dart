@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/rooms/autobase_log.dart';
@@ -68,5 +70,245 @@ void main() {
     expect(rejoined.epochKey, isNot(epoch.epochKey));
     expect(rejoined.accepts('d2'), isTrue);
     expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('removed writer and conflicting roles still converge', () {
+    final events = [
+      const RoomEvent(
+        writerId: 'a',
+        seq: 0,
+        kind: 'membership',
+        payload: {'peerId': 'a', 'action': 'join', 'displayName': 'A'},
+      ),
+      const RoomEvent(
+        writerId: 'b',
+        seq: 0,
+        kind: 'membership',
+        payload: {'peerId': 'b', 'action': 'join', 'displayName': 'B'},
+      ),
+      const RoomEvent(
+        writerId: 'a',
+        seq: 1,
+        kind: 'role',
+        payload: {'peerId': 'b', 'role': 'mod'},
+      ),
+      const RoomEvent(
+        writerId: 'b',
+        seq: 1,
+        kind: 'role',
+        payload: {'peerId': 'b', 'role': 'member'},
+      ),
+      const RoomEvent(
+        writerId: 'b',
+        seq: 2,
+        kind: 'message',
+        payload: {'id': 'm-old', 'text': 'stale'},
+      ),
+    ];
+    final left = AutobaseProjection()..applyAll(events);
+    left.revokeWriter('b');
+    left.apply(
+      const RoomEvent(
+        writerId: 'b',
+        seq: 3,
+        kind: 'message',
+        payload: {'id': 'm-revoked', 'text': 'should-drop'},
+      ),
+    );
+    final right = AutobaseProjection()..applyAll(events.reversed);
+    right.revokeWriter('b');
+    expect(left.state.roles['b'], right.state.roles['b']);
+    expect(left.state.messages.any((m) => m['id'] == 'm-revoked'), isFalse);
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('skipped-epoch recovery is bounded and attachments wrap per epoch', () {
+    var epoch = SenderKeyEpoch(
+      epochId: 1,
+      memberDeviceIds: {'d1', 'd2'},
+      epochKey: List<int>.generate(32, (i) => i + 4),
+    );
+    epoch = epoch.rotateAfterRemoval('d2', List<int>.generate(32, (i) => i + 7));
+    expect(epoch.canRecoverSkipped(1), isTrue);
+    expect(epoch.canRecoverSkipped(1 - 10), isFalse);
+    final fileKey = List<int>.generate(32, (i) => 32 - i);
+    final wrapped = epoch.wrapAttachmentKey(fileKey);
+    expect(epoch.unwrapAttachmentKey(wrapped, 'd1'), fileKey);
+    expect(() => epoch.unwrapAttachmentKey(wrapped, 'd2'), throwsStateError);
+    expect(epoch.toPersistedJson().containsKey('epochKey'), isFalse);
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('RoomAutobaseLog stamps writer seq and stays host-plaintext', () {
+    final log = RoomAutobaseLog();
+    final first = log.append(
+      writerId: 'host',
+      kind: 'membership',
+      payload: {'peerId': 'host', 'action': 'join', 'displayName': 'Host'},
+    );
+    final second = log.append(
+      writerId: 'host',
+      kind: 'message',
+      payload: {'id': 'm1', 'text': 'hello'},
+    );
+    expect(first.seq, 0);
+    expect(second.seq, 1);
+    expect(log.projection.state.members['host'], 'Host');
+    expect(log.projection.state.messages.single['text'], 'hello');
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('Autobase packets replay onto a second writer and converge', () {
+    final host = RoomAutobaseLog();
+    host.append(
+      writerId: 'host',
+      kind: 'membership',
+      payload: {'peerId': 'host', 'action': 'join', 'displayName': 'Host'},
+    );
+    host.append(
+      writerId: 'host',
+      kind: 'membership',
+      payload: {'peerId': 'guest', 'action': 'join', 'displayName': 'Guest'},
+    );
+    host.append(
+      writerId: 'host',
+      kind: 'channel',
+      payload: {'id': 'c1', 'name': 'general'},
+    );
+    final guest = RoomAutobaseLog();
+    for (final event in host.events) {
+      final packet = encodeRoomAutobasePacket('room-1', event);
+      expect(packet['type'], kRoomAutobaseType);
+      final decoded = decodeRoomEventFromPacket(packet);
+      expect(decoded, isNotNull);
+      guest.append(
+        writerId: decoded!.writerId,
+        kind: decoded.kind,
+        payload: decoded.payload,
+        seq: decoded.seq,
+      );
+    }
+    expect(guest.projection.state.members, host.projection.state.members);
+    expect(guest.projection.state.channels, host.projection.state.channels);
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('Autobase writer log hydrates after restart and still converges',
+      () async {
+    final saved = <int>[];
+    final live = RoomAutobaseLog(
+      writeSnapshot: (bytes) async {
+        saved
+          ..clear()
+          ..addAll(bytes);
+      },
+      readSnapshot: () async => saved.isEmpty ? null : Uint8List.fromList(saved),
+    );
+    live.append(
+      writerId: 'host',
+      kind: 'membership',
+      payload: {'peerId': 'g1', 'action': 'join'},
+    );
+    live.append(
+      writerId: 'host',
+      kind: 'channel',
+      payload: {'id': 'c1', 'name': 'general'},
+    );
+    live.append(
+      writerId: 'host',
+      kind: 'message',
+      payload: {'id': 'm1', 'text': 'hi'},
+    );
+    await live.persist();
+    expect(saved, isNotEmpty);
+
+    final restarted = RoomAutobaseLog(
+      writeSnapshot: (bytes) async {},
+      readSnapshot: () async => Uint8List.fromList(saved),
+    );
+    await restarted.hydrate();
+    expect(restarted.events.length, live.events.length);
+    expect(
+      restarted.projection.state.members.keys,
+      live.projection.state.members.keys,
+    );
+    expect(restarted.projection.state.channels, live.projection.state.channels);
+    expect(
+      restarted.projection.state.messages.any((m) => m['text'] == 'hi'),
+      isTrue,
+    );
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('Autobase persist failure is visible', () async {
+    final log = RoomAutobaseLog(
+      writeSnapshot: (_) async {
+        throw StateError('autobase-persist-failed');
+      },
+    );
+    log.append(
+      writerId: 'host',
+      kind: 'membership',
+      payload: {'peerId': 'g1', 'action': 'join'},
+    );
+    await log.persist();
+    expect(log.lastPersistError, contains('autobase-persist-failed'));
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
+
+  test('hydrate rejects a snapshot from another roomId', () async {
+    final saved = <int>[];
+    final a = RoomAutobaseLog(
+      writeSnapshot: (b) async {
+        saved
+          ..clear()
+          ..addAll(b);
+      },
+      readSnapshot: () async =>
+          saved.isEmpty ? null : Uint8List.fromList(saved),
+    )..roomId = 'ORBIT-AAAAAA';
+    a.append(
+      writerId: 'host',
+      kind: 'membership',
+      payload: {'peerId': 'g-a', 'action': 'join', 'displayName': 'A'},
+    );
+    await a.persist();
+    expect(saved, isNotEmpty);
+
+    final b = RoomAutobaseLog(
+      readSnapshot: () async => Uint8List.fromList(saved),
+    )..roomId = 'ORBIT-BBBBBB';
+    await b.hydrate();
+    expect(b.lastPersistError, contains('autobase-room-mismatch'));
+    expect(b.events, isEmpty);
+    expect(b.projection.state.members.containsKey('g-a'), isFalse);
+  });
+
+  test('append rejects non-monotonic seq', () {
+    final log = RoomAutobaseLog();
+    log.append(
+      writerId: 'host',
+      kind: 'membership',
+      payload: {'peerId': 'h', 'action': 'join'},
+    );
+    log.append(
+      writerId: 'host',
+      kind: 'message',
+      payload: {'id': 'm-stale', 'text': 'no'},
+      seq: 0,
+    );
+    expect(log.lastPersistError, 'autobase-seq-rewind');
+    expect(log.projection.state.messages, isEmpty);
+    expect(log.events, hasLength(1));
+  });
+
+  test('append refuses to grow past kMaxRoomAutobaseEvents', () {
+    final log = RoomAutobaseLog();
+    for (var i = 0; i < kMaxRoomAutobaseEvents; i++) {
+      log.append(writerId: 'host', kind: 'message', payload: {'id': 'm$i'});
+    }
+    log.append(writerId: 'host', kind: 'message', payload: {'id': 'overflow'});
+    expect(log.events.length, kMaxRoomAutobaseEvents);
+    expect(log.lastPersistError, 'autobase-cap');
   });
 }

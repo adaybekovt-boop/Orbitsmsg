@@ -37,12 +37,14 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 import 'dial_attempt.dart';
 import 'ice_lifecycle.dart';
 import 'signaling.dart';
+import 'webrtc_audio_lifecycle.dart';
 import 'ws_channel.dart';
 
 // в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
@@ -390,14 +392,33 @@ class PeerDataConnection {
   })  : _pc = pc,
         _client = client;
 
+  /// Test-only stub: no RTCPeerConnection, no client. [send] records
+  /// into [debugSent]; [debugEmitData] feeds [onData]; [close] latches.
+  @visibleForTesting
+  PeerDataConnection.stub({
+    required this.peer,
+    this.connectionId = 'stub',
+    this.label = 'reliable',
+    this.metadata = const {'channel': 'reliable'},
+    this.reliable = true,
+    this.initiator = true,
+    bool initiallyOpen = true,
+  })  : _pc = null,
+        _client = null {
+    _open = initiallyOpen;
+  }
+
   final String peer;
   final String connectionId;
   final String label;
   final Map<String, Object?> metadata;
   final bool reliable;
   final bool initiator;
-  final RTCPeerConnection _pc;
-  final PeerJsClient _client;
+  final RTCPeerConnection? _pc;
+  final PeerJsClient? _client;
+
+  /// Values passed to [send] on a stub connection, in order.
+  final List<Object?> debugSent = <Object?>[];
 
   RTCDataChannel? _dc;
   bool _open = false;
@@ -408,26 +429,55 @@ class PeerDataConnection {
   final _errorCtl = StreamController<PeerError>.broadcast();
   final _dataCtl = StreamController<Object?>.broadcast();
 
-  bool get open => _open;
+  /// True once the DataChannel is writable. Reads the native channel state
+  /// as well as the latched flag: Linux libwebrtc can deliver `onDataChannel`
+  /// with the channel already [RTCDataChannelState.RTCDataChannelOpen], so
+  /// [onDataChannelState] never fires and `_open` would otherwise stay false.
+  bool get open {
+    if (_open) return true;
+    if (_closed) return false;
+    return _dc?.state == RTCDataChannelState.RTCDataChannelOpen;
+  }
+
   bool get closed => _closed;
 
   /// Raw DataChannel вЂ” exposed so callers that need to tune
   /// bufferedAmountLowThreshold (file transfer path) can reach it.
   RTCDataChannel? get dataChannel => _dc;
-  RTCPeerConnection get peerConnection => _pc;
+  RTCPeerConnection? get peerConnection => _pc;
 
   Stream<void> get onOpen => _openCtl.stream;
   Stream<void> get onClose => _closeCtl.stream;
   Stream<PeerError> get onError => _errorCtl.stream;
   Stream<Object?> get onData => _dataCtl.stream;
 
+  /// Test-only: feed an inbound frame into [onData] (no-op when closed).
+  @visibleForTesting
+  void debugEmitData(Object? data) {
+    if (!_closed) _dataCtl.add(data);
+  }
+
+  void _emitOpen() {
+    if (_closed || _open) return;
+    _open = true;
+    if (!_openCtl.isClosed) _openCtl.add(null);
+  }
+
+  /// Latch `_open` from the native channel if the Open event was missed.
+  void _syncOpenFromChannel() {
+    if (_closed || _open) return;
+    final dc = _dc;
+    if (dc != null && dc.state == RTCDataChannelState.RTCDataChannelOpen) {
+      _emitOpen();
+    }
+  }
+
   void _attachDataChannel(RTCDataChannel dc) {
     _dc = dc;
     dc.onDataChannelState = (state) {
       if (_closed) return;
       if (state == RTCDataChannelState.RTCDataChannelOpen) {
-        _open = true;
-        _openCtl.add(null);
+        _emitOpen();
       } else if (state == RTCDataChannelState.RTCDataChannelClosed) {
         _markClosed();
       }
@@ -458,6 +508,12 @@ class PeerDataConnection {
       }
       _dataCtl.add(payload);
     };
+    // Linux libwebrtc can hand us a channel that is already Open before this
+    // callback is attached; the state listener then never fires. Promote
+    // immediately so [send] and [onOpen] observers see a live channel.
+    if (dc.state == RTCDataChannelState.RTCDataChannelOpen) {
+      _emitOpen();
+    }
   }
 
   /// Send JSON-serializable payload (Map/List/String/num/bool) or raw bytes.
@@ -466,8 +522,18 @@ class PeerDataConnection {
   /// Returns `true` only when the DataChannel accepted the payload.
   bool send(Object? value) {
     if (_closed) return false;
+    if (_client == null) {
+      // Stub path: record only.
+      if (!_open) return false;
+      debugSent.add(value);
+      return true;
+    }
     final dc = _dc;
-    if (dc == null || !_open) return false;
+    if (dc == null) return false;
+    if (!_open) {
+      _syncOpenFromChannel();
+      if (!_open) return false;
+    }
     try {
       if (value is Uint8List) {
         dc.send(RTCDataChannelMessage.fromBinary(value));
@@ -492,9 +558,9 @@ class PeerDataConnection {
       await _dc?.close();
     } catch (_) {}
     try {
-      await _pc.close();
+      await _pc?.close();
     } catch (_) {}
-    _client._forgetConnection(connectionId);
+    _client?._forgetConnection(connectionId);
   }
 
   void _markClosed() {
@@ -510,7 +576,7 @@ class PeerDataConnection {
       await _dc?.close();
     } catch (_) {}
     try {
-      await _pc.close();
+      await _pc?.close();
     } catch (_) {}
     await _openCtl.close();
     await _closeCtl.close();
@@ -540,6 +606,16 @@ class PeerMediaConnection {
         _localStream = localStream,
         _pendingOffer = pendingOffer;
 
+  /// Test-only stub: [answer]/[close] only latch spy flags.
+  @visibleForTesting
+  PeerMediaConnection.stub({
+    required this.peer,
+    this.connectionId = 'stub-media',
+    this.initiator = false,
+    this.metadata = const <String, Object?>{},
+  })  : _pc = null,
+        _client = null;
+
   final String peer;
   final String connectionId;
   final bool initiator;
@@ -548,13 +624,16 @@ class PeerMediaConnection {
   /// with `{channel:'room-voice', roomId, channelId}` so CallsNotifier can skip
   /// them and RoomManager can claim them (audit item 6). Empty for 1:1 calls.
   final Map<String, Object?> metadata;
-  final RTCPeerConnection _pc;
-  final PeerJsClient _client;
+  final RTCPeerConnection? _pc;
+  final PeerJsClient? _client;
   MediaStream? _localStream;
   RTCSessionDescription? _pendingOffer;
   MediaStream? _remoteStream;
   bool _open = false;
   bool _closed = false;
+
+  /// Set by stub [answer].
+  bool debugAnswered = false;
 
   final _streamCtl = StreamController<MediaStream>.broadcast();
   final _closeCtl = StreamController<void>.broadcast();
@@ -564,14 +643,16 @@ class PeerMediaConnection {
   bool get closed => _closed;
   MediaStream? get localStream => _localStream;
   MediaStream? get remoteStream => _remoteStream;
-  RTCPeerConnection get peerConnection => _pc;
+  RTCPeerConnection? get peerConnection => _pc;
 
   Stream<MediaStream> get onStream => _streamCtl.stream;
   Stream<void> get onClose => _closeCtl.stream;
   Stream<PeerError> get onError => _errorCtl.stream;
 
   void _wireRemoteTracks() {
-    _pc.onTrack = (event) {
+    final pc = _pc;
+    if (pc == null) return;
+    pc.onTrack = (event) {
       if (_closed) return;
       if (event.streams.isEmpty) return;
       final stream = event.streams.first;
@@ -590,19 +671,27 @@ class PeerMediaConnection {
     if (initiator) {
       throw const PeerError('invalid-state', 'answer() is for incoming calls');
     }
+    final pc = _pc;
+    final client = _client;
+    if (pc == null || client == null) {
+      // Stub path: latch only.
+      debugAnswered = true;
+      _localStream = localStream;
+      return;
+    }
     _localStream = localStream;
     for (final track in localStream.getTracks()) {
-      await _pc.addTrack(track, localStream);
+      await pc.addTrack(track, localStream);
     }
     final offer = _pendingOffer;
     if (offer != null) {
-      await _pc.setRemoteDescription(offer);
+      await pc.setRemoteDescription(offer);
       _pendingOffer = null;
       // Apply any ICE candidates that arrived between OFFER and answer().
-      await _client._flushPendingIce(connectionId);
-      final answer = await _pc.createAnswer({});
-      await _pc.setLocalDescription(answer);
-      _client._sendFrame({
+      await client._flushPendingIce(connectionId);
+      final answer = await pc.createAnswer({});
+      await pc.setLocalDescription(answer);
+      client._sendFrame({
         'type': _ServerMessageType.answer,
         'dst': peer,
         'payload': {
@@ -618,9 +707,9 @@ class PeerMediaConnection {
     if (_closed) return;
     _markClosed();
     try {
-      await _pc.close();
+      await _pc?.close();
     } catch (_) {}
-    _client._forgetConnection(connectionId);
+    _client?._forgetConnection(connectionId);
   }
 
   void _markClosed() {
@@ -633,7 +722,7 @@ class PeerMediaConnection {
   Future<void> _dispose() async {
     _markClosed();
     try {
-      await _pc.close();
+      await _pc?.close();
     } catch (_) {}
     await _streamCtl.close();
     await _closeCtl.close();
@@ -653,7 +742,7 @@ class _Negotiator {
   final PeerDataConnection? data;
   final PeerMediaConnection? media;
 
-  RTCPeerConnection get pc => (data?._pc ?? media!._pc);
+  RTCPeerConnection? get pc => (data?._pc ?? media?._pc);
   String get remotePeerId => (data?.peer ?? media!.peer);
   Future<void> dispose() async {
     if (data != null) {
@@ -682,6 +771,7 @@ class PeerJsClient {
     String? token,
     bool serverEchoesHeartbeat = false,
     this.connectTimeout = const Duration(seconds: 10),
+    CreateRtcPeerConnection? createPeerConnectionFn,
   })  : _desiredId = id,
         _key = key,
         _version = version,
@@ -695,7 +785,8 @@ class PeerJsClient {
           'bundlePolicy': 'max-bundle',
           'rtcpMuxPolicy': 'require',
           'sdpSemantics': 'unified-plan',
-        };
+        },
+        _createPeerConnectionFn = createPeerConnectionFn;
 
   final ResolvedSignalingEndpoint endpoint;
   final String? _desiredId;
@@ -705,6 +796,20 @@ class PeerJsClient {
   final bool _serverEchoesHeartbeat;
   final String _token;
   final Map<String, Object> _rtcConfig;
+  final CreateRtcPeerConnection? _createPeerConnectionFn;
+
+  Future<RTCPeerConnection> _openPeerConnection(WebRtcPeerKind kind) {
+    final config = Map<String, dynamic>.from(_rtcConfig);
+    final injected = _createPeerConnectionFn;
+    if (injected != null) {
+      WebRtcAudioLifecycle.instance.recordPeerConnection(kind);
+      return injected(config);
+    }
+    return WebRtcAudioLifecycle.instance.createPeerConnectionFor(
+      config,
+      kind: kind,
+    );
+  }
 
   SignalingSocket? _sock;
   String? _id;
@@ -952,7 +1057,7 @@ class PeerJsClient {
     try {
       final labelOrDefault = label ?? cid;
       final meta = metadata ?? <String, Object?>{};
-      final pc = await createPeerConnection(_rtcConfig);
+      final pc = await _openPeerConnection(WebRtcPeerKind.dataOnly);
       final dc = await pc.createDataChannel(
         labelOrDefault,
         RTCDataChannelInit()..ordered = reliable,
@@ -977,7 +1082,7 @@ class PeerJsClient {
         timeout: dialTimeout,
         dispose: () => _giveUpConnection(cid),
         createOffer: () async {
-          final offer = await pc.createOffer({});
+          final offer = await pc.createOffer(kDataOnlySdpConstraints);
           await pc.setLocalDescription(offer);
           return offer;
         },
@@ -1027,7 +1132,7 @@ class PeerJsClient {
     final meta = metadata ?? const <String, Object?>{};
     final cid = _newMediaConnectionId();
     try {
-      final pc = await createPeerConnection(_rtcConfig);
+      final pc = await _openPeerConnection(WebRtcPeerKind.media);
       final conn = PeerMediaConnection._(
         peer: targetId,
         connectionId: cid,
@@ -1156,62 +1261,72 @@ class PeerJsClient {
       sdpMap['type']?.toString() ?? 'offer',
     );
 
-    final pc = await createPeerConnection(_rtcConfig);
+    // Inbound media offers allocate a PC before the user accepts. Capture
+    // still happens in acceptCurrent / getUserMedia — not here.
+    try {
+      final pc = await _openPeerConnection(WebRtcPeerKind.dataOnly);
 
-    if (kind == 'media') {
-      final media = PeerMediaConnection._(
-        peer: src,
-        connectionId: cid,
-        initiator: false,
-        pc: pc,
-        client: this,
-        pendingOffer: sdp,
-        metadata: (map['metadata'] is Map)
-            ? (map['metadata'] as Map)
-                .map((k, v) => MapEntry(k.toString(), v))
-            : const <String, Object?>{},
-      );
-      media._wireRemoteTracks();
-      _wirePcLifecycle(pc, cid);
-      _wireIceOut(pc, cid, src, 'media');
-      _conns[cid] = _Negotiator.media(media);
-      // Do NOT flush pending ICE here вЂ” setRemoteDescription happens later in
-      // [PeerMediaConnection.answer]. Candidates that raced in before the
-      // offer arrived stay buffered and get flushed inside answer().
-      _callCtl.add(media);
-    } else {
-      final data = PeerDataConnection._(
-        peer: src,
-        connectionId: cid,
-        label: (map['label']?.toString() ?? cid),
-        metadata: (map['metadata'] is Map)
-            ? (map['metadata'] as Map).map((k, v) => MapEntry(k.toString(), v))
-            : <String, Object?>{},
-        reliable: map['reliable'] == true || map['reliable'] == 'true',
-        initiator: false,
-        pc: pc,
-        client: this,
-      );
-      pc.onDataChannel = (dc) {
-        data._attachDataChannel(dc);
-      };
-      _wirePcLifecycle(pc, cid);
-      _wireIceOut(pc, cid, src, 'data');
-      _conns[cid] = _Negotiator.data(data);
-      await pc.setRemoteDescription(sdp);
-      await _flushPendingIce(cid);
-      final answer = await pc.createAnswer({});
-      await pc.setLocalDescription(answer);
-      _sendFrame({
-        'type': _ServerMessageType.answer,
-        'dst': src,
-        'payload': {
-          'sdp': {'type': answer.type, 'sdp': answer.sdp},
-          'type': 'data',
-          'connectionId': cid,
-        },
-      });
-      _connectionCtl.add(data);
+      if (kind == 'media') {
+        final media = PeerMediaConnection._(
+          peer: src,
+          connectionId: cid,
+          initiator: false,
+          pc: pc,
+          client: this,
+          pendingOffer: sdp,
+          metadata: (map['metadata'] is Map)
+              ? (map['metadata'] as Map)
+                  .map((k, v) => MapEntry(k.toString(), v))
+              : const <String, Object?>{},
+        );
+        media._wireRemoteTracks();
+        _wirePcLifecycle(pc, cid);
+        _wireIceOut(pc, cid, src, 'media');
+        _conns[cid] = _Negotiator.media(media);
+        // Do NOT flush pending ICE here — setRemoteDescription happens later in
+        // [PeerMediaConnection.answer]. Candidates that raced in before the
+        // offer arrived stay buffered and get flushed inside answer().
+        _callCtl.add(media);
+      } else {
+        final data = PeerDataConnection._(
+          peer: src,
+          connectionId: cid,
+          label: (map['label']?.toString() ?? cid),
+          metadata: (map['metadata'] is Map)
+              ? (map['metadata'] as Map).map((k, v) => MapEntry(k.toString(), v))
+              : <String, Object?>{},
+          reliable: map['reliable'] == true || map['reliable'] == 'true',
+          initiator: false,
+          pc: pc,
+          client: this,
+        );
+        pc.onDataChannel = (dc) {
+          data._attachDataChannel(dc);
+        };
+        _wirePcLifecycle(pc, cid);
+        _wireIceOut(pc, cid, src, 'data');
+        _conns[cid] = _Negotiator.data(data);
+        await pc.setRemoteDescription(sdp);
+        await _flushPendingIce(cid);
+        final answer = await pc.createAnswer(kDataOnlySdpConstraints);
+        await pc.setLocalDescription(answer);
+        _sendFrame({
+          'type': _ServerMessageType.answer,
+          'dst': src,
+          'payload': {
+            'sdp': {'type': answer.type, 'sdp': answer.sdp},
+            'type': 'data',
+            'connectionId': cid,
+          },
+        });
+        _connectionCtl.add(data);
+      }
+    } catch (e) {
+      // Previously unawaited: createAnswer / Dummy ADM / setRemoteDescription
+      // failures vanished. Surface them as PeerError so lastConnectError can
+      // record the reason instead of leaving a half-open zombie.
+      _giveUpConnection(cid);
+      _errorCtl.add(PeerError('webrtc', 'handleOffer: $e'));
     }
   }
 
@@ -1229,7 +1344,9 @@ class PeerJsClient {
       sdpMap['type']?.toString() ?? 'answer',
     );
     try {
-      await n.pc.setRemoteDescription(sdp);
+      final pc = n.pc;
+      if (pc == null) return;
+      await pc.setRemoteDescription(sdp);
       await _flushPendingIce(cid);
     } catch (e) {
       _errorCtl.add(PeerError('webrtc', 'setRemoteDescription: $e'));
@@ -1259,12 +1376,14 @@ class PeerJsClient {
       return;
     }
     try {
-      final desc = await n.pc.getRemoteDescription();
+      final pc = n.pc;
+      if (pc == null) return;
+      final desc = await pc.getRemoteDescription();
       if (desc == null) {
         _bufferIce(cid, ice);
         return;
       }
-      await n.pc.addCandidate(ice);
+      await pc.addCandidate(ice);
     } catch (e) {
       _errorCtl.add(PeerError('webrtc', 'addCandidate: $e'));
     }
@@ -1383,9 +1502,11 @@ class PeerJsClient {
     if (list == null) return;
     final n = _conns[cid];
     if (n == null) return;
+    final pc = n.pc;
+    if (pc == null) return;
     for (final ice in list) {
       try {
-        await n.pc.addCandidate(ice);
+        await pc.addCandidate(ice);
       } catch (_) {}
     }
   }

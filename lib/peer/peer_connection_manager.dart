@@ -138,8 +138,9 @@ class PeerConnectionManager {
       final p = peer;
       if (p != null && !p.open && !p.destroyed) {
         cb.setStatus?.call('disconnected');
-        cb.setError
-            ?.call('Не удалось подключиться к серверу — проверьте интернет');
+        cb.setError?.call(
+          'Не удалось подключиться к серверу — проверьте интернет',
+        );
       }
     });
 
@@ -261,6 +262,7 @@ class PeerConnectionManager {
       endpoint: endpoint,
       iceServers: rtc.iceServers,
       iceTransportPolicy: rtc.iceTransportPolicy,
+      key: env.resolvedPeerKey,
     );
   }
 
@@ -334,16 +336,15 @@ class PeerConnectionManager {
     // ── Generic error handling ────────────────────────────────────
     final isSignalNoise =
         err.type == 'server-error' || err.type == 'socket-error';
-    final transient = isSignalNoise ||
+    final transient =
+        isSignalNoise ||
         err.type == 'network' ||
         err.type == 'peer-unavailable';
 
     final p = peer;
     if (transient && p != null && p.open) {
       cb.onError?.call(err);
-    } else if (isSignalNoise &&
-        _hasEverConnected &&
-        _signalNoiseStreak < 5) {
+    } else if (isSignalNoise && _hasEverConnected && _signalNoiseStreak < 5) {
       _signalNoiseStreak += 1;
       cb.setStatus?.call('connecting');
       cb.setError?.call(null);

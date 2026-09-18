@@ -3,9 +3,11 @@
 
 import 'dart:convert';
 
+import '../peer/helpers.dart';
 import '../transport/layers.dart';
 import '../transport/replication_schema.dart';
 import 'memory_journal.dart';
+import 'replication_authorization.dart';
 
 class HypercoreLocalStore {
   HypercoreLocalStore(this.writerDeviceId);
@@ -21,7 +23,64 @@ class HypercoreLocalStore {
     return record;
   }
 
-  Map<String, Object?> toReplicationFrame(JournalRecord record) {
+  /// Contact-scoped filter. Unscoped / device records are excluded.
+  List<JournalRecord> recordsForConversations(
+    Set<String> authorizedConversations,
+  ) {
+    final allowed = authorizedConversations.map(normalizePeerId).toSet();
+    return blocks
+        .where((r) {
+          if (isOwnerDeviceScopedKind(r.kind)) return false;
+          final cid = normalizedConversationId(r.fields);
+          return cid != null && allowed.contains(cid);
+        })
+        .toList(growable: false);
+  }
+
+  List<JournalRecord> recordsAuthorizedForPeer({
+    required String authenticatedPeerId,
+    required String selfPeerId,
+    required bool peerIsOwnDevice,
+  }) {
+    return blocks
+        .where(
+          (r) => recordMayReplicateTo(
+            r,
+            authenticatedPeerId: authenticatedPeerId,
+            selfPeerId: selfPeerId,
+            peerIsOwnDevice: peerIsOwnDevice,
+          ),
+        )
+        .toList(growable: false);
+  }
+
+  Map<String, Object?> toReplicationFrame(
+    JournalRecord record, {
+    Set<String>? authorizedConversations,
+    String? authenticatedPeerId,
+    String? selfPeerId,
+    bool peerIsOwnDevice = false,
+  }) {
+    if (authenticatedPeerId != null) {
+      if (!recordMayReplicateTo(
+        record,
+        authenticatedPeerId: authenticatedPeerId,
+        selfPeerId: selfPeerId ?? '',
+        peerIsOwnDevice: peerIsOwnDevice,
+      )) {
+        throw StateError(
+          'refusing to replicate record ${record.kind.name} to $authenticatedPeerId',
+        );
+      }
+    } else if (authorizedConversations != null) {
+      final cid = normalizedConversationId(record.fields);
+      final allowed = authorizedConversations.map(normalizePeerId).toSet();
+      if (cid == null || !allowed.contains(cid)) {
+        throw StateError(
+          'refusing to replicate record for unauthorized conversation: $cid',
+        );
+      }
+    }
     return <String, Object?>{
       'type': 'repl-event',
       'info': kReplicationEventInfo,
@@ -35,7 +94,15 @@ class HypercoreLocalStore {
     };
   }
 
-  JournalRecord? applyRemote(Map<String, Object?> frame) {
+  JournalRecord? applyRemote(
+    Map<String, Object?> frame, {
+    Set<String>? authorizedConversations,
+    String? authenticatedPeerId,
+    String? selfPeerId,
+    bool peerIsOwnDevice = false,
+    String? expectedWriterDeviceId,
+    bool Function(String writerDeviceId)? acceptsWriter,
+  }) {
     if (frame['type'] != 'repl-event') return null;
     if (frame['info'] != kReplicationEventInfo) return null;
     final kindName = frame['kind'] as String?;
@@ -53,9 +120,40 @@ class HypercoreLocalStore {
       }
     });
     if (!replicationFieldsAreSafe(fields.keys)) return null;
+
+    final writerDeviceId = frame['writerDeviceId'] as String? ?? '';
+    if (expectedWriterDeviceId != null &&
+        expectedWriterDeviceId.isNotEmpty &&
+        writerDeviceId != expectedWriterDeviceId) {
+      return null;
+    }
+    if (acceptsWriter != null &&
+        writerDeviceId.isNotEmpty &&
+        !acceptsWriter(writerDeviceId)) {
+      return null;
+    }
+
+    if (authenticatedPeerId != null) {
+      if (!frameMayAcceptFrom(
+        kind.first,
+        fields,
+        authenticatedPeerId: authenticatedPeerId,
+        selfPeerId: selfPeerId ?? '',
+        peerIsOwnDevice: peerIsOwnDevice,
+      )) {
+        return null;
+      }
+    } else if (authorizedConversations != null) {
+      final cid = normalizedConversationId(fields);
+      final allowed = authorizedConversations.map(normalizePeerId).toSet();
+      if (cid == null || !allowed.contains(cid)) {
+        return null;
+      }
+    }
+
     final record = JournalRecord(
       seq: frame['seq'] as int? ?? blocks.length,
-      writerDeviceId: frame['writerDeviceId'] as String? ?? '',
+      writerDeviceId: writerDeviceId,
       kind: kind.first,
       fields: fields,
     );

@@ -8,10 +8,10 @@ import '../core/key_store.dart';
 import 'drift_key_store.dart';
 
 /// Bump when the unlock walk gains another table or a new frame version.
-const int kLegacySealMigrationVersion = 1;
+const int kLegacySealMigrationVersion = 2;
 
-/// Re-encrypt every legacy plaintext keys/prekeys/ratchets row. No-op for
-/// the in-memory store. Safe to call repeatedly.
+/// Re-encrypt every legacy plaintext keys/prekeys/ratchets/device-material
+/// row. No-op for the in-memory store. Safe to call repeatedly.
 Future<int> migrateLegacySealedRows() async {
   final store = keyStore();
   if (store is DriftKeyStore) {

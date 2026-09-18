@@ -1,0 +1,543 @@
+# PR #62 repair report
+
+## 2026-09-18 room DualStack resume-after-loss
+
+Software path only. External gates stay open.
+
+- Host `sendRoomFile` over DualStack resumes a pre-seeded partial
+  `orbits-incoming` blob (`file-accept.resumeOffset` = 64 KiB) and
+  persists the completed jail path + sha256 with no `b64` and no
+  PeerJS DataChannel
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
+## 2026-09-18 CallsNotifier DualStack ringing / send errors
+
+Software path only. External gates stay open.
+
+- An inbound DualStack offer sets `CallsNotifier` to `CallStatus.ringing`
+  with no PeerJS DataChannel
+- DualStack send/ephemeral failures and room native file-send failures
+  are visible on `lastReplicationError`
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
+## 2026-09-18 journal clone-decrypt / OS wake hop
+
+Software path only. External gates stay open.
+
+- Contact-level journal decrypt uses `decryptWirePayload(commit: false)`.
+  DualStack-shaped `v2` rows project the chat `id` into Drift. A second
+  replay after the live consume fail-closes. Host decrypt errors are
+  visible on `lastProjectorError`
+- iOS `didReceiveRemoteNotification` and Android `OrbitsWakeReceiver`
+  hop only `opaqueWakeToken` / `collapseId` / `protocolVersion` onto
+  `app.orbits/wake`. `NativeTransportHost` binds `OpaqueWakeChannel`.
+  `kLiveApnsGateway` stays false. No `voip` / PushKit
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
+## 2026-09-18 exclusive-native call signal / host opaque-wake drain
+
+Software path only. External gates stay open.
+
+- `ConnectionsNotifier.sendCallSignal` uses DualStack when native is
+  authenticated and does not open PeerJS. A pre-opened PeerJS slot is
+  torn down (`peerjsFallbackCloseCalls`). An inbound DualStack offer
+  reaches `bindCallHandler` / `lastCallSignal` the same way
+- DualStack `lastCallSignalError` surfaces a malformed call frame
+- Mailbox journal append uses `mailboxWriterKey` when the live
+  `selfPeerId` callback is empty. Missing conversation members set
+  `lastReplicationError` and do not throw through opaque wake
+- `NativeTransportHost` resume drain wraps `drainKnownMailboxes`.
+  `OpaqueWakeService.handle` of a safe token drains known sender
+  buckets through `DozeAdapter`; a payload with `peerId` is rejected.
+  `kLiveApnsGateway` stays false
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
+## 2026-09-18 remote mailbox sender buckets / DeviceLinkPage widget
+
+Software path only. External gates stay open.
+
+- DualStack `lastDeviceRatchetError` surfaces offer / accept / decrypt
+  failures instead of an empty catch
+- A loopback `TransportPathChanged` to relay keeps the DualStack
+  session authenticated and still delivers packets
+- Remote `/v1/mailbox` deposit/drain/ack carry an opaque `senderBucket`
+  (`HASH("orbits-mailbox-sender-v1" || mailboxId || senderPeerId)`).
+  Storage peers never see a peer ID. `drainKnownMailboxes` attributes
+  contact-level `v2` wires from those buckets the same way local
+  `writerKey` buckets do. A peer-ID `senderBucket` is rejected.
+  Unbucketed legacy dumps still skip `v2` in the known-sender sweep
+- `DeviceLinkPage` widget test pastes a signed QR, calls DualStack
+  `authorizeDevice`, then revoke; private ratchet material stays out
+  of the JSON
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
+## 2026-09-18 room path-descriptor / exclusive-native teardown / DualStack restart
+
+Software path only. External gates stay open.
+
+- Analyze unused_import on `room_manager.dart` is prefixed `dart:convert`
+- Room DualStack files send a path descriptor (`native`/`transferId`/`sha256`);
+  PeerJS guests still get host-plaintext `b64`. Host relay is per-peer.
+  Incoming native blobs look up the jail by the authenticated transport sender
+- `_openChannel` dials native even when a PeerJS slot is already open, then
+  `_closePeerjsFallback` tears that slot down (`debugAttachPeerjsSlot`)
+- Combined DualStack + vault-wrapped ratchet snapshot hydrates after restart
+  and revoke survives a second hydrate
+- DualStack applies attachment keys from device-ratchet frames and waits for
+  `sendCk` before native `sendFile`. Alice sends `deviceRatchetReady` after
+  accept so the Bob side can send first after bidirectional admit
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
+## 2026-09-18 exclusive-native close counter / DeviceLinkPage hook
+
+Software path only. External gates stay open.
+
+- Native auth increments `peerjsFallbackCloseCalls` and leaves no
+  PeerJS DataChannel (`test/state/outbox_reliable_transport_test.dart`)
+- `DeviceLinkPage` source still calls DualStack authorize/revoke and
+  keeps private ratchet material out of the QR JSON
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
+## 2026-09-18 native outbound path persist / host restart bind
+
+Software path only. External gates stay open.
+
+- Native 1:1 outbound files persist a temp path + SHA-256 in Drift
+  instead of the file bytes. The native file meta carries `sha256`
+- `NativeTransportHost` start after unlock binds projector, hydrates
+  device ratchets, and injects Autobase snapshot IO. A shutdown +
+  restart rebinds those hooks
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
+## 2026-09-18 RoomManager DualStack Autobase + persist errors
+
+Software path only. External gates stay open.
+
+- Host+guest `RoomManager` now has a live DualStack integration:
+  join and a relayed message converge Autobase projections with no
+  PeerJS DataChannel
+- `RoomAutobaseLog.lastPersistError` surfaces vault-wrap persist /
+  hydrate failures instead of swallowing them
+- DualStack inbound replication decode failures set
+  `lastReplicationError`. Native host projector persist/tombstone
+  failures set `lastProjectorError`
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
+## 2026-09-18 Autobase persist / live membership projector
+
+Software path only. External gates stay open.
+
+- `RoomAutobaseLog` vault-wraps the writer log when IO is injected.
+  `RoomManager.bindAutobaseSnapshot` hydrates after unlock;
+  `NativeTransportHost` binds the production prefs wrappers. Room
+  tests that set a vault KEK do not touch SharedPreferences
+- DualStack membership / own-account records append FileJournal and
+  live-project through `onRemoteRecord`. Ciphertext envelopes stay
+  off that path (`onPacket` owns decrypt)
+- Live `JournalProjector` membership list matches FileJournal replay
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
+## 2026-09-18 mailbox buckets / journal clone / 3-device mesh
+
+Software path only. External gates stay open.
+
+- Local mailbox deposit/collect is per sender identity. `drainKnownMailboxes`
+  no longer attributes a shared bucket to the first unblocked peer. Remote
+  known-sender sweep leaves unauthenticated `v2` wires unattributed
+- Device-fanout journal rows carry `envelopeCipher=deviceRatchetV1`.
+  Projector decrypt uses `ratchetDecrypt(commit: false)` so replay cannot
+  burn the live session. Already-consumed envelopes fail closed
+- DualStack offers a per-device ratchet on every admit, addressed to the
+  transport id. QR `acceptDeviceLink` journals via `onAuthorized` and
+  still cannot mint without a live DH. `DeviceLinkPage` calls
+  DualStack `authorizeDevice` / `revokeDevice` when the native bridge
+  is bound
+- Three-device loopback mesh covers phone / tablet / contact fan-out,
+  own-device sync, and revoke
+- Autobase membership Hypercore append failures surface on
+  `lastReplicationError` and skip the packet send
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
+
+
+This report is evidence-only. It does **not** claim the Holepunch
+migration is code-complete or safe to merge.
+
+## 2026-09-18 exclusive native / mailbox device-ratchet / Noise gate
+
+Software path only. External gates stay open.
+
+- When DualStack authenticates a peer, PeerJS data channels for that
+  peer are closed. A native binding reject is recorded and does not
+  fall back to PeerJS. Inbound PeerJS is ignored while native is
+  authoritative
+- Offline device-ratchet fan-out deposits a `deviceRatchetV1` frame.
+  Mailbox drain decrypts through `_onDeviceRatchetFrame`, not the
+  contact-level ratchet
+- Connect-time Dart auth rejects a missing `connectionNoisePublicKey`
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
+## 2026-09-18 persist / Autobase / Drift-replay slice
+
+Software path only. External gates stay open.
+
+- `DeviceRatchetSessions` vault-wraps every session snapshot plus the
+  revoke set, including after each fan-out encrypt / decrypt.
+  `NativeTransportHost` hydrates before DualStack bind
+- Host-plaintext `room_autobase` packets carry Autobase events over
+  DualStack. RoomManager replays the log to late joiners. Membership
+  metadata is appended as `roomMembershipChanged` (no chat bodies,
+  no `displayName`)
+- `JournalProjector` live Drift persist, MemoryJournal replay, and
+  FileJournal restart replay write the same inbound rows. Membership
+  events replay to the same list
+- Host+guest `RoomManager` Autobase projections match after join and
+  after a relayed message (`test/peer/room_network_test.dart`)
+- Autobase `message` events require the same plaintext ack as `room_msg`
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
+## 2026-09-18 plan DoD slice
+
+Software path only. External gates stay open.
+
+- `_openChannel` awaits native `dial` and skips PeerJS when
+  `canUseNative` or fail-closed / fallback-off
+- `JournalProjector` persists decrypted inbound rows into Drift and
+  applies writer-matched tombstones
+- DualStack send/recv uses `DeviceRatchetSessions` when sessions are
+  bound; after admit the dialer mints a per-device ratchet over a
+  DH offer/accept; `revokeDevice` drops those sessions
+- Native Drop inbound persists a path/sha256 descriptor, not blob bytes
+- `RoomManager` records host-plaintext Autobase membership / channel /
+  message events (`kRoomsApplicationE2eImplemented` stays false)
+- `NativeTransportHost` owns `DozeAdapter` and drains mailboxes on
+  opaque wake / foreground
+- Desktop native plugins remain OTP1 fail-closed
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
+## 2026-09-17 green-baseline repair
+
+The previous identity table and CI claims below are **stale**. They
+describe earlier SHAs (`c2c02dcb`, `d01c54e`, `01fe55f`). Current
+`origin/main` is `e2441db26680d33d01fd5e8ffbb902b30390e45b`
+(Apache-2.0). PR #62 HEAD at audit time was
+`01fe55f5e08058573ffaa81ea27e0d53c0c8815b`. Merge-base remains
+`671c2e57875d62e56b371a7d4c651de9d2477836`.
+
+This pass restores compile/CI honesty on
+`cursor/orbits-holepunch-green-baseline-e7fb`. The first
+implementation commit is
+`9e545f63788faae931d761433f19c96e738dcbd1`. Treat the branch
+HEAD SHA after CI as the evidence pin.
+
+- Apache-2.0 commits from `main` merged onto the holepunch lineage
+- `OrbitsTransport.authorizePeer` is abstract and implemented by
+  loopback, worklet IO, worklet stub, plugin, and test fakes
+- Dual-stack decisions call `authorizePeer` when no host callback is set
+- Production worklet extraction includes `incoming_paths.js` and
+  excludes CLI-only `stand.js`
+- `BUNDLE.manifest` `corestore_journal.js` SHA-256 matches the file
+- `git diff --check` whitespace on the four flagged files is clean
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. Rooms stay host-plaintext. PeerJS remains the production
+default. Do not merge. Do not claim production-ready.
+
+## 2026-09-17 correctness slice (after green baseline)
+
+Implemented on this branch after `00da452`. Treat the new HEAD SHA
+as the evidence pin once CI is green.
+
+- Incoming blob lookup covers canonical `sender/local-id/blob`,
+  `meta.json` external-id scan, and legacy `<transferId>/<name>`
+- Own-account replication records are identity-signed; unsigned and
+  writer-mismatched inbound frames are dropped
+- Binding remembers the worklet Corestore public key when
+  `runtime.info` / start returns one
+- Dummy journal projector decrypt is fail-closed (`null`), not a
+  length-as-plaintext stand-in
+- Dead `DualStackBridge.sendAttachmentChunks` is removed
+- Worklet `sendFile` is marked harness-only
+- Auth wait uses a completer instead of a 10 ms poller
+- `JournalProjector.decrypt` now receives the journal record; live host
+  decrypts wire ciphertext with the sender ratchet and skips blocked
+  senders before decrypt. Missing session / non-ciphertext still
+  fail-closes to `null` (no plaintext stand-in)
+- Inbound journal envelopes record the remote `senderIdentity`
+- NativeTransportHost startup abort uses one cleanup helper
+
+## 2026-09-17 side-branch port slice
+
+Ported only the file-scoped pieces marked PORT-WORTHY from the
+semantic compare of `f2` / `f3` / `mailbox-relay` / `worklet-preauth` /
+the 2026-09-02 audit snapshot. Did **not** port XOR, DualStack
+wholesale, mailbox HTTP rewrite, `harnessAuth=local`,
+`conversationScopedToPeer`, `room_crypto.dart`, or turning Hyperswarm
+on.
+
+- `recordTransportDowngrade` + `_notePeerjsDowngrade` — no-op while
+  `HyperswarmRollout` is `off`; log is capped at 64
+- Fail-closed APNs HTTP *shape* (`lib/push/apns_send.dart`,
+  `apns_send_http.dart`). `kLiveApnsGateway` is false. `sendApns`
+  never posts
+- Own-account inbound also requires
+  `identityKeysEqual(known, binding)` before signature verify
+- `cachedIdentityPubSpki()` — cache read only; does not create keys
+- FileJournal rejected-replay assertion uses hashed
+  `conversationIdForPeers` and `FileJournal.memory` as
+  `durableJournal`
+- FileJournal replay no longer drops accepted remote writers.
+  `MemoryJournal.importPersisted` keeps the original writer and
+  reassigns a local seq so the projector cursor cannot skip mixed
+  feeds. Rejected inbound frames still never reach the file.
+
+## 2026-09-17 incoming transfer-id alignment
+
+Chat `msgId` (`ORBIT-…:ts:short`) is no longer used as
+`localTransferId`. Send, file-offer, and `meta.externalTransferId`
+share `sanitizeTransferId`. Lookup compares sanitized external ids so
+`readIncomingTransfer` finds `sender/<local-id>/blob` after a native
+receive. Traversal checks stay. The blob is still copied into Drift
+for the chat decoder (path-only persist is a later slice).
+
+## 2026-09-18 plan DoD software slice
+
+Moved the live DualStack path closer to the master-plan DoD without
+turning rollout on or claiming production-ready.
+
+- Resume drain walks `discoverySecretStore.knownPeerIds` via
+  `drainKnownMailboxes`. Blocked / missing senders stay 0. No invented
+  writer/mailbox-id sender
+- Native outgoing calls that successfully start a `NativeCallSession`
+  no longer also open PeerJS media. PeerJS is fallback-only
+- Native inbound attachments persist a path + sha256 in Drift `data`,
+  not the file bytes. `getFileBlob` reads the path on demand
+
+## 2026-09-18 fail-closed handwritten slice
+
+Ported leftover fail-open defects found in the handwritten review.
+Did **not** claim migration complete, turn Hyperswarm on, rewrite
+mailbox HTTP, merge call machines, or add `room_crypto.dart`.
+
+- DualStack no longer side-decrypts inbound ciphertext (that burned the
+  ratchet). Attachment keys are accepted only after
+  `dispatchReliablePlaintext` decrypts once
+- Mailbox drain requires `fromPeerId`, blocks before journal/Hypercore,
+  and does not invent a sender from the writer key or mailbox id
+- Sync `depositMailbox` no longer pretends a remote HTTP write finished
+- Unknown IPC channels are dropped, not remapped to `message`
+- Worklet `noisePublicKey()` no longer invents `SHA256(seed)`
+- Non-loopback `authorize()` requires a device binding
+- Incoming file offers with an empty SHA-256 fail closed
+- Attachment-key JSON on the file channel is ignored
+- Projector marks `seen` only after a successful decrypt
+- `StoragePeerClient.local` requires HMAC; HTTP client requires an
+  explicit `http(s)` origin
+- Empty Hypercore writer keys are rejected on inbound decode
+- `DeviceRatchetSessions.restore` refuses revoked devices
+- JS OTP1 decoder caps payload at 256 KiB; Corestore journal re-checks
+  forbidden fields on read
+- Windows Bare spawn hashes `bare.exe` against the sidecar
+- Desktop plugins answer `authorize` / `deny` / `runtimeInfo` fail-closed
+- Journal projector tombstones only if the writer device matches the
+  original `senderDeviceId` (a contact cannot delete someone else's
+  projected message)
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. Rooms stay host-plaintext. PeerJS remains the production
+default.
+
+## 2026-09-17 event codec + host teardown
+
+- One `platformMapToTransportEvent` /
+  `transportEventToPlatformMap` /
+  `deviceBindingToWire` shared by plugin, worklet IPC, and
+  `LocalWorkletPlatform`
+- Missing `connectionNoisePublicKey` stays null (never copied from
+  the binding transport key)
+- `LocalWorkletPlatform` forwards every `TransportEvent` and returns
+  `hypercorePublicKey` from `runtime.info`
+- `NativeTransportHost` uses one `_teardownAttached` for post-bind
+  abort, shutdown, and crash recover
+
+## Identity (historical repair pass; do not treat as current HEAD)
+
+| Field | Value |
+|-------|--------|
+| Repository | `adaybekovt-boop/Orbitsmsg` |
+| Branch | `cursor/orbits-holepunch-code-complete-night` |
+| PR | https://github.com/adaybekovt-boop/Orbitsmsg/pull/62 |
+| Base | `main` at `671c2e57875d62e56b371a7d4c651de9d2477836` |
+| Repair-pass start HEAD | `77033a313d798eed8fbf3f1a3385f0ed07840b2d` |
+| Platform-green implementation SHA | `d01c54e2a9d4486e7f4aa7ade9d7dd9498e29c64` |
+| Flutter | 3.44.7 (Dart 3.12.2) |
+
+Invariants checked after the repair:
+
+- `kCompletedMigrationPhase == 0`
+- `HyperswarmRollout` default `off`
+- `kRoomsApplicationE2eImplemented == false`
+- `kPeerjsSupportWindowOpen == true`
+- no `room_crypto.dart`
+- PeerJS not removed
+
+## App → plugin → runtime path after the repair
+
+1. Default product boot stays PeerJS (`HyperswarmRollout.off`).
+2. When rollout ≠ off, `NativeTransportHost` installs
+   `LocalWorkletPlatform` in debug/CI (or keeps
+   `InProcessOrbitsTransportPlatform` in tests) and then uses
+   `PluginOrbitsTransport`.
+3. `PluginOrbitsTransport` is the only app `OrbitsTransport` that talks
+   to `OrbitsTransportPlugin` / `OrbitsTransportPlatform`.
+4. Release native hosts (Android/iOS/macOS/Windows/Linux) never set
+   `started = true`. `start` returns `BARE_RUNTIME_MISSING` until a
+   signed local Bare binary is linked.
+5. Debug/CI may spawn the hashed local worklet under Node. Release
+   refuses Node, `ORBITS_BARE_BIN`, and `ORBITS_WORKLET_JS`.
+6. Large files move as a path + size. The worklet `sendFile` path reads
+   64 KiB windows, waits for socket drain, and persists a resume cursor.
+
+## Repair commits (after `77033a3`)
+
+1. `eeb6bf7` `fix(ci): resolve federated package analysis and run independent suites`
+2. `e85e4a5` `fix(transport): route app lifecycle through federated plugin`
+3. `c6a52c5` `fix(transport): fail closed without a linked Bare runtime`
+4. `d97d982` `fix(runtime): verify local worklet and forbid release Node fallback`
+5. `5d640fe` `fix(identity): publish real signed device bindings`
+6. `d5a8362` `fix(attachments): stream and resume files on the worklet path`
+7. `eb22a8a` `fix(mailbox): enforce framed envelopes and persistent replay safety`
+8. `5161ced` `fix(security): generate an honest dependency SBOM`
+9. `1dc7e26` `fix(ci): clear analyze errors and unused imports`
+10. `c2fc04f` `test(migration): prove worklet resume and drop unused plugin import`
+11. `fdba86d` `fix(identity): drop unused dart:convert after device_registry helpers`
+12. `ef217cb` `docs(migration): reconcile PR 62 claims with repair evidence`
+13. `cb876cb` `docs(migration): pin repair report ending commit SHA`
+14. `79ccc42` `fix(transport): package native plugin hosts for platform builds`
+15. `65265aa` `fix(ios): stop assigning get-only CallKit localizedName`
+16. `d01c54e` `fix(android): subclass abstract Telecom Connection on SDK 36`
+
+## Defects fixed
+
+| Defect | Result |
+|--------|--------|
+| Root `flutter analyze` walked `packages/**` and reported 137 URI errors | Root excludes `packages/**`; CI analyzes each package in its own graph |
+| `flutter test` skipped after analyze | Independent jobs; app tests no longer hidden |
+| Linux Drift tests missing `libsqlite3.so` | CI installs `libsqlite3-0`; `test/flutter_test_config.dart` loads it |
+| App did not depend on `orbits_transport` | Path dependency + generated registrants |
+| `NativeTransportHost` bypassed the plugin | Now uses `PluginOrbitsTransport` |
+| Native hosts returned success without Bare | `start` → `BARE_RUNTIME_MISSING`; `started` stays false |
+| iOS/Windows/Linux plugins could not link | podspecs + CMake registrars; fail-closed host tests |
+| `resolveBareRuntime()` fell back to Node in release | Release throws `BARE_RUNTIME_MISSING` |
+| Worklet `sendFile` used `readFileSync` | Chunked `readSync` + drain + resume state |
+| Placeholder device keys / swallowed publish | Real persisted keys + signed binding |
+| Mailbox accepted non-JSON as “encrypted” | `OE1` framed envelope + hash/length check |
+| `/v1/blocks` still served | Default off; Dart client throws; Node 404 |
+| Node replay was memory-only | `requests` persisted; restart replay rejected |
+| SBOM job counted package names | CycloneDX 1.5 from `pubspec.lock` |
+| iOS 26 `CXProviderConfiguration.localizedName` assignment | Removed; CallKit uses the app display name |
+| Android `Connection()` abstract on compileSdk 36 | Concrete `OrbitsConnection` subclass |
+
+## Commands on `d01c54e` / equivalent local tree
+
+GitHub App tests on `d01c54e`: `01:39 +743: All tests passed!`
+
+Local (packaging SHA `79ccc42`; later commits are iOS CallKit + Android Telecom only):
+
+```text
+flutter analyze --no-fatal-infos
+  → exit 0, 55 info-level findings, 0 warnings, 0 errors
+
+bash tool/ci/analyze_packages.sh
+  → exit 0 (platform_interface, orbits_transport, android, ios, macos, linux, windows)
+
+flutter test
+  → +743, -0, skip 0 migration-related
+  → pre-existing skips only:
+      test/transport/discovery_js_interop_test.dart (file-exists guard)
+      test/security/android_signing_test.dart (non-Linux/macOS)
+      test/core/windows_sign_gate_test.dart (explicit skip: true)
+
+cd packages/orbits_transport && flutter test
+  → +5 -0
+
+cd packages/orbits_transport_platform_interface && dart analyze
+  → No issues found
+
+cd tool/connectivity_harness && node --test test/*.test.js
+  → 16 pass, 0 fail, 0 skip
+
+node --test tool/storage_peer/server.test.js
+  → 6 pass, 0 fail, 0 skip
+
+python3 tool/ci/generate_sbom.py --lock pubspec.lock --out /tmp/orbits.cdx.json
+  → 163 components, CycloneDX 1.5
+
+bash tool/ci/verify_worklet_bundle.sh
+  → all src/*.js hashes match BUNDLE.manifest
+
+g++ host fail-closed tests (linux + windows TUs)
+  → exit 0
+
+git diff --check main...HEAD
+  → exit 0
+```
+
+## GitHub on implementation SHA `d01c54e`
+
+- Security scans **success**: https://github.com/adaybekovt-boop/Orbitsmsg/actions/runs/33681971114
+  - Semgrep, Gitleaks, CycloneDX SBOM and license policy
+- Build & Release **success**: https://github.com/adaybekovt-boop/Orbitsmsg/actions/runs/33681971111
+  - Analyze app, Analyze federated packages, App tests, Plugin tests,
+    Connectivity harness, Storage peer, Required suites
+  - Build Web, Build Windows, Build iOS (Xcode 26), Build Android (APK)
+  - GitHub Release **skipped** (not a `v*` tag)
+
+## Remaining code blockers
+
+- No signed Bare binary or native addon is in this tree. Production
+  hosts fail closed rather than pretending to send.
+- PeerJS remains the default live transport.
+- Rooms remain host-plaintext.
+- Linux desktop `flutter build` is not in this workflow; the Linux host
+  TU compiles in CI and the registrar/CMake exist for local desktop
+  builds. GTK/ninja are not on this agent.
+- Source-text host-surface tests remain as narrow policy guards; they
+  are not counted as runtime Bare evidence.
+
+## External/manual tests still required
+
+- Two real devices over Hyperswarm after a signed Bare binary is linked
+- NAT / carrier / Kazakhstan matrices
+- Push (APNs/FCM/PushKit) and store review
+- Public mailbox/relay fleet
+- Independent cryptography audit
+- Store-signed installers (Windows Authenticode, Play/App Store)

@@ -8,7 +8,6 @@ import 'dart:typed_data';
 import '../core/vault_kek.dart';
 import '../peer/helpers.dart';
 import '../storage/wrapped_snapshot.dart';
-import '../transport/discovery_secret_store.dart';
 
 enum DeviceStatus { active, revoked }
 
@@ -64,8 +63,19 @@ class AuthorizedDevice {
         'transportPeerId': transportPeerId,
       };
 
+  static DeviceStatus? parseStatus(String? name) {
+    if (name == null || name.isEmpty) return null;
+    for (final status in DeviceStatus.values) {
+      if (status.name == name) return status;
+    }
+    return null;
+  }
+
   static AuthorizedDevice fromJson(Map<String, Object?> json) {
-    final statusName = json['status'] as String? ?? DeviceStatus.active.name;
+    final status = parseStatus(json['status'] as String?);
+    if (status == null) {
+      throw FormatException('invalid device status: ${json['status']}');
+    }
     return AuthorizedDevice(
       deviceId: json['deviceId'] as String? ?? '',
       transportPublicKey: base64Decode(json['transportPublicKey'] as String? ?? ''),
@@ -73,10 +83,7 @@ class AuthorizedDevice {
       name: json['name'] as String? ?? '',
       kind: json['kind'] as String? ?? '',
       createdAt: json['createdAt'] as int? ?? 0,
-      status: DeviceStatus.values.firstWhere(
-        (s) => s.name == statusName,
-        orElse: () => DeviceStatus.active,
-      ),
+      status: status,
       ownerPeerId: json['ownerPeerId'] as String? ?? '',
       transportPeerId: json['transportPeerId'] as String?,
     );
@@ -87,10 +94,22 @@ class DeviceRegistry {
   DeviceRegistry({
     this.writeSnapshot,
     this.readSnapshot,
+    this.onError,
   });
 
   WrappedSnapshotWriter? writeSnapshot;
   WrappedSnapshotReader? readSnapshot;
+
+  /// Last hydrate/persist failure. Empty on success.
+  String lastError = '';
+
+  /// True when the last hydrate read corrupt/incomplete bytes. While
+  /// set, [acceptsWriter] returns false and [authorize] throws — a
+  /// broken snapshot is never a silent empty revoke set.
+  bool hydrateFailed = false;
+
+  /// Optional host hook for hydrate/persist failures.
+  void Function(String error)? onError;
 
   final Map<String, AuthorizedDevice> _devices = <String, AuthorizedDevice>{};
 
@@ -101,25 +120,81 @@ class DeviceRegistry {
       .where((d) => d.status == DeviceStatus.active)
       .toList(growable: false);
 
-  void authorize(AuthorizedDevice device) {
+  /// Restart / replay hydrate. A revoked row never becomes active.
+  void replaceAll(Iterable<AuthorizedDevice> devices) {
+    final incoming = <String, AuthorizedDevice>{
+      for (final device in devices) device.deviceId: device,
+    };
+    for (final id in incoming.keys.toList()) {
+      final existing = _devices[id];
+      if (existing?.status == DeviceStatus.revoked) {
+        incoming[id] = existing!;
+      }
+    }
+    _devices
+      ..clear()
+      ..addAll(incoming);
+  }
+
+  Future<void> authorize(AuthorizedDevice device) async {
+    if (hydrateFailed) {
+      throw StateError(
+        lastError.isEmpty ? 'registry hydrate failed' : lastError,
+      );
+    }
     final existing = _devices[device.deviceId];
     if (existing?.status == DeviceStatus.revoked) {
       throw StateError('revoked device cannot be re-authorized in place');
     }
     _devices[device.deviceId] = device;
-    unawaited(persist());
+    await _persistOrRecord();
   }
 
-  void revoke(String deviceId) {
+  Future<void> revoke(String deviceId, {String ownerPeerId = ''}) async {
     final existing = _devices[deviceId];
-    if (existing == null) return;
-    _devices[deviceId] = existing.revoke();
-    unawaited(persist());
+    if (existing == null) {
+      // Revoked stub: a later authorize/QR for this id must not admit.
+      _devices[deviceId] = AuthorizedDevice(
+        deviceId: deviceId,
+        transportPublicKey: const <int>[],
+        hypercorePublicKey: const <int>[],
+        name: deviceId,
+        kind: 'revoked',
+        createdAt: 0,
+        status: DeviceStatus.revoked,
+        ownerPeerId: ownerPeerId,
+      );
+    } else {
+      _devices[deviceId] = existing.revoke();
+    }
+    await _persistOrRecord();
+  }
+
+  /// Awaited (ordering matters for revoke-before-hydrate) but never
+  /// throws: failures land on [lastError] instead of unhandled futures.
+  Future<void> _persistOrRecord() async {
+    try {
+      await persist();
+    } catch (_) {
+      // lastError already set by persist().
+    }
   }
 
   bool acceptsWriter(String deviceId) {
+    if (hydrateFailed) return false;
     final device = _devices[deviceId];
     return device != null && device.status == DeviceStatus.active;
+  }
+
+  AuthorizedDevice? byId(String deviceId) => _devices[deviceId];
+
+  String ownerPeerIdFor(String deviceId) {
+    final device = _devices[deviceId];
+    if (device == null) return '';
+    if (device.ownerPeerId.isNotEmpty) {
+      return normalizePeerId(device.ownerPeerId);
+    }
+    return normalizePeerId(device.transportPeerId ?? '');
   }
 
   /// Fan-out targets: every active device of the recipient, plus own
@@ -152,20 +227,45 @@ class DeviceRegistry {
 
   Future<void> hydrate() async {
     final reader = readSnapshot ?? readDeviceRegistrySnapshot;
+    Uint8List? bytes;
     try {
-      final bytes = await reader();
-      if (bytes == null || bytes.isEmpty) return;
+      bytes = await reader();
+    } catch (_) {
+      // The reader itself is unavailable (missing file, no platform
+      // snapshot backend): same as no snapshot, not a failure.
+      return;
+    }
+    if (bytes == null || bytes.isEmpty) return;
+    try {
       final raw = jsonDecode(utf8.decode(bytes));
-      if (raw is! Map) return;
-      final list = raw['devices'];
-      if (list is! List) return;
+      if (raw is! Map || raw['devices'] is! List) {
+        _failHydrate('registry-snapshot-incomplete');
+        return;
+      }
+      final list = raw['devices'] as List;
       for (final item in list) {
         if (item is! Map) continue;
-        final device = AuthorizedDevice.fromJson(Map<String, Object?>.from(item));
+        final raw = Map<String, Object?>.from(item);
+        if (AuthorizedDevice.parseStatus(raw['status'] as String?) == null) {
+          continue;
+        }
+        final device = AuthorizedDevice.fromJson(raw);
         if (device.deviceId.isEmpty) continue;
+        final existing = _devices[device.deviceId];
+        if (existing?.status == DeviceStatus.revoked) continue;
         _devices[device.deviceId] = device;
       }
-    } catch (_) {}
+      lastError = '';
+      hydrateFailed = false;
+    } catch (err) {
+      _failHydrate(err.toString());
+    }
+  }
+
+  void _failHydrate(String error) {
+    lastError = error;
+    hydrateFailed = true;
+    onError?.call(error);
   }
 
   Future<void> persist() async {
@@ -177,7 +277,11 @@ class DeviceRegistry {
       }
       if (!hasVaultKek()) return;
       await writeDeviceRegistrySnapshot(bytes);
-    } catch (_) {}
+    } catch (err) {
+      lastError = err.toString();
+      onError?.call(lastError);
+      rethrow;
+    }
   }
 
   Map<String, Object?> toJson() => <String, Object?>{
