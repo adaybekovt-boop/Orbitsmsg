@@ -37,6 +37,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
+import '../attachments/temp_attachment.dart';
 import '../rooms/autobase_log.dart';
 import '../state/connections_notifier.dart';
 import '../state/local_profile_provider.dart';
@@ -936,9 +937,14 @@ class RoomManager extends StateNotifier<RoomState> {
       if (candidate.length <= kMaxRoomFileThumbLen) thumbDataUrl = candidate;
     }
 
+    final desc = await writeTempAttachment(
+      bytes: bytes,
+      name: safeName,
+      mime: mime,
+    );
     await db.saveFileBlob(
       id,
-      bytes,
+      desc == null ? bytes : const <int>[],
       mime: mime,
       name: safeName,
       kind: kind,
@@ -947,6 +953,7 @@ class RoomManager extends StateNotifier<RoomState> {
       height: height,
       duration: durationSec.toInt(),
       thumb: thumbBytes,
+      path: desc?.path,
     );
 
     final attachment = <String, Object?>{
@@ -1733,17 +1740,25 @@ class RoomManager extends StateNotifier<RoomState> {
         final bytes = base64Decode(content.b64!);
         if (bytes.isNotEmpty && bytes.length <= kMaxRoomFileRawBytes) {
           final att = content.attachment ?? const <String, Object?>{};
+          final mime = att['mime']?.toString() ?? 'application/octet-stream';
+          final name = att['name']?.toString() ?? 'file';
+          final desc = await writeTempAttachment(
+            bytes: bytes,
+            name: name,
+            mime: mime,
+          );
           await db.saveFileBlob(
             id,
-            bytes,
-            mime: att['mime']?.toString() ?? 'application/octet-stream',
-            name: att['name']?.toString() ?? 'file',
+            desc == null ? bytes : const <int>[],
+            mime: mime,
+            name: name,
             kind: att['kind']?.toString() ?? 'file',
             size: bytes.length,
             width: (att['width'] as num?)?.toInt() ?? 0,
             height: (att['height'] as num?)?.toInt() ?? 0,
             duration: (att['duration'] as num?)?.toInt() ?? 0,
             thumb: null,
+            path: desc?.path,
           );
         }
       } catch (_) {
