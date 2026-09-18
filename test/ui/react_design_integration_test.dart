@@ -8,6 +8,7 @@ import 'package:orbits_flutter/pages/profile_page.dart';
 import 'package:orbits_flutter/pages/saved_unavailable_page.dart';
 import 'package:orbits_flutter/state/appearance_prefs_provider.dart';
 import 'package:orbits_flutter/state/auth_notifier.dart' show AuthedUser;
+import 'package:orbits_flutter/state/chat_list_provider.dart';
 import 'package:orbits_flutter/state/local_profile_provider.dart';
 import 'package:orbits_flutter/themes/catalog/orbits_dark_manifest.dart';
 import 'package:orbits_flutter/themes/catalog/orbits_light_manifest.dart';
@@ -88,7 +89,10 @@ void main() {
         addTearDown(tester.view.resetDevicePixelRatio);
         await tester.pumpWidget(
           ProviderScope(
-            overrides: [localProfileProvider.overrideWithValue(_user)],
+            overrides: [
+              localProfileProvider.overrideWithValue(_user),
+              chatListProvider.overrideWithValue(const []),
+            ],
             child: MaterialApp(
               theme: testOrbitsTheme(),
               home: const Scaffold(body: ChatsPage()),

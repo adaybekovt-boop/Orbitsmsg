@@ -220,8 +220,8 @@ class _DropPageState extends ConsumerState<DropPage> {
     child: Column(
       children: [
         SizedBox(
-          width: 200,
-          height: 200,
+          width: 168,
+          height: 168,
           child: Stack(
             alignment: Alignment.center,
             children: [
@@ -289,8 +289,14 @@ class _DropPageState extends ConsumerState<DropPage> {
         runSpacing: 8,
         children: [
           OrbitsGlassButton(
-            label: 'Файл',
-            icon: Icons.insert_drive_file_outlined,
+            key: noPeers ? const Key('drop-add-contact') : null,
+            label: noPeers ? 'Добавить контакт' : 'Файл',
+            icon: noPeers
+                ? Icons.person_add_alt_1
+                : Icons.insert_drive_file_outlined,
+            variant: noPeers
+                ? OrbitsGlassVariant.primary
+                : OrbitsGlassVariant.secondary,
             onPressed: noPeers
                 ? _openAddContact
                 : () => _toast('Выбери контакт ниже, чтобы отправить файл'),
@@ -366,7 +372,6 @@ class _DropPageState extends ConsumerState<DropPage> {
         ),
         const SizedBox(height: 20),
         OrbitsGlassButton(
-          key: const Key('drop-add-contact'),
           label: 'Добавить контакт',
           icon: Icons.person_add_alt_1,
           variant: OrbitsGlassVariant.primary,
