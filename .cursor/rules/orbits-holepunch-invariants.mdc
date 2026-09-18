@@ -16,4 +16,4 @@ Phase 0 is locked in `docs/migration/`. Default transport is still PeerJS.
 - `HyperswarmRollout` defaults to `off`. Do not wire Hyperswarm into `ConnectionsNotifier` until Phase 4.
 - Production Bare must not fetch remote executable JS.
 - Do not run device / NAT / Kazakhstan hardware matrices unless the user is free and asks.
-- Large files go to Bare as a path/descriptor, not as a Dart `Uint8List` over IPC.
+- Product files are the Dart `FileTransferCoordinator` (`orbits-file-v1`, 64 KiB frames via `transport.send`); Bare/plugin `sendFile` is harness-only. Whole-file `Uint8List` payloads never cross IPC in one frame, and a native send failure stays `pending` + `lastReplicationError` (never whole-file base64 / PeerJS fallback).

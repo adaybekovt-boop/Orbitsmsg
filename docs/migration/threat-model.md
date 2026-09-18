@@ -77,3 +77,23 @@ attachment metadata.
 
 Host-plaintext is an accepted residual risk through Phase 11. The host
 is a trusted party for room bodies. Do not hide that in UI or docs.
+
+## Device-link identity transfer (Phase 10 residual)
+
+`acceptDeviceLink` pins `link.identityPublicKey` to the local trusted
+identity (`trustedIdentityStore` / self SPKI). A QR signed by a foreign
+identity, or a QR with empty `ownerPeerId`, is rejected.
+
+The QR never carries the identity *private* key (by design: no `priv` /
+`secretseed` in the payload). `lib/core/identity_key.dart` exposes
+`exportIdentityPubSpki` only. There is no export/import of
+`identity-signing-v1` / `identity-x3dh-v1` scalars.
+
+Therefore a real second handset that minted its own identity cannot
+satisfy `authorizeIncomingBinding` (`unknown-identity` /
+`identity-key-mismatch` at the trusted-key check). Loopback
+multi-device works because both ends reuse one test identity. Shipping
+multi-device outside loopback is impossible until a separate,
+vault-wrapped identity-transfer ceremony exists. That ceremony is out
+of scope for the link pin; do not weaken the pin to paper over the
+missing transfer.
