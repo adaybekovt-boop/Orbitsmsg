@@ -223,6 +223,11 @@ class LoopbackOrbitsTransport implements OrbitsTransport {
     _events.add(const TransportNetworkChanged('loopback'));
   }
 
+  /// Test-only: keep the peer linked and announce a path change.
+  void debugEmitPath(String peerId, TransportPath path) {
+    _events.add(TransportPathChanged(peerId, path));
+  }
+
   void _ensureStarted() {
     if (!_started || _config == null) {
       throw StateError('transport not started');

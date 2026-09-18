@@ -6,6 +6,8 @@ Software path only. External gates stay open.
 
 - DualStack `lastDeviceRatchetError` surfaces offer / accept / decrypt
   failures instead of an empty catch
+- A loopback `TransportPathChanged` to relay keeps the DualStack
+  session authenticated and still delivers packets
 - Remote `/v1/mailbox` deposit/drain/ack carry an opaque `senderBucket`
   (`HASH("orbits-mailbox-sender-v1" || mailboxId || senderPeerId)`).
   Storage peers never see a peer ID. `drainKnownMailboxes` attributes

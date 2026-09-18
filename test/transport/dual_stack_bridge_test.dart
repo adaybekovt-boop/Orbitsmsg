@@ -247,6 +247,32 @@ void main() {
     },
   );
 
+  test('relay path change keeps the DualStack session and delivers', () async {
+    final (a, b, packets) = await linked();
+    expect(a.isAuthenticated('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    (a.transport as LoopbackOrbitsTransport).debugEmitPath(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      TransportPath.relay,
+    );
+    await Future<void>.delayed(Duration.zero);
+    expect(a.paths['ORBIT-BBBBBBBBBBBBBBBB'], TransportPath.relay);
+    expect(a.isAuthenticated('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    expect(
+      a.sendRoomPacket('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'room_msg',
+        'text': 'via-relay',
+      }),
+      isTrue,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+    expect(
+      packets.whereType<Map>().any(
+            (p) => p['type'] == 'room_msg' && p['text'] == 'via-relay',
+          ),
+      isTrue,
+    );
+  });
+
   test('room_autobase membership rides DualStack and Hypercore metadata',
       () async {
     final (a, b, packets) = await linked();

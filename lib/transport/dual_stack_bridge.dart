@@ -118,6 +118,7 @@ class DualStackBridge {
   void Function(String peerId, bool connected)? onPresence;
   void Function(String peerId)? onAuthorizationRejected;
 
+  final Map<String, TransportPath> paths = <String, TransportPath>{};
   final Map<String, String> _expectedPeer = <String, String>{};
   final Map<String, DeviceBinding> _bindings = <String, DeviceBinding>{};
   final Map<String, String> _fingerprintOwner = <String, String>{};
@@ -905,6 +906,9 @@ class DualStackBridge {
         connecting.add(normalizePeerId(peerId));
       case TransportConnected():
         break;
+      case TransportPathChanged(:final peerId, :final path):
+        // Direct ↔ relay must keep the same logical session.
+        paths[normalizePeerId(peerId)] = path;
       case TransportIdentityPending(
         :final peerId,
         :final binding,
