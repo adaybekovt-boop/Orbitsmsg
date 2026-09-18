@@ -98,6 +98,11 @@ class DualStackBridge {
   final MailboxPump _mailboxPump = MailboxPump();
   void Function(String peerId, Object packet)? onDrop;
 
+  /// Last Hypercore / journal append failure. Empty when the last
+  /// membership record succeeded. Autobase packet send is skipped when
+  /// this is set by a failed membership append.
+  String lastReplicationError = '';
+
   final Set<String> connecting = <String>{};
   final Set<String> connected = <String>{};
   final Set<String> authenticated = <String>{};
@@ -318,6 +323,9 @@ class DualStackBridge {
         sentTo,
         utf8.encode(entry.value),
         senderIdentity: selfPeerId(),
+        envelopeCipher: kDeviceRatchetMessageType,
+        fromDeviceId: selfDeviceId,
+        toDeviceId: entry.key,
       );
       any = true;
     }
@@ -389,14 +397,22 @@ class DualStackBridge {
   /// Remote HTTP deposit is async — callers must use [enqueueMailbox] or
   /// [depositMailboxRemote]. This sync helper never pretends a remote
   /// write already finished.
-  bool depositMailbox(List<int> encryptedEnvelope, {String? envelopeId}) {
+  bool depositMailbox(
+    List<int> encryptedEnvelope, {
+    String? envelopeId,
+    String? writerKey,
+  }) {
     if (storagePeer != null && mailboxCapability != null) {
       return false;
     }
     final store = mailbox;
     final token = mailboxToken;
-    final writer = mailboxWriterKey;
-    if (store == null || token == null || writer == null) return false;
+    final writer = normalizePeerId(
+      writerKey ??
+          (selfPeerId().isEmpty ? mailboxWriterKey : selfPeerId()) ??
+          '',
+    );
+    if (store == null || token == null || writer.isEmpty) return false;
     _mailboxPump.deposit(
       store: store,
       token: token,
@@ -513,14 +529,14 @@ class DualStackBridge {
     }
     final store = mailbox;
     final token = mailboxToken;
-    final writer = mailboxWriterKey;
-    if (store == null || token == null || writer == null) return 0;
+    final writer = normalizePeerId(fromPeerId ?? '');
+    if (store == null || token == null || writer.isEmpty) return 0;
     final blocks = _mailboxPump.collect(
       store: store,
       token: token,
       writerKey: writer,
     );
-    return _projectMailboxBlocks(blocks, fromPeerId: fromPeerId);
+    return _projectMailboxBlocks(blocks, fromPeerId: writer);
   }
 
   Future<int> drainMailboxRemote({String? fromPeerId}) async {
@@ -542,13 +558,44 @@ class DualStackBridge {
     );
   }
 
-  /// Drain once per known contact. Never invents a sender from the
-  /// mailbox writer key. Blocked peers are skipped before collect/project.
+  /// Drain once per known contact bucket. Never invents a sender from the
+  /// mailbox writer key or a shared remote dump. Blocked peers are skipped
+  /// before collect/project. Remote v2 wires stay unattributed (explicit
+  /// [drainMailbox] is required). Device-ratchet frames attribute via the
+  /// authorized [fromDeviceId] owner, not the first peer in the list.
   Future<int> drainKnownMailboxes(Iterable<String> peerIds) async {
-    var projected = 0;
+    final known = <String>[];
     for (final raw in peerIds) {
       final peerId = normalizePeerId(raw);
       if (peerId.isEmpty || isBlocked(peerId)) continue;
+      known.add(peerId);
+    }
+    if (known.isEmpty) return 0;
+    if (storagePeer != null && mailboxCapability != null) {
+      final client = storagePeer;
+      final cap = mailboxCapability;
+      if (client == null || cap == null) return 0;
+      final blocks = await _mailboxPump.collectRemote(
+        client: client,
+        capability: cap,
+      );
+      var projected = 0;
+      for (final peerId in known) {
+        projected += await _projectMailboxBlocks(
+          blocks,
+          fromPeerId: peerId,
+          acknowledge: (id) => _mailboxPump.acknowledgeRemote(
+            client: client,
+            capability: cap,
+            envelopeId: id,
+          ),
+          knownSenderSweep: true,
+        );
+      }
+      return projected;
+    }
+    var projected = 0;
+    for (final peerId in known) {
       projected += await drainMailbox(fromPeerId: peerId);
     }
     return projected;
@@ -561,6 +608,7 @@ class DualStackBridge {
     List<EncryptedBlock> blocks, {
     required String? fromPeerId,
     Future<void> Function(String envelopeId)? acknowledge,
+    bool knownSenderSweep = false,
   }) async {
     final from = normalizePeerId(fromPeerId ?? '');
     if (from.isEmpty || isBlocked(from)) return 0;
@@ -572,6 +620,11 @@ class DualStackBridge {
       if (!isWireCiphertext(text)) {
         final decoded = decodeJsonPayload(block.bytes);
         if (decoded['type'] == kDeviceRatchetMessageType) {
+          final owner = _ownerPeerForDevice(
+            decoded['fromDeviceId'] as String? ?? '',
+          );
+          if (owner.isNotEmpty && owner != from) continue;
+          if (owner.isEmpty && knownSenderSweep) continue;
           await _onDeviceRatchetFrame(from, decoded);
           _mailboxPump.markProjected(id);
           if (acknowledge != null) await acknowledge(id);
@@ -581,6 +634,7 @@ class DualStackBridge {
         _appendEnvelope(from, block.bytes, senderIdentity: from);
         await onPacket(from, decoded);
       } else {
+        if (knownSenderSweep) continue;
         _appendEnvelope(from, block.bytes, senderIdentity: from);
         await onPacket(from, text);
       }
@@ -589,6 +643,11 @@ class DualStackBridge {
       projected += 1;
     }
     return projected;
+  }
+
+  String _ownerPeerForDevice(String deviceId) {
+    if (deviceId.isEmpty) return '';
+    return devices?.ownerPeerIdFor(deviceId) ?? '';
   }
 
   Future<bool> sendEphemeral(String peerId, Object? msg) async {
@@ -604,7 +663,12 @@ class DualStackBridge {
   bool sendRoomPacket(String peerId, Map<String, Object?> packet) {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm) || !isAuthenticated(norm)) return false;
-    _maybeRecordRoomMembership(norm, packet);
+    try {
+      if (!_maybeRecordRoomMembership(norm, packet)) return false;
+    } catch (err) {
+      lastReplicationError = err.toString();
+      return false;
+    }
     unawaited(
       transport.send(norm, TransportChannel.control, jsonPayload(packet)),
     );
@@ -612,16 +676,17 @@ class DualStackBridge {
   }
 
   /// Membership metadata only. Message bodies stay off Hypercore.
-  void _maybeRecordRoomMembership(String peerId, Map<String, Object?> packet) {
-    if (packet['type'] != kRoomAutobaseType) return;
-    if ((packet['kind'] as String? ?? '') != 'membership') return;
+  /// Returns false when a required Hypercore append fails.
+  bool _maybeRecordRoomMembership(String peerId, Map<String, Object?> packet) {
+    if (packet['type'] != kRoomAutobaseType) return true;
+    if ((packet['kind'] as String? ?? '') != 'membership') return true;
     final roomId = packet['roomId'] as String? ?? '';
     final raw = packet['payload'];
-    if (roomId.isEmpty || raw is! Map) return;
+    if (roomId.isEmpty || raw is! Map) return true;
     final payload = Map<String, Object?>.from(raw);
     final member = payload['peerId'] as String? ?? '';
     final action = payload['action'] as String? ?? '';
-    if (member.isEmpty || action.isEmpty) return;
+    if (member.isEmpty || action.isEmpty) return true;
     final writer = packet['writerId'] as String? ?? selfDeviceId;
     final seq = (packet['seq'] as num?)?.toInt() ?? 0;
     final eventId = '$writer:$seq:$roomId';
@@ -632,28 +697,28 @@ class DualStackBridge {
           r.fields['eventId'] == eventId &&
           r.fields['conversationId'] == conversationId,
     )) {
-      return;
+      return true;
     }
-    try {
-      final record = journal.append(
-        ReplicationEventKind.roomMembershipChanged,
-        <String, Object?>{
-          'eventId': eventId,
-          'conversationId': conversationId,
-          'senderIdentity': selfPeerId(),
-          'senderDeviceId': selfDeviceId,
-          'createdAt': DateTime.now().millisecondsSinceEpoch,
-          'roomId': roomId,
-          'action': action,
-          'memberPeerId': member,
-          'abWriter': writer,
-          'abSeq': seq,
-        },
-      );
-      unawaited(durableJournal?.append(record));
-      hypercore.append(record);
-      _fanoutReplication(record);
-    } catch (_) {}
+    lastReplicationError = '';
+    final record = journal.append(
+      ReplicationEventKind.roomMembershipChanged,
+      <String, Object?>{
+        'eventId': eventId,
+        'conversationId': conversationId,
+        'senderIdentity': selfPeerId(),
+        'senderDeviceId': selfDeviceId,
+        'createdAt': DateTime.now().millisecondsSinceEpoch,
+        'roomId': roomId,
+        'action': action,
+        'memberPeerId': member,
+        'abWriter': writer,
+        'abSeq': seq,
+      },
+    );
+    unawaited(durableJournal?.append(record));
+    hypercore.append(record);
+    _fanoutReplication(record);
+    return true;
   }
 
   Future<void> sendCallSignal(String peerId, CallSignal signal) {
@@ -698,6 +763,9 @@ class DualStackBridge {
     String peerId,
     List<int> encrypted, {
     String? senderIdentity,
+    String envelopeCipher = '',
+    String fromDeviceId = '',
+    String toDeviceId = '',
   }) {
     final id =
         '${DateTime.now().millisecondsSinceEpoch}-$peerId-${encrypted.length}';
@@ -706,10 +774,13 @@ class DualStackBridge {
         eventId: id,
         conversationId: conversationIdForPeers(selfPeerId(), peerId),
         senderIdentity: senderIdentity ?? selfPeerId(),
-        senderDeviceId: selfDeviceId,
+        senderDeviceId: fromDeviceId.isNotEmpty ? fromDeviceId : selfDeviceId,
         logicalSequence: journal.length + 1,
         createdAt: DateTime.now().millisecondsSinceEpoch,
         encryptedEnvelope: encrypted,
+        envelopeCipher: envelopeCipher,
+        fromDeviceId: fromDeviceId,
+        toDeviceId: toDeviceId,
       ),
     );
     unawaited(durableJournal?.append(record));
@@ -718,22 +789,26 @@ class DualStackBridge {
   }
 
   void _fanoutReplication(JournalRecord record) {
+    final self = normalizePeerId(selfPeerId());
     for (final peer in authenticated.toList(growable: false)) {
+      if (peer == self) continue;
       if (!_maySendRecord(record, peer)) continue;
-      unawaited(
-        transport.send(
-          peer,
-          TransportChannel.replication,
-          jsonPayload(
-            hypercore.toReplicationFrame(
-              record,
-              authenticatedPeerId: peer,
-              selfPeerId: selfPeerId(),
-              peerIsOwnDevice: _isOwnDevice(peer),
+      unawaited(() async {
+        try {
+          await transport.send(
+            peer,
+            TransportChannel.replication,
+            jsonPayload(
+              hypercore.toReplicationFrame(
+                record,
+                authenticatedPeerId: peer,
+                selfPeerId: selfPeerId(),
+                peerIsOwnDevice: _isOwnDevice(peer),
+              ),
             ),
-          ),
-        ),
-      );
+          );
+        } catch (_) {}
+      }());
     }
   }
 
@@ -883,6 +958,7 @@ class DualStackBridge {
     final expected = _expectedPeer[transportId] ?? _expectedPeer[logical];
     if (expected != null &&
         expected != logical &&
+        expected != transportId &&
         !decided.ownDevicePrivileges) {
       return false;
     }
@@ -909,6 +985,7 @@ class DualStackBridge {
     final logical = binding.ownerPeerId.isNotEmpty
         ? normalizePeerId(binding.ownerPeerId)
         : transportId;
+    final self = normalizePeerId(selfPeerId());
     connecting.remove(transportId);
     connecting.remove(logical);
     connected.add(logical);
@@ -923,23 +1000,22 @@ class DualStackBridge {
     if (transportId != logical) {
       _completeAuthWaiter(transportId);
     }
-    onPresence?.call(logical, true);
-    if (_expectedPeer.containsKey(transportId) ||
-        _expectedPeer.containsKey(logical)) {
-      unawaited(_offerDeviceRatchet(logical, binding.deviceId));
+    onPresence?.call(logical == self ? transportId : logical, true);
+    if (binding.deviceId.isNotEmpty) {
+      unawaited(_offerDeviceRatchet(transportId, binding.deviceId));
     }
 
     final caps = localCapabilities;
     if (caps != null) {
       unawaited(
         transport.send(
-          logical,
+          transportId,
           TransportChannel.control,
           jsonPayload({'type': 'capabilities', ...caps.toWire()}),
         ),
       );
     }
-    _replayAuthorized(logical);
+    _replayAuthorized(transportId);
   }
 
   void _replayAuthorized(String peerId) {
@@ -1119,7 +1195,14 @@ class DualStackBridge {
         return;
       }
       if (plain is! Map) return;
-      _appendEnvelope(peerId, utf8.encode(wire), senderIdentity: peerId);
+      _appendEnvelope(
+        peerId,
+        utf8.encode(wire),
+        senderIdentity: peerId,
+        envelopeCipher: kDeviceRatchetMessageType,
+        fromDeviceId: fromDevice,
+        toDeviceId: toDevice,
+      );
       await onPacket(
         peerId,
         AuthenticatedPlaintext(Map<String, Object?>.from(plain)),

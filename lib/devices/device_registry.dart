@@ -128,6 +128,17 @@ class DeviceRegistry {
     return device != null && device.status == DeviceStatus.active;
   }
 
+  AuthorizedDevice? byId(String deviceId) => _devices[deviceId];
+
+  String ownerPeerIdFor(String deviceId) {
+    final device = _devices[deviceId];
+    if (device == null) return '';
+    if (device.ownerPeerId.isNotEmpty) {
+      return normalizePeerId(device.ownerPeerId);
+    }
+    return normalizePeerId(device.transportPeerId ?? '');
+  }
+
   /// Fan-out targets: every active device of the recipient, plus own
   /// devices except the sending one (sync copy).
   List<AuthorizedDevice> fanout({

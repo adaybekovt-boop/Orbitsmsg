@@ -385,3 +385,17 @@ String hexOf(List<int> bytes) {
     LoopbackOrbitsTransport(hub: hub),
   );
 }
+
+/// Three transports on one hub (Phase 10 live DualStack mesh).
+(
+  LoopbackOrbitsTransport,
+  LoopbackOrbitsTransport,
+  LoopbackOrbitsTransport,
+) loopbackTriple() {
+  final hub = LoopbackHub();
+  return (
+    LoopbackOrbitsTransport(hub: hub),
+    LoopbackOrbitsTransport(hub: hub),
+    LoopbackOrbitsTransport(hub: hub),
+  );
+}

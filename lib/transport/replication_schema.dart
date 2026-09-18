@@ -31,6 +31,9 @@ class MessageEnvelopeCreated {
     this.attachmentReferences = const <String>[],
     this.previousEventReference,
     this.eventVersion = kReplicationEventVersion,
+    this.envelopeCipher = '',
+    this.fromDeviceId = '',
+    this.toDeviceId = '',
   });
 
   final int eventVersion;
@@ -46,6 +49,11 @@ class MessageEnvelopeCreated {
   final List<String> attachmentReferences;
   final String? previousEventReference;
 
+  /// `deviceRatchetV1` or empty (contact-level peer ratchet).
+  final String envelopeCipher;
+  final String fromDeviceId;
+  final String toDeviceId;
+
   Map<String, Object?> toJournalFields() => <String, Object?>{
         'eventVersion': eventVersion,
         'eventId': eventId,
@@ -57,6 +65,9 @@ class MessageEnvelopeCreated {
         'encryptedEnvelope': encryptedEnvelope,
         'attachmentReferences': attachmentReferences,
         'previousEventReference': previousEventReference,
+        if (envelopeCipher.isNotEmpty) 'envelopeCipher': envelopeCipher,
+        if (fromDeviceId.isNotEmpty) 'fromDeviceId': fromDeviceId,
+        if (toDeviceId.isNotEmpty) 'toDeviceId': toDeviceId,
       };
 
   bool get isSafeForHypercore =>

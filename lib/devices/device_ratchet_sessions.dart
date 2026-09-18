@@ -126,6 +126,7 @@ class DeviceRatchetSessions {
     required String localDeviceId,
     required String remoteDeviceId,
     required String wire,
+    bool commit = true,
   }) async {
     if (_revoked.contains(remoteDeviceId) || _revoked.contains(localDeviceId)) {
       throw StateError('revoked device');
@@ -138,8 +139,8 @@ class DeviceRatchetSessions {
     if (env == null) {
       throw const FormatException('not a v2 ratchet envelope');
     }
-    final plain = await ratchetDecrypt(state, env);
-    unawaited(persist());
+    final plain = await ratchetDecrypt(state, env, commit: commit);
+    if (commit) unawaited(persist());
     return plain;
   }
 

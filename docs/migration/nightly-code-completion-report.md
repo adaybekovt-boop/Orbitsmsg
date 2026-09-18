@@ -1,5 +1,28 @@
 # PR #62 repair report
 
+## 2026-09-18 mailbox buckets / journal clone / 3-device mesh
+
+Software path only. External gates stay open.
+
+- Local mailbox deposit/collect is per sender identity. `drainKnownMailboxes`
+  no longer attributes a shared bucket to the first unblocked peer. Remote
+  known-sender sweep leaves unauthenticated `v2` wires unattributed
+- Device-fanout journal rows carry `envelopeCipher=deviceRatchetV1`.
+  Projector decrypt uses `ratchetDecrypt(commit: false)` so replay cannot
+  burn the live session. Already-consumed envelopes fail closed
+- DualStack offers a per-device ratchet on every admit, addressed to the
+  transport id. QR `acceptDeviceLink` journals via `onAuthorized` and
+  still cannot mint without a live DH
+- Three-device loopback mesh covers phone / tablet / contact fan-out,
+  own-device sync, and revoke
+- Autobase membership Hypercore append failures surface on
+  `lastReplicationError` and skip the packet send
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
+
+
 This report is evidence-only. It does **not** claim the Holepunch
 migration is code-complete or safe to merge.
 

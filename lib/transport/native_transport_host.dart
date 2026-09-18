@@ -550,6 +550,32 @@ class NativeTransportHost {
     } catch (_) {
       return null;
     }
+    if (record.fields['envelopeCipher'] == kDeviceRatchetMessageType) {
+      final sessions = ratchets;
+      if (sessions == null) return null;
+      final fromDevice = record.fields['fromDeviceId'] as String? ??
+          record.fields['senderDeviceId'] as String? ??
+          '';
+      final toDevice = record.fields['toDeviceId'] as String? ??
+          sessions.localDeviceId;
+      if (fromDevice.isEmpty || toDevice != sessions.localDeviceId) {
+        return null;
+      }
+      try {
+        final bytes = await sessions.decryptFrom(
+          localDeviceId: toDevice,
+          remoteDeviceId: fromDevice,
+          wire: wire,
+          commit: false,
+        );
+        final decoded = jsonDecode(utf8.decode(bytes));
+        if (decoded is Map) {
+          return <String, Object?>{'text': '${decoded['text'] ?? ''}'};
+        }
+        if (decoded is String) return <String, Object?>{'text': decoded};
+      } catch (_) {}
+      return null;
+    }
     if (!isWireCiphertext(wire)) return null;
     try {
       final plain = await decryptWirePayload(sender, wire);

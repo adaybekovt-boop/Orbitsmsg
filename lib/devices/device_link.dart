@@ -185,11 +185,14 @@ Future<bool> verifyDeviceLink(
 
 /// Owner approval after challenge + signature checks. Does not grant
 /// privileges until this returns true and the device is authorized.
+/// Per-device ratchets are minted later on DualStack admit — the QR
+/// never carries private ratchet material.
 Future<bool> acceptDeviceLink(
   DeviceLinkPayload link, {
   required String ownerPeerId,
   int? nowMs,
   DeviceRegistry? registry,
+  void Function(AuthorizedDevice device)? onAuthorized,
 }) async {
   if (!await verifyDeviceLink(link, nowMs: nowMs)) return false;
   if (link.challenge.isEmpty || _usedChallenges.contains(link.challenge)) {
@@ -204,21 +207,21 @@ Future<bool> acceptDeviceLink(
     return false;
   }
   _usedChallenges.add(link.challenge);
-  registry?.authorize(
-    AuthorizedDevice(
-      deviceId: link.deviceId,
-      transportPublicKey: link.transportPublicKey,
-      hypercorePublicKey: link.hypercorePublicKey,
-      name: link.deviceId,
-      kind: 'linked',
-      createdAt: link.createdAt,
-      status: DeviceStatus.active,
-      ownerPeerId: ownerPeerId,
-      transportPeerId: link.transportPeerId.isEmpty
-          ? ownerPeerId
-          : link.transportPeerId,
-    ),
+  final device = AuthorizedDevice(
+    deviceId: link.deviceId,
+    transportPublicKey: link.transportPublicKey,
+    hypercorePublicKey: link.hypercorePublicKey,
+    name: link.deviceId,
+    kind: 'linked',
+    createdAt: link.createdAt,
+    status: DeviceStatus.active,
+    ownerPeerId: ownerPeerId,
+    transportPeerId: link.transportPeerId.isEmpty
+        ? ownerPeerId
+        : link.transportPeerId,
   );
+  registry?.authorize(device);
+  onAuthorized?.call(device);
   return true;
 }
 

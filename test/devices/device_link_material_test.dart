@@ -92,6 +92,32 @@ void main() {
     );
   });
 
+  test('acceptDeviceLink notifies DualStack without minting a ratchet', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final material = await loadOrCreateLocalDeviceMaterial(store: InMemoryKeyStore());
+    final link = await issueLocalDeviceLink(
+      material: material,
+      ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    final registry = DeviceRegistry();
+    AuthorizedDevice? authorized;
+    expect(
+      await acceptDeviceLink(
+        link,
+        ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        registry: registry,
+        onAuthorized: (device) => authorized = device,
+      ),
+      isTrue,
+    );
+    expect(authorized?.deviceId, material.deviceId);
+    expect(registry.byId(material.deviceId), isNotNull);
+    expect(jsonEncode(link.toQrJson()).toLowerCase().contains('rootkey'), isFalse);
+  });
+
   test('QR JSON with private material is rejected', () {
     expect(
       () => DeviceLinkPayload.fromQrJson({

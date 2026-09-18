@@ -10,6 +10,7 @@ import 'package:orbits_flutter/transport/replication_schema.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
 import 'package:orbits_flutter/rooms/autobase_log.dart';
+import 'package:orbits_flutter/replication/hypercore_store.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/transport/dev_bare_transport.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
@@ -415,7 +416,13 @@ void main() {
       mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
       onPacket: (_, __) async {},
     )..attach();
-    expect(blocked.depositMailbox(utf8.encode('v2:hdr:iv:ct')), isTrue);
+    expect(
+      blocked.depositMailbox(
+        utf8.encode('v2:hdr:iv:ct'),
+        writerKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      ),
+      isTrue,
+    );
     expect(await blocked.drainMailbox(), 0);
     expect(
       await blocked.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA'),
@@ -447,7 +454,20 @@ void main() {
       mailboxWriterKey: 'ORBIT-BBBBBBBBBBBBBBBB',
       onPacket: (peer, _) async => seen.add(peer),
     )..attach();
-    expect(bridge.depositMailbox(utf8.encode('v2:hdr:iv:ct')), isTrue);
+    expect(
+      bridge.depositMailbox(
+        utf8.encode('v2:hdr:iv:ct'),
+        writerKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      ),
+      isTrue,
+    );
+    expect(
+      bridge.depositMailbox(
+        utf8.encode('v2:hdr:iv:other'),
+        writerKey: 'ORBIT-CCCCCCCCCCCCCCCC',
+      ),
+      isTrue,
+    );
     expect(await bridge.drainKnownMailboxes(const <String>[]), 0);
     expect(
       await bridge.drainKnownMailboxes(const [
@@ -458,6 +478,137 @@ void main() {
     );
     expect(seen, ['ORBIT-AAAAAAAAAAAAAAAA']);
     await bridge.detach();
+  });
+
+  test('drainKnownMailboxes keeps per-sender buckets', () async {
+    final store = BlindMailboxStore()
+      ..grant(
+        MailboxCapability(
+          token: 'cap-1',
+          quotaBytes: 4096,
+          retentionMs: 60 * 1000,
+          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+        ),
+      );
+    final seen = <String>[];
+    final bridge = DualStackBridge(
+      transport: LoopbackOrbitsTransport(),
+      journal: MemoryJournal('b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'b',
+      isBlocked: (_) => false,
+      mailbox: store,
+      mailboxToken: 'cap-1',
+      onPacket: (peer, _) async => seen.add(peer),
+    )..attach();
+    expect(
+      bridge.depositMailbox(
+        utf8.encode('v2:hdr:iv:alice'),
+        writerKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      ),
+      isTrue,
+    );
+    expect(
+      bridge.depositMailbox(
+        utf8.encode('v2:hdr:iv:dana'),
+        writerKey: 'ORBIT-DDDDDDDDDDDDDDDD',
+      ),
+      isTrue,
+    );
+    expect(
+      await bridge.drainKnownMailboxes(const [
+        'ORBIT-AAAAAAAAAAAAAAAA',
+        'ORBIT-DDDDDDDDDDDDDDDD',
+      ]),
+      2,
+    );
+    expect(
+      seen,
+      ['ORBIT-AAAAAAAAAAAAAAAA', 'ORBIT-DDDDDDDDDDDDDDDD'],
+    );
+    await bridge.detach();
+  });
+
+  test('membership Hypercore append failure is visible and does not send',
+      () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    final aliceIds = TrustedIdentityStore();
+    final bobIds = TrustedIdentityStore();
+    final aliceDev = DeviceRegistry();
+    final bobDev = DeviceRegistry();
+    trustContactPair(
+      aliceIdentities: aliceIds,
+      aliceDevices: aliceDev,
+      bobIdentities: bobIds,
+      bobDevices: bobDev,
+      aliceBinding: bindA,
+      bobBinding: bindB,
+    );
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(bindA);
+    await pair.$2.publish(bindB);
+    final seen = <Object?>[];
+    final alice = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: secrets,
+      devices: aliceDev,
+      identities: aliceIds,
+      hypercore: _ThrowingHypercore('a'),
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'b',
+      secrets: secrets,
+      devices: bobDev,
+      identities: bobIds,
+      isBlocked: (_) => false,
+      onPacket: (_, data) async => seen.add(data),
+    ).attach();
+    await alice.dial('ORBIT-BBBBBBBBBBBBBBBB');
+    expect(
+      alice.sendRoomPacket(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        encodeRoomAutobasePacket(
+          'room-1',
+          const RoomEvent(
+            writerId: 'host',
+            seq: 0,
+            kind: 'membership',
+            payload: {
+              'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+              'action': 'join',
+            },
+          ),
+        ),
+      ),
+      isFalse,
+    );
+    expect(alice.lastReplicationError, contains('hypercore-append-failed'));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(seen, isEmpty);
+    await alice.detach();
   });
 
   test('drop chunks and hypercore replication ride native channels', () async {
@@ -628,4 +779,13 @@ void main() {
       isFalse,
     );
   });
+}
+
+class _ThrowingHypercore extends HypercoreLocalStore {
+  _ThrowingHypercore(super.writerDeviceId);
+
+  @override
+  JournalRecord append(JournalRecord record) {
+    throw StateError('hypercore-append-failed');
+  }
 }
