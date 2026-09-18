@@ -859,4 +859,97 @@ void main() {
     await alice2.detach();
     await bob2.detach();
   });
+
+  test('device-ratchet decrypt failure is visible', () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final secret = List<int>.generate(32, (i) => 19);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    final bindA = await signedDeviceBinding(
+      peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+      deviceId: 'dev-a',
+    );
+    final bindB = await signedDeviceBinding(
+      peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+      deviceId: 'dev-b',
+    );
+    final aliceIds = TrustedIdentityStore();
+    final bobIds = TrustedIdentityStore();
+    final aliceDev = DeviceRegistry();
+    final bobDev = DeviceRegistry();
+    trustContactPair(
+      aliceIdentities: aliceIds,
+      aliceDevices: aliceDev,
+      bobIdentities: bobIds,
+      bobDevices: bobDev,
+      aliceBinding: bindA,
+      bobBinding: bindB,
+    );
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(bindA);
+    await pair.$2.publish(bindB);
+    final alice = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('dev-a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'dev-a',
+      secrets: secrets,
+      devices: aliceDev,
+      identities: aliceIds,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    final bob = DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('dev-b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'dev-b',
+      secrets: secrets,
+      devices: bobDev,
+      identities: bobIds,
+      isBlocked: (_) => false,
+      onPacket: (_, __) async {},
+    )..attach();
+    await alice.dial('ORBIT-BBBBBBBBBBBBBBBB');
+    final deadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(deadline)) {
+      if (bob.isAuthenticated('ORBIT-AAAAAAAAAAAAAAAA')) break;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(bob.lastDeviceRatchetError, isEmpty);
+    await pair.$1.send(
+      'ORBIT-BBBBBBBBBBBBBBBB',
+      TransportChannel.message,
+      utf8.encode(
+        jsonEncode(
+          encodeDeviceRatchetFrame(
+            fromDeviceId: 'dev-a',
+            toDeviceId: 'dev-b',
+            wire: 'v2:not:a:real:ratchet',
+          ),
+        ),
+      ),
+    );
+    final errDeadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(errDeadline)) {
+      if (bob.lastDeviceRatchetError.isNotEmpty) break;
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(bob.lastDeviceRatchetError, isNotEmpty);
+    await alice.detach();
+    await bob.detach();
+  });
 }

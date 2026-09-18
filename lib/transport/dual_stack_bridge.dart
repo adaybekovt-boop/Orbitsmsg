@@ -103,6 +103,11 @@ class DualStackBridge {
   /// this is set by a failed membership append.
   String lastReplicationError = '';
 
+  /// Last per-device ratchet offer / accept / frame failure. Empty after
+  /// a successful bind or decrypt. Handshake and decrypt errors must not
+  /// disappear into an empty catch.
+  String lastDeviceRatchetError = '';
+
   final Set<String> connecting = <String>{};
   final Set<String> connected = <String>{};
   final Set<String> authenticated = <String>{};
@@ -1154,8 +1159,9 @@ class DualStackBridge {
           'ephPub': bytesToBase64(await exportSpkiBytes(eph)),
         }),
       );
-    } catch (_) {
+    } catch (err) {
       _ratchetHandshakeEph.remove(remoteDeviceId);
+      lastDeviceRatchetError = err.toString();
     }
   }
 
@@ -1201,7 +1207,10 @@ class DualStackBridge {
           'ratchetPub': bytesToBase64(bobSpki),
         }),
       );
-    } catch (_) {}
+      lastDeviceRatchetError = '';
+    } catch (err) {
+      lastDeviceRatchetError = err.toString();
+    }
   }
 
   Future<void> _onDeviceRatchetAccept(
@@ -1247,7 +1256,10 @@ class DualStackBridge {
           ),
         ),
       );
-    } catch (_) {}
+      lastDeviceRatchetError = '';
+    } catch (err) {
+      lastDeviceRatchetError = err.toString();
+    }
   }
 
   Future<void> _onDeviceRatchetFrame(
@@ -1290,7 +1302,10 @@ class DualStackBridge {
         peerId,
         AuthenticatedPlaintext(map),
       );
-    } catch (_) {}
+      lastDeviceRatchetError = '';
+    } catch (err) {
+      lastDeviceRatchetError = err.toString();
+    }
   }
 
   Future<void> _onAttachmentFrame(String peerId, List<int> bytes) async {
