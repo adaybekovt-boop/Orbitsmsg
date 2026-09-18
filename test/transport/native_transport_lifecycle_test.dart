@@ -2,12 +2,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
 import 'package:orbits_flutter/core/key_store.dart';
+import 'package:orbits_flutter/core/vault_kek.dart';
+import 'package:orbits_flutter/peer/room_manager.dart';
 import 'package:orbits_flutter/state/auth_notifier.dart';
 import 'package:orbits_flutter/state/connections_notifier.dart';
 import 'package:orbits_flutter/storage/secure_profile_store.dart';
 import 'package:orbits_flutter/transport/dev_bare_transport.dart';
 import 'package:orbits_flutter/transport/loopback_transport.dart';
 import 'package:orbits_flutter/transport/native_transport_host.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../helpers/pointycastle_ecdh.dart';
 
@@ -136,6 +139,37 @@ void main() {
     expect(host.attached, isFalse);
     expect(host.sessionPeerId, isNull);
     expect(host.transport, isNull);
+  });
+
+  test('start binds projector, ratchets, and Autobase snapshot IO after restart',
+      () async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    await setVaultKek(List<int>.generate(32, (i) => (i * 7 + 1) & 0xff));
+    addTearDown(clearVaultKek);
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final container = ProviderContainer();
+    addTearDown(container.dispose);
+    final current = AuthAuthed(_user('ORBIT-AAAAAAAAAAAAAAAA'));
+    final host = _host(container, auth: () => current);
+    await host.ensureStarted();
+    expect(host.attached, isTrue);
+    expect(host.projector, isNotNull);
+    expect(host.ratchets, isNotNull);
+    expect(host.lastProjectorError, isEmpty);
+    final rooms = container.read(roomManagerProvider.notifier);
+    expect(rooms.roomLog.writeSnapshot, isNotNull);
+    expect(rooms.roomLog.readSnapshot, isNotNull);
+    await host.shutdown();
+    expect(host.attached, isFalse);
+    await host.ensureStarted();
+    expect(host.attached, isTrue);
+    expect(host.projector, isNotNull);
+    expect(host.ratchets, isNotNull);
+    expect(
+      container.read(roomManagerProvider.notifier).roomLog.writeSnapshot,
+      isNotNull,
+    );
+    await host.shutdown();
   });
 
   test('double ensureStarted is idempotent', () async {

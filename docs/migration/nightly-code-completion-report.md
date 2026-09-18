@@ -1,5 +1,18 @@
 # PR #62 repair report
 
+## 2026-09-18 native outbound path persist / host restart bind
+
+Software path only. External gates stay open.
+
+- Native 1:1 outbound files persist a temp path + SHA-256 in Drift
+  instead of the file bytes. The native file meta carries `sha256`
+- `NativeTransportHost` start after unlock binds projector, hydrates
+  device ratchets, and injects Autobase snapshot IO. A shutdown +
+  restart rebinds those hooks
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
 ## 2026-09-18 RoomManager DualStack Autobase + persist errors
 
 Software path only. External gates stay open.

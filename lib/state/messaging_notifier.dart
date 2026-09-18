@@ -21,6 +21,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -1060,9 +1061,25 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
 
     final sanitizedReply = _sanitizeReplyTo(replyTo);
 
+    final useNativePath =
+        conns.canUseNative(normalized) || isDevBareTransportRequested();
+    String? outboundPath;
+    String? outboundSha;
+    if (useNativePath) {
+      final desc = await writeTempAttachment(
+        bytes: bytes,
+        name: safeName,
+        mime: mime,
+      );
+      if (desc != null) {
+        outboundPath = desc.path;
+        outboundSha = sha256.convert(bytes).toString();
+      }
+    }
+
     await db.saveFileBlob(
       msgId,
-      bytes,
+      outboundPath == null ? bytes : const <int>[],
       mime: mime,
       name: safeName,
       kind: kind,
@@ -1071,6 +1088,8 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       height: height,
       duration: durationSec.toInt(),
       thumb: thumbBytes,
+      path: outboundPath,
+      sha256hex: outboundSha,
     );
 
     // `duration` stays a double for parity with the JS wire convention
@@ -1109,13 +1128,8 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
 
     if (!open) return msgId;
 
-    if (conns.canUseNative(normalized) || isDevBareTransportRequested()) {
-      final desc = await writeTempAttachment(
-        bytes: bytes,
-        name: safeName,
-        mime: mime,
-      );
-      if (desc == null) {
+    if (useNativePath) {
+      if (outboundPath == null) {
         if (isDevBareTransportRequested()) {
           unawaited(db.updateMessageStatus(msgId, 'pending'));
           return msgId;
@@ -1126,8 +1140,8 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
           await conns.sendFile(
             normalized,
             TransportFileDescriptor(
-              path: desc.path,
-              sizeBytes: desc.sizeBytes,
+              path: outboundPath,
+              sizeBytes: size,
               fileName: safeName,
               mime: mime,
               transferId: fileTransferId,
@@ -1144,6 +1158,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
               ...attachmentRef,
               'transferId': fileTransferId,
               'native': true,
+              if (outboundSha != null) 'sha256': outboundSha,
             },
             if (sanitizedReply != null) 'replyTo': sanitizedReply,
           });
