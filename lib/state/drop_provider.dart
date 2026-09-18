@@ -302,13 +302,20 @@ class DropNotifier extends StateNotifier<DropState> {
     _patch(meta.fileId, (t) => t.copyWith(status: DropStatus.received));
     final blobId = 'drop-${meta.fileId}';
     try {
+      final desc = await writeTempAttachment(
+        bytes: bytes,
+        name: meta.name,
+        mime: meta.mime,
+      );
       await db.saveFileBlob(
         blobId,
-        bytes,
+        desc == null ? bytes : const <int>[],
         mime: meta.mime,
         name: meta.name,
         size: meta.size,
         kind: _kindForMime(meta.mime),
+        path: desc?.path,
+        sha256hex: meta.hash,
       );
     } catch (_) {
       _patch(
