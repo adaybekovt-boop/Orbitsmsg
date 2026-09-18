@@ -1,6 +1,7 @@
 // Per-device Double Ratchet sessions. Each device pair has its own
 // RatchetState and rootKey. Devices never share a mutable instance.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -9,6 +10,8 @@ import 'package:cryptography/cryptography.dart';
 import '../core/base64_helpers.dart';
 import '../core/double_ratchet.dart';
 import '../core/spki_codec.dart';
+import '../core/vault_kek.dart';
+import '../storage/wrapped_snapshot.dart';
 import '../transport/layers.dart';
 import 'device_registry.dart';
 
@@ -45,11 +48,18 @@ class AuthenticatedPlaintext {
 }
 
 class DeviceRatchetSessions {
-  DeviceRatchetSessions({this.localDeviceId = ''});
+  DeviceRatchetSessions({
+    this.localDeviceId = '',
+    this.writeSnapshot,
+    this.readSnapshot,
+  });
 
   final String localDeviceId;
+  WrappedSnapshotWriter? writeSnapshot;
+  WrappedSnapshotReader? readSnapshot;
   final Map<String, RatchetState> _sessions = <String, RatchetState>{};
   final Set<String> _revoked = <String>{};
+  Future<void> _persistChain = Future<void>.value();
 
   static String sessionKey(String localDeviceId, String remoteDeviceId) =>
       '$localDeviceId->$remoteDeviceId';
@@ -76,6 +86,7 @@ class DeviceRatchetSessions {
       }
     }
     _sessions[sessionKey(localDeviceId, remoteDeviceId)] = state;
+    unawaited(persist());
   }
 
   RatchetState? session(String localDeviceId, String remoteDeviceId) {
@@ -87,6 +98,7 @@ class DeviceRatchetSessions {
     _sessions.removeWhere(
       (key, _) => key.startsWith('$deviceId->') || key.endsWith('->$deviceId'),
     );
+    unawaited(persist());
   }
 
   bool isRevoked(String deviceId) => _revoked.contains(deviceId);
@@ -207,6 +219,71 @@ class DeviceRatchetSessions {
             entry.key as String: base64ToBytes(entry.value as String),
       },
     );
+  }
+
+  /// All sessions plus the revoke set. Callers must vault-wrap the bytes.
+  Future<Map<String, Object?>> snapshotAll() async {
+    final sessions = <Map<String, Object?>>[];
+    for (final key in _sessions.keys) {
+      sessions.add(await snapshot(key));
+    }
+    return <String, Object?>{
+      'localDeviceId': localDeviceId,
+      'revoked': (_revoked.toList()..sort()),
+      'sessions': sessions,
+    };
+  }
+
+  Future<void> restoreAll(Map<String, Object?> row) async {
+    final revoked = row['revoked'];
+    if (revoked is List) {
+      for (final id in revoked) {
+        if (id is String && id.isNotEmpty) _revoked.add(id);
+      }
+    }
+    final sessions = row['sessions'];
+    if (sessions is! List) return;
+    for (final item in sessions) {
+      if (item is! Map) continue;
+      try {
+        await restore(Map<String, Object?>.from(item));
+      } on StateError {
+        // Revoked pair or duplicate root — skip that session only.
+      } on FormatException {
+        // Corrupt row — skip that session only.
+      }
+    }
+  }
+
+  Future<void> hydrate() async {
+    final reader = readSnapshot ?? readDeviceRatchetSnapshot;
+    try {
+      final bytes = await reader();
+      if (bytes == null || bytes.isEmpty) return;
+      final raw = jsonDecode(utf8.decode(bytes));
+      if (raw is! Map) return;
+      await restoreAll(Map<String, Object?>.from(raw));
+    } catch (_) {}
+  }
+
+  Future<void> persist() {
+    if (writeSnapshot == null && !hasVaultKek()) {
+      return Future<void>.value();
+    }
+    final next = _persistChain.then((_) => _persistNow());
+    _persistChain = next.catchError((_) {});
+    return next;
+  }
+
+  Future<void> _persistNow() async {
+    try {
+      final bytes = utf8.encode(jsonEncode(await snapshotAll()));
+      if (writeSnapshot != null) {
+        await writeSnapshot!(bytes);
+        return;
+      }
+      await writeDeviceRatchetSnapshot(bytes);
+    } catch (_) {}
   }
 
   /// Privacy-safe counters only. Never includes keys, peer IDs, or bodies.

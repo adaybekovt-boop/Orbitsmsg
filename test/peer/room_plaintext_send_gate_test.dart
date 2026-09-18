@@ -44,6 +44,35 @@ void main() {
     expect(sent.single['type'], 'room_join');
   });
 
+  test('Autobase message events require the same plaintext ack as room_msg', () {
+    final sent = <Map<String, Object?>>[];
+    expect(
+      sendGuardedRoomPacket(
+        {
+          'type': 'room_autobase',
+          'kind': 'message',
+          'payload': {'text': 'bypass'},
+        },
+        connected: true,
+        send: sent.add,
+      ),
+      isFalse,
+    );
+    expect(sent, isEmpty);
+    expect(
+      sendGuardedRoomPacket(
+        {
+          'type': 'room_autobase',
+          'kind': 'membership',
+          'payload': {'peerId': 'g', 'action': 'join'},
+        },
+        connected: true,
+        send: sent.add,
+      ),
+      isTrue,
+    );
+  });
+
   test('disconnected peer is not a silent ack bypass', () {
     kRoomPlaintextSessionAck.setAcknowledged(true);
     final sent = <Map<String, Object?>>[];

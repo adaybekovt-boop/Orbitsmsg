@@ -87,6 +87,7 @@ class JournalProjector {
   final ProjectedPersist? persist;
   final ProjectedTombstone? tombstone;
   final Map<String, ProjectedMessage> messages = <String, ProjectedMessage>{};
+  final List<Map<String, Object?>> membershipChanges = <Map<String, Object?>>[];
   final Set<String> seenEventIds = <String>{};
   int cursor = 0;
 
@@ -100,6 +101,7 @@ class JournalProjector {
   Future<void> applyInTransaction(Iterable<JournalRecord> records) async {
     final snapshot = Map<String, ProjectedMessage>.from(messages);
     final seen = Set<String>.from(seenEventIds);
+    final membership = List<Map<String, Object?>>.from(membershipChanges);
     final savedCursor = cursor;
     try {
       for (final record in records) {
@@ -113,6 +115,9 @@ class JournalProjector {
       seenEventIds
         ..clear()
         ..addAll(seen);
+      membershipChanges
+        ..clear()
+        ..addAll(membership);
       cursor = savedCursor;
       rethrow;
     }
@@ -173,6 +178,18 @@ class JournalProjector {
         }
         messages.remove(id);
         await tombstone?.call(id);
+      case ReplicationEventKind.roomMembershipChanged:
+        final id = record.fields['eventId'] as String?;
+        if (id == null || seenEventIds.contains(id)) return;
+        seenEventIds.add(id);
+        membershipChanges.add(<String, Object?>{
+          'eventId': id,
+          'roomId': record.fields['roomId'],
+          'action': record.fields['action'],
+          'memberPeerId': record.fields['memberPeerId'],
+          'abWriter': record.fields['abWriter'],
+          'abSeq': record.fields['abSeq'],
+        });
       default:
         break;
     }

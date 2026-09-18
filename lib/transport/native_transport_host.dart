@@ -202,6 +202,8 @@ class NativeTransportHost {
       hypercore!.append(record);
     }
     ratchets = DeviceRatchetSessions(localDeviceId: material.deviceId);
+    await ratchets!.hydrate();
+    if (_startupAborted(generation)) return;
     projector = JournalProjector(
       decrypt: _decryptJournalEnvelope,
       isBlocked: (peerId) =>

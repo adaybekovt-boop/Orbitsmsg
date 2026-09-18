@@ -155,4 +155,39 @@ void main() {
     expect(log.projection.state.messages.single['text'], 'hello');
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
+
+  test('Autobase packets replay onto a second writer and converge', () {
+    final host = RoomAutobaseLog();
+    host.append(
+      writerId: 'host',
+      kind: 'membership',
+      payload: {'peerId': 'host', 'action': 'join', 'displayName': 'Host'},
+    );
+    host.append(
+      writerId: 'host',
+      kind: 'membership',
+      payload: {'peerId': 'guest', 'action': 'join', 'displayName': 'Guest'},
+    );
+    host.append(
+      writerId: 'host',
+      kind: 'channel',
+      payload: {'id': 'c1', 'name': 'general'},
+    );
+    final guest = RoomAutobaseLog();
+    for (final event in host.events) {
+      final packet = encodeRoomAutobasePacket('room-1', event);
+      expect(packet['type'], kRoomAutobaseType);
+      final decoded = decodeRoomEventFromPacket(packet);
+      expect(decoded, isNotNull);
+      guest.append(
+        writerId: decoded!.writerId,
+        kind: decoded.kind,
+        payload: decoded.payload,
+        seq: decoded.seq,
+      );
+    }
+    expect(guest.projection.state.members, host.projection.state.members);
+    expect(guest.projection.state.channels, host.projection.state.channels);
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
 }

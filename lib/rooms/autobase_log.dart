@@ -1,5 +1,32 @@
 // Deterministic multiwriter projection for rooms (Phase 12).
 // Does not encrypt. Host-plaintext warning stays in place.
+// DualStack carries [kRoomAutobaseType] as a room_* control packet.
+
+/// Host-plaintext Autobase event on the room control channel.
+const String kRoomAutobaseType = 'room_autobase';
+
+Map<String, Object?> encodeRoomAutobasePacket(String roomId, RoomEvent event) =>
+    <String, Object?>{
+      'type': kRoomAutobaseType,
+      'roomId': roomId,
+      'writerId': event.writerId,
+      'seq': event.seq,
+      'kind': event.kind,
+      'payload': event.payload,
+    };
+
+RoomEvent? decodeRoomEventFromPacket(Map<String, Object?> packet) {
+  final writerId = packet['writerId'] as String? ?? '';
+  final kind = packet['kind'] as String? ?? '';
+  final raw = packet['payload'];
+  if (writerId.isEmpty || kind.isEmpty || raw is! Map) return null;
+  return RoomEvent(
+    writerId: writerId,
+    seq: (packet['seq'] as num?)?.toInt() ?? 0,
+    kind: kind,
+    payload: Map<String, Object?>.from(raw),
+  );
+}
 
 class RoomEvent {
   const RoomEvent({
@@ -92,6 +119,7 @@ class RoomAutobaseLog {
 
   final AutobaseProjection projection;
   final Map<String, int> _seq = <String, int>{};
+  final List<RoomEvent> events = <RoomEvent>[];
 
   int nextSeq(String writerId) =>
       _seq[writerId] = (_seq[writerId] ?? -1) + 1;
@@ -113,7 +141,9 @@ class RoomAutobaseLog {
       kind: kind,
       payload: payload,
     );
+    final already = projection.state.applied.contains(projection.state.keyOf(event));
     projection.apply(event);
+    if (!already) events.add(event);
     return event;
   }
 
@@ -124,5 +154,6 @@ class RoomAutobaseLog {
     projection.state.messages.clear();
     projection.state.applied.clear();
     _seq.clear();
+    events.clear();
   }
 }

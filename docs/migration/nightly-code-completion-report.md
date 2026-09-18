@@ -3,6 +3,23 @@
 This report is evidence-only. It does **not** claim the Holepunch
 migration is code-complete or safe to merge.
 
+## 2026-09-18 persist / Autobase / Drift-replay slice
+
+Software path only. External gates stay open.
+
+- `DeviceRatchetSessions` vault-wraps every session snapshot plus the
+  revoke set. `NativeTransportHost` hydrates before DualStack bind
+- Host-plaintext `room_autobase` packets carry Autobase events over
+  DualStack. RoomManager replays the log to late joiners. Membership
+  metadata is appended as `roomMembershipChanged` (no chat bodies,
+  no `displayName`)
+- `JournalProjector` live Drift persist and journal replay write the
+  same inbound rows. Membership events replay to the same list
+- Autobase `message` events require the same plaintext ack as `room_msg`
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
 ## 2026-09-18 plan DoD slice
 
 Software path only. External gates stay open.

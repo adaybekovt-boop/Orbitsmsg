@@ -12,6 +12,7 @@ void main() {
     expect(host, contains('DozeAdapter(lifecycle:'));
     expect(host, contains('persistProjectedMessage'));
     expect(host, contains('ratchets: ratchets'));
+    expect(host, contains('await ratchets!.hydrate()'));
     expect(
       host.contains('if (isMobileBareHost())') &&
           host.contains('spawnWorklet(backend:'),

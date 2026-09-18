@@ -9,6 +9,7 @@ import 'package:orbits_flutter/mailbox/blind_store.dart';
 import 'package:orbits_flutter/transport/replication_schema.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
+import 'package:orbits_flutter/rooms/autobase_log.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/transport/dev_bare_transport.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
@@ -242,6 +243,57 @@ void main() {
       kRoomPlaintextSessionAck.reset();
     },
   );
+
+  test('room_autobase membership rides DualStack and Hypercore metadata',
+      () async {
+    final (a, b, packets) = await linked();
+    final event = const RoomEvent(
+      writerId: 'host',
+      seq: 0,
+      kind: 'membership',
+      payload: {
+        'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+        'action': 'join',
+        'displayName': 'Bob',
+      },
+    );
+    expect(
+      a.sendRoomPacket(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        encodeRoomAutobasePacket('room-1', event),
+      ),
+      isTrue,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 40));
+
+    final inbound = packets.whereType<Map>().where(
+          (p) => p['type'] == kRoomAutobaseType,
+        );
+    expect(inbound, isNotEmpty);
+    final decoded = decodeRoomEventFromPacket(
+      Map<String, Object?>.from(inbound.first),
+    );
+    expect(decoded, isNotNull);
+    final guest = AutobaseProjection()..apply(decoded!);
+    expect(guest.state.members['ORBIT-BBBBBBBBBBBBBBBB'], 'Bob');
+
+    final recorded = a.journal.records.where(
+      (r) => r.kind == ReplicationEventKind.roomMembershipChanged,
+    );
+    expect(recorded, isNotEmpty);
+    expect(recorded.first.fields['action'], 'join');
+    expect(recorded.first.fields['memberPeerId'], 'ORBIT-BBBBBBBBBBBBBBBB');
+    expect(recorded.first.fields.containsKey('plaintext'), isFalse);
+    expect(recorded.first.fields.containsKey('text'), isFalse);
+    expect(recorded.first.fields.containsKey('displayName'), isFalse);
+    expect(
+      a.hypercore.blocks.any(
+        (r) => r.kind == ReplicationEventKind.roomMembershipChanged,
+      ),
+      isTrue,
+    );
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
 
   test('recipient reads mailbox after the sender is gone', () async {
     final store = BlindMailboxStore()

@@ -22,6 +22,7 @@ import '../mailbox/mailbox_protocol.dart';
 import '../mailbox/mailbox_pump.dart';
 import '../mailbox/storage_peer_client.dart';
 import '../peer/helpers.dart';
+import '../rooms/autobase_log.dart';
 import '../replication/conversation_id.dart';
 import '../replication/file_journal.dart';
 import '../replication/hypercore_store.dart';
@@ -592,10 +593,46 @@ class DualStackBridge {
   bool sendRoomPacket(String peerId, Map<String, Object?> packet) {
     final norm = normalizePeerId(peerId);
     if (isBlocked(norm) || !isAuthenticated(norm)) return false;
+    _maybeRecordRoomMembership(norm, packet);
     unawaited(
       transport.send(norm, TransportChannel.control, jsonPayload(packet)),
     );
     return true;
+  }
+
+  /// Membership metadata only. Message bodies stay off Hypercore.
+  void _maybeRecordRoomMembership(String peerId, Map<String, Object?> packet) {
+    if (packet['type'] != kRoomAutobaseType) return;
+    if ((packet['kind'] as String? ?? '') != 'membership') return;
+    final roomId = packet['roomId'] as String? ?? '';
+    final raw = packet['payload'];
+    if (roomId.isEmpty || raw is! Map) return;
+    final payload = Map<String, Object?>.from(raw);
+    final member = payload['peerId'] as String? ?? '';
+    final action = payload['action'] as String? ?? '';
+    if (member.isEmpty || action.isEmpty) return;
+    final writer = packet['writerId'] as String? ?? selfDeviceId;
+    final seq = (packet['seq'] as num?)?.toInt() ?? 0;
+    try {
+      final record = journal.append(
+        ReplicationEventKind.roomMembershipChanged,
+        <String, Object?>{
+          'eventId': '$writer:$seq:$roomId',
+          'conversationId': conversationIdForPeers(selfPeerId(), peerId),
+          'senderIdentity': selfPeerId(),
+          'senderDeviceId': selfDeviceId,
+          'createdAt': DateTime.now().millisecondsSinceEpoch,
+          'roomId': roomId,
+          'action': action,
+          'memberPeerId': member,
+          'abWriter': writer,
+          'abSeq': seq,
+        },
+      );
+      unawaited(durableJournal?.append(record));
+      hypercore.append(record);
+      _fanoutReplication(record);
+    } catch (_) {}
   }
 
   Future<void> sendCallSignal(String peerId, CallSignal signal) {

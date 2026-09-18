@@ -328,4 +328,27 @@ void main() {
     );
     expect(tombstoned, ['in-1']);
   });
+
+  test('room membership events live-apply and replay to the same list',
+      () async {
+    final journal = MemoryJournal('dev-a');
+    journal.append(ReplicationEventKind.roomMembershipChanged, {
+      'eventId': 'ab:0:r1',
+      'conversationId': 'c1',
+      'roomId': 'r1',
+      'action': 'join',
+      'memberPeerId': 'bob',
+      'abWriter': 'host',
+      'abSeq': 0,
+    });
+    Future<Map<String, Object?>?> decrypt(List<int> _, JournalRecord __) async =>
+        null;
+    final live = JournalProjector(decrypt: decrypt);
+    await live.applyAll(journal);
+    final replay = JournalProjector(decrypt: decrypt);
+    await replay.applyAll(journal);
+    expect(replay.membershipChanges, live.membershipChanges);
+    expect(live.membershipChanges.single['action'], 'join');
+    expect(live.messages, isEmpty);
+  });
 }

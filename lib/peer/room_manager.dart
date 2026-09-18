@@ -18,6 +18,7 @@
 //   room_destroy         host → guests  {roomId}
 //   room_leave           guest → host   {roomId, guestPeerId}
 //   room_spatial_update  both           {roomId, peerId, x, y}  (host relays)
+//   room_autobase        host → guests  {roomId, writerId, seq, kind, payload}
 //
 // Architecture mirrors `messaging_notifier` / `connections_notifier`: the
 // manager registers a [RoomBridge] on the connection registry (no provider
@@ -100,6 +101,7 @@ const Set<String> kRoomPacketTypes = <String>{
   'room_destroy',
   'room_leave',
   'room_spatial_update',
+  'room_autobase',
 };
 
 /// Pure authorization check for an incoming room-voice media call (audit item
@@ -1305,11 +1307,12 @@ class RoomManager extends StateNotifier<RoomState> {
     final channelId = channel['id'] as String?;
     final channelName = channel['name'] as String?;
     if (channelId != null && channelName != null) {
-      roomLog.append(
+      final event = roomLog.append(
         writerId: _selfPeerId(),
         kind: 'channel',
         payload: {'id': channelId, 'name': channelName},
       );
+      _replicateAutobase(event);
     }
     _broadcastToGuests({
       'type': 'room_channel_create',
@@ -1381,6 +1384,9 @@ class RoomManager extends StateNotifier<RoomState> {
           break;
         case 'room_spatial_update':
           await _onSpatialUpdate(remoteId, packet);
+          break;
+        case 'room_autobase':
+          _onRoomAutobase(remoteId, packet);
           break;
       }
     } catch (e) {
@@ -1466,7 +1472,7 @@ class RoomManager extends StateNotifier<RoomState> {
       'isOnline': true,
       'joinedAt': now(),
     });
-    roomLog.append(
+    final joinEvent = roomLog.append(
       writerId: _selfPeerId().isEmpty ? guestId : _selfPeerId(),
       kind: 'membership',
       payload: {
@@ -1476,6 +1482,8 @@ class RoomManager extends StateNotifier<RoomState> {
       },
     );
     state = state.copyWith(guestPeerIds: {...state.guestPeerIds, guestId});
+    _replayAutobaseTo(guestId);
+    _replicateAutobase(joinEvent, except: guestId);
 
     // Replicate the channel list to the newcomer (host ids are canonical).
     final channels = await db.getRoomChannels(roomId);
@@ -1645,9 +1653,10 @@ class RoomManager extends StateNotifier<RoomState> {
     final name = m['name'] as String?;
     if (id != null && name != null) {
       roomLog.append(
-        writerId: remoteId,
+        writerId: (packet['abWriter'] as String?) ?? remoteId,
         kind: 'channel',
         payload: {'id': id, 'name': name},
+        seq: (packet['abSeq'] as num?)?.toInt(),
       );
     }
   }
@@ -1679,11 +1688,12 @@ class RoomManager extends StateNotifier<RoomState> {
     final guestId = remoteId;
     if (!state.guestPeerIds.contains(guestId)) return;
     await db.removeRoomMember(roomId, guestId);
-    roomLog.append(
+    final leaveEvent = roomLog.append(
       writerId: _selfPeerId().isEmpty ? guestId : _selfPeerId(),
       kind: 'membership',
       payload: {'peerId': guestId, 'action': 'leave'},
     );
+    _replicateAutobase(leaveEvent);
     state = state.copyWith(
       guestPeerIds: state.guestPeerIds.where((g) => g != guestId).toSet(),
     );
@@ -1718,6 +1728,36 @@ class RoomManager extends StateNotifier<RoomState> {
       if (g == except) continue;
       conns.sendRoomPacket(g, packet);
     }
+  }
+
+  void _replicateAutobase(RoomEvent event, {String? except}) {
+    final roomId = state.roomId;
+    if (roomId == null) return;
+    _broadcastToGuests(encodeRoomAutobasePacket(roomId, event), except: except);
+  }
+
+  void _replayAutobaseTo(String guestId) {
+    final roomId = state.roomId;
+    if (roomId == null) return;
+    for (final event in roomLog.events) {
+      _connections.sendRoomPacket(
+        guestId,
+        encodeRoomAutobasePacket(roomId, event),
+      );
+    }
+  }
+
+  /// Guest-only. Host writes Autobase; guests apply stamped events.
+  void _onRoomAutobase(String remoteId, Map<String, Object?> packet) {
+    if (state.role != RoomRole.guest || remoteId != state.hostPeerId) return;
+    final event = decodeRoomEventFromPacket(packet);
+    if (event == null) return;
+    roomLog.append(
+      writerId: event.writerId,
+      kind: event.kind,
+      payload: event.payload,
+      seq: event.seq,
+    );
   }
 
   /// Persist inbound room content (text / sticker / file) with explicit,
