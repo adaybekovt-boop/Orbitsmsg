@@ -161,7 +161,7 @@ void main() {
   });
 
   test('native incoming file persists a path, not payload bytes', () async {
-    final dir = await Directory.systemTemp.createTemp('orbits-path-blob-');
+    final dir = await Directory.systemTemp.createTemp('orbits-chat-file-');
     addTearDown(() {
       if (dir.existsSync()) dir.deleteSync(recursive: true);
     });

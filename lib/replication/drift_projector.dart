@@ -1,7 +1,10 @@
 // Drift is the read-model. This projector applies journal events after
 // a local decrypt hook. It never writes plaintext into the journal.
 
+import 'device_journal_apply.dart';
 import 'memory_journal.dart';
+import '../devices/device_ratchet_sessions.dart';
+import '../devices/device_registry.dart';
 import '../transport/replication_schema.dart';
 
 typedef EnvelopeDecrypt =
@@ -78,6 +81,10 @@ class JournalProjector {
     this.isBlocked,
     this.persist,
     this.tombstone,
+    this.devices,
+    this.ratchets,
+    this.selfPeerId = '',
+    this.localDeviceId = '',
   });
 
   final EnvelopeDecrypt decrypt;
@@ -86,6 +93,10 @@ class JournalProjector {
   final bool Function(String peerId)? isBlocked;
   final ProjectedPersist? persist;
   final ProjectedTombstone? tombstone;
+  final DeviceRegistry? devices;
+  final DeviceRatchetSessions? ratchets;
+  final String selfPeerId;
+  final String localDeviceId;
   final Map<String, ProjectedMessage> messages = <String, ProjectedMessage>{};
   final List<Map<String, Object?>> membershipChanges = <Map<String, Object?>>[];
   final Set<String> seenEventIds = <String>{};
@@ -193,6 +204,15 @@ class JournalProjector {
           'abWriter': record.fields['abWriter'],
           'abSeq': record.fields['abSeq'],
         });
+      case ReplicationEventKind.deviceAuthorized:
+      case ReplicationEventKind.deviceRevoked:
+        applyOwnAccountDeviceRecord(
+          record,
+          devices: devices,
+          ratchets: ratchets,
+          selfPeerId: selfPeerId,
+          localDeviceId: localDeviceId,
+        );
       default:
         break;
     }

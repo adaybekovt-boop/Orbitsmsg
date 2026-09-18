@@ -16,6 +16,10 @@ import 'incoming_paths.dart';
 import 'resumable_blob.dart';
 
 const String kFileTransferProtocol = 'orbits-file-v1';
+/// Local-only coordinator completion. Never accepted from the wire:
+/// [_onAttachmentFrame] drops any JSON carrying a `path`, and Drop only
+/// persists this type after a jail check.
+const String kCoordinatorCompletionType = 'coordinator-completion';
 const int kFileTransferChunk = 64 * 1024;
 
 typedef FileDropSink = void Function(String peerId, Object packet);
@@ -391,7 +395,7 @@ class FileTransferCoordinator {
       return;
     }
     onDrop?.call(peerId, {
-      'type': 'harness-file-received',
+      'type': kCoordinatorCompletionType,
       'id': id,
       'path': incoming.file.path,
       'size': size,

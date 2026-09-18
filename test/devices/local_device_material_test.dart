@@ -1,12 +1,20 @@
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
+import 'package:orbits_flutter/core/base64_helpers.dart';
 import 'package:orbits_flutter/core/key_store.dart';
 import 'package:orbits_flutter/core/spki_codec.dart';
+import 'package:orbits_flutter/core/vault_kek.dart';
 import 'package:orbits_flutter/devices/local_device_material.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
 
 import '../helpers/pointycastle_ecdh.dart';
 
 void main() {
+  setUp(() async {
+    await setVaultKek(List<int>.generate(32, (i) => (i * 5 + 3) & 0xff));
+  });
+  tearDown(clearVaultKek);
   test('restart loads the same distinct device material', () async {
     final store = InMemoryKeyStore();
     final first = await loadOrCreateLocalDeviceMaterial(store: store);
@@ -102,5 +110,30 @@ void main() {
     expect(a.deviceId, isNot(b.deviceId));
     expect(a.transportSecretSeed, isNot(b.transportSecretSeed));
     expect(a.hypercorePublicKey, isNot(b.hypercorePublicKey));
+  });
+
+  test('seed is wrapped at rest and legacy plaintext is resealed', () async {
+    final store = InMemoryKeyStore();
+    await loadOrCreateLocalDeviceMaterial(store: store);
+    final row = await store.get('device-material', 'local');
+    expect(row, isNotNull);
+    expect(isWrapped(row!['transportSecretSeed']), isTrue);
+
+    final legacy = InMemoryKeyStore();
+    final seed = List<int>.generate(32, (i) => i + 1);
+    final writer = List<int>.generate(32, (i) => 200 - i);
+    final transport = List<int>.generate(32, (i) => 100 + i);
+    await legacy.put('device-material', {
+      'id': 'local',
+      'deviceId': 'legacy-device',
+      'transportPublicKey': bytesToBase64(Uint8List.fromList(transport)),
+      'hypercorePublicKey': bytesToBase64(Uint8List.fromList(writer)),
+      'transportSecretSeed': bytesToBase64(Uint8List.fromList(seed)),
+    });
+    final loaded = await loadOrCreateLocalDeviceMaterial(store: legacy);
+    expect(loaded.deviceId, 'legacy-device');
+    expect(loaded.transportSecretSeed, seed);
+    final resealed = await legacy.get('device-material', 'local');
+    expect(isWrapped(resealed!['transportSecretSeed']), isTrue);
   });
 }

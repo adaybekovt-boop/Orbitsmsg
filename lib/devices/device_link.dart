@@ -7,6 +7,7 @@ import 'dart:typed_data';
 
 import '../peer/helpers.dart';
 import '../transport/signed_capabilities.dart';
+import '../transport/trusted_identity_store.dart';
 import 'device_registry.dart';
 import 'local_device_material.dart';
 
@@ -192,14 +193,29 @@ Future<bool> acceptDeviceLink(
   required String ownerPeerId,
   int? nowMs,
   DeviceRegistry? registry,
+  TrustedIdentityStore? identities,
+  List<int>? localIdentityPublicKey,
   void Function(AuthorizedDevice device)? onAuthorized,
 }) async {
   if (!await verifyDeviceLink(link, nowMs: nowMs)) return false;
   if (link.challenge.isEmpty || _usedChallenges.contains(link.challenge)) {
     return false;
   }
-  if (link.ownerPeerId.isNotEmpty &&
+  // Empty owner never passes: the QR must name its account.
+  if (link.ownerPeerId.isEmpty ||
       normalizePeerId(link.ownerPeerId) != normalizePeerId(ownerPeerId)) {
+    return false;
+  }
+  // Pin the QR identity key to the trusted/local identity. A signature
+  // that verifies under its own embedded key is not authorization.
+  final pinned = identities?.lookup(ownerPeerId);
+  if (pinned != null && pinned.tofuOnly) return false;
+  final expected = (pinned != null && pinned.identityPublicKey.isNotEmpty)
+      ? pinned.identityPublicKey
+      : localIdentityPublicKey;
+  if (expected == null ||
+      expected.isEmpty ||
+      !identityKeysEqual(expected, link.identityPublicKey)) {
     return false;
   }
   if (_isPlaceholder(link.transportPublicKey) ||

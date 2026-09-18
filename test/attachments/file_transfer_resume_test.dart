@@ -115,8 +115,8 @@ void main() {
         transferId: transferId,
       ),
     );
-    expect(received.any((m) => m['type'] == 'harness-file-received'), isTrue);
-    final done = received.firstWhere((m) => m['type'] == 'harness-file-received');
+    expect(received.any((m) => m['type'] == 'coordinator-completion'), isTrue);
+    final done = received.firstWhere((m) => m['type'] == 'coordinator-completion');
     expect(done['size'], bytes.length);
     expect(done['sha256'], digest);
     expect(File(done['path'] as String).readAsBytesSync(), bytes);

@@ -92,13 +92,22 @@ void main() {
     File(
       '${legacyDir.path}${Platform.pathSeparator}photo.jpg',
     ).writeAsBytesSync(const [9, 8, 7]);
+    // The sender-less legacy layout is no longer resolved: a remote
+    // peer must not reach another sender's jail through it.
+    expect(
+      lookupIncomingBlob(
+        base: base,
+        trustedSenderId: sender,
+        externalTransferId: 'legacyid01',
+      ),
+      isNull,
+    );
     expect(
       lookupIncomingBlob(
         base: base,
         externalTransferId: 'legacyid01',
-        legacyName: 'photo.jpg',
-      )?.readAsBytesSync(),
-      const [9, 8, 7],
+      ),
+      isNull,
     );
   });
 
@@ -168,16 +177,16 @@ void main() {
     expect(
       lookupIncomingBlob(
         base: base,
+        trustedSenderId: 'ORBIT-AAAAAAAAAAAAAAAA',
         externalTransferId: '../escape',
-        legacyName: 'blob',
       ),
       isNull,
     );
     expect(
       lookupIncomingBlob(
         base: base,
+        trustedSenderId: 'ORBIT-AAAAAAAAAAAAAAAA',
         externalTransferId: 'safeid01',
-        legacyName: '..',
       ),
       isNull,
     );

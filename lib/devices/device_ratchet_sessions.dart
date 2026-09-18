@@ -52,6 +52,7 @@ class DeviceRatchetSessions {
     this.localDeviceId = '',
     this.writeSnapshot,
     this.readSnapshot,
+    this.onError,
   });
 
   final String localDeviceId;
@@ -60,6 +61,17 @@ class DeviceRatchetSessions {
   final Map<String, RatchetState> _sessions = <String, RatchetState>{};
   final Set<String> _revoked = <String>{};
   Future<void> _persistChain = Future<void>.value();
+
+  /// Last hydrate/persist failure. Empty on success. A broken snapshot
+  /// is never a silent empty session/revoke set.
+  String lastError = '';
+
+  /// True when the last hydrate read corrupt/incomplete bytes. While
+  /// set, [bind] refuses to mint sessions fail-closed.
+  bool hydrateFailed = false;
+
+  /// Optional host hook for hydrate/persist failures.
+  void Function(String error)? onError;
 
   static String sessionKey(String localDeviceId, String remoteDeviceId) =>
       '$localDeviceId->$remoteDeviceId';
@@ -73,6 +85,11 @@ class DeviceRatchetSessions {
     required String remoteDeviceId,
     required RatchetState state,
   }) {
+    if (hydrateFailed) {
+      throw StateError(
+        lastError.isEmpty ? 'ratchet hydrate failed' : lastError,
+      );
+    }
     if (_revoked.contains(remoteDeviceId) || _revoked.contains(localDeviceId)) {
       throw StateError('revoked device cannot receive a ratchet session');
     }
@@ -86,7 +103,7 @@ class DeviceRatchetSessions {
       }
     }
     _sessions[sessionKey(localDeviceId, remoteDeviceId)] = state;
-    unawaited(persist());
+    _persistBestEffort();
   }
 
   RatchetState? session(String localDeviceId, String remoteDeviceId) {
@@ -98,7 +115,7 @@ class DeviceRatchetSessions {
     _sessions.removeWhere(
       (key, _) => key.startsWith('$deviceId->') || key.endsWith('->$deviceId'),
     );
-    unawaited(persist());
+    _persistBestEffort();
   }
 
   bool isRevoked(String deviceId) => _revoked.contains(deviceId);
@@ -118,7 +135,7 @@ class DeviceRatchetSessions {
       final env = await ratchetEncrypt(state, plaintext);
       out[target.deviceId] = encodeWire(env);
     }
-    if (out.isNotEmpty) unawaited(persist());
+    if (out.isNotEmpty) _persistBestEffort();
     return out;
   }
 
@@ -140,7 +157,7 @@ class DeviceRatchetSessions {
       throw const FormatException('not a v2 ratchet envelope');
     }
     final plain = await ratchetDecrypt(state, env, commit: commit);
-    if (commit) unawaited(persist());
+    if (commit) _persistBestEffort();
     return plain;
   }
 
@@ -265,9 +282,28 @@ class DeviceRatchetSessions {
       final bytes = await reader();
       if (bytes == null || bytes.isEmpty) return;
       final raw = jsonDecode(utf8.decode(bytes));
-      if (raw is! Map) return;
+      if (raw is! Map || raw['revoked'] is! List || raw['sessions'] is! List) {
+        _failHydrate('ratchet-snapshot-incomplete');
+        return;
+      }
       await restoreAll(Map<String, Object?>.from(raw));
-    } catch (_) {}
+      lastError = '';
+      hydrateFailed = false;
+    } catch (err) {
+      _failHydrate(err.toString());
+    }
+  }
+
+  void _failHydrate(String error) {
+    lastError = error;
+    hydrateFailed = true;
+    onError?.call(error);
+  }
+
+  /// Fire-and-forget persist that records failures on [lastError]
+  /// instead of surfacing unhandled async errors.
+  void _persistBestEffort() {
+    unawaited(persist().then((_) {}, onError: (_) {}));
   }
 
   Future<void> persist() {
@@ -287,7 +323,11 @@ class DeviceRatchetSessions {
         return;
       }
       await writeDeviceRatchetSnapshot(bytes);
-    } catch (_) {}
+    } catch (err) {
+      lastError = err.toString();
+      onError?.call(lastError);
+      rethrow;
+    }
   }
 
   /// Privacy-safe counters only. Never includes keys, peer IDs, or bodies.

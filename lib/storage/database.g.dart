@@ -768,6 +768,212 @@ class RatchetsTableCompanion extends UpdateCompanion<RatchetRow> {
   }
 }
 
+class $DeviceMaterialTableTable extends DeviceMaterialTable
+    with TableInfo<$DeviceMaterialTableTable, DeviceMaterialRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $DeviceMaterialTableTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _dataMeta = const VerificationMeta('data');
+  @override
+  late final GeneratedColumn<Uint8List> data = GeneratedColumn<Uint8List>(
+    'data',
+    aliasedName,
+    false,
+    type: DriftSqlType.blob,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [id, data];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'device_material';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<DeviceMaterialRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('data')) {
+      context.handle(
+        _dataMeta,
+        this.data.isAcceptableOrUnknown(data['data']!, _dataMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_dataMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  DeviceMaterialRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return DeviceMaterialRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      data: attachedDatabase.typeMapping.read(
+        DriftSqlType.blob,
+        data['${effectivePrefix}data'],
+      )!,
+    );
+  }
+
+  @override
+  $DeviceMaterialTableTable createAlias(String alias) {
+    return $DeviceMaterialTableTable(attachedDatabase, alias);
+  }
+}
+
+class DeviceMaterialRow extends DataClass
+    implements Insertable<DeviceMaterialRow> {
+  final String id;
+  final Uint8List data;
+  const DeviceMaterialRow({required this.id, required this.data});
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['data'] = Variable<Uint8List>(data);
+    return map;
+  }
+
+  DeviceMaterialTableCompanion toCompanion(bool nullToAbsent) {
+    return DeviceMaterialTableCompanion(id: Value(id), data: Value(data));
+  }
+
+  factory DeviceMaterialRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return DeviceMaterialRow(
+      id: serializer.fromJson<String>(json['id']),
+      data: serializer.fromJson<Uint8List>(json['data']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'data': serializer.toJson<Uint8List>(data),
+    };
+  }
+
+  DeviceMaterialRow copyWith({String? id, Uint8List? data}) =>
+      DeviceMaterialRow(id: id ?? this.id, data: data ?? this.data);
+  DeviceMaterialRow copyWithCompanion(DeviceMaterialTableCompanion data) {
+    return DeviceMaterialRow(
+      id: data.id.present ? data.id.value : this.id,
+      data: data.data.present ? data.data.value : this.data,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('DeviceMaterialRow(')
+          ..write('id: $id, ')
+          ..write('data: $data')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(id, $driftBlobEquality.hash(data));
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is DeviceMaterialRow &&
+          other.id == this.id &&
+          $driftBlobEquality.equals(other.data, this.data));
+}
+
+class DeviceMaterialTableCompanion extends UpdateCompanion<DeviceMaterialRow> {
+  final Value<String> id;
+  final Value<Uint8List> data;
+  final Value<int> rowid;
+  const DeviceMaterialTableCompanion({
+    this.id = const Value.absent(),
+    this.data = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  DeviceMaterialTableCompanion.insert({
+    required String id,
+    required Uint8List data,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       data = Value(data);
+  static Insertable<DeviceMaterialRow> custom({
+    Expression<String>? id,
+    Expression<Uint8List>? data,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (data != null) 'data': data,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  DeviceMaterialTableCompanion copyWith({
+    Value<String>? id,
+    Value<Uint8List>? data,
+    Value<int>? rowid,
+  }) {
+    return DeviceMaterialTableCompanion(
+      id: id ?? this.id,
+      data: data ?? this.data,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (data.present) {
+      map['data'] = Variable<Uint8List>(data.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('DeviceMaterialTableCompanion(')
+          ..write('id: $id, ')
+          ..write('data: $data, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 class $PeersTableTable extends PeersTable
     with TableInfo<$PeersTableTable, PeerRow> {
   @override
@@ -5480,6 +5686,8 @@ abstract class _$OrbitsDatabase extends GeneratedDatabase {
   late final $KeysTableTable keysTable = $KeysTableTable(this);
   late final $PrekeysTableTable prekeysTable = $PrekeysTableTable(this);
   late final $RatchetsTableTable ratchetsTable = $RatchetsTableTable(this);
+  late final $DeviceMaterialTableTable deviceMaterialTable =
+      $DeviceMaterialTableTable(this);
   late final $PeersTableTable peersTable = $PeersTableTable(this);
   late final $AvatarsTableTable avatarsTable = $AvatarsTableTable(this);
   late final $SessionKeysTableTable sessionKeysTable = $SessionKeysTableTable(
@@ -5509,6 +5717,7 @@ abstract class _$OrbitsDatabase extends GeneratedDatabase {
     keysTable,
     prekeysTable,
     ratchetsTable,
+    deviceMaterialTable,
     peersTable,
     avatarsTable,
     sessionKeysTable,
@@ -6020,6 +6229,165 @@ typedef $$RatchetsTableTableProcessedTableManager =
         BaseReferences<_$OrbitsDatabase, $RatchetsTableTable, RatchetRow>,
       ),
       RatchetRow,
+      PrefetchHooks Function()
+    >;
+typedef $$DeviceMaterialTableTableCreateCompanionBuilder =
+    DeviceMaterialTableCompanion Function({
+      required String id,
+      required Uint8List data,
+      Value<int> rowid,
+    });
+typedef $$DeviceMaterialTableTableUpdateCompanionBuilder =
+    DeviceMaterialTableCompanion Function({
+      Value<String> id,
+      Value<Uint8List> data,
+      Value<int> rowid,
+    });
+
+class $$DeviceMaterialTableTableFilterComposer
+    extends Composer<_$OrbitsDatabase, $DeviceMaterialTableTable> {
+  $$DeviceMaterialTableTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<Uint8List> get data => $composableBuilder(
+    column: $table.data,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$DeviceMaterialTableTableOrderingComposer
+    extends Composer<_$OrbitsDatabase, $DeviceMaterialTableTable> {
+  $$DeviceMaterialTableTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<Uint8List> get data => $composableBuilder(
+    column: $table.data,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$DeviceMaterialTableTableAnnotationComposer
+    extends Composer<_$OrbitsDatabase, $DeviceMaterialTableTable> {
+  $$DeviceMaterialTableTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<Uint8List> get data =>
+      $composableBuilder(column: $table.data, builder: (column) => column);
+}
+
+class $$DeviceMaterialTableTableTableManager
+    extends
+        RootTableManager<
+          _$OrbitsDatabase,
+          $DeviceMaterialTableTable,
+          DeviceMaterialRow,
+          $$DeviceMaterialTableTableFilterComposer,
+          $$DeviceMaterialTableTableOrderingComposer,
+          $$DeviceMaterialTableTableAnnotationComposer,
+          $$DeviceMaterialTableTableCreateCompanionBuilder,
+          $$DeviceMaterialTableTableUpdateCompanionBuilder,
+          (
+            DeviceMaterialRow,
+            BaseReferences<
+              _$OrbitsDatabase,
+              $DeviceMaterialTableTable,
+              DeviceMaterialRow
+            >,
+          ),
+          DeviceMaterialRow,
+          PrefetchHooks Function()
+        > {
+  $$DeviceMaterialTableTableTableManager(
+    _$OrbitsDatabase db,
+    $DeviceMaterialTableTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$DeviceMaterialTableTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$DeviceMaterialTableTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$DeviceMaterialTableTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<Uint8List> data = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => DeviceMaterialTableCompanion(
+                id: id,
+                data: data,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required Uint8List data,
+                Value<int> rowid = const Value.absent(),
+              }) => DeviceMaterialTableCompanion.insert(
+                id: id,
+                data: data,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$DeviceMaterialTableTableProcessedTableManager =
+    ProcessedTableManager<
+      _$OrbitsDatabase,
+      $DeviceMaterialTableTable,
+      DeviceMaterialRow,
+      $$DeviceMaterialTableTableFilterComposer,
+      $$DeviceMaterialTableTableOrderingComposer,
+      $$DeviceMaterialTableTableAnnotationComposer,
+      $$DeviceMaterialTableTableCreateCompanionBuilder,
+      $$DeviceMaterialTableTableUpdateCompanionBuilder,
+      (
+        DeviceMaterialRow,
+        BaseReferences<
+          _$OrbitsDatabase,
+          $DeviceMaterialTableTable,
+          DeviceMaterialRow
+        >,
+      ),
+      DeviceMaterialRow,
       PrefetchHooks Function()
     >;
 typedef $$PeersTableTableCreateCompanionBuilder =
@@ -9331,6 +9699,8 @@ class $OrbitsDatabaseManager {
       $$PrekeysTableTableTableManager(_db, _db.prekeysTable);
   $$RatchetsTableTableTableManager get ratchetsTable =>
       $$RatchetsTableTableTableManager(_db, _db.ratchetsTable);
+  $$DeviceMaterialTableTableTableManager get deviceMaterialTable =>
+      $$DeviceMaterialTableTableTableManager(_db, _db.deviceMaterialTable);
   $$PeersTableTableTableManager get peersTable =>
       $$PeersTableTableTableManager(_db, _db.peersTable);
   $$AvatarsTableTableTableManager get avatarsTable =>

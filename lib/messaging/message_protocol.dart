@@ -678,10 +678,12 @@ Future<bool> dispatchReliablePlaintext(
           attachmentRef = <String, Object?>{...metaOut, 'missing': true};
         }
       } else if (attachmentMeta['native'] == true) {
+        // Jail keyed by the AUTHENTICATED transport peer, never the
+        // spoofable payload `from` (rooms already do this).
         final path = lookupIncomingTransferPath(
           transferId: attachmentMeta['transferId'] as String? ?? '',
           name: name,
-          trustedSenderId: from,
+          trustedSenderId: remoteId,
         );
         if (path != null && path.isNotEmpty) {
           await db.saveFileBlob(

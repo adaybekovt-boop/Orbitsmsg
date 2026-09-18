@@ -93,8 +93,10 @@ Future<BindingAuthResult> authorizeIncomingBinding({
   if (normalizePeerId(registered.ownerPeerId) != logical) {
     return const BindingAuthResult.reject('device-owner-mismatch');
   }
-  if (registered.transportPublicKey.isNotEmpty &&
-      !identityKeysEqual(
+  if (registered.transportPublicKey.isEmpty) {
+    return const BindingAuthResult.reject('registered-noise-missing');
+  }
+  if (!identityKeysEqual(
         registered.transportPublicKey,
         binding.transportPublicKey,
       )) {

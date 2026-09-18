@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -14,11 +15,12 @@ AuthorizedDevice dev(String id) => AuthorizedDevice(
     );
 
 void main() {
-  test('three devices fan-out without sharing a ratchet snapshot', () {
-    final alice = DeviceRegistry()
-      ..authorize(dev('a1'))
-      ..authorize(dev('a2'));
-    final bob = DeviceRegistry()..authorize(dev('b1'));
+  test('three devices fan-out without sharing a ratchet snapshot', () async {
+    final alice = DeviceRegistry();
+    await alice.authorize(dev('a1'));
+    await alice.authorize(dev('a2'));
+    final bob = DeviceRegistry();
+    await bob.authorize(dev('b1'));
     final targets = alice.fanout(
       recipient: bob,
       sender: alice,
@@ -26,7 +28,7 @@ void main() {
     );
     expect(targets.map((d) => d.deviceId).toSet(), {'b1', 'a2'});
     expect(alice.acceptsWriter('a1'), isTrue);
-    alice.revoke('a1');
+    await alice.revoke('a1');
     expect(alice.acceptsWriter('a1'), isFalse);
     expect(
       () => alice.authorize(dev('a1')),
@@ -45,7 +47,7 @@ void main() {
       },
       readSnapshot: () async => Uint8List.fromList(saved),
     );
-    alice.authorize(
+    await alice.authorize(
       AuthorizedDevice(
         deviceId: 'phone',
         transportPublicKey: List<int>.filled(32, 1),
@@ -59,19 +61,60 @@ void main() {
       ),
     );
     await alice.persist();
-    final snapshot = Uint8List.fromList(saved);
-    alice.revoke('phone');
-    expect(alice.acceptsWriter('phone'), isFalse);
-
-    final again = DeviceRegistry(
-      writeSnapshot: (bytes) async {},
-      readSnapshot: () async => snapshot,
-    );
-    await again.hydrate();
-    expect(again.acceptsWriter('phone'), isTrue);
+    final activeSnapshot = Uint8List.fromList(saved);
     expect(
-      again.transportTargets('ORBIT-BBBBBBBBBBBBBBBB'),
+      alice.transportTargets('ORBIT-BBBBBBBBBBBBBBBB'),
       {'ORBIT-BBBBBBBBBBBBBBBB', 'ORBIT-B1B1B1B1B1B1B1B1'},
     );
+
+    await alice.revoke('phone');
+    expect(alice.acceptsWriter('phone'), isFalse);
+    expect(alice.byId('phone')!.status, DeviceStatus.revoked);
+
+    // An old active snapshot must not resurrect a revoked device.
+    alice.readSnapshot = () async => activeSnapshot;
+    await alice.hydrate();
+    expect(alice.acceptsWriter('phone'), isFalse);
+    expect(alice.byId('phone')!.status, DeviceStatus.revoked);
+
+    // Awaited persist: a fresh registry hydrates revoked.
+    alice.readSnapshot = () async => Uint8List.fromList(saved);
+    await alice.persist();
+    final again = DeviceRegistry(
+      writeSnapshot: (bytes) async {},
+      readSnapshot: () async => Uint8List.fromList(saved),
+    );
+    await again.hydrate();
+    expect(again.acceptsWriter('phone'), isFalse);
+    expect(again.byId('phone')!.status, DeviceStatus.revoked);
+    expect(
+      again.transportTargets('ORBIT-BBBBBBBBBBBBBBBB'),
+      {'ORBIT-BBBBBBBBBBBBBBBB'},
+    );
+
+    // Unknown status is rejected, never treated as active.
+    final toxic = DeviceRegistry(
+      readSnapshot: () async => Uint8List.fromList(
+        utf8.encode(
+          jsonEncode({
+            'devices': [
+              {
+                'deviceId': 'ghost',
+                'transportPublicKey': base64.encode(List<int>.filled(32, 3)),
+                'hypercorePublicKey': base64.encode(List<int>.filled(32, 4)),
+                'name': 'ghost',
+                'kind': 'phone',
+                'createdAt': 1,
+                'status': 'not-a-status',
+                'ownerPeerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+              },
+            ],
+          }),
+        ),
+      ),
+    );
+    await toxic.hydrate();
+    expect(toxic.byId('ghost'), isNull);
+    expect(toxic.acceptsWriter('ghost'), isFalse);
   });
 }

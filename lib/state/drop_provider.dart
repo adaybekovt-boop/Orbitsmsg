@@ -10,6 +10,8 @@ import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../attachments/file_transfer_session.dart'
+    show kCoordinatorCompletionType;
 import '../attachments/temp_attachment.dart';
 import '../core/orbits_drop.dart';
 import '../peer/helpers.dart';
@@ -103,7 +105,8 @@ class DropNotifier extends StateNotifier<DropState> {
           DropBridge(
             handleInbound: (remoteId, packet) {
               _pendingInboundPeer = remoteId;
-              if (packet is Map && packet['type'] == 'harness-file-received') {
+              if (packet is Map &&
+                  packet['type'] == kCoordinatorCompletionType) {
                 unawaited(_persistNativeFile(remoteId, packet));
                 return;
               }
@@ -260,18 +263,12 @@ class DropNotifier extends StateNotifier<DropState> {
     final size = (packet['size'] as num?)?.toInt() ?? 0;
     final mime = (packet['mime'] as String?) ?? 'application/octet-stream';
     if (path.isEmpty || id.isEmpty) return;
-    _upsert(DropTransfer(
-      id: id,
-      name: name,
-      size: size,
-      mime: mime,
-      peerId: peerId,
-      direction: DropDirection.incoming,
-      transferred: size,
-      status: DropStatus.received,
-    ));
+    // Defense in depth: even a local coordinator completion must point
+    // inside the jail. No UI row before the persist succeeds.
+    if (!isAllowedAttachmentPath(path)) return;
+    final normPeer = normalizePeerId(peerId);
+    final blobId = 'drop-$normPeer|$id';
     try {
-      final blobId = 'drop-$id';
       final ok = await db.saveFileBlob(
         blobId,
         const <int>[],
@@ -285,22 +282,27 @@ class DropNotifier extends StateNotifier<DropState> {
       if (!ok) {
         throw StateError('received file missing');
       }
-      _patch(
-        id,
-        (t) => t.copyWith(
-          status: DropStatus.completed,
-          transferred: size,
-          blobId: blobId,
-        ),
-      );
+      _upsert(DropTransfer(
+        id: id,
+        name: name,
+        size: size,
+        mime: mime,
+        peerId: peerId,
+        direction: DropDirection.incoming,
+        transferred: size,
+        status: DropStatus.completed,
+        blobId: blobId,
+      ));
     } catch (e) {
-      _patch(id, (t) => t.copyWith(status: DropStatus.failed, error: '$e'));
+      _patch(id, (t) => t.copyWith(status: DropStatus.failed, error: '$e'),
+          peerId: peerId);
     }
   }
 
   Future<bool> _persistIncoming(DropFileMeta meta, Uint8List bytes) async {
     _patch(meta.fileId, (t) => t.copyWith(status: DropStatus.received));
-    final blobId = 'drop-${meta.fileId}';
+    final peer = normalizePeerId(_pendingInboundPeer);
+    final blobId = 'drop-$peer|${meta.fileId}';
     try {
       final desc = await writeTempAttachment(
         bytes: bytes,
@@ -341,16 +343,22 @@ class DropNotifier extends StateNotifier<DropState> {
   // ── State helpers ─────────────────────────────────────────────
 
   void _upsert(DropTransfer t) {
-    final list = state.transfers.where((e) => e.id != t.id).toList()
+    final list = state.transfers
+        .where((e) => !(e.id == t.id && e.peerId == t.peerId))
+        .toList()
       ..insert(0, t);
     state = state.copyWith(transfers: list);
   }
 
-  void _patch(String id, DropTransfer Function(DropTransfer) f) {
+  void _patch(String id, DropTransfer Function(DropTransfer) f,
+      {String? peerId}) {
     var changed = false;
     final list = [
       for (final t in state.transfers)
-        if (t.id == id) (changed = true) ? f(t) : t else t,
+        if (t.id == id && (peerId == null || t.peerId == peerId))
+          (changed = true) ? f(t) : t
+        else
+          t,
     ];
     if (changed && mounted) state = state.copyWith(transfers: list);
   }

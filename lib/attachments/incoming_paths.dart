@@ -73,15 +73,81 @@ Directory resolveIncomingDir({
   return dest;
 }
 
+String resolvedJailPath(FileSystemEntity entity) {
+  try {
+    if (entity.existsSync()) {
+      return entity.resolveSymbolicLinksSync();
+    }
+    final parent = entity.parent;
+    if (parent.existsSync()) {
+      final segments =
+          entity.uri.pathSegments.where((s) => s.isNotEmpty).toList();
+      final leaf = segments.isEmpty ? '' : segments.last;
+      return '${parent.resolveSymbolicLinksSync()}'
+          '${Platform.pathSeparator}$leaf';
+    }
+  } catch (_) {}
+  return entity.absolute.path;
+}
+
 void assertInsideRoot(Directory root, FileSystemEntity candidate) {
-  final rootPath = root.absolute.path;
-  final candidatePath = candidate.absolute.path;
+  final rootPath = resolvedJailPath(root);
+  final candidatePath = resolvedJailPath(candidate);
   final prefix = rootPath.endsWith(Platform.pathSeparator)
       ? rootPath
       : '$rootPath${Platform.pathSeparator}';
   if (candidatePath != rootPath && !candidatePath.startsWith(prefix)) {
     throw StateError('path-escape');
   }
+}
+
+bool _isRegularExistingFile(File file) {
+  return file.existsSync() && file.statSync().type == FileSystemEntityType.file;
+}
+
+/// Fail-closed allowlist for path-backed blobs: the incoming jail or an
+/// `orbits-chat-file-*` temp dir, after symlink resolution.
+bool isAllowedAttachmentPath(String path, {Directory? incomingBase}) {
+  if (path.isEmpty || path.contains('\u0000')) return false;
+  final file = File(path);
+  if (!_isRegularExistingFile(file)) return false;
+  final File resolved;
+  try {
+    resolved = File(file.resolveSymbolicLinksSync());
+  } catch (_) {
+    return false;
+  }
+  if (!_isRegularExistingFile(resolved)) return false;
+
+  final bases = <Directory>{
+    incomingBase ?? Directory.systemTemp,
+    Directory.systemTemp,
+  };
+  for (final base in bases) {
+    try {
+      assertInsideRoot(incomingRoot(base), resolved);
+      return true;
+    } catch (_) {}
+  }
+
+  Directory cursor = resolved.parent;
+  for (var i = 0; i < 8; i++) {
+    final segments =
+        cursor.uri.pathSegments.where((s) => s.isNotEmpty).toList();
+    final name = segments.isEmpty ? cursor.path : segments.last;
+    if (name.startsWith('orbits-chat-file-')) {
+      try {
+        assertInsideRoot(cursor, resolved);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+    final parent = cursor.parent;
+    if (parent.path == cursor.path) break;
+    cursor = parent;
+  }
+  return false;
 }
 
 File blobFile(Directory dir) =>
@@ -92,18 +158,17 @@ File metaFile(Directory dir) =>
 
 /// Resolve a completed incoming blob. Prefers the current jail
 /// (`sender/local-id/blob`), then a meta.json scan by external transfer
-/// id, then the legacy `orbits-incoming/<transferId>/<name>` layout.
+/// id. Requires [trustedSenderId]: the sender-less legacy
+/// `orbits-incoming/<transferId>/<name>` layout was removed — a remote
+/// peer must not reach another sender's jail through it.
 File? lookupIncomingBlob({
   required Directory base,
   String? trustedSenderId,
   String? localTransferId,
   String? externalTransferId,
-  String? legacyName,
 }) {
-  if (trustedSenderId != null &&
-      trustedSenderId.isNotEmpty &&
-      localTransferId != null &&
-      localTransferId.isNotEmpty) {
+  if (trustedSenderId == null || trustedSenderId.isEmpty) return null;
+  if (localTransferId != null && localTransferId.isNotEmpty) {
     try {
       final dir = resolveIncomingDir(
         base: base,
@@ -115,10 +180,7 @@ File? lookupIncomingBlob({
     } catch (_) {}
   }
 
-  if (trustedSenderId != null &&
-      trustedSenderId.isNotEmpty &&
-      externalTransferId != null &&
-      externalTransferId.isNotEmpty) {
+  if (externalTransferId != null && externalTransferId.isNotEmpty) {
     try {
       final sender = trustedSenderDirName(trustedSenderId);
       final root = Directory(
@@ -145,27 +207,6 @@ File? lookupIncomingBlob({
           } catch (_) {}
         }
       }
-    } catch (_) {}
-  }
-
-  if (externalTransferId != null &&
-      externalTransferId.isNotEmpty &&
-      legacyName != null &&
-      legacyName.isNotEmpty) {
-    try {
-      final safeId = sanitizeTransferId(externalTransferId);
-      final safeName = legacyName.replaceAll(
-        RegExp(r'[\x00-\x1f\\/:*?"<>|]'),
-        '_',
-      );
-      if (safeName.isEmpty || safeName == '.' || safeName == '..') {
-        return null;
-      }
-      final file = File(
-        '${incomingRoot(base).path}${Platform.pathSeparator}$safeId${Platform.pathSeparator}$safeName',
-      );
-      assertInsideRoot(incomingRoot(base), file);
-      if (_isRegularFile(file)) return file;
     } catch (_) {}
   }
   return null;

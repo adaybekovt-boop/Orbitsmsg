@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import '../core/base64_helpers.dart';
 import '../core/identity_key.dart';
 import '../core/key_store.dart';
+import '../core/vault_kek.dart';
 import '../transport/device_binding.dart';
 import 'device_registry.dart';
 
@@ -38,7 +39,8 @@ Future<LocalDeviceMaterial> loadOrCreateLocalDeviceMaterial({
   var deviceId = row?['deviceId'] as String?;
   var transport = _asBytes(row?['transportPublicKey']);
   var writer = _asBytes(row?['hypercorePublicKey']);
-  var seed = _asBytes(row?['transportSecretSeed']);
+  final rawSeed = row?['transportSecretSeed'];
+  var seed = await _asSecretBytes(rawSeed);
   if (deviceId == null ||
       deviceId.isEmpty ||
       seed.length != 32 ||
@@ -55,22 +57,37 @@ Future<LocalDeviceMaterial> loadOrCreateLocalDeviceMaterial({
     if (_bytesEqual(transport, seed) || _bytesEqual(transport, writer)) {
       transport = _randomKey();
     }
-    await keys.put(kLocalDeviceMaterialTable, {
-      'id': kLocalDeviceMaterialId,
-      'deviceId': deviceId,
-      'transportPublicKey': bytesToBase64(transport),
-      'hypercorePublicKey': bytesToBase64(writer),
-      'transportSecretSeed': bytesToBase64(seed),
-    });
+    await keys.put(
+      kLocalDeviceMaterialTable,
+      await _persistRow(
+        deviceId: deviceId,
+        transport: transport,
+        writer: writer,
+        seed: seed,
+      ),
+    );
   } else if (transport.length != 32 || _isPlaceholder(transport)) {
     transport = _randomKey();
-    await keys.put(kLocalDeviceMaterialTable, {
-      'id': kLocalDeviceMaterialId,
-      'deviceId': deviceId,
-      'transportPublicKey': bytesToBase64(transport),
-      'hypercorePublicKey': bytesToBase64(writer),
-      'transportSecretSeed': bytesToBase64(seed),
-    });
+    await keys.put(
+      kLocalDeviceMaterialTable,
+      await _persistRow(
+        deviceId: deviceId,
+        transport: transport,
+        writer: writer,
+        seed: seed,
+      ),
+    );
+  } else if (!isWrapped(rawSeed) && hasVaultKek()) {
+    // Legacy plaintext seed: reseal wrapped without rotating deviceId.
+    await keys.put(
+      kLocalDeviceMaterialTable,
+      await _persistRow(
+        deviceId: deviceId,
+        transport: transport,
+        writer: writer,
+        seed: seed,
+      ),
+    );
   }
   return LocalDeviceMaterial(
     deviceId: deviceId,
@@ -89,13 +106,15 @@ Future<LocalDeviceMaterial> rememberTransportPublicKey({
   if (next.length != 32) return material;
   if (_bytesEqual(material.transportPublicKey, next)) return material;
   final keys = store ?? keyStore();
-  await keys.put(kLocalDeviceMaterialTable, {
-    'id': kLocalDeviceMaterialId,
-    'deviceId': material.deviceId,
-    'transportPublicKey': bytesToBase64(next),
-    'hypercorePublicKey': bytesToBase64(material.hypercorePublicKey),
-    'transportSecretSeed': bytesToBase64(material.transportSecretSeed),
-  });
+  await keys.put(
+    kLocalDeviceMaterialTable,
+    await _persistRow(
+      deviceId: material.deviceId,
+      transport: next,
+      writer: material.hypercorePublicKey,
+      seed: material.transportSecretSeed,
+    ),
+  );
   return LocalDeviceMaterial(
     deviceId: material.deviceId,
     transportPublicKey: next,
@@ -113,13 +132,15 @@ Future<LocalDeviceMaterial> rememberHypercorePublicKey({
   if (next.length != 32) return material;
   if (_bytesEqual(material.hypercorePublicKey, next)) return material;
   final keys = store ?? keyStore();
-  await keys.put(kLocalDeviceMaterialTable, {
-    'id': kLocalDeviceMaterialId,
-    'deviceId': material.deviceId,
-    'transportPublicKey': bytesToBase64(material.transportPublicKey),
-    'hypercorePublicKey': bytesToBase64(next),
-    'transportSecretSeed': bytesToBase64(material.transportSecretSeed),
-  });
+  await keys.put(
+    kLocalDeviceMaterialTable,
+    await _persistRow(
+      deviceId: material.deviceId,
+      transport: material.transportPublicKey,
+      writer: next,
+      seed: material.transportSecretSeed,
+    ),
+  );
   return LocalDeviceMaterial(
     deviceId: material.deviceId,
     transportPublicKey: material.transportPublicKey,
@@ -206,6 +227,29 @@ Uint8List _asBytes(Object? raw) {
     }
   }
   return Uint8List(0);
+}
+
+/// Seed read path: wrapped (`orb-wrap-v1:…`) or legacy plaintext
+/// (bytes / raw base64). A locked vault on a wrapped field throws —
+/// never treat that as empty, or the deviceId would rotate.
+Future<Uint8List> _asSecretBytes(Object? raw) async {
+  if (isWrapped(raw)) return unwrapSecret(raw);
+  return _asBytes(raw);
+}
+
+Future<Map<String, Object?>> _persistRow({
+  required String deviceId,
+  required Uint8List transport,
+  required Uint8List writer,
+  required Uint8List seed,
+}) async {
+  return {
+    'id': kLocalDeviceMaterialId,
+    'deviceId': deviceId,
+    'transportPublicKey': bytesToBase64(transport),
+    'hypercorePublicKey': bytesToBase64(writer),
+    'transportSecretSeed': await wrapSecret(seed),
+  };
 }
 
 Uint8List _randomKey() {

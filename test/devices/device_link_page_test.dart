@@ -132,6 +132,20 @@ void main() {
 
     expect(deviceRegistry.byId(tabletId), isNotNull);
     expect(deviceRegistry.byId(tabletId)!.status, DeviceStatus.active);
+    // authorizeDevice journals async (sign-then-append): pump first.
+    await tester.runAsync(() async {
+      final deadline = DateTime.now().add(const Duration(seconds: 2));
+      while (DateTime.now().isBefore(deadline)) {
+        if (journal.records.any(
+          (r) =>
+              r.kind == ReplicationEventKind.deviceAuthorized &&
+              r.fields['deviceId'] == tabletId,
+        )) {
+          return;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    });
     expect(
       journal.records.any(
         (r) =>
@@ -149,6 +163,19 @@ void main() {
     await tester.tap(find.text('Отозвать'));
     await tester.pump();
     expect(deviceRegistry.byId(tabletId)!.status, DeviceStatus.revoked);
+    await tester.runAsync(() async {
+      final deadline = DateTime.now().add(const Duration(seconds: 2));
+      while (DateTime.now().isBefore(deadline)) {
+        if (journal.records.any(
+          (r) =>
+              r.kind == ReplicationEventKind.deviceRevoked &&
+              r.fields['deviceId'] == tabletId,
+        )) {
+          return;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+      }
+    });
     expect(
       journal.records.any(
         (r) =>

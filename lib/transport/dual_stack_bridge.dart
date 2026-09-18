@@ -24,6 +24,7 @@ import '../mailbox/storage_peer_client.dart';
 import '../peer/helpers.dart';
 import '../rooms/autobase_log.dart';
 import '../replication/conversation_id.dart';
+import '../replication/device_journal_apply.dart';
 import '../replication/file_journal.dart';
 import '../replication/hypercore_store.dart';
 import '../replication/memory_journal.dart';
@@ -296,9 +297,20 @@ class DualStackBridge {
     final targets = _deviceFanoutTargets(peerId);
     if (targets.isEmpty) return false;
     final encoded = msg is String ? msg : jsonEncode(msg);
+    // Never burn fan-out ratchet steps for offline targets when no
+    // remote mailbox peer can hold their copies.
+    final canMailbox = _canEnqueueMailbox();
+    final encryptTargets = <AuthorizedDevice>[];
+    for (final target in targets) {
+      final dest = _transportIdForDevice(target.deviceId, fallback: norm);
+      final sentTo = isAuthenticated(dest) ? dest : norm;
+      if (!isAuthenticated(sentTo) && !canMailbox) continue;
+      encryptTargets.add(target);
+    }
+    if (encryptTargets.isEmpty) return false;
     final wires = await ratchets.fanoutEncrypt(
       sendingDeviceId: selfDeviceId,
-      targets: targets,
+      targets: encryptTargets,
       plaintext: encoded,
     );
     if (wires.isEmpty) return false;
@@ -357,6 +369,10 @@ class DualStackBridge {
       }
       if (!isAuthenticated(norm)) {
         if (isDevBareTransportRequested()) return false;
+        // Check mailbox availability BEFORE encrypting: a Double Ratchet
+        // step cannot be rolled back, and without a remote peer the
+        // recipient would never see the bytes anyway.
+        if (!_canEnqueueMailbox()) return false;
         if (msg is Map &&
             (msg['type'] == 'wireHello' || msg['type'] == 'wireRekey')) {
           return enqueueMailbox(jsonPayload(Map<String, Object?>.from(msg)));
@@ -391,7 +407,10 @@ class DualStackBridge {
     if (storagePeer != null && mailboxCapability != null) {
       return depositMailboxRemote(encryptedEnvelope, envelopeId: envelopeId);
     }
-    return depositMailbox(encryptedEnvelope, envelopeId: envelopeId);
+    // No remote storage peer: a local in-process store is not delivery.
+    // The recipient would never see these bytes, so fail closed and let
+    // the outbox keep the row pending instead of burning a ratchet step.
+    return false;
   }
 
   /// Offline deposit: encrypted bytes only. Used when the recipient is not
@@ -457,6 +476,11 @@ class DualStackBridge {
     return bucket.isEmpty ? null : bucket;
   }
 
+  bool _canEnqueueMailbox() {
+    if (storagePeer == null || mailboxCapability == null) return false;
+    return _mailboxSenderBucket(_selfId()) != null;
+  }
+
   String _stableEnvelopeId(List<int> encryptedEnvelope) {
     return sha256.convert([
       ...utf8.encode(selfDeviceId),
@@ -466,62 +490,67 @@ class DualStackBridge {
 
   /// Authorization log: revoked writers are ignored on the next fan-out.
   void revokeDevice(String deviceId) {
-    devices?.revoke(deviceId);
+    unawaited(devices?.revoke(deviceId, ownerPeerId: _selfId()));
     ratchets.revoke(deviceId);
-    _queueOwnAccountRecord(
-      ReplicationEventKind.deviceRevoked,
-      <String, Object?>{
-        'deviceId': deviceId,
-        'ownerPeerId': _selfId(),
-        'audience': 'owner-devices',
-        'createdAt': DateTime.now().millisecondsSinceEpoch,
-      },
+    unawaited(
+      _queueOwnAccountRecord(
+        ReplicationEventKind.deviceRevoked,
+        <String, Object?>{
+          'deviceId': deviceId,
+          'ownerPeerId': _selfId(),
+          'audience': 'owner-devices',
+          'createdAt': DateTime.now().millisecondsSinceEpoch,
+        },
+      ),
     );
   }
 
   void authorizeDevice(AuthorizedDevice device) {
-    devices?.authorize(device);
-    _queueOwnAccountRecord(
-      ReplicationEventKind.deviceAuthorized,
-      <String, Object?>{
-        'deviceId': device.deviceId,
-        'ownerPeerId': device.ownerPeerId.isNotEmpty
-            ? device.ownerPeerId
-            : _selfId(),
-        'audience': 'owner-devices',
-        'createdAt': device.createdAt,
-      },
-    );
-  }
-
-  void _queueOwnAccountRecord(
-    ReplicationEventKind kind,
-    Map<String, Object?> fields,
-  ) {
-    final record = journal.append(kind, fields);
-    hypercore.append(record);
-    unawaited(_fanoutSignedOwnAccount(record));
-    unawaited(_commitJournal(record, projectLive: true));
-  }
-
-  Future<void> _fanoutSignedOwnAccount(JournalRecord record) async {
-    final signedFields = await _signOwnAccountFields(
-      kind: record.kind,
-      writerDeviceId: record.writerDeviceId,
-      fields: record.fields,
-    );
-    if (isOwnerDeviceScopedKind(record.kind) &&
-        decodeReplicationSignature(signedFields['signature']) == null) {
-      return;
-    }
-    _fanoutReplication(
-      JournalRecord(
-        seq: record.seq,
-        writerDeviceId: record.writerDeviceId,
-        kind: record.kind,
-        fields: signedFields,
+    unawaited(devices?.authorize(device));
+    unawaited(
+      _queueOwnAccountRecord(
+        ReplicationEventKind.deviceAuthorized,
+        <String, Object?>{
+          'deviceId': device.deviceId,
+          'ownerPeerId': device.ownerPeerId.isNotEmpty
+              ? device.ownerPeerId
+              : _selfId(),
+          'audience': 'owner-devices',
+          'createdAt': device.createdAt,
+          'transportPublicKey': base64Encode(device.transportPublicKey),
+          'hypercorePublicKey': base64Encode(device.hypercorePublicKey),
+          'name': device.name,
+          'kind': device.kind,
+          'transportPeerId': device.transportPeerId,
+          'status': DeviceStatus.active.name,
+        },
       ),
     );
+  }
+
+  Future<void> _queueOwnAccountRecord(
+    ReplicationEventKind kind,
+    Map<String, Object?> fields,
+  ) async {
+    // Sign-then-append: the signature must live in the journal/hypercore
+    // copy too, or a late-joining own-device drops the replayed frame.
+    final signedFields = await _signOwnAccountFields(
+      kind: kind,
+      writerDeviceId: selfDeviceId,
+      fields: fields,
+    );
+    if (isOwnerDeviceScopedKind(kind) &&
+        decodeReplicationSignature(signedFields['signature']) == null &&
+        signRecord != null) {
+      return;
+    }
+    final record = journal.append(kind, signedFields);
+    hypercore.append(record);
+    if (!isOwnerDeviceScopedKind(kind) ||
+        decodeReplicationSignature(signedFields['signature']) != null) {
+      _fanoutReplication(record);
+    }
+    await _commitJournal(record, projectLive: true);
   }
 
   Future<Map<String, Object?>> _signOwnAccountFields({
@@ -642,9 +671,23 @@ class DualStackBridge {
     for (final block in blocks) {
       final id = block.envelopeId ?? _stableEnvelopeId(block.bytes);
       if (_mailboxPump.projectedEnvelopeIds.contains(id)) continue;
-      final text = utf8.decode(block.bytes);
+      final String text;
+      try {
+        text = utf8.decode(block.bytes);
+      } catch (err) {
+        lastReplicationError = knownSenderSweep
+            ? 'unbucketed-legacy-skipped'
+            : err.toString();
+        continue;
+      }
       if (!isWireCiphertext(text)) {
-        final decoded = decodeJsonPayload(block.bytes);
+        late final Map<String, Object?> decoded;
+        try {
+          decoded = decodeJsonPayload(block.bytes);
+        } catch (_) {
+          lastReplicationError = 'unbucketed-legacy-skipped';
+          continue;
+        }
         if (decoded['type'] == kDeviceRatchetMessageType) {
           final owner = _ownerPeerForDevice(
             decoded['fromDeviceId'] as String? ?? '',
@@ -657,14 +700,10 @@ class DualStackBridge {
           projected += 1;
           continue;
         }
-        if (!_appendEnvelope(from, block.bytes, senderIdentity: from)) {
-          continue;
-        }
-        try {
-          await onPacket(from, decoded);
-        } catch (err) {
-          lastReplicationError = err.toString();
-        }
+        // Non-ciphertext outside a device-ratchet frame is never
+        // attributed to a swept sender and never journaled.
+        lastReplicationError = 'unbucketed-legacy-skipped';
+        continue;
       } else {
         if (knownSenderSweep) continue;
         if (!_appendEnvelope(from, block.bytes, senderIdentity: from)) {
@@ -855,6 +894,32 @@ class DualStackBridge {
     return false;
   }
 
+  /// Hypercore holds encrypted envelopes only. Accept a `v2:` wire
+  /// ciphertext, or a device-ratchet frame whose inner wire is one.
+  bool _isJournalableEnvelope(
+    List<int> encrypted, {
+    String envelopeCipher = '',
+  }) {
+    String text;
+    try {
+      text = utf8.decode(encrypted);
+    } catch (_) {
+      return false;
+    }
+    if (isWireCiphertext(text)) return true;
+    if (envelopeCipher != kDeviceRatchetMessageType &&
+        envelopeCipher.isNotEmpty) {
+      return false;
+    }
+    try {
+      final decoded = decodeJsonPayload(encrypted);
+      if (decoded['type'] != kDeviceRatchetMessageType) return false;
+      return isWireCiphertext(decoded['wire']);
+    } catch (_) {
+      return false;
+    }
+  }
+
   bool _appendEnvelope(
     String peerId,
     List<int> encrypted, {
@@ -864,6 +929,11 @@ class DualStackBridge {
     String toDeviceId = '',
   }) {
     try {
+      if (!_isJournalableEnvelope(encrypted,
+          envelopeCipher: envelopeCipher)) {
+        lastReplicationError = 'non-ciphertext-envelope-rejected';
+        return false;
+      }
       final self = _selfId();
       final other = normalizePeerId(peerId);
       if (self.isEmpty || other.isEmpty) {
@@ -1138,20 +1208,41 @@ class DualStackBridge {
       selfPeerId: _selfId(),
       peerIsOwnDevice: own,
     )) {
-      unawaited(
-        transport.send(
+      unawaited(() async {
+        var frameRecord = record;
+        // Late-join: pre-fix journals hold unsigned own-account records.
+        // Sign at send time so the receiver's inbound auth passes.
+        if (isOwnerDeviceScopedKind(record.kind) &&
+            decodeReplicationSignature(record.fields['signature']) == null &&
+            signRecord != null) {
+          final signedFields = await _signOwnAccountFields(
+            kind: record.kind,
+            writerDeviceId: record.writerDeviceId,
+            fields: record.fields,
+          );
+          if (decodeReplicationSignature(signedFields['signature']) == null) {
+            return;
+          }
+          frameRecord = JournalRecord(
+            seq: record.seq,
+            writerDeviceId: record.writerDeviceId,
+            kind: record.kind,
+            fields: signedFields,
+          );
+        }
+        await transport.send(
           peerId,
           TransportChannel.replication,
           jsonPayload(
             hypercore.toReplicationFrame(
-              record,
+              frameRecord,
               authenticatedPeerId: peerId,
               selfPeerId: _selfId(),
               peerIsOwnDevice: own,
             ),
           ),
-        ),
-      );
+        );
+      }());
     }
   }
 
@@ -1209,6 +1300,47 @@ class DualStackBridge {
     }
   }
 
+  /// Claimed fromDeviceId must be the authenticated binding's device
+  /// and belong to that binding's owner (self when the connection is
+  /// an own-device). Mailbox frames have no live binding: registry
+  /// owner must match the attributed sender, or self for own-device.
+  String? _deviceRatchetFromError(String peerId, String fromDeviceId) {
+    final norm = normalizePeerId(peerId);
+    if (fromDeviceId.isEmpty) return 'missing-from-device';
+    if (isAuthenticated(norm)) {
+      final binding = _bindings[norm];
+      if (binding == null || binding.deviceId.isEmpty) {
+        return 'binding-required';
+      }
+      if (fromDeviceId != binding.deviceId) {
+        return 'device-id-mismatch';
+      }
+      if (devices == null) return 'device-registry-required';
+      final owner = devices!.ownerPeerIdFor(fromDeviceId);
+      final expected = normalizePeerId(binding.ownerPeerId);
+      if (owner.isEmpty) return 'unknown-device';
+      if (expected.isEmpty || owner != expected) {
+        return 'device-owner-mismatch';
+      }
+      return null;
+    }
+    if (devices == null) return 'device-registry-required';
+    final owner = devices!.ownerPeerIdFor(fromDeviceId);
+    if (owner.isEmpty) return 'unknown-device';
+    if (owner == norm) return null;
+    if (owner == normalizePeerId(_selfId()) && _isOwnDevice(norm)) {
+      return null;
+    }
+    return 'device-owner-mismatch';
+  }
+
+  bool _rejectUnauthorizedDeviceRatchet(String peerId, String fromDeviceId) {
+    final error = _deviceRatchetFromError(peerId, fromDeviceId);
+    if (error == null) return false;
+    lastDeviceRatchetError = error;
+    return true;
+  }
+
   Future<void> _onDeviceRatchetOffer(
     String peerId,
     Map<String, Object?> decoded,
@@ -1217,6 +1349,7 @@ class DualStackBridge {
     final to = decoded['toDeviceId'] as String? ?? '';
     final ephB64 = decoded['ephPub'] as String? ?? '';
     if (from.isEmpty || to != selfDeviceId || ephB64.isEmpty) return;
+    if (_rejectUnauthorizedDeviceRatchet(peerId, from)) return;
     if (ratchets.isRevoked(from) || ratchets.isRevoked(to)) return;
     if (ratchets.session(selfDeviceId, from) != null) return;
     if (_ratchetHandshakeEph.containsKey(from) &&
@@ -1268,6 +1401,7 @@ class DualStackBridge {
     if (from.isEmpty || to != selfDeviceId || ephB64.isEmpty || ratchetB64.isEmpty) {
       return;
     }
+    if (_rejectUnauthorizedDeviceRatchet(peerId, from)) return;
     if (ratchets.isRevoked(from) || ratchets.isRevoked(to)) return;
     if (ratchets.session(selfDeviceId, from) != null) return;
     final eph = _ratchetHandshakeEph.remove(from);
@@ -1315,6 +1449,7 @@ class DualStackBridge {
     final wire = decoded['wire'] as String? ?? '';
     if (fromDevice.isEmpty || toDevice.isEmpty || wire.isEmpty) return;
     if (toDevice != selfDeviceId) return;
+    if (_rejectUnauthorizedDeviceRatchet(peerId, fromDevice)) return;
     if (ratchets.isRevoked(fromDevice) || ratchets.isRevoked(toDevice)) {
       return;
     }
@@ -1339,7 +1474,8 @@ class DualStackBridge {
         utf8.encode(wire),
         senderIdentity: peerId,
         envelopeCipher: kDeviceRatchetMessageType,
-        fromDeviceId: fromDevice,
+        fromDeviceId:
+            _bindings[normalizePeerId(peerId)]?.deviceId ?? fromDevice,
         toDeviceId: toDevice,
       );
       await onPacket(
@@ -1352,6 +1488,32 @@ class DualStackBridge {
     }
   }
 
+  /// Wire JSON allowed on the attachment channel: legacy Drop control
+  /// frames only, and never carrying a `path`. The coordinator
+  /// completion is local-only (see [kCoordinatorCompletionType]).
+  static const _kWireDropControlTypes = <String>{
+    'file-start',
+    'file-end',
+    'file-abort',
+    'file-ack',
+    'file-nack',
+    'file-chunk',
+    'drop-beacon',
+    'drop-beacon-ack',
+    'drop-req',
+    'drop-ack',
+    'drop-rej',
+    'drop-cancel',
+    'drop-resume',
+  };
+
+  bool _isAllowedWireDropControl(Map<String, Object?> decoded) {
+    final type = decoded['type'] as String? ?? '';
+    if (!_kWireDropControlTypes.contains(type)) return false;
+    if (decoded.containsKey('path')) return false;
+    return true;
+  }
+
   Future<void> _onAttachmentFrame(String peerId, List<int> bytes) async {
     if (await files.handleInbound(peerId, bytes)) return;
     if (bytes.isNotEmpty && bytes[0] == 1) {
@@ -1359,7 +1521,9 @@ class DualStackBridge {
       return;
     }
     try {
-      onDrop?.call(peerId, decodeJsonPayload(bytes));
+      final decoded = decodeJsonPayload(bytes);
+      if (!_isAllowedWireDropControl(decoded)) return;
+      onDrop?.call(peerId, decoded);
     } catch (err) {
       lastReplicationError = err.toString();
     }
@@ -1379,6 +1543,15 @@ class DualStackBridge {
         acceptsWriter: devices?.acceptsWriter,
       );
       if (record != null) {
+        // Own-account device records apply to the same registry/ratchets
+        // that admit reads — even when onRemoteRecord is null (tests).
+        applyOwnAccountDeviceRecord(
+          record,
+          devices: devices,
+          ratchets: ratchets,
+          selfPeerId: _selfId(),
+          localDeviceId: selfDeviceId,
+        );
         unawaited(durableJournal?.append(record));
         unawaited(onRemoteRecord?.call(record));
       }

@@ -8,6 +8,8 @@ import 'package:orbits_flutter/devices/device_link.dart';
 import 'package:orbits_flutter/devices/device_ratchet_sessions.dart';
 import 'package:orbits_flutter/devices/device_registry.dart';
 import 'package:orbits_flutter/mailbox/blind_store.dart';
+import 'package:orbits_flutter/mailbox/mailbox_protocol.dart';
+import 'package:orbits_flutter/mailbox/storage_peer_client.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
@@ -273,6 +275,22 @@ void main() {
           expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
         ),
       );
+    // A shared local store is not delivery: the offline fan-out needs a
+    // real (here: local-loopback) storage peer + capability.
+    final grantSecret = List<int>.generate(32, (i) => i + 9);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final cap = issueMailboxCapability(
+      grantSecret: grantSecret,
+      tokenId: 'tok-1',
+      mailboxId: 'mb-alice-bob',
+      scopes: MailboxScope.values.toSet(),
+      issuedAt: now - 1000,
+      notBefore: now - 1000,
+      expiresAt: now + 60 * 1000,
+      quotaBytes: 64 * 1024,
+      retentionMs: 60 * 1000,
+    );
+    final client = StoragePeerClient.local(store, grantSecret: grantSecret);
     await pair.$1.start(
       TransportLocalConfiguration(
         peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
@@ -300,6 +318,8 @@ void main() {
       mailbox: store,
       mailboxToken: 'cap-1',
       mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      storagePeer: client,
+      mailboxCapability: cap,
       isBlocked: (_) => false,
       onPacket: (_, __) async {},
     )..attach();
@@ -314,6 +334,8 @@ void main() {
       mailbox: store,
       mailboxToken: 'cap-1',
       mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      storagePeer: client,
+      mailboxCapability: cap,
       isBlocked: (_) => false,
       onPacket: (_, data) async => packets.add(data),
     )..attach();
@@ -632,12 +654,25 @@ void main() {
         link,
         ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
         registry: aliceDev,
+        identities: aliceIds,
         onAuthorized: alice.authorizeDevice,
       ),
       isTrue,
     );
     expect(aliceDev.byId('dev-linked'), isNotNull);
     expect(alice.ratchets.session('dev-a', 'dev-linked'), isNull);
+    // authorizeDevice journals async (sign-then-append): pump first.
+    final journalDeadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(journalDeadline)) {
+      if (alice.journal.records.any(
+        (r) =>
+            r.kind == ReplicationEventKind.deviceAuthorized &&
+            r.fields['deviceId'] == 'dev-linked',
+      )) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
     expect(
       alice.journal.records.any(
         (r) =>

@@ -3,6 +3,8 @@ import 'dart:io';
 import '../transport/transport_api.dart';
 import 'incoming_paths.dart';
 
+export 'incoming_paths.dart' show isAllowedAttachmentPath;
+
 Future<TransportFileDescriptor?> writeTempAttachment({
   required List<int> bytes,
   required String name,
@@ -21,6 +23,7 @@ Future<TransportFileDescriptor?> writeTempAttachment({
 }
 
 Future<List<int>?> readAttachmentPath(String path) async {
+  if (!isAllowedAttachmentPath(path)) return null;
   final file = File(path);
   if (!file.existsSync()) return null;
   return file.readAsBytes();
@@ -32,6 +35,7 @@ String? lookupIncomingTransferPath({
   String? trustedSenderId,
   Directory? base,
 }) {
+  if (trustedSenderId == null || trustedSenderId.isEmpty) return null;
   final sanitized = trySanitizeTransferId(transferId);
   final alreadySafe = sanitized != null && sanitized == transferId.trim();
   final found = lookupIncomingBlob(
@@ -42,7 +46,6 @@ String? lookupIncomingTransferPath({
     // 32-hex local id) may be tried as [localTransferId].
     localTransferId: alreadySafe ? sanitized : null,
     externalTransferId: transferId,
-    legacyName: name,
   );
   return found?.path;
 }

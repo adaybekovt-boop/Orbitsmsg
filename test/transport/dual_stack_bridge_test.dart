@@ -6,6 +6,8 @@ import 'package:orbits_flutter/calls/hyperswarm_signaling.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
 import 'package:orbits_flutter/devices/device_registry.dart';
 import 'package:orbits_flutter/mailbox/blind_store.dart';
+import 'package:orbits_flutter/mailbox/mailbox_protocol.dart';
+import 'package:orbits_flutter/mailbox/storage_peer_client.dart';
 import 'package:orbits_flutter/transport/replication_schema.dart';
 import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
@@ -349,6 +351,20 @@ void main() {
           expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
         ),
       );
+    final grantSecret = List<int>.generate(32, (i) => i + 5);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final cap = issueMailboxCapability(
+      grantSecret: grantSecret,
+      tokenId: 'tok-1',
+      mailboxId: 'mb-alice-bob',
+      scopes: MailboxScope.values.toSet(),
+      issuedAt: now - 1000,
+      notBefore: now - 1000,
+      expiresAt: now + 60 * 1000,
+      quotaBytes: 64 * 1024,
+      retentionMs: 60 * 1000,
+    );
+    final client = StoragePeerClient.local(store, grantSecret: grantSecret);
     setHyperswarmRollout(HyperswarmRollout.internal);
     final pair = loopbackPair();
     final secrets = DiscoverySecretStore()
@@ -393,6 +409,8 @@ void main() {
       mailbox: store,
       mailboxToken: 'cap-1',
       mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      storagePeer: client,
+      mailboxCapability: cap,
       onPacket: (peer, data) async {},
     )..attach();
     final b = DualStackBridge(
@@ -407,20 +425,142 @@ void main() {
       mailbox: store,
       mailboxToken: 'cap-1',
       mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      storagePeer: client,
+      mailboxCapability: cap,
       onPacket: (peer, data) async => seen.add(data),
     )..attach();
+    // Ciphertext survives the sender going away.
     expect(
-      await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
-        'type': 'wireHello',
-        'v': 4,
-      }),
+      await a.depositMailboxRemote(
+        utf8.encode('v2:hdr:iv:ct'),
+        envelopeId: 'e1',
+      ),
       isTrue,
     );
     await pair.$1.stop();
     expect(await b.drainMailbox(), 0);
     final n = await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA');
-    expect(n, greaterThan(0));
-    expect(seen.whereType<Map>().any((m) => m['type'] == 'wireHello'), isTrue);
+    expect(n, 1);
+    expect(seen, ['v2:hdr:iv:ct']);
+
+    // Non-ciphertext is never attributed or journaled, even on an
+    // explicit per-sender bucket.
+    seen.clear();
+    expect(
+      await a.depositMailboxRemote(
+        utf8.encode(jsonEncode({'type': 'wireHello', 'v': 4})),
+        envelopeId: 'e-hello',
+      ),
+      isTrue,
+    );
+    expect(
+      await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA'),
+      0,
+    );
+    expect(seen, isEmpty);
+    expect(b.lastReplicationError, 'unbucketed-legacy-skipped');
+    await a.detach();
+    await b.detach();
+  });
+
+  test('offline send without a storage peer stays pending, ratchet untouched',
+      () async {
+    setHyperswarmRollout(HyperswarmRollout.internal);
+    final pair = loopbackPair();
+    final secrets = DiscoverySecretStore()
+      ..put('ORBIT-AAAAAAAAAAAAAAAA', secret)
+      ..put('ORBIT-BBBBBBBBBBBBBBBB', secret);
+    await pair.$1.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$2.start(
+      TransportLocalConfiguration(
+        peerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        discoverySecret: secret,
+      ),
+    );
+    await pair.$1.publish(bindA);
+    await pair.$2.publish(bindB);
+    final aliceIds = TrustedIdentityStore();
+    final bobIds = TrustedIdentityStore();
+    final aliceDev = DeviceRegistry();
+    final bobDev = DeviceRegistry();
+    trustContactPair(
+      aliceIdentities: aliceIds,
+      aliceDevices: aliceDev,
+      bobIdentities: bobIds,
+      bobDevices: bobDev,
+      aliceBinding: bindA,
+      bobBinding: bindB,
+    );
+    // Two SEPARATE local stores: a local deposit is not delivery.
+    MailboxCapability mkCap(String token) => MailboxCapability(
+          token: token,
+          quotaBytes: 4096,
+          retentionMs: 60 * 1000,
+          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+        );
+    final aliceStore = BlindMailboxStore()..grant(mkCap('cap-a'));
+    final bobStore = BlindMailboxStore()..grant(mkCap('cap-b'));
+    final a = DualStackBridge(
+      transport: pair.$1,
+      journal: MemoryJournal('a'),
+      selfPeerId: () => 'ORBIT-AAAAAAAAAAAAAAAA',
+      selfDeviceId: 'a',
+      secrets: secrets,
+      devices: aliceDev,
+      identities: aliceIds,
+      isBlocked: (_) => false,
+      mailbox: aliceStore,
+      mailboxToken: 'cap-a',
+      mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      onPacket: (peer, data) async {},
+    )..attach();
+    final b = DualStackBridge(
+      transport: pair.$2,
+      journal: MemoryJournal('b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'b',
+      secrets: secrets,
+      devices: bobDev,
+      identities: bobIds,
+      isBlocked: (_) => false,
+      mailbox: bobStore,
+      mailboxToken: 'cap-b',
+      mailboxWriterKey: 'ORBIT-BBBBBBBBBBBBBBBB',
+      onPacket: (peer, data) async {},
+    )..attach();
+    await a.dial('ORBIT-BBBBBBBBBBBBBBBB');
+    await Future<void>.delayed(const Duration(milliseconds: 80));
+    expect(a.isAuthenticated('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+    await pair.$1.disconnect('ORBIT-BBBBBBBBBBBBBBBB');
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(a.isAuthenticated('ORBIT-BBBBBBBBBBBBBBBB'), isFalse);
+
+    expect(
+      await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'wireHello',
+        'v': 4,
+      }),
+      isFalse,
+    );
+    expect(
+      await a.sendEncrypted('ORBIT-BBBBBBBBBBBBBBBB', {
+        'type': 'msg',
+        'text': 'no-peer',
+      }),
+      isFalse,
+    );
+    expect(
+      await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA'),
+      0,
+    );
+    expect(b.journal.length, 0);
+    await a.detach();
+    await b.detach();
   });
 
   test('mailbox drain skips blocked senders and does not invent a sender', () async {

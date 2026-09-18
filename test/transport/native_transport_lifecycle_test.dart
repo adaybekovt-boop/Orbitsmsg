@@ -45,12 +45,17 @@ NativeTransportHost _host(
 void main() {
   installPointyCastleEcdh();
 
-  setUp(() {
+  setUp(() async {
     resetFlagsForTests();
     setKeyStore(InMemoryKeyStore());
+    // Device material reseals wrapped; every ensureStarted reaches it.
+    await setVaultKek(List<int>.generate(32, (i) => (i * 7 + 1) & 0xff));
     hydrateDevBareTransportPref(true);
   });
-  tearDown(resetFlagsForTests);
+  tearDown(() {
+    clearVaultKek();
+    resetFlagsForTests();
+  });
 
   test('login A → logout → login B does not keep A attached', () async {
     final container = ProviderContainer();

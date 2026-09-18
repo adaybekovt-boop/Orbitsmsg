@@ -390,7 +390,9 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
           dual.lastReplicationError = err.toString();
           if (failClosed || !isPeerjsFallbackEnabled()) return false;
         }
-      } else if (dual.mailbox != null && dual.secrets.get(remoteId) != null) {
+      } else if (dual.storagePeer != null &&
+          dual.mailboxCapability != null &&
+          dual.secrets.get(remoteId) != null) {
         try {
           return await dual.sendEncrypted(remoteId, msg);
         } catch (err) {

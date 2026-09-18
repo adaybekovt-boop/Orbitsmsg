@@ -166,6 +166,7 @@ class NativeTransportHost {
     if (_startupAborted(generation)) return;
 
     await discoverySecretStore.hydrate();
+    deviceRegistry.onError = (e) => lastError = e;
     await deviceRegistry.hydrate();
     await trustedIdentityStore.hydrate();
     if (_startupAborted(generation)) return;
@@ -205,11 +206,18 @@ class NativeTransportHost {
     for (final record in memory.records) {
       hypercore!.append(record);
     }
-    ratchets = DeviceRatchetSessions(localDeviceId: material.deviceId);
+    ratchets = DeviceRatchetSessions(
+      localDeviceId: material.deviceId,
+      onError: (e) => lastError = e,
+    );
     await ratchets!.hydrate();
     if (_startupAborted(generation)) return;
     projector = JournalProjector(
       decrypt: _decryptJournalEnvelope,
+      devices: deviceRegistry,
+      ratchets: ratchets,
+      selfPeerId: auth.user.peerId,
+      localDeviceId: material.deviceId,
       isBlocked: (peerId) =>
           _ref.read(messagingNotifierProvider.notifier).isPeerBlocked(peerId),
       persist: (msg) async {
@@ -342,6 +350,12 @@ class NativeTransportHost {
           },
           signRecord: signBytes,
         );
+    final boundBridge = _ref
+        .read(connectionsNotifierProvider.notifier)
+        .nativeBridge;
+    if (boundBridge != null && ratchets?.lastError.isNotEmpty == true) {
+      boundBridge.lastDeviceRatchetError = ratchets!.lastError;
+    }
     _ref.read(roomManagerProvider.notifier).bindAutobaseSnapshot();
     lifecycle = TransportLifecycle(
       transport: transport!,

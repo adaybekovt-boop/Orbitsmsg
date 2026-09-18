@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/spki_codec.dart';
+import 'package:orbits_flutter/core/vault_kek.dart';
 import 'package:orbits_flutter/devices/device_link.dart';
 import 'package:orbits_flutter/devices/device_registry.dart';
 import 'package:orbits_flutter/core/key_store.dart';
@@ -12,7 +13,11 @@ import 'package:orbits_flutter/devices/local_device_material.dart';
 import '../helpers/pointycastle_ecdh.dart';
 
 void main() {
-  setUp(resetDeviceLinkChallengesForTests);
+  setUp(() async {
+    resetDeviceLinkChallengesForTests();
+    await setVaultKek(List<int>.generate(32, (i) => (i * 5 + 3) & 0xff));
+  });
+  tearDown(clearVaultKek);
 
   test('two devices have different ids and QR has no private key', () async {
     final a = await loadOrCreateLocalDeviceMaterial(store: InMemoryKeyStore());
@@ -59,6 +64,7 @@ void main() {
         link,
         ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
         registry: registry,
+        localIdentityPublicKey: spki,
       ),
       isTrue,
     );
@@ -67,6 +73,7 @@ void main() {
         link,
         ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
         registry: registry,
+        localIdentityPublicKey: spki,
       ),
       isFalse,
     );
@@ -88,6 +95,7 @@ void main() {
         stub,
         ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
         registry: DeviceRegistry(),
+        localIdentityPublicKey: spki,
       ),
       isFalse,
     );
@@ -110,6 +118,7 @@ void main() {
         link,
         ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
         registry: registry,
+        localIdentityPublicKey: spki,
         onAuthorized: (device) => authorized = device,
       ),
       isTrue,

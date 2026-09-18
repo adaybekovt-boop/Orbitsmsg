@@ -123,6 +123,7 @@ const ALLOWED_REQUEST_KEYS = new Set([
   'issuedAt',
   'capability',
   'mailboxId',
+  'senderBucket',
   'envelopeId',
   'ciphertextB64',
   'fromSeq',
@@ -193,6 +194,22 @@ function rejectUnknown(obj, allowed, where) {
       throw err
     }
   }
+}
+
+// Per-sender bucket: lowercase hex sha256, exactly 64 chars. Mirrors the
+// Dart mailboxSenderBucket() ('orbits-mailbox-sender-v1|id|sender') —
+// never a peer id. Storage key is `mailboxId` or `mailboxId#<bucket>`.
+const SENDER_BUCKET = /^[a-f0-9]{64}$/
+
+function mailboxStorageKey(mailboxId, senderBucket) {
+  const bucket = typeof senderBucket === 'string' ? senderBucket.trim() : ''
+  if (!bucket) return mailboxId
+  if (!SENDER_BUCKET.test(bucket)) {
+    const err = new Error('senderBucket is invalid')
+    err.code = 'malformed'
+    throw err
+  }
+  return mailboxId + '#' + bucket
 }
 
 function rejectForbiddenDeep(value, depth = 0) {
@@ -435,6 +452,14 @@ function createServer(opts = {}) {
         rejectForbiddenDeep(cap)
         rejectUnknown(cap, ALLOWED_CAP_KEYS, 'capability')
         const mailboxId = body.mailboxId || cap.mailboxId
+        if (body.senderBucket != null && body.senderBucket !== undefined) {
+          if (typeof body.senderBucket !== 'string' || !SENDER_BUCKET.test(body.senderBucket)) {
+            const err = new Error('senderBucket is invalid')
+            err.code = 'malformed'
+            throw err
+          }
+        }
+        const storageKey = mailboxStorageKey(mailboxId, body.senderBucket)
         if (body.issuedAt > nowMs() + CLOCK_SKEW_MS) {
           const err = new Error('not-yet-valid')
           err.code = 'not-yet-valid'
@@ -453,13 +478,13 @@ function createServer(opts = {}) {
         }
         if (body.op === 'deposit') {
           const bytes = decodeCanonicalB64(body.ciphertextB64 || '', 'ciphertextB64')
-          const result = store.deposit(mailboxId, body.envelopeId, bytes, cap.quotaBytes)
+          const result = store.deposit(storageKey, body.envelopeId, bytes, cap.quotaBytes)
           res.writeHead(200, { 'content-type': 'application/json' })
           res.end(JSON.stringify({ v: VERSION, ok: true, duplicate: result.duplicate }))
           return
         }
         if (body.op === 'drain') {
-          const envelopes = store.drain(mailboxId, cap.retentionMs, Number(body.fromSeq || 0))
+          const envelopes = store.drain(storageKey, cap.retentionMs, Number(body.fromSeq || 0))
           res.writeHead(200, { 'content-type': 'application/json' })
           res.end(
             JSON.stringify({
@@ -476,13 +501,13 @@ function createServer(opts = {}) {
           return
         }
         if (body.op === 'ack') {
-          store.ack(mailboxId, body.envelopeId)
+          store.ack(storageKey, body.envelopeId)
           res.writeHead(200, { 'content-type': 'application/json' })
           res.end(JSON.stringify({ v: VERSION, ok: true }))
           return
         }
         if (body.op === 'delete') {
-          store.del(mailboxId, body.envelopeId)
+          store.del(storageKey, body.envelopeId)
           res.writeHead(200, { 'content-type': 'application/json' })
           res.end(JSON.stringify({ v: VERSION, ok: true }))
           return
@@ -518,6 +543,7 @@ if (require.main === module) {
 module.exports = {
   createServer,
   issueCapability,
+  mailboxStorageKey,
   FORBIDDEN,
   VERSION,
   wrapOpaqueEnvelope,

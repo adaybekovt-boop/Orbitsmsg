@@ -10,6 +10,8 @@ Future<TransportFileDescriptor?> writeTempAttachment({
 
 Future<List<int>?> readAttachmentPath(String path) async => null;
 
+bool isAllowedAttachmentPath(String path, {Object? incomingBase}) => false;
+
 String? lookupIncomingTransferPath({
   required String transferId,
   required String name,

@@ -312,6 +312,15 @@ Future<bool> saveFileBlob(
 }) async {
   if (id.isEmpty) return false;
   final pathOnly = path != null && path.isNotEmpty;
+  // Path-backed blobs must live in the incoming jail or an
+  // `orbits-chat-file-*` temp dir (after symlink resolution). A remote
+  // peer must never plant an arbitrary local path here.
+  final pathArg = path;
+  if (pathArg != null &&
+      pathArg.isNotEmpty &&
+      !isAllowedAttachmentPath(pathArg)) {
+    return false;
+  }
   // Defense-in-depth byte cap (audit finding 4): mirror the send-side raw cap
   // `_maxFileRawBytes` (12 MiB). Path-backed native files stay on disk.
   if (!pathOnly && bytes.length > 12 * 1024 * 1024) return false;
@@ -352,7 +361,7 @@ Future<Map<String, Object?>?> getFileBlob(String id) async {
   final extra = decodeRow(row.data);
   final path = extra['path'] as String? ?? '';
   var blob = _secureBytesDecode(row.bytes);
-  if (blob.isEmpty && path.isNotEmpty) {
+  if (blob.isEmpty && path.isNotEmpty && isAllowedAttachmentPath(path)) {
     final fromDisk = await readAttachmentPath(path);
     if (fromDisk != null) blob = Uint8List.fromList(fromDisk);
   }
@@ -1454,6 +1463,7 @@ Future<bool> clearAllData() async {
     await db.delete(db.voiceBlobsTable).go();
     await db.delete(db.fileBlobsTable).go();
     await db.delete(db.ratchetsTable).go();
+    await db.delete(db.deviceMaterialTable).go();
     await db.delete(db.kvTable).go();
     // Rooms (schema v3). Children first; FK CASCADE would also reap them, but
     // explicit deletes keep the wipe correct even if FK enforcement is off.

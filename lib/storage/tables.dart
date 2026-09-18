@@ -10,6 +10,7 @@
 //   KeysTable            → 'keys'            (identity, peer pins, bundles)
 //   PrekeysTable         → 'prekeys'         (X3DH SPK + OPK pool)
 //   RatchetsTable        → 'ratchet_state'   (Double Ratchet snapshots)
+//   DeviceMaterialTable  → 'device_material' (transport seed + device ids)
 //   PeersTable           → 'peers'           (contact list)
 //   AvatarsTable         → 'avatars'         (peer profile pictures)
 //   SessionKeysTable     → 'session_keys'    (legacy symmetric sessions)
@@ -65,6 +66,20 @@ class RatchetsTable extends Table {
 
   TextColumn get id => text()();
   TextColumn get peerId => text()();
+  BlobColumn get data => blob()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// Per-device transport / Hypercore material. KeyStore name is
+/// `'device-material'`. Never reuse identity / Noise / ratchet rows.
+@DataClassName('DeviceMaterialRow')
+class DeviceMaterialTable extends Table {
+  @override
+  String get tableName => 'device_material';
+
+  TextColumn get id => text()();
   BlobColumn get data => blob()();
 
   @override

@@ -13,6 +13,7 @@ import '../../devices/device_registry.dart';
 import '../../devices/local_device_material.dart';
 import '../../state/connections_notifier.dart';
 import '../../themes/orbits_tokens.dart';
+import '../../transport/trusted_identity_store.dart';
 import '../primitives/orbits_glass_app_bar.dart';
 import '../primitives/orbits_glass_button.dart';
 import '../primitives/orbits_glass_list_tile.dart';
@@ -75,6 +76,8 @@ class _DeviceLinkPageState extends ConsumerState<DeviceLinkPage> {
         link,
         ownerPeerId: widget.peerId,
         registry: deviceRegistry,
+        identities: trustedIdentityStore,
+        localIdentityPublicKey: await exportIdentityPubSpki(),
         onAuthorized: (device) {
           ref
               .read(connectionsNotifierProvider.notifier)
