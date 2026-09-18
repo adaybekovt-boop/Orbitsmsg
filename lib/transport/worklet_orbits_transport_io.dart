@@ -15,6 +15,7 @@ import 'bare_runtime.dart';
 import 'device_binding.dart';
 import 'local_worklet_bundle.dart';
 import 'transport_api.dart';
+import 'transport_event_codec.dart';
 
 const _bundledWorkletFiles = <String>[
   'worklet.js',
@@ -273,75 +274,16 @@ class WorkletOrbitsTransport implements OrbitsTransport {
     final payload =
         (event['payload'] as Map?)?.cast<String, Object?>() ??
         const <String, Object?>{};
-    switch (name) {
-      case 'identity-pending':
-        final pending = deviceBindingFromWire(
-          (payload['binding'] as Map?)?.cast<String, Object?>(),
-        );
-        if (pending != null) {
-          _events.add(
-            TransportIdentityPending(
-              payload['peerId'] as String? ?? '',
-              pending,
-              connectionNoisePublicKey: parseNoisePublicKey(
-                payload['connectionNoisePublicKey'],
-              ),
-            ),
-          );
-        }
-      case 'authenticated':
-        final binding = deviceBindingFromWire(
-          (payload['binding'] as Map?)?.cast<String, Object?>(),
-        );
-        if (binding != null) {
-          _events.add(
-            TransportAuthenticated(
-              payload['peerId'] as String? ?? '',
-              binding,
-              connectionNoisePublicKey: parseNoisePublicKey(
-                payload['connectionNoisePublicKey'],
-              ),
-            ),
-          );
-        }
-      case 'connected':
-        _events.add(TransportConnected(payload['peerId'] as String? ?? ''));
-      case 'disconnected':
-        _events.add(TransportDisconnected(payload['peerId'] as String? ?? ''));
-      case 'suspended':
-        _events.add(const TransportSuspended());
-      case 'resumed':
-        _events.add(const TransportResumed());
-      case 'networkChanged':
-        _events.add(
-          TransportNetworkChanged(payload['detail'] as String? ?? ''),
-        );
-      case 'pathChanged':
-        _events.add(
-          TransportPathChanged(
-            payload['peerId'] as String? ?? '',
-            payload['path'] == 'relay'
-                ? TransportPath.relay
-                : TransportPath.direct,
-          ),
-        );
-      case 'frame':
-        final peerId = payload['peerId'] as String? ?? '';
-        final channelName = payload['channel'] as String? ?? 'message';
-        final channel = TransportChannel.values.firstWhere(
-          (c) => c.name == channelName,
-          orElse: () => TransportChannel.message,
-        );
-        List<int> bytes = const [];
-        final b64 = payload['frameB64'] as String?;
-        if (b64 != null) {
-          bytes = base64Decode(b64);
-        }
-        _events.add(TransportFrame(peerId, channel, bytes));
-      default:
-        if (kDebugMode && name.isNotEmpty) {
-          debugPrint('[worklet] $name');
-        }
+    final decoded = platformMapToTransportEvent(<String, Object?>{
+      'name': name,
+      ...payload,
+    });
+    if (decoded != null) {
+      _events.add(decoded);
+      return;
+    }
+    if (kDebugMode && name.isNotEmpty) {
+      debugPrint('[worklet] $name');
     }
   }
 }

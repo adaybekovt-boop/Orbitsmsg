@@ -88,6 +88,21 @@ bool deviceBindingClockIsValid(
   return true;
 }
 
+Map<String, Object?> deviceBindingToWire(DeviceBinding binding) {
+  return <String, Object?>{
+    'version': binding.version,
+    'deviceId': binding.deviceId,
+    'identityPublicKeyB64': base64Encode(binding.identityPublicKey),
+    'transportPublicKeyB64': base64Encode(binding.transportPublicKey),
+    'hypercorePublicKeyB64': base64Encode(binding.hypercorePublicKey),
+    'signatureB64': base64Encode(binding.signatureByIdentityKey),
+    'capabilities': binding.capabilities,
+    'createdAt': binding.createdAt,
+    'expiresAt': binding.expiresAt,
+    'ownerPeerId': binding.ownerPeerId,
+  };
+}
+
 DeviceBinding? deviceBindingFromWire(Map<String, Object?>? raw) {
   if (raw == null || raw.isEmpty) return null;
   try {
@@ -142,6 +157,11 @@ Uint8List? parseNoisePublicKey(Object? raw) {
     }
   }
   return null;
+}
+
+String? encodeNoisePublicKeyHex(List<int>? key) {
+  if (key == null || key.length != 32) return null;
+  return key.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 }
 
 bool noiseKeyMatchesBinding({

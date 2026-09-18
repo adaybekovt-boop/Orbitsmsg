@@ -1,13 +1,13 @@
 // App OrbitsTransport implemented only through the federated plugin.
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:orbits_transport/orbits_transport.dart';
 
 import 'device_binding.dart';
 import 'transport_api.dart';
+import 'transport_event_codec.dart';
 
 class PluginOrbitsTransport implements OrbitsTransport {
   PluginOrbitsTransport({
@@ -57,18 +57,7 @@ class PluginOrbitsTransport implements OrbitsTransport {
 
   @override
   Future<void> publish(DeviceBinding binding) {
-    return plugin.publish({
-      'version': binding.version,
-      'deviceId': binding.deviceId,
-      'identityPublicKeyB64': base64Encode(binding.identityPublicKey),
-      'transportPublicKeyB64': base64Encode(binding.transportPublicKey),
-      'hypercorePublicKeyB64': base64Encode(binding.hypercorePublicKey),
-      'signatureB64': base64Encode(binding.signatureByIdentityKey),
-      'capabilities': binding.capabilities,
-      'createdAt': binding.createdAt,
-      'expiresAt': binding.expiresAt,
-      'ownerPeerId': binding.ownerPeerId,
-    });
+    return plugin.publish(deviceBindingToWire(binding));
   }
 
   @override
@@ -111,80 +100,7 @@ class PluginOrbitsTransport implements OrbitsTransport {
 
   void _onPlatformEvent(Map<String, Object?> event) {
     if (_events.isClosed) return;
-    final name = event['name'] as String? ?? '';
-    final peerId = event['peerId'] as String? ?? '';
-    switch (name) {
-      case 'connecting':
-        _events.add(TransportConnecting(peerId));
-      case 'connected':
-        _events.add(TransportConnected(peerId));
-      case 'identity-pending':
-        final pending = deviceBindingFromWire(
-          (event['binding'] as Map?)?.cast<String, Object?>(),
-        );
-        if (pending != null) {
-          _events.add(
-            TransportIdentityPending(
-              peerId,
-              pending,
-              connectionNoisePublicKey: parseNoisePublicKey(
-                event['connectionNoisePublicKey'] ?? pending.transportPublicKey,
-              ),
-            ),
-          );
-        }
-      case 'authenticated':
-        final rawBinding = (event['binding'] as Map?)?.cast<String, Object?>();
-        final binding = deviceBindingFromWire(rawBinding);
-        if (binding != null) {
-          _events.add(
-            TransportAuthenticated(
-              peerId,
-              binding,
-              connectionNoisePublicKey: parseNoisePublicKey(
-                event['connectionNoisePublicKey'] ??
-                    rawBinding?['connectionNoisePublicKey'],
-              ),
-            ),
-          );
-        }
-      case 'pathChanged':
-        final pathStr = event['path'] as String? ?? 'unknown';
-        final path = switch (pathStr) {
-          'direct' => TransportPath.direct,
-          'relay' => TransportPath.relay,
-          _ => TransportPath.unknown,
-        };
-        _events.add(TransportPathChanged(peerId, path));
-      case 'networkChanged':
-        _events.add(TransportNetworkChanged(event['detail'] as String? ?? ''));
-      case 'disconnected':
-        _events.add(TransportDisconnected(peerId));
-      case 'suspended':
-        _events.add(const TransportSuspended());
-      case 'resumed':
-        _events.add(const TransportResumed());
-      case 'frame':
-        final channelName = event['channel'] as String? ?? 'message';
-        final channel = TransportChannel.values.firstWhere(
-          (c) => c.name == channelName,
-          orElse: () => TransportChannel.message,
-        );
-        var bytes =
-            (event['bytes'] as List?)?.whereType<int>().toList() ??
-            const <int>[];
-        final b64 = event['frameB64'] as String?;
-        if (bytes.isEmpty && b64 != null && b64.isNotEmpty) {
-          bytes = base64Decode(b64);
-        }
-        _events.add(TransportFrame(peerId, channel, bytes));
-      case 'error':
-        _events.add(
-          TransportError(
-            event['code'] as String? ?? 'transport',
-            event['message'] as String? ?? '',
-          ),
-        );
-    }
+    final decoded = platformMapToTransportEvent(event);
+    if (decoded != null) _events.add(decoded);
   }
 }

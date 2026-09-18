@@ -71,6 +71,34 @@ void main() {
     expect(frame.peerId, 'ORBIT-BBBBBBBBBBBBBBBB');
     expect(String.fromCharCodes(frame.bytes), 'ping');
 
+    await binding.defaultBinaryMessenger.handlePlatformMessage(
+      'app.orbits/transport',
+      const StandardMethodCodec().encodeMethodCall(
+        MethodCall('event', {
+          'name': 'identity-pending',
+          'peerId': 'ORBIT-BBBBBBBBBBBBBBBB',
+          'binding': deviceBindingToWire(
+            DeviceBinding(
+              version: kDeviceBindingVersion,
+              identityPublicKey: Uint8List.fromList(List<int>.filled(32, 2)),
+              deviceId: 'dev-a',
+              transportPublicKey: Uint8List.fromList(List<int>.filled(32, 3)),
+              hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 4)),
+              capabilities: const ['hyperswarm-v1'],
+              createdAt: 1,
+              expiresAt: 2,
+              signatureByIdentityKey: Uint8List.fromList(List<int>.filled(64, 5)),
+            ),
+          ),
+        }),
+      ),
+      (_) {},
+    );
+    await Future<void>.delayed(Duration.zero);
+    final pending = events.whereType<TransportIdentityPending>().single;
+    expect(pending.connectionNoisePublicKey, isNull);
+    expect(pending.binding.transportPublicKey, List<int>.filled(32, 3));
+
     await transport.connect(
       PeerDescriptor(
         peerId: 'ORBIT-BBBBBBBBBBBBBBBB',

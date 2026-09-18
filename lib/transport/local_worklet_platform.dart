@@ -12,6 +12,7 @@ import 'bare_runtime.dart';
 import 'device_binding.dart';
 import 'local_worklet_bundle.dart';
 import 'transport_api.dart';
+import 'transport_event_codec.dart';
 import 'worklet_orbits_transport.dart';
 
 typedef WorkletSpawner =
@@ -68,12 +69,11 @@ class LocalWorkletPlatform extends OrbitsTransportPlatform {
 
   @override
   Future<Map<String, Object?>> runtimeInfo() async {
-    final key = _worklet?.lastNoisePublicKey;
+    final noise = encodeNoisePublicKeyHex(_worklet?.lastNoisePublicKey);
+    final writer = encodeNoisePublicKeyHex(_worklet?.lastHypercorePublicKey);
     return <String, Object?>{
-      if (key != null)
-        'noisePublicKey': key
-            .map((b) => b.toRadixString(16).padLeft(2, '0'))
-            .join(),
+      if (noise != null) 'noisePublicKey': noise,
+      if (writer != null) 'hypercorePublicKey': writer,
     };
   }
 
@@ -199,57 +199,6 @@ class LocalWorkletPlatform extends OrbitsTransportPlatform {
   }
 
   void _forward(TransportEvent event) {
-    if (event is TransportIdentityPending) {
-      _events.add({
-        'name': 'identity-pending',
-        'peerId': event.peerId,
-        'connectionNoisePublicKey': event.connectionNoisePublicKey,
-        'binding': {
-          'version': event.binding.version,
-          'deviceId': event.binding.deviceId,
-          'identityPublicKeyB64': base64Encode(event.binding.identityPublicKey),
-          'transportPublicKeyB64': base64Encode(event.binding.transportPublicKey),
-          'hypercorePublicKeyB64': base64Encode(event.binding.hypercorePublicKey),
-          'signatureB64': base64Encode(event.binding.signatureByIdentityKey),
-          'capabilities': event.binding.capabilities,
-          'createdAt': event.binding.createdAt,
-          'expiresAt': event.binding.expiresAt,
-          'ownerPeerId': event.binding.ownerPeerId,
-        },
-      });
-    } else if (event is TransportAuthenticated) {
-      _events.add({
-        'name': 'authenticated',
-        'peerId': event.peerId,
-        'connectionNoisePublicKey': event.connectionNoisePublicKey,
-        'binding': {
-          'version': event.binding.version,
-          'deviceId': event.binding.deviceId,
-          'identityPublicKeyB64': base64Encode(event.binding.identityPublicKey),
-          'transportPublicKeyB64': base64Encode(event.binding.transportPublicKey),
-          'hypercorePublicKeyB64': base64Encode(event.binding.hypercorePublicKey),
-          'signatureB64': base64Encode(event.binding.signatureByIdentityKey),
-          'capabilities': event.binding.capabilities,
-          'createdAt': event.binding.createdAt,
-          'expiresAt': event.binding.expiresAt,
-          'ownerPeerId': event.binding.ownerPeerId,
-        },
-      });
-    } else if (event is TransportConnected) {
-      _events.add({'name': 'connected', 'peerId': event.peerId});
-    } else if (event is TransportDisconnected) {
-      _events.add({'name': 'disconnected', 'peerId': event.peerId});
-    } else if (event is TransportSuspended) {
-      _events.add({'name': 'suspended'});
-    } else if (event is TransportResumed) {
-      _events.add({'name': 'resumed'});
-    } else if (event is TransportFrame) {
-      _events.add({
-        'name': 'frame',
-        'peerId': event.peerId,
-        'channel': event.channel.name,
-        'bytes': event.bytes,
-      });
-    }
+    _events.add(transportEventToPlatformMap(event));
   }
 }

@@ -321,20 +321,7 @@ class NativeTransportHost {
     );
     wake = OpaqueWakeService(onAccepted: (_) => lifecycle!.onOpaqueWake());
     if (_startupAborted(generation)) {
-      try {
-        await _ref
-            .read(connectionsNotifierProvider.notifier)
-            .unbindNativeTransport();
-      } catch (_) {}
-      try {
-        await chosen.stop();
-      } catch (_) {}
-      if (identical(transport, chosen)) transport = null;
-      lifecycle = null;
-      wake = null;
-      projector = null;
-      hypercore = null;
-      attached = false;
+      await _teardownAttached(chosen: chosen, unbind: true);
       return;
     }
     attached = true;
@@ -437,12 +424,7 @@ class NativeTransportHost {
   }
 
   Future<void> recoverAfterCrash() async {
-    attached = false;
-    try {
-      await transport?.stop();
-    } catch (_) {}
-    transport = null;
-    lifecycle = null;
+    await _teardownAttached(unbind: false, clearSession: false);
     await ensureStarted();
   }
 
@@ -456,25 +438,11 @@ class NativeTransportHost {
       } catch (_) {}
     }
     await lifecycle?.onBackground();
-    try {
-      await _ref
-          .read(connectionsNotifierProvider.notifier)
-          .unbindNativeTransport();
-    } catch (_) {}
-    try {
-      await transport?.stop();
-    } catch (_) {}
-    await _staleGuard?.cancel();
-    _staleGuard = null;
-    transport = null;
-    lifecycle = null;
-    wake = null;
-    projector = null;
-    hypercore = null;
-    attached = false;
-    backend = 'none';
-    _sessionPeerId = null;
-    lastError = '';
+    await _teardownAttached(
+      unbind: true,
+      cancelStaleGuard: true,
+      clearSession: true,
+    );
     trustedIdentityStore.clear();
   }
 
@@ -484,6 +452,42 @@ class NativeTransportHost {
 
   Future<void> onForeground() async {
     await lifecycle?.onForeground();
+  }
+
+  Future<void> _teardownAttached({
+    OrbitsTransport? chosen,
+    bool unbind = false,
+    bool cancelStaleGuard = false,
+    bool clearSession = false,
+  }) async {
+    if (unbind) {
+      try {
+        await _ref
+            .read(connectionsNotifierProvider.notifier)
+            .unbindNativeTransport();
+      } catch (_) {}
+    }
+    final running = chosen ?? transport;
+    try {
+      await running?.stop();
+    } catch (_) {}
+    if (cancelStaleGuard) {
+      await _staleGuard?.cancel();
+      _staleGuard = null;
+    }
+    if (chosen == null || identical(transport, chosen)) {
+      transport = null;
+    }
+    lifecycle = null;
+    wake = null;
+    projector = null;
+    hypercore = null;
+    attached = false;
+    if (clearSession) {
+      backend = 'none';
+      _sessionPeerId = null;
+      lastError = '';
+    }
   }
 
   Future<bool> _abortStartup(int generation, OrbitsTransport? chosen) async {
