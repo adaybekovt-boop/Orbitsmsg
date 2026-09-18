@@ -206,6 +206,21 @@ void main() {
     expect(conns.canUseNative(bob), isTrue);
     expect(conns.getConn(bob, 'reliable'), same(stub));
 
+    // Quiesce the background PeerJS-open handshake so its hello send
+    // cannot land after our snapshot below.
+    final helloDeadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(helloDeadline)) {
+      if (stub.debugSent.any(
+        (m) => m is Map && m['type'] == 'wireHello',
+      )) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    final settledAt = stub.debugSent.length;
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    expect(stub.debugSent.length, settledAt);
+
     // wireHello on an authenticated peer goes straight to transport.send,
     // which throws here — deterministically, with no 8s wire wait.
     transport.throwOnSend = true;
