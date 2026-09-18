@@ -25,10 +25,10 @@ void main() {
       'eventId': 'e1',
     });
 
-    final live = JournalProjector(decrypt: decrypt);
+    final live = JournalProjector(decrypt: decrypt, persistEnvelopePlaintext: true);
     await live.applyAll(journal);
 
-    final replay = JournalProjector(decrypt: decrypt);
+    final replay = JournalProjector(decrypt: decrypt, persistEnvelopePlaintext: true);
     await replay.applyAll(journal);
 
     expect(replay.messages.keys, live.messages.keys);
@@ -62,6 +62,7 @@ void main() {
       ),
     );
     final projector = JournalProjector(
+      persistEnvelopePlaintext: true,
       decrypt: (enc, _) async => {'text': String.fromCharCodes(enc)},
     );
     await projector.applyAll(journal);
@@ -105,6 +106,7 @@ void main() {
       ),
     );
     final projector = JournalProjector(
+      persistEnvelopePlaintext: true,
       decrypt: (enc, _) async => {'text': String.fromCharCodes(enc)},
       revokedWriters: {'revoked-dev'},
     );
@@ -124,6 +126,7 @@ void main() {
       ),
     );
     final guarded = JournalProjector(
+      persistEnvelopePlaintext: true,
       decrypt: (enc, _) async => {'text': String.fromCharCodes(enc)},
       revokedWriters: {'revoked-dev'},
     );
@@ -131,6 +134,7 @@ void main() {
     expect(guarded.messages, isEmpty);
 
     final rolling = JournalProjector(
+      persistEnvelopePlaintext: true,
       decrypt: (enc, _) async {
         if (enc.length == 1 && enc.first == 0) throw StateError('boom');
         return {'text': 'x'};
@@ -183,6 +187,7 @@ void main() {
       ),
     );
     final projector = JournalProjector(
+      persistEnvelopePlaintext: true,
       decrypt: (enc, _) async {
         decrypted += 1;
         return {'text': String.fromCharCodes(enc)};
@@ -210,6 +215,7 @@ void main() {
       ),
     );
     final projector = JournalProjector(
+      persistEnvelopePlaintext: true,
       decrypt: (enc, _) async {
         attempts += 1;
         if (attempts == 1) return null;
@@ -239,6 +245,7 @@ void main() {
       ),
     );
     final projector = JournalProjector(
+      persistEnvelopePlaintext: true,
       decrypt: (enc, _) async => {'text': String.fromCharCodes(enc)},
     );
     await projector.applyAll(journal);
@@ -270,6 +277,7 @@ void main() {
     final saved = <Map<String, Object?>>[];
     final tombstoned = <String>[];
     final projector = JournalProjector(
+      persistEnvelopePlaintext: true,
       decrypt: (enc, _) async => {'text': String.fromCharCodes(enc)},
       persist: (msg) => persistProjectedMessage(
         msg,
@@ -343,12 +351,50 @@ void main() {
     });
     Future<Map<String, Object?>?> decrypt(List<int> _, JournalRecord __) async =>
         null;
-    final live = JournalProjector(decrypt: decrypt);
+    final live = JournalProjector(decrypt: decrypt, persistEnvelopePlaintext: true);
     await live.applyAll(journal);
-    final replay = JournalProjector(decrypt: decrypt);
+    final replay = JournalProjector(decrypt: decrypt, persistEnvelopePlaintext: true);
     await replay.applyAll(journal);
     expect(replay.membershipChanges, live.membershipChanges);
     expect(live.membershipChanges.single['action'], 'join');
     expect(live.messages, isEmpty);
+  });
+
+  test('live projector does not decrypt envelopes into Drift (onPacket owns it)',
+      () async {
+    var decryptCalls = 0;
+    final saved = <Map<String, Object?>>[];
+    final projector = JournalProjector(
+      decrypt: (enc, _) async {
+        decryptCalls += 1;
+        return {'text': 'LEAK'};
+      },
+      persist: (msg) => persistProjectedMessage(
+        msg,
+        selfPeerId: 'alice',
+        save: (row) async {
+          saved.add(row);
+          return true;
+        },
+      ),
+    );
+    await projector.apply(
+      JournalRecord(
+        seq: 0,
+        writerDeviceId: 'bob-dev',
+        kind: ReplicationEventKind.messageEnvelopeCreated,
+        fields: {
+          'eventId': 'e-live',
+          'conversationId': 'c1',
+          'senderIdentity': 'bob',
+          'senderDeviceId': 'bob-dev',
+          'encryptedEnvelope': <int>[72, 105],
+        },
+      ),
+    );
+    expect(decryptCalls, 0);
+    expect(saved, isEmpty);
+    expect(projector.messages['e-live']?.status, 'pending');
+    expect(projector.messages['e-live']?.plaintext, isEmpty);
   });
 }

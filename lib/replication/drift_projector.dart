@@ -85,6 +85,7 @@ class JournalProjector {
     this.ratchets,
     this.selfPeerId = '',
     this.localDeviceId = '',
+    this.persistEnvelopePlaintext = false,
   });
 
   final EnvelopeDecrypt decrypt;
@@ -97,6 +98,12 @@ class JournalProjector {
   final DeviceRatchetSessions? ratchets;
   final String selfPeerId;
   final String localDeviceId;
+
+  /// Live/host plaintext ingest. Default false: ciphertext journal rows
+  /// stay off Drift and `onPacket` owns decrypt (clamps, receipts,
+  /// sender keyed by the transport peer). Opt-in exists only for
+  /// explicit replay tests — never for the live projector.
+  final bool persistEnvelopePlaintext;
   final Map<String, ProjectedMessage> messages = <String, ProjectedMessage>{};
   final List<Map<String, Object?>> membershipChanges = <Map<String, Object?>>[];
   final Set<String> seenEventIds = <String>{};
@@ -146,6 +153,22 @@ class JournalProjector {
         if (sender.isNotEmpty && (isBlocked?.call(sender) ?? false)) {
           return;
         }
+        if (!persistEnvelopePlaintext) {
+          // Live path: durable journal only. No decrypt, no Drift row —
+          // onPacket owns plaintext ingest.
+          seenEventIds.add(id);
+          messages[id] = ProjectedMessage(
+            eventId: id,
+            conversationId: record.fields['conversationId'] as String? ?? '',
+            senderIdentity: sender,
+            senderDeviceId: record.fields['senderDeviceId'] as String? ?? '',
+            plaintext: '',
+            status: 'pending',
+            createdAt: (record.fields['createdAt'] as num?)?.toInt() ?? 0,
+          );
+          return;
+        }
+        // Opt-in replay path: a failed decrypt must not burn the event id.
         final enc = record.fields['encryptedEnvelope'];
         if (enc is! List<int>) return;
         final plain = await decrypt(enc, record);

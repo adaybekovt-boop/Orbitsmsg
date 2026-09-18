@@ -58,6 +58,7 @@ void main() {
         {'text': String.fromCharCodes(enc)};
 
     final live = JournalProjector(
+      persistEnvelopePlaintext: true,
       decrypt: decrypt,
       persist: (msg) => persistProjectedMessage(
         msg,
@@ -76,6 +77,7 @@ void main() {
 
     await db.clearAllMessages();
     final replay = JournalProjector(
+      persistEnvelopePlaintext: true,
       decrypt: decrypt,
       persist: (msg) => persistProjectedMessage(
         msg,
@@ -125,6 +127,7 @@ void main() {
         {'text': String.fromCharCodes(enc)};
 
     final live = JournalProjector(
+      persistEnvelopePlaintext: true,
       decrypt: decrypt,
       persist: (msg) => persistProjectedMessage(
         msg,
@@ -139,6 +142,7 @@ void main() {
     await db.clearAllMessages();
     final replayed = await durable.replay();
     final replay = JournalProjector(
+      persistEnvelopePlaintext: true,
       decrypt: decrypt,
       persist: (msg) => persistProjectedMessage(
         msg,

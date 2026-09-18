@@ -878,7 +878,7 @@ void main() {
     final durable = FileJournal.memory('a');
     Future<Map<String, Object?>?> decrypt(List<int> _, JournalRecord __) async =>
         null;
-    final live = JournalProjector(decrypt: decrypt);
+    final live = JournalProjector(decrypt: decrypt, persistEnvelopePlaintext: true);
     setHyperswarmRollout(HyperswarmRollout.internal);
     final pair = loopbackPair();
     final secrets = DiscoverySecretStore()
@@ -966,7 +966,7 @@ void main() {
     );
     expect(live.membershipChanges.single['roomId'], 'room-1');
 
-    final replay = JournalProjector(decrypt: decrypt);
+    final replay = JournalProjector(decrypt: decrypt, persistEnvelopePlaintext: true);
     await replay.applyAll(await durable.replay());
     expect(replay.membershipChanges, live.membershipChanges);
     expect(live.messages, isEmpty);

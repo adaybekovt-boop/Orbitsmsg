@@ -66,6 +66,7 @@ void main() {
 
       final replayed = await journal.replay();
       final projector = JournalProjector(
+      persistEnvelopePlaintext: true,
         decrypt: (enc, _) async => {'text': String.fromCharCodes(enc)},
       );
       await projector.applyAll(replayed);
@@ -199,10 +200,10 @@ void main() {
         List<int> enc,
         JournalRecord _,
       ) async => {'text': String.fromCharCodes(enc)};
-      final beforeCrash = JournalProjector(decrypt: decrypt);
+      final beforeCrash = JournalProjector(decrypt: decrypt, persistEnvelopePlaintext: true);
       await beforeCrash.applyAll(live);
 
-      final afterRestart = JournalProjector(decrypt: decrypt);
+      final afterRestart = JournalProjector(decrypt: decrypt, persistEnvelopePlaintext: true);
       await afterRestart.applyAll(await durable.replay());
       expect(
         afterRestart.messages['e1']?.plaintext,

@@ -1553,7 +1553,11 @@ class DualStackBridge {
           localDeviceId: selfDeviceId,
         );
         unawaited(durableJournal?.append(record));
-        unawaited(onRemoteRecord?.call(record));
+        // Ciphertext journal rows stay off the live projector: onPacket
+        // owns decrypt (clamps, receipts, sender keyed by transport peer).
+        if (record.kind != ReplicationEventKind.messageEnvelopeCreated) {
+          unawaited(onRemoteRecord?.call(record));
+        }
       }
     } catch (err) {
       lastReplicationError = err.toString();

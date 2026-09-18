@@ -81,7 +81,7 @@ void main() {
       return null;
     }
 
-    final live = JournalProjector(decrypt: decrypt);
+    final live = JournalProjector(decrypt: decrypt, persistEnvelopePlaintext: true);
     await live.applyAll(journal);
     expect(live.messages['dev-1']?.plaintext, 'journal-device');
 
@@ -92,7 +92,7 @@ void main() {
     );
     expect(utf8.decode(again), contains('journal-device'));
 
-    final replay = JournalProjector(decrypt: decrypt);
+    final replay = JournalProjector(decrypt: decrypt, persistEnvelopePlaintext: true);
     await replay.applyAll(journal);
     expect(replay.messages['dev-1'], isNull);
   });

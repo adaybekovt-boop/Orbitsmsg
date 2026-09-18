@@ -74,7 +74,7 @@ void main() {
       return null;
     }
 
-    final live = JournalProjector(decrypt: decrypt);
+    final live = JournalProjector(decrypt: decrypt, persistEnvelopePlaintext: true);
     await live.applyAll(journal);
     expect(live.messages[chatId]?.plaintext, 'journal-v2');
     expect(live.messages[chatId]?.eventId, chatId);
@@ -84,7 +84,7 @@ void main() {
     );
     expect(jsonDecode(again)['text'], 'journal-v2');
 
-    final replay = JournalProjector(decrypt: decrypt);
+    final replay = JournalProjector(decrypt: decrypt, persistEnvelopePlaintext: true);
     await replay.applyAll(journal);
     expect(replay.messages[chatId], isNull);
   });

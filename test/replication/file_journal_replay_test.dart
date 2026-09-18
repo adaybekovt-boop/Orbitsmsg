@@ -42,6 +42,7 @@ void main() {
     );
     final replayed = await restarted.replay();
     final projector = JournalProjector(
+      persistEnvelopePlaintext: true,
       decrypt: (enc, _) async => {'text': String.fromCharCodes(enc)},
     );
     await projector.applyAll(replayed);

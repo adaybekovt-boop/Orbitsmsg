@@ -27,6 +27,7 @@ import '../replication/drift_projector.dart';
 import '../storage/db.dart' as db;
 import '../replication/hypercore_store.dart';
 import '../replication/memory_journal.dart';
+import 'replication_schema.dart';
 import '../state/auth_notifier.dart';
 import '../state/connections_notifier.dart';
 import '../state/messaging_notifier.dart';
@@ -348,6 +349,11 @@ class NativeTransportHost {
             await carrier.authorizePeer(peerId, authorized: authorized);
           },
           onRemoteRecord: (record) async {
+            // Belt-and-braces with _onReplicationFrame: ciphertext rows
+            // never reach the live projector; onPacket owns decrypt.
+            if (record.kind == ReplicationEventKind.messageEnvelopeCreated) {
+              return;
+            }
             await projector?.apply(record);
           },
           signRecord: signBytes,
