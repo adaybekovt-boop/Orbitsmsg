@@ -102,6 +102,56 @@ void main() {
     );
   });
 
+  test('colon chat msgId finds canonical blob via sanitized external id', () {
+    final base = Directory.systemTemp.createTempSync('orbits-lookup-colon-');
+    addTearDown(() {
+      if (base.existsSync()) base.deleteSync(recursive: true);
+    });
+    const sender = 'ORBIT-AAAAAAAAAAAAAAAA';
+    const localId = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+    const chatMsgId = 'ORBIT-AAAAAAAAAAAAAAAA:1700000000000:abcd';
+    final canonical = resolveIncomingDir(
+      base: base,
+      trustedSenderId: sender,
+      localTransferId: localId,
+    );
+    canonical.createSync(recursive: true);
+    blobFile(canonical).writeAsBytesSync(const [4, 5, 6]);
+    metaFile(canonical).writeAsStringSync(
+      jsonEncode(<String, Object?>{
+        'trustedSender': trustedSenderDirName(sender),
+        'externalTransferId': sanitizeTransferId(chatMsgId),
+        'localTransferId': localId,
+      }),
+    );
+
+    expect(sanitizeTransferId(chatMsgId), isNot(contains(':')));
+    expect(
+      lookupIncomingBlob(
+        base: base,
+        trustedSenderId: sender,
+        localTransferId: chatMsgId,
+      ),
+      isNull,
+    );
+    expect(
+      lookupIncomingBlob(
+        base: base,
+        trustedSenderId: sender,
+        externalTransferId: chatMsgId,
+      )?.readAsBytesSync(),
+      const [4, 5, 6],
+    );
+    expect(
+      lookupIncomingBlob(
+        base: base,
+        trustedSenderId: sender,
+        externalTransferId: sanitizeTransferId(chatMsgId),
+      )?.readAsBytesSync(),
+      const [4, 5, 6],
+    );
+  });
+
   test('lookupIncomingBlob refuses traversal and directory aliases', () {
     final base = Directory.systemTemp.createTempSync('orbits-lookup-bad-');
     addTearDown(() {

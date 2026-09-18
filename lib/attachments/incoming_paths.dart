@@ -7,6 +7,9 @@ import 'dart:io';
 import 'dart:math';
 
 import '../peer/helpers.dart';
+import 'transfer_id.dart';
+
+export 'transfer_id.dart';
 
 final _safeId = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$');
 final _winDrive = RegExp(r'^[a-zA-Z]:[\\/]');
@@ -130,7 +133,10 @@ File? lookupIncomingBlob({
             final prev = Map<String, Object?>.from(
               jsonDecode(meta.readAsStringSync()) as Map,
             );
-            if (prev['externalTransferId'] == externalTransferId &&
+            if (transferIdsMatch(
+                  prev['externalTransferId'] as String?,
+                  externalTransferId,
+                ) &&
                 prev['trustedSender'] == sender) {
               final blob = blobFile(entity);
               assertInsideRoot(incomingRoot(base), blob);
@@ -147,10 +153,7 @@ File? lookupIncomingBlob({
       legacyName != null &&
       legacyName.isNotEmpty) {
     try {
-      final safeId = assertSafePathFragment(
-        externalTransferId.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_'),
-        label: 'legacy-id',
-      );
+      final safeId = sanitizeTransferId(externalTransferId);
       final safeName = legacyName.replaceAll(
         RegExp(r'[\x00-\x1f\\/:*?"<>|]'),
         '_',

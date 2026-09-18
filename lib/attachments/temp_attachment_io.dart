@@ -32,10 +32,15 @@ Future<List<int>?> readIncomingTransfer({
   String? trustedSenderId,
   Directory? base,
 }) async {
+  final sanitized = trySanitizeTransferId(transferId);
+  final alreadySafe = sanitized != null && sanitized == transferId.trim();
   final found = lookupIncomingBlob(
     base: base ?? Directory.systemTemp,
     trustedSenderId: trustedSenderId,
-    localTransferId: transferId,
+    // Chat `msgId` (`ORBIT-…:ts:short`) is an external id, never the
+    // receiver-local jail directory. Only already-safe fragments (the
+    // 32-hex local id) may be tried as [localTransferId].
+    localTransferId: alreadySafe ? sanitized : null,
     externalTransferId: transferId,
     legacyName: name,
   );

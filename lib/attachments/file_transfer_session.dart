@@ -81,7 +81,9 @@ class FileTransferCoordinator {
       throw StateError('attachment size mismatch');
     }
     final digest = await sha256File(source);
-    final transferId = file.transferId ?? digest.substring(0, 16);
+    final transferId = sanitizeTransferId(
+      file.transferId ?? digest.substring(0, 16),
+    );
     final name = file.fileName ?? source.uri.pathSegments.last;
     final store = keys;
     if (store != null && !store.has(peerId, transferId)) {
@@ -183,7 +185,8 @@ class FileTransferCoordinator {
     }
     if (body['protocol'] != kFileTransferProtocol) return false;
     final type = body['type'] as String? ?? '';
-    final id = body['transferId'] as String? ?? '';
+    final id = trySanitizeTransferId(body['transferId'] as String? ?? '');
+    if (id == null) return false;
     if (type == 'file-accept' || type == 'file-ack' || type == 'file-error') {
       final key = type == 'file-error' ? 'file-ack|$id' : '$type|$id';
       final wait = _waits.remove('$peerId|$key');
@@ -220,16 +223,12 @@ class FileTransferCoordinator {
   }
 
   Future<void> _acceptOffer(String peerId, Map<String, Object?> body) async {
-    final id = body['transferId'] as String? ?? '';
+    final id = sanitizeTransferId(body['transferId'] as String? ?? '');
     final size = (body['size'] as num?)?.toInt() ?? 0;
     final digest = body['sha256'] as String? ?? '';
     final name = (body['name'] as String? ?? 'blob').replaceAll(
       RegExp(r'[\x00-\x1f\\/:*?"<>|]'),
       '_',
-    );
-    assertSafePathFragment(
-      id.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_'),
-      label: 'transfer-id',
     );
     var localId = generateLocalTransferId();
     final existing = _incoming['$peerId|$id'];
@@ -262,7 +261,7 @@ class FileTransferCoordinator {
         if (prev['sha256'] == digest &&
             (prev['size'] as num?)?.toInt() == size &&
             prev['trustedSender'] == trustedSenderDirName(peerId) &&
-            prev['externalTransferId'] == id) {
+            transferIdsMatch(prev['externalTransferId'] as String?, id)) {
           resume = dest.lengthSync();
           if (resume > size) resume = 0;
         }
@@ -306,7 +305,8 @@ class FileTransferCoordinator {
   }
 
   void _writeChunk(String peerId, Map<String, Object?> body) {
-    final id = body['transferId'] as String? ?? '';
+    final id = trySanitizeTransferId(body['transferId'] as String? ?? '');
+    if (id == null) return;
     final incoming = _incoming['$peerId|$id'];
     if (incoming == null) return;
     final offset = (body['offset'] as num?)?.toInt() ?? -1;
@@ -334,7 +334,8 @@ class FileTransferCoordinator {
   }
 
   Future<void> _finishIncoming(String peerId, Map<String, Object?> body) async {
-    final id = body['transferId'] as String? ?? '';
+    final id = trySanitizeTransferId(body['transferId'] as String? ?? '');
+    if (id == null) return;
     final incoming = _incoming.remove('$peerId|$id');
     if (incoming == null) {
       await _emit(peerId, {
@@ -441,7 +442,7 @@ class FileTransferCoordinator {
         final prev = Map<String, Object?>.from(
           jsonDecode(meta.readAsStringSync()) as Map,
         );
-        if (prev['externalTransferId'] == externalId &&
+        if (transferIdsMatch(prev['externalTransferId'] as String?, externalId) &&
             prev['sha256'] == digest &&
             (prev['size'] as num?)?.toInt() == size &&
             prev['trustedSender'] == sender) {

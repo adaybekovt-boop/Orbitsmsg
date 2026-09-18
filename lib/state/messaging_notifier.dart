@@ -26,6 +26,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/error_reporter.dart';
 import '../attachments/temp_attachment.dart';
+import '../attachments/transfer_id.dart';
 import '../transport/dev_bare_transport.dart';
 import '../transport/transport_api.dart';
 import '../utils/heavy_codec.dart';
@@ -1121,6 +1122,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
         }
       } else {
         try {
+          final fileTransferId = sanitizeTransferId(msgId);
           await conns.sendFile(
             normalized,
             TransportFileDescriptor(
@@ -1128,7 +1130,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
               sizeBytes: desc.sizeBytes,
               fileName: safeName,
               mime: mime,
-              transferId: msgId.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_'),
+              transferId: fileTransferId,
             ),
           );
           final metaOk = await conns.sendEncrypted(normalized, {
@@ -1140,7 +1142,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
             'msgType': 'file',
             'attachment': <String, Object?>{
               ...attachmentRef,
-              'transferId': msgId,
+              'transferId': fileTransferId,
               'native': true,
             },
             if (sanitizedReply != null) 'replyTo': sanitizedReply,
