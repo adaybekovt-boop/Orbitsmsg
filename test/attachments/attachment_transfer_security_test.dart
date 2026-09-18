@@ -327,4 +327,64 @@ void main() {
     expect(dropped.single['sha256'], digest);
     expect(dropped.single['size'], 50 * 1024 * 1024);
   }, timeout: const Timeout(Duration(minutes: 3)));
+
+  test('file-offer 10 GiB is file-error and leaves jail empty', () async {
+    final incoming = Directory.systemTemp.createTempSync('orbits-huge-offer-');
+    addTearDown(() => incoming.deleteSync(recursive: true));
+    final errors = <Map<String, Object?>>[];
+    final recv = FileTransferCoordinator()
+      ..keys = AttachmentKeyStore()
+      ..incomingBase = incoming
+      ..send = (_, bytes) async {
+        final body = jsonDecode(utf8.decode(bytes)) as Map<String, Object?>;
+        if (body['type'] == 'file-error') errors.add(body);
+      };
+    await recv.handleInbound(
+      'alice',
+      utf8.encode(
+        jsonEncode({
+          'type': 'file-offer',
+          'protocol': kFileTransferProtocol,
+          'transferId': 'huge000000000001',
+          'name': 'x.bin',
+          'size': 10 * 1024 * 1024 * 1024,
+          'sha256': 'ab' * 32,
+        }),
+      ),
+    );
+    expect(errors, hasLength(1));
+    expect(errors.single['error'], 'attachment exceeds quota');
+    expect(
+      incomingRoot(incoming).existsSync()
+          ? incomingRoot(incoming).listSync()
+          : const [],
+      isEmpty,
+    );
+  });
+
+  test('sendPath refuses an oversize local file before any offer', () async {
+    final dir = await Directory.systemTemp.createTemp('orbits-huge-send-');
+    addTearDown(() => dir.deleteSync(recursive: true));
+    final file = File('${dir.path}/big.bin');
+    // Sparse-ish: write one byte past the cap instead of 50 MiB.
+    final raf = file.openSync(mode: FileMode.write);
+    raf.setPositionSync(kNativeFileMaxBytes + 1);
+    raf.writeByteSync(0);
+    await raf.close();
+    final coord = FileTransferCoordinator()
+      ..keys = AttachmentKeyStore()
+      ..send = (_, __) async {};
+    await expectLater(
+      coord.sendPath(
+        'bob',
+        TransportFileDescriptor(
+          path: file.path,
+          sizeBytes: kNativeFileMaxBytes + 2,
+          fileName: 'big.bin',
+          transferId: 'big00000000000001',
+        ),
+      ),
+      throwsStateError,
+    );
+  });
 }

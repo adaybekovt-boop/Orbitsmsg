@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/feature_flags.dart';
 import 'package:orbits_flutter/devices/device_registry.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
+import 'package:orbits_flutter/transport/binding_authorization.dart';
 import 'package:orbits_flutter/transport/device_binding.dart';
 import 'package:orbits_flutter/transport/discovery_secret_store.dart';
 import 'package:orbits_flutter/transport/dual_stack_bridge.dart';
@@ -392,5 +393,72 @@ void main() {
     expect(devices.acceptsWriter('brand-new'), isFalse);
     expect(dual.isOwnDevice(alice), isFalse);
     await dual.detach();
+  });
+
+  test('F-01 empty registered Noise key is rejected fail-closed', () async {
+    final identities = TrustedIdentityStore();
+    final devices = DeviceRegistry();
+    final bind = await signedDeviceBinding(peerId: bob, deviceId: 'dev-b');
+    identities.trust(peerId: bob, identityPublicKey: bind.identityPublicKey);
+    await devices.authorize(
+      AuthorizedDevice(
+        deviceId: 'dev-b',
+        transportPublicKey: const <int>[],
+        hypercorePublicKey: bind.hypercorePublicKey,
+        name: 'dev-b',
+        kind: 'contact',
+        createdAt: bind.createdAt,
+        status: DeviceStatus.active,
+        ownerPeerId: bob,
+        transportPeerId: bob,
+      ),
+    );
+    final result = await authorizeIncomingBinding(
+      binding: bind,
+      connectionNoisePublicKey: bind.transportPublicKey,
+      transportPeerId: bob,
+      selfPeerId: alice,
+      identities: identities,
+      devices: devices,
+    );
+    expect(result.accepted, isFalse);
+    expect(result.reason, 'registered-noise-missing');
+  });
+
+  test('F-01 registered Noise key A vs binding/connection key B is mismatch',
+      () async {
+    final identities = TrustedIdentityStore();
+    final devices = DeviceRegistry();
+    final keyA = List<int>.filled(32, 1);
+    final keyB = List<int>.filled(32, 2);
+    final bind = await signedDeviceBinding(
+      peerId: bob,
+      deviceId: 'dev-b',
+      transportPublicKey: keyB,
+    );
+    trustBinding(identities: identities, devices: devices, binding: bind);
+    await devices.authorize(
+      AuthorizedDevice(
+        deviceId: 'dev-b',
+        transportPublicKey: keyA,
+        hypercorePublicKey: bind.hypercorePublicKey,
+        name: 'dev-b',
+        kind: 'contact',
+        createdAt: bind.createdAt,
+        status: DeviceStatus.active,
+        ownerPeerId: bob,
+        transportPeerId: bob,
+      ),
+    );
+    final result = await authorizeIncomingBinding(
+      binding: bind,
+      connectionNoisePublicKey: keyB,
+      transportPeerId: bob,
+      selfPeerId: alice,
+      identities: identities,
+      devices: devices,
+    );
+    expect(result.accepted, isFalse);
+    expect(result.reason, 'registered-noise-mismatch');
   });
 }

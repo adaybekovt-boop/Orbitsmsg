@@ -99,4 +99,45 @@ void main() {
       throwsStateError,
     );
   });
+
+  test('unreadable snapshot sets lastError and fail-closes bind', () async {
+    final broken = DeviceRatchetSessions(
+      localDeviceId: 'dev-a',
+      readSnapshot: () async => Uint8List.fromList(utf8.encode('{not-json')),
+    );
+    await broken.hydrate();
+    expect(broken.lastError, isNotEmpty);
+    expect(broken.hydrateFailed, isTrue);
+    expect(broken.sessionCount, 0);
+    expect(broken.revokedDeviceIds, isEmpty);
+    final (aliceState, _) = await _pair(List<int>.generate(32, (i) => i + 1));
+    expect(
+      () => broken.bind(
+        localDeviceId: 'dev-a',
+        remoteDeviceId: 'dev-b',
+        state: aliceState,
+      ),
+      throwsStateError,
+    );
+  });
+
+  test('incomplete snapshot is not an empty revoke set', () async {
+    final emptyMap = DeviceRatchetSessions(
+      localDeviceId: 'dev-a',
+      readSnapshot: () async => Uint8List.fromList(utf8.encode('{}')),
+    );
+    await emptyMap.hydrate();
+    expect(emptyMap.hydrateFailed, isTrue);
+    expect(emptyMap.lastError, 'ratchet-snapshot-incomplete');
+  });
+
+  test('persist write failure is visible on lastError', () async {
+    final (aliceState, _) = await _pair(List<int>.generate(32, (i) => i + 2));
+    final live = DeviceRatchetSessions(
+      localDeviceId: 'dev-a',
+      writeSnapshot: (_) async => throw StateError('disk-full'),
+    )..bind(localDeviceId: 'dev-a', remoteDeviceId: 'dev-b', state: aliceState);
+    await expectLater(live.persist(), throwsA(isStateError));
+    expect(live.lastError, contains('disk-full'));
+  });
 }

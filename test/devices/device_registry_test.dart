@@ -117,4 +117,26 @@ void main() {
     expect(toxic.byId('ghost'), isNull);
     expect(toxic.acceptsWriter('ghost'), isFalse);
   });
+
+  test('unreadable registry snapshot fail-closes writers', () async {
+    final broken = DeviceRegistry(
+      readSnapshot: () async => Uint8List.fromList(utf8.encode('{nope')),
+    );
+    await broken.hydrate();
+    expect(broken.lastError, isNotEmpty);
+    expect(broken.hydrateFailed, isTrue);
+    expect(broken.acceptsWriter('anyone'), isFalse);
+    expect(broken.all, isEmpty);
+  });
+
+  test('snapshot without devices list is incomplete, not empty-success',
+      () async {
+    final broken = DeviceRegistry(
+      readSnapshot: () async =>
+          Uint8List.fromList(utf8.encode('{"foo":1}')),
+    );
+    await broken.hydrate();
+    expect(broken.lastError, 'registry-snapshot-incomplete');
+    expect(broken.hydrateFailed, isTrue);
+  });
 }

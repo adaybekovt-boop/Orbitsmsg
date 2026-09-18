@@ -13,6 +13,7 @@ import 'package:orbits_flutter/peer/room_disclaimer.dart';
 import 'package:orbits_flutter/peer/room_plaintext_gate.dart';
 import 'package:orbits_flutter/rooms/autobase_log.dart';
 import 'package:orbits_flutter/replication/drift_projector.dart';
+import 'package:orbits_flutter/replication/conversation_id.dart';
 import 'package:orbits_flutter/replication/file_journal.dart';
 import 'package:orbits_flutter/replication/hypercore_store.dart';
 import 'package:orbits_flutter/replication/memory_journal.dart';
@@ -48,6 +49,7 @@ void main() {
   Future<(DualStackBridge, DualStackBridge, List<Object?>)> linked({
     Set<String> blocked = const {},
     BlindMailboxStore? mailbox,
+    Future<void> Function(JournalRecord record)? onRemoteRecord,
   }) async {
     setHyperswarmRollout(HyperswarmRollout.internal);
     final pair = loopbackPair();
@@ -85,6 +87,7 @@ void main() {
         mailbox: mailbox,
         mailboxToken: mailbox == null ? null : 'cap-1',
         mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+        onRemoteRecord: isAlice ? onRemoteRecord : null,
         onPacket: (peer, data) async {
           packets.add(data);
         },
@@ -1176,6 +1179,96 @@ void main() {
       ),
       isFalse,
     );
+  });
+
+  test('remote messageEnvelopeCreated journals only; Drift comes from onPacket',
+      () async {
+    // Live projector wired exactly like the host: pending stub, no decrypt.
+    final persisted = <Map<String, Object?>>[];
+    var decryptCalls = 0;
+    final live = JournalProjector(
+      decrypt: (enc, _) async {
+        decryptCalls += 1;
+        return {'text': 'LEAK'};
+      },
+      persist: (msg) => persistProjectedMessage(
+        msg,
+        selfPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        save: (row) async {
+          persisted.add(row);
+          return true;
+        },
+      ),
+    );
+    final remoteKinds = <ReplicationEventKind>[];
+    final (a, b, _) = await linked(
+      onRemoteRecord: (record) async {
+        remoteKinds.add(record.kind);
+        await live.apply(record);
+      },
+    );
+    await a.dial('ORBIT-BBBBBBBBBBBBBBBB');
+    final authDeadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(authDeadline)) {
+      if (a.isAuthenticated('ORBIT-BBBBBBBBBBBBBBBB') &&
+          b.isAuthenticated('ORBIT-AAAAAAAAAAAAAAAA')) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(a.isAuthenticated('ORBIT-BBBBBBBBBBBBBBBB'), isTrue);
+
+    // Writer must match Bob's admitted binding device ('b'); the journal
+    // writer id ('dev-b') would fail inbound writer auth.
+    final envelope = MessageEnvelopeCreated(
+      eventId: 'e-from-b',
+      conversationId: conversationIdForPeers(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        'ORBIT-AAAAAAAAAAAAAAAA',
+      ),
+      senderIdentity: 'ORBIT-BBBBBBBBBBBBBBBB',
+      senderDeviceId: 'b',
+      logicalSequence: 1,
+      createdAt: 1,
+      encryptedEnvelope: utf8.encode('v2:hdr:iv:ct'),
+    );
+    final record = JournalRecord(
+      seq: b.journal.length,
+      writerDeviceId: 'b',
+      kind: ReplicationEventKind.messageEnvelopeCreated,
+      fields: envelope.toJournalFields(),
+    );
+    b.appendAndReplicate(record);
+
+    final journalDeadline = DateTime.now().add(const Duration(seconds: 2));
+    while (DateTime.now().isBefore(journalDeadline)) {
+      if (a.hypercore.blocks.any(
+        (r) =>
+            r.kind == ReplicationEventKind.messageEnvelopeCreated &&
+            r.fields['eventId'] == 'e-from-b',
+      )) {
+        break;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+    }
+    expect(
+      a.hypercore.blocks.any(
+        (r) =>
+            r.kind == ReplicationEventKind.messageEnvelopeCreated &&
+            r.fields['eventId'] == 'e-from-b',
+      ),
+      isTrue,
+    );
+    // Durable journal only: the live projector never saw this envelope.
+    expect(
+      remoteKinds.contains(ReplicationEventKind.messageEnvelopeCreated),
+      isFalse,
+    );
+    expect(decryptCalls, 0);
+    expect(persisted, isEmpty);
+    expect(live.messages.containsKey('e-from-b'), isFalse);
+    await a.detach();
+    await b.detach();
   });
 }
 

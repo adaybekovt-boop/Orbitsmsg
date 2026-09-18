@@ -1,6 +1,10 @@
 // Identity keys must remain usable for wireHello even when persist fails
 // (locked vault / wrapping error). Persist-before-cache used to fail-close
 // the handshake, leaving 1:1 text stuck at status=pending.
+//
+// Persist write failures stay best-effort so wireHello can start. An
+// existing keys-row whose pubSpki != RAM identity is fail-closed
+// (lastIdentityError + StateError), never a silent TOFU churn.
 
 import 'dart:typed_data';
 
@@ -51,6 +55,38 @@ void main() {
     expect(pair, isNotNull);
     final sig = await signBytes(Uint8List.fromList([9, 8, 7]));
     expect(sig.length, 64);
+    // Best-effort write, but the failure is recorded, not swallowed.
+    expect(lastIdentityError, isNotEmpty);
+  });
+
+  test('persist mismatch vs existing row is fail-closed', () async {
+    await setVaultKek(_key32());
+    setKeyStore(_ThrowingPutStore());
+    await getOrCreateSigningKey();
+    final ram = Uint8List.fromList(await exportIdentityPubSpki());
+
+    final other = List<int>.from(ram);
+    other[other.length - 1] ^= 0xff;
+    final store = InMemoryKeyStore();
+    await store.put('keys', {
+      'id': 'identity-signing-v1',
+      'privBytes': List<int>.filled(32, 9),
+      'pubSpki': other,
+      'privEnc': 1,
+    });
+    setKeyStore(store);
+
+    await expectLater(
+      getOrCreateSigningKey(),
+      throwsA(
+        predicate(
+          (e) =>
+              e is StateError && e.message == 'identity-persist-mismatch',
+        ),
+      ),
+    );
+    expect(lastIdentityError, 'identity-persist-mismatch');
+    expect(await exportIdentityPubSpki(), ram);
   });
 
   test('getOrCreateSigningKey persists when the vault is unlocked', () async {

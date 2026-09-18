@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/spki_codec.dart';
 import 'package:orbits_flutter/core/vault_kek.dart';
 import 'package:orbits_flutter/devices/device_link.dart';
+import 'package:orbits_flutter/transport/trusted_identity_store.dart';
 import 'package:orbits_flutter/devices/device_registry.dart';
 import 'package:orbits_flutter/core/key_store.dart';
 import 'package:orbits_flutter/devices/local_device_material.dart';
@@ -126,6 +127,88 @@ void main() {
     expect(authorized?.deviceId, material.deviceId);
     expect(registry.byId(material.deviceId), isNotNull);
     expect(jsonEncode(link.toQrJson()).toLowerCase().contains('rootkey'), isFalse);
+  });
+
+  test('attacker-signed QR with victim ownerPeerId is rejected', () async {
+    final victim = await generateP256EcdsaKey();
+    final victimSpki = buildP256Spki(x: victim.x, y: victim.y);
+    final attacker = await generateP256EcdsaKey();
+    final attackerSpki = buildP256Spki(x: attacker.x, y: attacker.y);
+    final material =
+        await loadOrCreateLocalDeviceMaterial(store: InMemoryKeyStore());
+    final link = await issueLocalDeviceLink(
+      material: material,
+      ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+      identityPublicKey: attackerSpki,
+      sign: (payload) async => signP256Ecdsa(attacker, payload),
+    );
+    final identities = TrustedIdentityStore()
+      ..trust(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        identityPublicKey: victimSpki,
+        isSelf: true,
+      );
+    final registry = DeviceRegistry();
+    expect(
+      await acceptDeviceLink(
+        link,
+        ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        registry: registry,
+        identities: identities,
+      ),
+      isFalse,
+    );
+    expect(registry.byId(material.deviceId), isNull);
+  });
+
+  test('empty ownerPeerId on QR is rejected', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final link = await issueDeviceLink(
+      deviceId: 'phone-2',
+      transportPublicKey: Uint8List.fromList(List<int>.generate(32, (i) => i + 3)),
+      hypercorePublicKey: Uint8List.fromList(List<int>.generate(32, (i) => i + 4)),
+      createdAt: DateTime.now().millisecondsSinceEpoch,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    expect(
+      await acceptDeviceLink(
+        link,
+        ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        localIdentityPublicKey: spki,
+        registry: DeviceRegistry(),
+      ),
+      isFalse,
+    );
+  });
+
+  test('self-link accepts only the local/trusted identity', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final material =
+        await loadOrCreateLocalDeviceMaterial(store: InMemoryKeyStore());
+    final link = await issueLocalDeviceLink(
+      material: material,
+      ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    final identities = TrustedIdentityStore()
+      ..trust(
+        peerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        identityPublicKey: spki,
+        isSelf: true,
+      );
+    expect(
+      await acceptDeviceLink(
+        link,
+        ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        identities: identities,
+        registry: DeviceRegistry(),
+      ),
+      isTrue,
+    );
   });
 
   test('QR JSON with private material is rejected', () {
