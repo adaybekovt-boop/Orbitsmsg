@@ -12,7 +12,9 @@ Software path only. External gates stay open.
   burn the live session. Already-consumed envelopes fail closed
 - DualStack offers a per-device ratchet on every admit, addressed to the
   transport id. QR `acceptDeviceLink` journals via `onAuthorized` and
-  still cannot mint without a live DH
+  still cannot mint without a live DH. `DeviceLinkPage` calls
+  DualStack `authorizeDevice` / `revokeDevice` when the native bridge
+  is bound
 - Three-device loopback mesh covers phone / tablet / contact fan-out,
   own-device sync, and revoke
 - Autobase membership Hypercore append failures surface on
