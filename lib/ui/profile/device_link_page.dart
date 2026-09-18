@@ -4,28 +4,30 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../core/identity_key.dart';
 import '../../devices/device_link.dart';
 import '../../devices/device_registry.dart';
 import '../../devices/local_device_material.dart';
+import '../../state/connections_notifier.dart';
 import '../../themes/orbits_tokens.dart';
 import '../primitives/orbits_glass_app_bar.dart';
 import '../primitives/orbits_glass_button.dart';
 import '../primitives/orbits_glass_list_tile.dart';
 import '../primitives/orbits_glass_surface.dart';
 
-class DeviceLinkPage extends StatefulWidget {
+class DeviceLinkPage extends ConsumerStatefulWidget {
   const DeviceLinkPage({super.key, required this.peerId});
 
   final String peerId;
 
   @override
-  State<DeviceLinkPage> createState() => _DeviceLinkPageState();
+  ConsumerState<DeviceLinkPage> createState() => _DeviceLinkPageState();
 }
 
-class _DeviceLinkPageState extends State<DeviceLinkPage> {
+class _DeviceLinkPageState extends ConsumerState<DeviceLinkPage> {
   String? _payload;
   String? _error;
   String? _localDeviceId;
@@ -73,6 +75,12 @@ class _DeviceLinkPageState extends State<DeviceLinkPage> {
         link,
         ownerPeerId: widget.peerId,
         registry: deviceRegistry,
+        onAuthorized: (device) {
+          ref
+              .read(connectionsNotifierProvider.notifier)
+              .nativeBridge
+              ?.authorizeDevice(device);
+        },
       );
       if (!ok) {
         throw StateError('device-link rejected');
@@ -165,7 +173,12 @@ class _DeviceLinkPageState extends State<DeviceLinkPage> {
                       device.deviceId != _localDeviceId
                   ? TextButton(
                       onPressed: () {
-                        deviceRegistry.revoke(device.deviceId);
+                        final id = device.deviceId;
+                        deviceRegistry.revoke(id);
+                        ref
+                            .read(connectionsNotifierProvider.notifier)
+                            .nativeBridge
+                            ?.revokeDevice(id);
                         setState(() {});
                       },
                       child: const Text('Отозвать'),
