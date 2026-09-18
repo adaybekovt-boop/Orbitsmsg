@@ -6,9 +6,10 @@ import 'package:orbits_flutter/transport/replication_schema.dart';
 void main() {
   test('live apply and replay produce the same projection', () async {
     final journal = MemoryJournal('dev-a');
-    Future<Map<String, Object?>?> decrypt(List<int> enc) async => {
-      'text': String.fromCharCodes(enc),
-    };
+    Future<Map<String, Object?>?> decrypt(
+      List<int> enc,
+      JournalRecord _,
+    ) async => {'text': String.fromCharCodes(enc)};
 
     const first = MessageEnvelopeCreated(
       eventId: 'e1',
@@ -61,7 +62,7 @@ void main() {
       ),
     );
     final projector = JournalProjector(
-      decrypt: (enc) async => {'text': String.fromCharCodes(enc)},
+      decrypt: (enc, _) async => {'text': String.fromCharCodes(enc)},
     );
     await projector.applyAll(journal);
     expect(projector.messages, hasLength(1));
@@ -104,7 +105,7 @@ void main() {
       ),
     );
     final projector = JournalProjector(
-      decrypt: (enc) async => {'text': String.fromCharCodes(enc)},
+      decrypt: (enc, _) async => {'text': String.fromCharCodes(enc)},
       revokedWriters: {'revoked-dev'},
     );
     await projector.applyAll(journal);
@@ -123,14 +124,14 @@ void main() {
       ),
     );
     final guarded = JournalProjector(
-      decrypt: (enc) async => {'text': String.fromCharCodes(enc)},
+      decrypt: (enc, _) async => {'text': String.fromCharCodes(enc)},
       revokedWriters: {'revoked-dev'},
     );
     await guarded.applyAll(other);
     expect(guarded.messages, isEmpty);
 
     final rolling = JournalProjector(
-      decrypt: (enc) async {
+      decrypt: (enc, _) async {
         if (enc.length == 1 && enc.first == 0) throw StateError('boom');
         return {'text': 'x'};
       },
@@ -165,5 +166,31 @@ void main() {
       throwsStateError,
     );
     expect(rolling.messages, isEmpty);
+  });
+
+  test('blocked sender is dropped before decrypt', () async {
+    var decrypted = 0;
+    final journal = MemoryJournal('dev-a');
+    journal.appendEnvelope(
+      const MessageEnvelopeCreated(
+        eventId: 'blocked',
+        conversationId: 'c1',
+        senderIdentity: 'eve',
+        senderDeviceId: 'dev-eve',
+        logicalSequence: 1,
+        createdAt: 1,
+        encryptedEnvelope: <int>[69],
+      ),
+    );
+    final projector = JournalProjector(
+      decrypt: (enc, _) async {
+        decrypted += 1;
+        return {'text': String.fromCharCodes(enc)};
+      },
+      isBlocked: (peerId) => peerId == 'eve',
+    );
+    await projector.applyAll(journal);
+    expect(decrypted, 0);
+    expect(projector.messages, isEmpty);
   });
 }

@@ -351,6 +351,12 @@ void main() {
       b.hypercore.blocks.every((r) => !r.fields.containsKey('plaintext')),
       isTrue,
     );
+    expect(
+      b.hypercore.blocks.any(
+        (r) => r.fields['senderIdentity'] == 'ORBIT-AAAAAAAAAAAAAAAA',
+      ),
+      isTrue,
+    );
   });
 
   test(

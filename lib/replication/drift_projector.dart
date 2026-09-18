@@ -5,7 +5,10 @@ import 'memory_journal.dart';
 import '../transport/replication_schema.dart';
 
 typedef EnvelopeDecrypt =
-    Future<Map<String, Object?>?> Function(List<int> encryptedEnvelope);
+    Future<Map<String, Object?>?> Function(
+      List<int> encryptedEnvelope,
+      JournalRecord record,
+    );
 
 class ProjectedMessage {
   const ProjectedMessage({
@@ -39,11 +42,13 @@ class JournalProjector {
     required this.decrypt,
     this.revokedWriters = const <String>{},
     this.maxEventVersion = kReplicationEventVersion,
+    this.isBlocked,
   });
 
   final EnvelopeDecrypt decrypt;
   final Set<String> revokedWriters;
   final int maxEventVersion;
+  final bool Function(String peerId)? isBlocked;
   final Map<String, ProjectedMessage> messages = <String, ProjectedMessage>{};
   final Set<String> seenEventIds = <String>{};
   int cursor = 0;
@@ -85,9 +90,13 @@ class JournalProjector {
         final id = record.fields['eventId'] as String?;
         if (id == null || seenEventIds.contains(id)) return;
         seenEventIds.add(id);
+        final sender = record.fields['senderIdentity'] as String? ?? '';
+        if (sender.isNotEmpty && (isBlocked?.call(sender) ?? false)) {
+          return;
+        }
         final enc = record.fields['encryptedEnvelope'];
         if (enc is! List<int>) return;
-        final plain = await decrypt(enc);
+        final plain = await decrypt(enc, record);
         if (plain == null) return;
         messages[id] = ProjectedMessage(
           eventId: id,

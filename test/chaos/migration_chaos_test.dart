@@ -66,7 +66,7 @@ void main() {
 
       final replayed = await journal.replay();
       final projector = JournalProjector(
-        decrypt: (enc) async => {'text': String.fromCharCodes(enc)},
+        decrypt: (enc, _) async => {'text': String.fromCharCodes(enc)},
       );
       await projector.applyAll(replayed);
       expect(projector.messages['e1']?.plaintext, 'Hi');
@@ -195,9 +195,10 @@ void main() {
       );
       await durable.append(event);
 
-      Future<Map<String, Object?>?> decrypt(List<int> enc) async => {
-        'text': String.fromCharCodes(enc),
-      };
+      Future<Map<String, Object?>?> decrypt(
+        List<int> enc,
+        JournalRecord _,
+      ) async => {'text': String.fromCharCodes(enc)};
       final beforeCrash = JournalProjector(decrypt: decrypt);
       await beforeCrash.applyAll(live);
 

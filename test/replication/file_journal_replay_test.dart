@@ -18,7 +18,8 @@ void main() {
     final durable = FileJournal(
       writerDeviceId: 'dev-a',
       writeLine: (line) => file.writeAsString('$line\n', mode: FileMode.append),
-      readLines: () async => file.existsSync() ? file.readAsLinesSync() : const <String>[],
+      readLines: () async =>
+          file.existsSync() ? file.readAsLinesSync() : const <String>[],
     );
     final live = MemoryJournal('dev-a');
     final record = live.appendEnvelope(
@@ -41,7 +42,7 @@ void main() {
     );
     final replayed = await restarted.replay();
     final projector = JournalProjector(
-      decrypt: (enc) async => {'text': String.fromCharCodes(enc)},
+      decrypt: (enc, _) async => {'text': String.fromCharCodes(enc)},
     );
     await projector.applyAll(replayed);
     expect(projector.messages['e1']?.plaintext, 'Hi');
@@ -63,7 +64,10 @@ void main() {
     await journal.append(first);
     await journal.append(first);
     final replayed = await journal.replay();
-    expect(replayed.records.where((r) => r.fields['eventId'] == 'e1'), hasLength(1));
+    expect(
+      replayed.records.where((r) => r.fields['eventId'] == 'e1'),
+      hasLength(1),
+    );
   });
 
   test('truncated tail is reported and middle corrupt is skipped', () async {

@@ -429,7 +429,7 @@ class DualStackBridge {
     for (final block in blocks) {
       final id = block.envelopeId ?? _stableEnvelopeId(block.bytes);
       if (!_mailboxPump.markProjected(id)) continue;
-      _appendEnvelope(from, block.bytes);
+      _appendEnvelope(from, block.bytes, senderIdentity: from);
       final text = utf8.decode(block.bytes);
       await onPacket(
         from,
@@ -453,7 +453,7 @@ class DualStackBridge {
     for (final block in blocks) {
       final id = block.envelopeId ?? _stableEnvelopeId(block.bytes);
       if (!_mailboxPump.markProjected(id)) continue;
-      _appendEnvelope(from, block.bytes);
+      _appendEnvelope(from, block.bytes, senderIdentity: from);
       final text = utf8.decode(block.bytes);
       await onPacket(
         from,
@@ -526,14 +526,18 @@ class DualStackBridge {
     return false;
   }
 
-  void _appendEnvelope(String peerId, List<int> encrypted) {
+  void _appendEnvelope(
+    String peerId,
+    List<int> encrypted, {
+    String? senderIdentity,
+  }) {
     final id =
         '${DateTime.now().millisecondsSinceEpoch}-$peerId-${encrypted.length}';
     final record = journal.appendEnvelope(
       MessageEnvelopeCreated(
         eventId: id,
         conversationId: conversationIdForPeers(selfPeerId(), peerId),
-        senderIdentity: selfPeerId(),
+        senderIdentity: senderIdentity ?? selfPeerId(),
         senderDeviceId: selfDeviceId,
         logicalSequence: journal.length + 1,
         createdAt: DateTime.now().millisecondsSinceEpoch,
@@ -905,7 +909,7 @@ class DualStackBridge {
       final text = utf8.decode(bytes);
       if (isWireCiphertext(text)) {
         data = text;
-        _appendEnvelope(norm, bytes);
+        _appendEnvelope(norm, bytes, senderIdentity: norm);
         unawaited(() async {
           try {
             final plain = await decryptWirePayload(norm, text);

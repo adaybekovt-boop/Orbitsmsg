@@ -32,14 +32,18 @@ void main() {
     );
     await durable.append(event);
 
-    Future<Map<String, Object?>?> decrypt(List<int> enc) async => {
-          'text': String.fromCharCodes(enc),
-        };
+    Future<Map<String, Object?>?> decrypt(
+      List<int> enc,
+      JournalRecord _,
+    ) async => {'text': String.fromCharCodes(enc)};
     final fromLive = JournalProjector(decrypt: decrypt);
     await fromLive.applyAll(live);
     final fromDisk = JournalProjector(decrypt: decrypt);
     await fromDisk.applyAll(await durable.replay());
-    expect(fromDisk.messages['e1']?.plaintext, fromLive.messages['e1']?.plaintext);
+    expect(
+      fromDisk.messages['e1']?.plaintext,
+      fromLive.messages['e1']?.plaintext,
+    );
     expect(fromDisk.messages['e1']?.plaintext, 'Hi');
   });
 }

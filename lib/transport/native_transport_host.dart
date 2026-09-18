@@ -4,6 +4,7 @@
 // Android/iOS and never falls back to PeerJS.
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,6 +12,7 @@ import 'package:orbits_transport/orbits_transport.dart';
 
 import '../core/feature_flags.dart';
 import '../core/identity_key.dart';
+import '../core/wire_crypto.dart';
 import '../devices/device_registry.dart';
 import '../devices/local_device_material.dart';
 import '../mailbox/blind_store.dart';
@@ -22,6 +24,7 @@ import '../replication/hypercore_store.dart';
 import '../replication/memory_journal.dart';
 import '../state/auth_notifier.dart';
 import '../state/connections_notifier.dart';
+import '../state/messaging_notifier.dart';
 import '../state/peer_connection_provider.dart';
 import 'capabilities.dart';
 import 'dev_bare_transport.dart';
@@ -160,12 +163,7 @@ class NativeTransportHost {
 
     _ensurePluginBoundary();
     final chosen = await _chooseTransport(devBare: devBare);
-    if (_startupAborted(generation)) {
-      try {
-        await chosen?.stop();
-      } catch (_) {}
-      return;
-    }
+    if (await _abortStartup(generation, chosen)) return;
     if (chosen == null) {
       if (devBare) {
         lastError = lastError.isEmpty ? 'BARE_RUNTIME_MISSING' : lastError;
@@ -175,13 +173,7 @@ class NativeTransportHost {
     }
 
     transport = chosen;
-    if (_startupAborted(generation)) {
-      try {
-        await chosen.stop();
-      } catch (_) {}
-      if (identical(transport, chosen)) transport = null;
-      return;
-    }
+    if (await _abortStartup(generation, chosen)) return;
 
     final material = await loadOrCreateLocalDeviceMaterial();
     await authorizeLocalDevice(material, ownerPeerId: auth.user.peerId);
@@ -204,16 +196,14 @@ class NativeTransportHost {
     for (final record in memory.records) {
       hypercore!.append(record);
     }
-    projector = JournalProjector(decrypt: (enc) async => null);
+    projector = JournalProjector(
+      decrypt: _decryptJournalEnvelope,
+      isBlocked: (peerId) =>
+          _ref.read(messagingNotifierProvider.notifier).isPeerBlocked(peerId),
+    );
     await projector!.applyAll(memory);
     final secret = discoverySecretStore.getOrCreateLocal();
-    if (_startupAborted(generation)) {
-      try {
-        await chosen.stop();
-      } catch (_) {}
-      if (identical(transport, chosen)) transport = null;
-      return;
-    }
+    if (await _abortStartup(generation, chosen)) return;
     try {
       await transport!.start(
         TransportLocalConfiguration(
@@ -230,13 +220,7 @@ class NativeTransportHost {
       }
       return;
     }
-    if (_startupAborted(generation)) {
-      try {
-        await chosen.stop();
-      } catch (_) {}
-      if (identical(transport, chosen)) transport = null;
-      return;
-    }
+    if (await _abortStartup(generation, chosen)) return;
 
     var boundMaterial = material;
     final noise = _localNoisePublicKey(transport);
@@ -287,13 +271,7 @@ class NativeTransportHost {
       }
       return;
     }
-    if (_startupAborted(generation)) {
-      try {
-        await chosen.stop();
-      } catch (_) {}
-      if (identical(transport, chosen)) transport = null;
-      return;
-    }
+    if (await _abortStartup(generation, chosen)) return;
 
     final mailbox = BlindMailboxStore()
       ..grant(
@@ -506,6 +484,41 @@ class NativeTransportHost {
 
   Future<void> onForeground() async {
     await lifecycle?.onForeground();
+  }
+
+  Future<bool> _abortStartup(int generation, OrbitsTransport? chosen) async {
+    if (!_startupAborted(generation)) return false;
+    try {
+      await chosen?.stop();
+    } catch (_) {}
+    if (chosen != null && identical(transport, chosen)) {
+      transport = null;
+    }
+    return true;
+  }
+
+  Future<Map<String, Object?>?> _decryptJournalEnvelope(
+    List<int> enc,
+    JournalRecord record,
+  ) async {
+    if (enc.isEmpty) return null;
+    final sender = record.fields['senderIdentity'] as String? ?? '';
+    if (sender.isEmpty) return null;
+    final String wire;
+    try {
+      wire = utf8.decode(enc);
+    } catch (_) {
+      return null;
+    }
+    if (!isWireCiphertext(wire)) return null;
+    try {
+      final plain = await decryptWirePayload(sender, wire);
+      if (plain is Map) {
+        return <String, Object?>{'text': '${plain['text'] ?? ''}'};
+      }
+      if (plain is String) return <String, Object?>{'text': plain};
+    } catch (_) {}
+    return null;
   }
 
   List<int>? _localNoisePublicKey(OrbitsTransport? carrier) {
