@@ -8,7 +8,11 @@ Future<TransportFileDescriptor?> writeTempAttachment({
   return null;
 }
 
-Future<List<int>?> readAttachmentPath(String path) async => null;
+Future<List<int>?> readAttachmentPath(
+  String path, {
+  int maxBytes = 50 * 1024 * 1024,
+}) async =>
+    null;
 
 bool isAllowedAttachmentPath(String path, {Object? incomingBase}) => false;
 

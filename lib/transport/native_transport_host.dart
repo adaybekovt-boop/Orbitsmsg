@@ -37,6 +37,7 @@ import 'device_binding.dart';
 import 'discovery_secret_store.dart';
 import 'trusted_identity_store.dart';
 import 'journal_file_io.dart' if (dart.library.html) 'journal_file_stub.dart';
+import '../replication/file_journal.dart';
 import 'local_worklet_platform.dart';
 import 'native_backend_policy.dart';
 import 'plugin_orbits_transport.dart';
@@ -192,16 +193,17 @@ class NativeTransportHost {
       identityPublicKey: await exportIdentityPubSpki(),
       isSelf: true,
     );
-    final durable = await openLocalFileJournal(
-      material.deviceId,
-      ownerPeerId: auth.user.peerId,
-    );
-    MemoryJournal memory;
-    if (durable != null) {
-      memory = await durable.replay();
-    } else {
-      memory = MemoryJournal(material.deviceId);
+    FileJournal? durable;
+    try {
+      durable = await openLocalFileJournal(
+        material.deviceId,
+        ownerPeerId: auth.user.peerId,
+      );
+    } catch (err) {
+      lastProjectorError = err.toString();
     }
+    final MemoryJournal memory =
+        durable != null ? await durable.replay() : MemoryJournal(material.deviceId);
     hypercore = HypercoreLocalStore(material.deviceId);
     for (final record in memory.records) {
       hypercore!.append(record);
@@ -355,6 +357,9 @@ class NativeTransportHost {
         .nativeBridge;
     if (boundBridge != null && ratchets?.lastError.isNotEmpty == true) {
       boundBridge.lastDeviceRatchetError = ratchets!.lastError;
+    }
+    if (boundBridge != null && lastProjectorError.isNotEmpty) {
+      boundBridge.lastReplicationError = lastProjectorError;
     }
     _ref.read(roomManagerProvider.notifier).bindAutobaseSnapshot();
     lifecycle = TransportLifecycle(

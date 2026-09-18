@@ -6,6 +6,7 @@ import '../replication/file_journal.dart';
 Future<FileJournal?> openLocalFileJournal(
   String deviceId, {
   String ownerPeerId = '',
+  Object? directory,
 }) async {
   // Parameters document the IO contract; web cannot persist either value.
   return null;

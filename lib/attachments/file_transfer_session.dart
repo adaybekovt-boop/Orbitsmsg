@@ -12,10 +12,15 @@ import 'package:crypto/crypto.dart';
 import '../transport/mux_frames.dart';
 import '../transport/transport_api.dart';
 import 'attachment_keys.dart';
+import 'attachment_transfer.dart' show kAttachmentMaxObjectBytes;
 import 'incoming_paths.dart';
 import 'resumable_blob.dart';
 
 const String kFileTransferProtocol = 'orbits-file-v1';
+/// Receiver/send cap for `orbits-file-v1`: same object protocol as
+/// [kAttachmentMaxObjectBytes] (50 MiB). An authenticated peer must not
+/// be able to fill our disk/RAM with a giant offer.
+const int kNativeFileMaxBytes = kAttachmentMaxObjectBytes;
 /// Local-only coordinator completion. Never accepted from the wire:
 /// [_onAttachmentFrame] drops any JSON carrying a `path`, and Drop only
 /// persists this type after a jail check.
@@ -83,6 +88,9 @@ class FileTransferCoordinator {
     final size = await source.length();
     if (file.sizeBytes > 0 && file.sizeBytes != size) {
       throw StateError('attachment size mismatch');
+    }
+    if (size <= 0 || size > kNativeFileMaxBytes) {
+      throw StateError('attachment exceeds quota');
     }
     final digest = await sha256File(source);
     final transferId = sanitizeTransferId(
@@ -244,6 +252,15 @@ class FileTransferCoordinator {
     final size = (body['size'] as num?)?.toInt() ?? 0;
     final digest = body['sha256'] as String? ?? '';
     if (digest.isEmpty) return;
+    if (size <= 0 || size > kNativeFileMaxBytes) {
+      await _emit(peerId, {
+        'type': 'file-error',
+        'protocol': kFileTransferProtocol,
+        'transferId': id,
+        'error': 'attachment exceeds quota',
+      });
+      return;
+    }
     final name = (body['name'] as String? ?? 'blob').replaceAll(
       RegExp(r'[\x00-\x1f\\/:*?"<>|]'),
       '_',
@@ -345,7 +362,22 @@ class FileTransferCoordinator {
     } catch (_) {
       return;
     }
-    if (incoming.written + plain.length > incoming.size) return;
+    if (incoming.size > kNativeFileMaxBytes ||
+        incoming.written + plain.length > incoming.size ||
+        incoming.written + plain.length > kNativeFileMaxBytes) {
+      incoming.close();
+      _incoming.remove('$peerId|$id');
+      try {
+        incoming.file.deleteSync();
+      } catch (_) {}
+      unawaited(_emit(peerId, {
+        'type': 'file-error',
+        'protocol': kFileTransferProtocol,
+        'transferId': id,
+        'error': 'attachment exceeds quota',
+      }));
+      return;
+    }
     incoming.raf.setPositionSync(offset);
     incoming.raf.writeFromSync(plain);
     incoming.written = offset + plain.length;

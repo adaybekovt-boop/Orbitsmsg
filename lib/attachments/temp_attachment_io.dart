@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import '../transport/transport_api.dart';
+import 'attachment_transfer.dart' show kAttachmentMaxObjectBytes;
 import 'incoming_paths.dart';
 
 export 'incoming_paths.dart' show isAllowedAttachmentPath;
@@ -22,10 +23,16 @@ Future<TransportFileDescriptor?> writeTempAttachment({
   );
 }
 
-Future<List<int>?> readAttachmentPath(String path) async {
+Future<List<int>?> readAttachmentPath(
+  String path, {
+  int maxBytes = kAttachmentMaxObjectBytes,
+}) async {
   if (!isAllowedAttachmentPath(path)) return null;
   final file = File(path);
   if (!file.existsSync()) return null;
+  if (file.lengthSync() > maxBytes) {
+    throw StateError('attachment exceeds quota');
+  }
   return file.readAsBytes();
 }
 

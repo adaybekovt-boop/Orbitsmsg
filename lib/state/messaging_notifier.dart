@@ -588,7 +588,13 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       case 'file':
         final att = payload['attachment'];
         if (att is! Map) return null;
-        final blob = await db.getFileBlob(msgId);
+        Map<String, Object?>? blob;
+        try {
+          blob = await db.getFileBlob(msgId);
+        } catch (_) {
+          // Oversize/unreadable path blob: dead-letter via the null path.
+          return null;
+        }
         if (blob == null) return null;
         final bytes = blob['blob'];
         if (bytes is! Uint8List || bytes.isEmpty) return null;
