@@ -136,4 +136,23 @@ void main() {
     expect(epoch.toPersistedJson().containsKey('epochKey'), isFalse);
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
+
+  test('RoomAutobaseLog stamps writer seq and stays host-plaintext', () {
+    final log = RoomAutobaseLog();
+    final first = log.append(
+      writerId: 'host',
+      kind: 'membership',
+      payload: {'peerId': 'host', 'action': 'join', 'displayName': 'Host'},
+    );
+    final second = log.append(
+      writerId: 'host',
+      kind: 'message',
+      payload: {'id': 'm1', 'text': 'hello'},
+    );
+    expect(first.seq, 0);
+    expect(second.seq, 1);
+    expect(log.projection.state.members['host'], 'Host');
+    expect(log.projection.state.messages.single['text'], 'hello');
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
 }

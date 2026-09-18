@@ -264,4 +264,68 @@ void main() {
     );
     expect(projector.messages.containsKey('keep'), isFalse);
   });
+
+  test('successful decrypt persists inbound rows and skips own outbound',
+      () async {
+    final saved = <Map<String, Object?>>[];
+    final tombstoned = <String>[];
+    final projector = JournalProjector(
+      decrypt: (enc, _) async => {'text': String.fromCharCodes(enc)},
+      persist: (msg) => persistProjectedMessage(
+        msg,
+        selfPeerId: 'alice',
+        save: (row) async {
+          saved.add(row);
+          return true;
+        },
+      ),
+      tombstone: (id) async => tombstoned.add(id),
+    );
+    await projector.apply(
+      JournalRecord(
+        seq: 0,
+        writerDeviceId: 'bob-dev',
+        kind: ReplicationEventKind.messageEnvelopeCreated,
+        fields: {
+          'eventId': 'in-1',
+          'conversationId': 'c1',
+          'senderIdentity': 'bob',
+          'senderDeviceId': 'bob-dev',
+          'encryptedEnvelope': <int>[72, 105],
+          'createdAt': 42,
+        },
+      ),
+    );
+    await projector.apply(
+      JournalRecord(
+        seq: 1,
+        writerDeviceId: 'alice-dev',
+        kind: ReplicationEventKind.messageEnvelopeCreated,
+        fields: {
+          'eventId': 'out-1',
+          'conversationId': 'c1',
+          'senderIdentity': 'alice',
+          'senderDeviceId': 'alice-dev',
+          'encryptedEnvelope': <int>[79],
+          'createdAt': 43,
+        },
+      ),
+    );
+    expect(saved, hasLength(1));
+    expect(saved.single['id'], 'in-1');
+    expect(saved.single['peerId'], 'bob');
+    expect(saved.single['direction'], 'in');
+    expect((saved.single['payload'] as Map)['text'], 'Hi');
+    expect(projector.messages['out-1']?.plaintext, 'O');
+
+    await projector.apply(
+      JournalRecord(
+        seq: 2,
+        writerDeviceId: 'bob-dev',
+        kind: ReplicationEventKind.messageTombstoned,
+        fields: {'eventId': 'in-1'},
+      ),
+    );
+    expect(tombstoned, ['in-1']);
+  });
 }

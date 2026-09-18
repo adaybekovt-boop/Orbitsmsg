@@ -20,6 +20,28 @@ const Set<String> kRatchetSecretSnapshotKeys = {
   'skipped',
 };
 
+/// Per-device ciphertext wrapper. Not an identity-layer wire envelope.
+const String kDeviceRatchetMessageType = 'deviceRatchetV1';
+
+Map<String, Object?> encodeDeviceRatchetFrame({
+  required String fromDeviceId,
+  required String toDeviceId,
+  required String wire,
+}) =>
+    <String, Object?>{
+      'type': kDeviceRatchetMessageType,
+      'fromDeviceId': fromDeviceId,
+      'toDeviceId': toDeviceId,
+      'wire': wire,
+    };
+
+/// Plaintext DualStack already authenticated with a per-device ratchet.
+/// Must not be built from unauthenticated JSON.
+class AuthenticatedPlaintext {
+  const AuthenticatedPlaintext(this.data);
+  final Map<String, Object?> data;
+}
+
 class DeviceRatchetSessions {
   DeviceRatchetSessions({this.localDeviceId = ''});
 

@@ -10,6 +10,9 @@ typedef EnvelopeDecrypt =
       JournalRecord record,
     );
 
+typedef ProjectedPersist = Future<void> Function(ProjectedMessage message);
+typedef ProjectedTombstone = Future<void> Function(String eventId);
+
 class ProjectedMessage {
   const ProjectedMessage({
     required this.eventId,
@@ -18,6 +21,7 @@ class ProjectedMessage {
     required this.senderDeviceId,
     required this.plaintext,
     required this.status,
+    this.createdAt = 0,
   });
 
   final String eventId;
@@ -26,6 +30,7 @@ class ProjectedMessage {
   final String senderDeviceId;
   final String plaintext;
   final String status;
+  final int createdAt;
 
   ProjectedMessage copyWith({String? status}) => ProjectedMessage(
     eventId: eventId,
@@ -34,7 +39,35 @@ class ProjectedMessage {
     senderDeviceId: senderDeviceId,
     plaintext: plaintext,
     status: status ?? this.status,
+    createdAt: createdAt,
   );
+}
+
+/// Drift is the read-model. Own outbound rows already exist from the composer.
+Future<void> persistProjectedMessage(
+  ProjectedMessage msg, {
+  required String selfPeerId,
+  required Future<bool> Function(Map<String, Object?> row) save,
+}) async {
+  final sender = msg.senderIdentity;
+  if (sender.isEmpty) return;
+  if (selfPeerId.isNotEmpty &&
+      sender.toUpperCase() == selfPeerId.toUpperCase()) {
+    return;
+  }
+  await save(<String, Object?>{
+    'id': msg.eventId,
+    'peerId': sender,
+    'timestamp': msg.createdAt == 0
+        ? DateTime.now().millisecondsSinceEpoch
+        : msg.createdAt,
+    'direction': 'in',
+    'status': msg.status,
+    'payload': <String, Object?>{
+      'text': msg.plaintext,
+      'from': sender,
+    },
+  });
 }
 
 class JournalProjector {
@@ -43,12 +76,16 @@ class JournalProjector {
     this.revokedWriters = const <String>{},
     this.maxEventVersion = kReplicationEventVersion,
     this.isBlocked,
+    this.persist,
+    this.tombstone,
   });
 
   final EnvelopeDecrypt decrypt;
   final Set<String> revokedWriters;
   final int maxEventVersion;
   final bool Function(String peerId)? isBlocked;
+  final ProjectedPersist? persist;
+  final ProjectedTombstone? tombstone;
   final Map<String, ProjectedMessage> messages = <String, ProjectedMessage>{};
   final Set<String> seenEventIds = <String>{};
   int cursor = 0;
@@ -98,25 +135,33 @@ class JournalProjector {
         final plain = await decrypt(enc, record);
         if (plain == null) return;
         seenEventIds.add(id);
-        messages[id] = ProjectedMessage(
+        final projected = ProjectedMessage(
           eventId: id,
           conversationId: record.fields['conversationId'] as String? ?? '',
           senderIdentity: record.fields['senderIdentity'] as String? ?? '',
           senderDeviceId: record.fields['senderDeviceId'] as String? ?? '',
           plaintext: plain['text'] as String? ?? '',
           status: 'delivered',
+          createdAt: (record.fields['createdAt'] as num?)?.toInt() ?? 0,
         );
+        messages[id] = projected;
+        await persist?.call(projected);
       case ReplicationEventKind.deliveryAcknowledged:
         final ackId = record.fields['eventId'] as String?;
         if (ackId == null) return;
         final acked = messages[ackId];
-        if (acked != null)
+        if (acked != null) {
           messages[ackId] = acked.copyWith(status: 'delivered');
+          await persist?.call(messages[ackId]!);
+        }
       case ReplicationEventKind.readAcknowledged:
         final readId = record.fields['eventId'] as String?;
         if (readId == null) return;
         final read = messages[readId];
-        if (read != null) messages[readId] = read.copyWith(status: 'read');
+        if (read != null) {
+          messages[readId] = read.copyWith(status: 'read');
+          await persist?.call(messages[readId]!);
+        }
       case ReplicationEventKind.messageTombstoned:
         final id = record.fields['eventId'] as String?;
         if (id == null) return;
@@ -127,6 +172,7 @@ class JournalProjector {
           return;
         }
         messages.remove(id);
+        await tombstone?.call(id);
       default:
         break;
     }

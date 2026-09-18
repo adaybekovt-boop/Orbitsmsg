@@ -125,6 +125,8 @@ void main() {
     expect(await db.getRoomChannels(hostId), hasLength(2));
     final members = await db.getRoomMembers(hostId);
     expect(members.any((m) => m['peerId'] == hostId), isTrue);
+    expect(rooms.roomLog.projection.state.members[hostId], isNotNull);
+    expect(rooms.roomLog.projection.state.channels, isNotEmpty);
   });
 
   test('createRoom(selfHosted) on a non-desktop platform sets a clear error',

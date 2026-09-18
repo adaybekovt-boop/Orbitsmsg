@@ -37,6 +37,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
+import '../rooms/autobase_log.dart';
 import '../state/connections_notifier.dart';
 import '../state/local_profile_provider.dart';
 import '../state/peer_connection_provider.dart';
@@ -360,6 +361,9 @@ class RoomManager extends StateNotifier<RoomState> {
   /// and was removed so it could not look like live protection.
   final SecurityMonitor _security = SecurityMonitor();
 
+  /// Host-plaintext Autobase log. Writers converge; no room_crypto.
+  final RoomAutobaseLog roomLog = RoomAutobaseLog();
+
   /// Delegates to the (possibly faked) transport. Named `_connections` for
   /// continuity — the method surface (sendRoomPacket/openReliable/hasReliable)
   /// matches the registry it wraps in production.
@@ -445,8 +449,27 @@ class RoomManager extends StateNotifier<RoomState> {
       'isOnline': true,
       'joinedAt': now(),
     });
+    roomLog.append(
+      writerId: selfId,
+      kind: 'membership',
+      payload: {
+        'peerId': selfId,
+        'action': 'join',
+        'displayName': self?.displayName ?? selfId,
+      },
+    );
 
     final channels = await db.getRoomChannels(roomId);
+    for (final channel in channels) {
+      final id = channel['id'] as String?;
+      final name = channel['name'] as String?;
+      if (id == null || name == null) continue;
+      roomLog.append(
+        writerId: selfId,
+        kind: 'channel',
+        payload: {'id': id, 'name': name},
+      );
+    }
     final general = channels.firstWhere(
       (c) => c['type'] == 'text',
       orElse: () => channels.isNotEmpty ? channels.first : const {},
@@ -804,6 +827,16 @@ class RoomManager extends StateNotifier<RoomState> {
       'payload': {'kind': 'text', 'text': trimmed, 'fromName': fromName},
     });
 
+    final event = roomLog.append(
+      writerId: selfId,
+      kind: 'message',
+      payload: {
+        'id': id,
+        'text': trimmed,
+        'roomId': roomId,
+        'channelId': channelId,
+      },
+    );
     final ok = _dispatchRoomPacket(<String, Object?>{
       'type': 'room_msg',
       'kind': 'text',
@@ -814,6 +847,8 @@ class RoomManager extends StateNotifier<RoomState> {
       'fromName': fromName,
       'fromPeerId': selfId,
       'ts': ts,
+      'abWriter': event.writerId,
+      'abSeq': event.seq,
     });
     if (ok) {
       await db.updateMessageStatus(id, 'sent');
@@ -1241,6 +1276,7 @@ class RoomManager extends StateNotifier<RoomState> {
     await _teardownSelfHost();
     _security.reset();
     kRoomPlaintextSessionAck.reset();
+    roomLog.clear();
     state = const RoomState();
   }
 
@@ -1259,6 +1295,15 @@ class RoomManager extends StateNotifier<RoomState> {
     if (trimmed.isEmpty) return;
     final channel = await db.createChannel(roomId, trimmed, type);
     if (channel.isEmpty) return;
+    final channelId = channel['id'] as String?;
+    final channelName = channel['name'] as String?;
+    if (channelId != null && channelName != null) {
+      roomLog.append(
+        writerId: _selfPeerId(),
+        kind: 'channel',
+        payload: {'id': channelId, 'name': channelName},
+      );
+    }
     _broadcastToGuests({
       'type': 'room_channel_create',
       'roomId': roomId,
@@ -1414,6 +1459,15 @@ class RoomManager extends StateNotifier<RoomState> {
       'isOnline': true,
       'joinedAt': now(),
     });
+    roomLog.append(
+      writerId: _selfPeerId().isEmpty ? guestId : _selfPeerId(),
+      kind: 'membership',
+      payload: {
+        'peerId': guestId,
+        'action': 'join',
+        'displayName': _clampName(packet['guestName'] as String?),
+      },
+    );
     state = state.copyWith(guestPeerIds: {...state.guestPeerIds, guestId});
 
     // Replicate the channel list to the newcomer (host ids are canonical).
@@ -1438,6 +1492,7 @@ class RoomManager extends StateNotifier<RoomState> {
     await _stopVoice();
     _security.reset();
     kRoomPlaintextSessionAck.reset();
+    roomLog.clear();
     state = RoomState(
       joinError: _rejectReasonMessage(packet['reason'] as String?),
     );
@@ -1505,6 +1560,16 @@ class RoomManager extends StateNotifier<RoomState> {
         ts: hostTs,
         content: content,
       );
+      final event = roomLog.append(
+        writerId: _selfPeerId().isEmpty ? remoteId : _selfPeerId(),
+        kind: 'message',
+        payload: {
+          'id': canonicalId,
+          'text': content.kind == 'text' ? content.text : content.kind,
+          'roomId': roomId,
+          'channelId': channelId,
+        },
+      );
       _broadcastToGuests({
         'type': 'room_msg',
         'kind': content.kind,
@@ -1514,6 +1579,8 @@ class RoomManager extends StateNotifier<RoomState> {
         'fromName': fromName,
         'fromPeerId': remoteId,
         'ts': hostTs,
+        'abWriter': event.writerId,
+        'abSeq': event.seq,
         ...content.wireFields(),
       }, except: remoteId);
     } else if (state.role == RoomRole.guest) {
@@ -1534,6 +1601,17 @@ class RoomManager extends StateNotifier<RoomState> {
         fromName: fromName,
         ts: ts,
         content: content,
+      );
+      roomLog.append(
+        writerId: (packet['abWriter'] as String?) ?? remoteId,
+        kind: 'message',
+        payload: {
+          'id': id,
+          'text': content.kind == 'text' ? content.text : content.kind,
+          'roomId': roomId,
+          'channelId': channelId,
+        },
+        seq: (packet['abSeq'] as num?)?.toInt(),
       );
     }
   }
@@ -1556,6 +1634,15 @@ class RoomManager extends StateNotifier<RoomState> {
     m['roomId'] = state.roomId;
     m['name'] = _clampName(m['name'] as String?);
     await db.upsertRoomChannel(m);
+    final id = m['id'] as String?;
+    final name = m['name'] as String?;
+    if (id != null && name != null) {
+      roomLog.append(
+        writerId: remoteId,
+        kind: 'channel',
+        payload: {'id': id, 'name': name},
+      );
+    }
   }
 
   /// Guest: host tore the room down. Mark offline, drop voice, reset.
@@ -1571,6 +1658,7 @@ class RoomManager extends StateNotifier<RoomState> {
     await _teardownSelfHost();
     _security.reset();
     kRoomPlaintextSessionAck.reset();
+    roomLog.clear();
     state = const RoomState();
   }
 
@@ -1584,6 +1672,11 @@ class RoomManager extends StateNotifier<RoomState> {
     final guestId = remoteId;
     if (!state.guestPeerIds.contains(guestId)) return;
     await db.removeRoomMember(roomId, guestId);
+    roomLog.append(
+      writerId: _selfPeerId().isEmpty ? guestId : _selfPeerId(),
+      kind: 'membership',
+      payload: {'peerId': guestId, 'action': 'leave'},
+    );
     state = state.copyWith(
       guestPeerIds: state.guestPeerIds.where((g) => g != guestId).toSet(),
     );

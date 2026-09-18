@@ -35,6 +35,7 @@ import '../attachments/temp_attachment.dart';
 import '../core/bundle_cache.dart';
 import '../core/prekey_bundle.dart';
 import '../core/wire_crypto.dart';
+import '../devices/device_ratchet_sessions.dart';
 import '../peer/helpers.dart';
 import '../utils/heavy_codec.dart';
 import '../storage/db.dart' as db;
@@ -229,6 +230,9 @@ Future<bool> dispatchReliableInbound(
 ) async {
   if (ctx.isPeerBlocked?.call(remoteId) == true) {
     return true;
+  }
+  if (data is AuthenticatedPlaintext) {
+    return dispatchReliablePlaintext(data.data, connSend, remoteId, ctx);
   }
   // в”Ђв”Ђ Handshake in plaintext в”Ђв”Ђ
   if (data is Map) {

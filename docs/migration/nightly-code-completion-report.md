@@ -3,6 +3,25 @@
 This report is evidence-only. It does **not** claim the Holepunch
 migration is code-complete or safe to merge.
 
+## 2026-09-18 plan DoD slice
+
+Software path only. External gates stay open.
+
+- `_openChannel` awaits native `dial` and skips PeerJS when
+  `canUseNative` or fail-closed / fallback-off
+- `JournalProjector` persists decrypted inbound rows into Drift and
+  applies writer-matched tombstones
+- DualStack send/recv uses `DeviceRatchetSessions` when sessions are
+  bound; `revokeDevice` drops those sessions
+- `RoomManager` records host-plaintext Autobase membership / channel /
+  message events (`kRoomsApplicationE2eImplemented` stays false)
+- `NativeTransportHost` owns `DozeAdapter` and drains mailboxes on
+  opaque wake / foreground
+- Desktop native plugins remain OTP1 fail-closed
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
 ## 2026-09-17 green-baseline repair
 
 The previous identity table and CI claims below are **stale**. They

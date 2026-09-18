@@ -12,6 +12,7 @@ import '../attachments/file_transfer_session.dart';
 import '../calls/hyperswarm_signaling.dart';
 import '../core/feature_flags.dart';
 import '../core/wire_crypto.dart';
+import '../devices/device_ratchet_sessions.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
 import '../mailbox/mailbox_protocol.dart';
@@ -60,10 +61,12 @@ class DualStackBridge {
     this.signRecord,
     AttachmentKeyStore? attachmentKeys,
     HypercoreLocalStore? hypercore,
+    DeviceRatchetSessions? ratchets,
   }) : secrets = secrets ?? discoverySecretStore,
        identities = identities ?? TrustedIdentityStore(),
        attachmentKeys = attachmentKeys ?? AttachmentKeyStore(),
-       hypercore = hypercore ?? HypercoreLocalStore(selfDeviceId);
+       hypercore = hypercore ?? HypercoreLocalStore(selfDeviceId),
+       ratchets = ratchets ?? DeviceRatchetSessions(localDeviceId: selfDeviceId);
 
   final OrbitsTransport transport;
   final MemoryJournal journal;
@@ -87,6 +90,7 @@ class DualStackBridge {
   final Future<void> Function(JournalRecord record)? onRemoteRecord;
   final Future<List<int>> Function(List<int> payload)? signRecord;
   final AttachmentKeyStore attachmentKeys;
+  final DeviceRatchetSessions ratchets;
   final MailboxPump _mailboxPump = MailboxPump();
   void Function(String peerId, Object packet)? onDrop;
 
@@ -229,6 +233,13 @@ class DualStackBridge {
   }
 
   Future<bool> sendEncrypted(String peerId, Object? msg) async {
+    if (msg is Map &&
+        (msg['type'] == 'wireHello' || msg['type'] == 'wireRekey')) {
+      return _sendEncryptedOne(peerId, msg);
+    }
+    if (await _sendEncryptedDeviceFanout(peerId, msg)) {
+      return true;
+    }
     final targets =
         devices?.transportTargets(peerId) ?? <String>{normalizePeerId(peerId)};
     if (targets.length > 1) {
@@ -239,6 +250,82 @@ class DualStackBridge {
       return any;
     }
     return _sendEncryptedOne(peerId, msg);
+  }
+
+  Future<bool> _sendEncryptedDeviceFanout(String peerId, Object? msg) async {
+    final registry = devices;
+    if (registry == null) return false;
+    final norm = normalizePeerId(peerId);
+    if (isBlocked(norm)) return false;
+    final recipient = DeviceRegistry()
+      ..replaceAll(
+        registry.active.where(
+          (d) => normalizePeerId(d.ownerPeerId) == norm,
+        ),
+      );
+    final sender = DeviceRegistry()
+      ..replaceAll(
+        registry.active.where(
+          (d) => normalizePeerId(d.ownerPeerId) == normalizePeerId(selfPeerId()),
+        ),
+      );
+    final targets = registry
+        .fanout(
+          recipient: recipient,
+          sender: sender,
+          sendingDeviceId: selfDeviceId,
+        )
+        .where(
+          (d) =>
+              !ratchets.isRevoked(d.deviceId) &&
+              ratchets.session(selfDeviceId, d.deviceId) != null,
+        )
+        .toList();
+    if (targets.isEmpty) return false;
+    final encoded = msg is String ? msg : jsonEncode(msg);
+    final wires = await ratchets.fanoutEncrypt(
+      sendingDeviceId: selfDeviceId,
+      targets: targets,
+      plaintext: encoded,
+    );
+    if (wires.isEmpty) return false;
+    var any = false;
+    for (final entry in wires.entries) {
+      final frame = encodeDeviceRatchetFrame(
+        fromDeviceId: selfDeviceId,
+        toDeviceId: entry.key,
+        wire: entry.value,
+      );
+      final dest = _transportIdForDevice(entry.key, fallback: norm);
+      final sentTo = isAuthenticated(dest) ? dest : norm;
+      if (!isAuthenticated(sentTo)) {
+        if (await enqueueMailbox(utf8.encode(entry.value))) any = true;
+        continue;
+      }
+      await transport.send(
+        sentTo,
+        TransportChannel.message,
+        jsonPayload(frame),
+      );
+      _appendEnvelope(
+        sentTo,
+        utf8.encode(entry.value),
+        senderIdentity: selfPeerId(),
+      );
+      any = true;
+    }
+    return any;
+  }
+
+  String _transportIdForDevice(String deviceId, {required String fallback}) {
+    for (final device in devices?.all ?? const <AuthorizedDevice>[]) {
+      if (device.deviceId != deviceId) continue;
+      final transportId = device.transportPeerId;
+      if (transportId != null && transportId.isNotEmpty) {
+        return normalizePeerId(transportId);
+      }
+    }
+    return fallback;
   }
 
   Future<bool> _sendEncryptedOne(String peerId, Object? msg) async {
@@ -339,6 +426,7 @@ class DualStackBridge {
   /// Authorization log: revoked writers are ignored on the next fan-out.
   void revokeDevice(String deviceId) {
     devices?.revoke(deviceId);
+    ratchets.revoke(deviceId);
     _queueOwnAccountRecord(
       ReplicationEventKind.deviceRevoked,
       <String, Object?>{
@@ -835,6 +923,40 @@ class DualStackBridge {
     } catch (_) {}
   }
 
+  Future<void> _onDeviceRatchetFrame(
+    String peerId,
+    Map<String, Object?> decoded,
+  ) async {
+    final fromDevice = decoded['fromDeviceId'] as String? ?? '';
+    final toDevice = decoded['toDeviceId'] as String? ?? '';
+    final wire = decoded['wire'] as String? ?? '';
+    if (fromDevice.isEmpty || toDevice.isEmpty || wire.isEmpty) return;
+    if (toDevice != selfDeviceId) return;
+    if (ratchets.isRevoked(fromDevice) || ratchets.isRevoked(toDevice)) {
+      return;
+    }
+    try {
+      final bytes = await ratchets.decryptFrom(
+        localDeviceId: selfDeviceId,
+        remoteDeviceId: fromDevice,
+        wire: wire,
+      );
+      final text = utf8.decode(bytes);
+      Object? plain;
+      try {
+        plain = jsonDecode(text);
+      } catch (_) {
+        return;
+      }
+      if (plain is! Map) return;
+      _appendEnvelope(peerId, utf8.encode(wire), senderIdentity: peerId);
+      await onPacket(
+        peerId,
+        AuthenticatedPlaintext(Map<String, Object?>.from(plain)),
+      );
+    } catch (_) {}
+  }
+
   Future<void> _onAttachmentFrame(String peerId, List<int> bytes) async {
     if (await files.handleInbound(peerId, bytes)) return;
     if (bytes.isNotEmpty && bytes[0] == 1) {
@@ -938,6 +1060,10 @@ class DualStackBridge {
       } else {
         final decoded = decodeJsonPayload(bytes);
         data = decoded;
+        if (decoded['type'] == kDeviceRatchetMessageType) {
+          unawaited(_onDeviceRatchetFrame(norm, decoded));
+          return;
+        }
         if (decoded['type'] == kAttachmentKeyMessageType) {
           return;
         }

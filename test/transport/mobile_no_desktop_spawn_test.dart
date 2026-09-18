@@ -9,6 +9,9 @@ void main() {
     expect(host, contains('isMobileBareHost()'));
     expect(host, contains('if (isMobileBareHost()) return;'));
     expect(host, contains('PluginOrbitsTransport(backend: \'hyperswarm\')'));
+    expect(host, contains('DozeAdapter(lifecycle:'));
+    expect(host, contains('persistProjectedMessage'));
+    expect(host, contains('ratchets: ratchets'));
     expect(
       host.contains('if (isMobileBareHost())') &&
           host.contains('spawnWorklet(backend:'),
@@ -56,10 +59,14 @@ void main() {
     expect(pod, contains('orbits-worklet-modules.zip'));
     final conns = File('lib/state/connections_notifier.dart').readAsStringSync();
     expect(conns, contains('if (isDevBareTransportRequested())'));
-    expect(conns, contains('unawaited(_dual?.dial(normalized))'));
-    final openChannel = conns.split('void _openChannel').last;
-    final afterDial = openChannel.split('if (isDevBareTransportRequested())').elementAt(1);
-    expect(afterDial.split('final peer = _boundPeer').first, contains('return;'));
+    expect(conns, contains('await _dual?.dial(normalized)'));
+    expect(conns, contains('shouldOpenPeerjsDataFallback'));
+    expect(conns, contains('if (canUseNative(normalized)) return;'));
+    final openPeerjs = conns.split('void _openPeerjsChannel').last;
+    expect(
+      openPeerjs.split('final peer = _boundPeer').first,
+      contains('return;'),
+    );
   });
 
   test('defaultTargetPlatform android is classified as mobile', () {

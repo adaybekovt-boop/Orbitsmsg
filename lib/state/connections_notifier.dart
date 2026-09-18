@@ -46,6 +46,7 @@ import '../calls/hyperswarm_signaling.dart';
 import '../core/feature_flags.dart';
 import '../transport/dev_bare_transport.dart';
 import '../peer/wire_transport.dart';
+import '../devices/device_ratchet_sessions.dart';
 import '../devices/device_registry.dart';
 import '../mailbox/blind_store.dart';
 import '../replication/file_journal.dart';
@@ -61,6 +62,14 @@ import '../transport/trusted_identity_store.dart';
 import 'auth_notifier.dart';
 import 'local_profile_provider.dart';
 import 'peer_connection_provider.dart';
+
+/// PeerJS data channels are only for fallback after native is unusable.
+bool shouldOpenPeerjsDataFallback({
+  required bool fallbackEnabled,
+  required bool failClosed,
+  required bool nativeUsable,
+}) =>
+    fallbackEnabled && !failClosed && !nativeUsable;
 
 // ─── Public state ─────────────────────────────────────────────────
 
@@ -250,6 +259,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     Future<void> Function(JournalRecord record)? onRemoteRecord,
     Future<List<int>> Function(List<int> payload)? signRecord,
     HypercoreLocalStore? hypercore,
+    DeviceRatchetSessions? ratchets,
   }) {
     _nativeJournal = journal ?? MemoryJournal(deviceId);
     _dual = DualStackBridge(
@@ -268,6 +278,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
       onRemoteRecord: onRemoteRecord,
       signRecord: signRecord,
       hypercore: hypercore,
+      ratchets: ratchets,
       onPacket: _dispatchNativeInbound,
       isBlocked: (rid) => _messaging.isPeerBlocked(rid),
     )
@@ -466,9 +477,8 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
   }
 
   /// Shared implementation for the two public open-channel helpers.
-  /// Keeps the "validate → lookup existing → dial via PeerJsClient →
-  /// attach listeners" sequence in one place so reliable and ephemeral
-  /// can't drift apart accidentally.
+  /// Native DualStack is exclusive when it can carry the peer; PeerJS is
+  /// only the fallback after native is unavailable or failed.
   void _openChannel(String targetId, {required bool reliable}) {
     // Guard against UI-driven calls after the notifier was disposed — the
     // chat page's postFrameCallback could land on a torn-down container
@@ -485,10 +495,43 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
     // window between `peer.connect` and `conn.onOpen`. Glare resolver
     // cleans the duplicate up today, so this is cosmetic only.
     if (existing != null && existing.open) return;
-    if (reliable) {
-      unawaited(_dual?.dial(normalized));
+    if (canUseNative(normalized)) return;
+    if (_dual != null && _dual!.nativeEnabled) {
+      unawaited(_openNativeThenMaybePeerjs(
+        normalized,
+        channel: channel,
+        reliable: reliable,
+      ));
+      return;
     }
-    if (isDevBareTransportRequested()) {
+    _openPeerjsChannel(normalized, channel: channel, reliable: reliable);
+  }
+
+  Future<void> _openNativeThenMaybePeerjs(
+    String normalized, {
+    required String channel,
+    required bool reliable,
+  }) async {
+    try {
+      await _dual?.dial(normalized);
+    } catch (_) {}
+    if (!mounted) return;
+    if (canUseNative(normalized)) return;
+    _openPeerjsChannel(normalized, channel: channel, reliable: reliable);
+  }
+
+  /// PeerJS data channels are only for fallback after native is unusable.
+  void _openPeerjsChannel(
+    String normalized, {
+    required String channel,
+    required bool reliable,
+  }) {
+    if (!mounted) return;
+    if (!shouldOpenPeerjsDataFallback(
+      fallbackEnabled: isPeerjsFallbackEnabled(),
+      failClosed: isDevBareTransportRequested(),
+      nativeUsable: canUseNative(normalized),
+    )) {
       return;
     }
     final peer = _boundPeer;

@@ -13,13 +13,16 @@ import 'package:orbits_transport/orbits_transport.dart';
 import '../core/feature_flags.dart';
 import '../core/identity_key.dart';
 import '../core/wire_crypto.dart';
+import '../devices/device_ratchet_sessions.dart';
 import '../devices/device_registry.dart';
 import '../devices/local_device_material.dart';
 import '../mailbox/blind_store.dart';
 import '../peer/signaling.dart';
+import '../push/doze_adapter.dart';
 import '../push/opaque_wake.dart';
 import '../push/wake_service.dart';
 import '../replication/drift_projector.dart';
+import '../storage/db.dart' as db;
 import '../replication/hypercore_store.dart';
 import '../replication/memory_journal.dart';
 import '../state/auth_notifier.dart';
@@ -64,6 +67,8 @@ class NativeTransportHost {
   bool attached = false;
   TransportLifecycle? lifecycle;
   OpaqueWakeService? wake;
+  DozeAdapter? doze;
+  DeviceRatchetSessions? ratchets;
 
   Map<String, Object?> get routeDiagnostics =>
       lastDecision?.diagnostics() ??
@@ -196,10 +201,25 @@ class NativeTransportHost {
     for (final record in memory.records) {
       hypercore!.append(record);
     }
+    ratchets = DeviceRatchetSessions(localDeviceId: material.deviceId);
     projector = JournalProjector(
       decrypt: _decryptJournalEnvelope,
       isBlocked: (peerId) =>
           _ref.read(messagingNotifierProvider.notifier).isPeerBlocked(peerId),
+      persist: (msg) async {
+        try {
+          await persistProjectedMessage(
+            msg,
+            selfPeerId: _sessionPeerId ?? '',
+            save: db.saveMessage,
+          );
+        } catch (_) {}
+      },
+      tombstone: (id) async {
+        try {
+          await db.deleteMessageRow(id);
+        } catch (_) {}
+      },
     );
     await projector!.applyAll(memory);
     final secret = discoverySecretStore.getOrCreateLocal();
@@ -297,6 +317,7 @@ class NativeTransportHost {
           devices: deviceRegistry,
           identities: trustedIdentityStore,
           hypercore: hypercore,
+          ratchets: ratchets,
           confirmPeerAuthorization: (peerId, {required authorized}) async {
             final carrier = transport;
             if (carrier == null) {
@@ -319,7 +340,8 @@ class NativeTransportHost {
         return bridge.drainKnownMailboxes(discoverySecretStore.knownPeerIds);
       },
     );
-    wake = OpaqueWakeService(onAccepted: (_) => lifecycle!.onOpaqueWake());
+    doze = DozeAdapter(lifecycle: lifecycle!);
+    wake = OpaqueWakeService(onAccepted: (_) => doze!.onOpaqueWake());
     if (_startupAborted(generation)) {
       await _teardownAttached(chosen: chosen, unbind: true);
       return;
@@ -447,10 +469,20 @@ class NativeTransportHost {
   }
 
   Future<void> onBackground() async {
+    final adapter = doze;
+    if (adapter != null) {
+      await adapter.enterBackground();
+      return;
+    }
     await lifecycle?.onBackground();
   }
 
   Future<void> onForeground() async {
+    final adapter = doze;
+    if (adapter != null) {
+      await adapter.onForeground();
+      return;
+    }
     await lifecycle?.onForeground();
   }
 
@@ -480,6 +512,8 @@ class NativeTransportHost {
     }
     lifecycle = null;
     wake = null;
+    doze = null;
+    ratchets = null;
     projector = null;
     hypercore = null;
     attached = false;

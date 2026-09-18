@@ -84,3 +84,45 @@ class AutobaseProjection {
     }
   }
 }
+
+/// Local writer-seq tracker used by RoomManager. Payload stays host-plaintext.
+class RoomAutobaseLog {
+  RoomAutobaseLog({Set<String>? revokedWriters})
+      : projection = AutobaseProjection(revokedWriters: revokedWriters);
+
+  final AutobaseProjection projection;
+  final Map<String, int> _seq = <String, int>{};
+
+  int nextSeq(String writerId) =>
+      _seq[writerId] = (_seq[writerId] ?? -1) + 1;
+
+  RoomEvent append({
+    required String writerId,
+    required String kind,
+    required Map<String, Object?> payload,
+    int? seq,
+  }) {
+    final resolved = seq ?? nextSeq(writerId);
+    if (seq != null) {
+      final current = _seq[writerId] ?? -1;
+      if (seq > current) _seq[writerId] = seq;
+    }
+    final event = RoomEvent(
+      writerId: writerId,
+      seq: resolved,
+      kind: kind,
+      payload: payload,
+    );
+    projection.apply(event);
+    return event;
+  }
+
+  void clear() {
+    projection.state.members.clear();
+    projection.state.roles.clear();
+    projection.state.channels.clear();
+    projection.state.messages.clear();
+    projection.state.applied.clear();
+    _seq.clear();
+  }
+}
