@@ -97,17 +97,18 @@ class StoragePeerClient {
   }
 
   /// In-process peer used by tests and desktop mailbox mode.
+  /// [grantSecret] is required so versioned ops cannot skip HMAC.
   factory StoragePeerClient.local(
     BlindMailboxStore store, {
-    List<int>? grantSecret,
+    required List<int> grantSecret,
     int Function()? nowMs,
   }) {
+    if (grantSecret.length < 16) {
+      throw ArgumentError('mailbox grantSecret must be at least 16 bytes');
+    }
     final clock = nowMs ?? (() => DateTime.now().millisecondsSinceEpoch);
     MailboxHttpRequest authorize(MailboxHttpRequest request) {
-      final secret = grantSecret;
-      if (secret != null) {
-        verifyMailboxRequest(request, grantSecret: secret, nowMs: clock());
-      }
+      verifyMailboxRequest(request, grantSecret: grantSecret, nowMs: clock());
       if (!store.rememberRequest(request.requestId)) {
         throw MailboxProtocolException('replay', 'request was already seen');
       }

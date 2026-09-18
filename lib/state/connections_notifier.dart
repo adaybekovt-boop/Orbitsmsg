@@ -758,6 +758,7 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
           // Same — sound cue hooks live in a future audio slice.
         },
         isAppInForeground: () => true,
+        attachmentKeys: _dual?.attachmentKeys,
     );
   }
 

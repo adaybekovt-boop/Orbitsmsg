@@ -291,12 +291,13 @@ class DualStackBridge {
 
   /// Offline deposit: encrypted bytes only. Used when the recipient is not
   /// currently connected. The storage peer never sees keys.
+  ///
+  /// Remote HTTP deposit is async — callers must use [enqueueMailbox] or
+  /// [depositMailboxRemote]. This sync helper never pretends a remote
+  /// write already finished.
   bool depositMailbox(List<int> encryptedEnvelope, {String? envelopeId}) {
     if (storagePeer != null && mailboxCapability != null) {
-      unawaited(
-        depositMailboxRemote(encryptedEnvelope, envelopeId: envelopeId),
-      );
-      return true;
+      return false;
     }
     final store = mailbox;
     final token = mailboxToken;
@@ -424,20 +425,7 @@ class DualStackBridge {
       token: token,
       writerKey: writer,
     );
-    final from = normalizePeerId(fromPeerId ?? writer);
-    var projected = 0;
-    for (final block in blocks) {
-      final id = block.envelopeId ?? _stableEnvelopeId(block.bytes);
-      if (!_mailboxPump.markProjected(id)) continue;
-      _appendEnvelope(from, block.bytes, senderIdentity: from);
-      final text = utf8.decode(block.bytes);
-      await onPacket(
-        from,
-        isWireCiphertext(text) ? text : decodeJsonPayload(block.bytes),
-      );
-      projected += 1;
-    }
-    return projected;
+    return _projectMailboxBlocks(blocks, fromPeerId: fromPeerId);
   }
 
   Future<int> drainMailboxRemote({String? fromPeerId}) async {
@@ -448,22 +436,39 @@ class DualStackBridge {
       client: client,
       capability: cap,
     );
-    final from = normalizePeerId(fromPeerId ?? cap.mailboxId);
+    return _projectMailboxBlocks(
+      blocks,
+      fromPeerId: fromPeerId,
+      acknowledge: (id) => _mailboxPump.acknowledgeRemote(
+        client: client,
+        capability: cap,
+        envelopeId: id,
+      ),
+    );
+  }
+
+  /// Project collected envelopes. [fromPeerId] is required — the store is
+  /// blind and must not invent a sender from the writer key or mailbox id.
+  /// Blocked senders are skipped before journal / Hypercore / onPacket.
+  Future<int> _projectMailboxBlocks(
+    List<EncryptedBlock> blocks, {
+    required String? fromPeerId,
+    Future<void> Function(String envelopeId)? acknowledge,
+  }) async {
+    final from = normalizePeerId(fromPeerId ?? '');
+    if (from.isEmpty || isBlocked(from)) return 0;
     var projected = 0;
     for (final block in blocks) {
       final id = block.envelopeId ?? _stableEnvelopeId(block.bytes);
-      if (!_mailboxPump.markProjected(id)) continue;
+      if (_mailboxPump.projectedEnvelopeIds.contains(id)) continue;
       _appendEnvelope(from, block.bytes, senderIdentity: from);
       final text = utf8.decode(block.bytes);
       await onPacket(
         from,
         isWireCiphertext(text) ? text : decodeJsonPayload(block.bytes),
       );
-      await _mailboxPump.acknowledgeRemote(
-        client: client,
-        capability: cap,
-        envelopeId: id,
-      );
+      _mailboxPump.markProjected(id);
+      if (acknowledge != null) await acknowledge(id);
       projected += 1;
     }
     return projected;
@@ -490,7 +495,7 @@ class DualStackBridge {
 
   Future<void> sendCallSignal(String peerId, CallSignal signal) {
     final norm = normalizePeerId(peerId);
-    if (!isAuthenticated(norm)) {
+    if (isBlocked(norm) || !isAuthenticated(norm)) {
       throw StateError('call signaling requires an authenticated peer');
     }
     return transport.send(
@@ -914,18 +919,14 @@ class DualStackBridge {
     try {
       final text = utf8.decode(bytes);
       if (isWireCiphertext(text)) {
+        // Decrypt once, in onPacket / dispatchReliableInbound. A side
+        // peek here burns the ratchet and drops the chat plaintext.
         data = text;
         _appendEnvelope(norm, bytes, senderIdentity: norm);
-        unawaited(() async {
-          try {
-            final plain = await decryptWirePayload(norm, text);
-            tryAcceptAttachmentKeyMessage(attachmentKeys, norm, plain);
-          } catch (_) {}
-        }());
       } else {
         final decoded = decodeJsonPayload(bytes);
         data = decoded;
-        if (tryAcceptAttachmentKeyMessage(attachmentKeys, norm, decoded)) {
+        if (decoded['type'] == kAttachmentKeyMessageType) {
           return;
         }
         if (decoded['type'] == 'capabilities' ||

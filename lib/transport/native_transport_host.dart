@@ -312,11 +312,9 @@ class NativeTransportHost {
     lifecycle = TransportLifecycle(
       transport: transport!,
       onResumeDrain: () async {
-        return await _ref
-                .read(connectionsNotifierProvider.notifier)
-                .nativeBridge
-                ?.drainMailbox() ??
-            0;
+        // Drain requires an authenticated sender. The local store is
+        // blind and must not invent one from mailboxWriterKey.
+        return 0;
       },
     );
     wake = OpaqueWakeService(onAccepted: (_) => lifecycle!.onOpaqueWake());

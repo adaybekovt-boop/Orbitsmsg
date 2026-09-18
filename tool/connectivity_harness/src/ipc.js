@@ -5,6 +5,7 @@ const VERSION = 1
 const REQUEST = 1
 const RESPONSE = 2
 const EVENT = 3
+const MAX_PAYLOAD = 256 * 1024
 
 function encode(type, body) {
   const payload = Buffer.from(JSON.stringify(body), 'utf8')
@@ -41,6 +42,10 @@ class Decoder {
       }
       const type = this._buf.readUInt8(5)
       const len = this._buf.readUInt32BE(6)
+      if (len > MAX_PAYLOAD) {
+        this.reset()
+        throw new Error('IPC payload exceeds cap')
+      }
       if (this._buf.length < 10 + len) break
       const payload = this._buf.subarray(10, 10 + len)
       try {
@@ -55,4 +60,4 @@ class Decoder {
   }
 }
 
-module.exports = { MAGIC, VERSION, REQUEST, RESPONSE, EVENT, encode, Decoder }
+module.exports = { MAGIC, VERSION, REQUEST, RESPONSE, EVENT, MAX_PAYLOAD, encode, Decoder }

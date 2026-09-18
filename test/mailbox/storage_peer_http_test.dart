@@ -242,7 +242,10 @@ void main() {
         onPacket: (_, data) async => seen.add(data),
       )..attach();
 
-      final n = await recipient.drainMailbox();
+      expect(await recipient.drainMailbox(), 0);
+      final n = await recipient.drainMailbox(
+        fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+      );
       expect(n, 1);
       expect(seen, ['v2:hdr:iv:ciphertext-bytes']);
       expect(recipient.journal.length, 1);
@@ -251,7 +254,9 @@ void main() {
         isTrue,
       );
 
-      final again = await recipient.drainMailbox();
+      final again = await recipient.drainMailbox(
+        fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+      );
       expect(again, 0);
       expect(seen, hasLength(1));
       await recipient.detach();
@@ -631,6 +636,12 @@ void main() {
     } finally {
       http.close(force: true);
     }
+  });
+
+  test('http storage peer client requires an explicit http(s) origin', () {
+    expect(() => httpStoragePeerClient(''), throwsArgumentError);
+    expect(() => httpStoragePeerClient('file:///tmp'), throwsArgumentError);
+    expect(() => httpStoragePeerClient('/v1/mailbox'), throwsArgumentError);
   });
 }
 

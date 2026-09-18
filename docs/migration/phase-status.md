@@ -18,7 +18,8 @@ repair, then the correctness slice: incoming-path lookup, identity-signed
 own-account replication, Corestore writer-key remember, fail-closed
 projector decrypt, then the side-branch port slice: refuse-to-send APNs
 shape, capped transport-downgrade log, identity-key match on
-own-account inbound, FileJournal rejected-replay). Treat CI on that
+own-account inbound, FileJournal rejected-replay, then the 2026-09-18
+fail-closed handwritten slice). Treat CI on that
 branch as current evidence, not the older repair SHAs in this file.
 
 | Phase | Implemented in production path | Automated evidence on repair SHA | External/manual gate |

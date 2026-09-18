@@ -183,6 +183,10 @@ class FileTransferCoordinator {
     } catch (_) {
       return false;
     }
+    if (body['type'] == kAttachmentKeyMessageType) {
+      // Keys arrive inside a ratchet message, not on this channel.
+      return true;
+    }
     if (body['protocol'] != kFileTransferProtocol) return false;
     final type = body['type'] as String? ?? '';
     final id = trySanitizeTransferId(body['transferId'] as String? ?? '');
@@ -199,9 +203,6 @@ class FileTransferCoordinator {
           wait.complete(body);
         }
       }
-      return true;
-    }
-    if (keys != null && tryAcceptAttachmentKeyMessage(keys!, peerId, body)) {
       return true;
     }
     if (type == 'file-offer') {
@@ -226,6 +227,7 @@ class FileTransferCoordinator {
     final id = sanitizeTransferId(body['transferId'] as String? ?? '');
     final size = (body['size'] as num?)?.toInt() ?? 0;
     final digest = body['sha256'] as String? ?? '';
+    if (digest.isEmpty) return;
     final name = (body['name'] as String? ?? 'blob').replaceAll(
       RegExp(r'[\x00-\x1f\\/:*?"<>|]'),
       '_',
@@ -360,7 +362,7 @@ class FileTransferCoordinator {
     final actual = await sha256File(incoming.file);
     final expected = incoming.sha256hex;
     final size = incoming.file.lengthSync();
-    final ok = (expected.isEmpty || actual == expected) && size == incoming.size;
+    final ok = expected.isNotEmpty && actual == expected && size == incoming.size;
     if (!ok) {
       try {
         incoming.file.deleteSync();

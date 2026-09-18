@@ -7,6 +7,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "orbits_sha256.h"
+
 #ifdef _WIN32
 static bool file_exists(const char* path) {
   DWORD attrs = GetFileAttributesA(path);
@@ -26,7 +28,29 @@ static bool read_sidecar(const char* binary, char* hex, size_t hex_len) {
   fclose(fp);
   char* nl = strchr(hex, '\n');
   if (nl) *nl = '\0';
+  char* cr = strchr(hex, '\r');
+  if (cr) *cr = '\0';
   return strlen(hex) == 64;
+}
+
+static bool orbits_bare_verify_sha256_file(const char* path,
+                                           const char* expected_hex) {
+  FILE* fp = fopen(path, "rb");
+  if (!fp) return false;
+  orbits_sha256_ctx ctx;
+  orbits_sha256_init(&ctx);
+  unsigned char buf[4096];
+  size_t n;
+  while ((n = fread(buf, 1, sizeof(buf), fp)) > 0) {
+    orbits_sha256_update(&ctx, buf, n);
+  }
+  fclose(fp);
+  unsigned char digest[32];
+  orbits_sha256_final(&ctx, digest);
+  char hex[65];
+  orbits_sha256_hex(digest, hex);
+  if (expected_hex == nullptr || expected_hex[0] == '\0') return false;
+  return strcmp(hex, expected_hex) == 0;
 }
 
 static bool module_dir(char* out, size_t out_len) {
@@ -65,6 +89,9 @@ int orbits_bare_try_launch(OrbitsBareHost* host) {
   }
   char expected[80];
   if (!read_sidecar(runtime, expected, sizeof(expected))) {
+    return kOrbitsHostRuntimeTampered;
+  }
+  if (!orbits_bare_verify_sha256_file(runtime, expected)) {
     return kOrbitsHostRuntimeTampered;
   }
   char worklet_buf[4096] = {0};

@@ -139,10 +139,10 @@ class LocalWorkletPlatform extends OrbitsTransportPlatform {
   @override
   Future<void> send(String peerId, String channel, List<int> frame) {
     assertIpcFrameSize(frame);
-    final named = TransportChannel.values.firstWhere(
-      (c) => c.name == channel,
-      orElse: () => TransportChannel.message,
-    );
+    final named = channelFromWire(channel);
+    if (named == null) {
+      throw StateError('unknown transport channel');
+    }
     return _require().send(peerId, named, frame);
   }
 

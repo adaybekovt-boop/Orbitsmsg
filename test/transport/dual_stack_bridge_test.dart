@@ -321,9 +321,41 @@ void main() {
       isTrue,
     );
     await pair.$1.stop();
+    expect(await b.drainMailbox(), 0);
     final n = await b.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA');
     expect(n, greaterThan(0));
     expect(seen.whereType<Map>().any((m) => m['type'] == 'wireHello'), isTrue);
+  });
+
+  test('mailbox drain skips blocked senders and does not invent a sender', () async {
+    final store = BlindMailboxStore()
+      ..grant(
+        MailboxCapability(
+          token: 'cap-1',
+          quotaBytes: 4096,
+          retentionMs: 60 * 1000,
+          expiresAt: DateTime.now().millisecondsSinceEpoch + 60 * 1000,
+        ),
+      );
+    final blocked = DualStackBridge(
+      transport: LoopbackOrbitsTransport(),
+      journal: MemoryJournal('b'),
+      selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+      selfDeviceId: 'b',
+      isBlocked: (id) => id == 'ORBIT-AAAAAAAAAAAAAAAA',
+      mailbox: store,
+      mailboxToken: 'cap-1',
+      mailboxWriterKey: 'ORBIT-AAAAAAAAAAAAAAAA',
+      onPacket: (_, __) async {},
+    )..attach();
+    expect(blocked.depositMailbox(utf8.encode('v2:hdr:iv:ct')), isTrue);
+    expect(await blocked.drainMailbox(), 0);
+    expect(
+      await blocked.drainMailbox(fromPeerId: 'ORBIT-AAAAAAAAAAAAAAAA'),
+      0,
+    );
+    expect(blocked.journal.length, 0);
+    await blocked.detach();
   });
 
   test('drop chunks and hypercore replication ride native channels', () async {

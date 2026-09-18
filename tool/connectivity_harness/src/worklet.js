@@ -320,8 +320,7 @@ class Worklet {
         this._noisePublicHex = hc.keyPair(this._noiseSeed).publicKey.toString('hex')
         return this._noisePublicHex
       } catch {
-        this._noisePublicHex = createHash('sha256').update(this._noiseSeed).digest('hex')
-        return this._noisePublicHex
+        return null
       }
     }
     return null
@@ -418,6 +417,9 @@ class Worklet {
   async authorize(peerId) {
     const peer = this._requirePeer(peerId)
     if (peer.authState === AUTH_REJECTED) throw new Error('peer already rejected')
+    if (this.backend !== 'loopback' && !peer.binding) {
+      throw new Error('authorization requires a device binding')
+    }
     peer.authState = AUTH_AUTHENTICATED
     this._resolveAuthWaiter(peer, true)
     this._emitAuthenticated(peer)
@@ -1050,7 +1052,7 @@ class Worklet {
     fs.closeSync(incoming.fd)
     const actualSha = incoming.hasher.digest('hex')
     const expectedSha = body.sha256 || incoming.sha256
-    if (expectedSha && actualSha !== expectedSha) {
+    if (!expectedSha || actualSha !== expectedSha) {
       try { fs.unlinkSync(incoming.path) } catch {}
       this._emit('error', { code: 'file-hash', message: 'attachment hash mismatch' })
       return

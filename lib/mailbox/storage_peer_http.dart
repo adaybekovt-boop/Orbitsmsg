@@ -238,7 +238,21 @@ class StoragePeerHttp {
   }
 }
 
+void requireStoragePeerOrigin(String origin) {
+  final uri = Uri.tryParse(origin);
+  if (uri == null ||
+      (uri.scheme != 'http' && uri.scheme != 'https') ||
+      uri.host.isEmpty) {
+    throw ArgumentError.value(
+      origin,
+      'origin',
+      'storage peer origin must be an http(s) URL with a host',
+    );
+  }
+}
+
 StoragePeerClient httpStoragePeerClient(String origin) {
+  requireStoragePeerOrigin(origin);
   Future<Map<String, Object?>> post(MailboxHttpRequest request) async {
     final client = HttpClient();
     try {

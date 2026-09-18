@@ -96,6 +96,26 @@ void main() {
     expect(String.fromCharCodes((fromB64 as TransportFrame).bytes), 'ping');
   });
 
+  test('unknown frame channel is dropped, not remapped to message', () {
+    expect(
+      platformMapToTransportEvent(<String, Object?>{
+        'name': 'frame',
+        'peerId': 'p',
+        'channel': 'not-a-channel',
+        'bytes': <int>[1],
+      }),
+      isNull,
+    );
+    expect(channelFromWire('message'), TransportChannel.message);
+    expect(channelFromWire('nope'), isNull);
+  });
+
+  test('empty hypercore writer is not accepted from the wire', () {
+    final raw = deviceBindingToWire(_binding());
+    raw['hypercorePublicKeyB64'] = '';
+    expect(deviceBindingFromWire(raw), isNull);
+  });
+
   test('deviceBindingToWire round-trips owner and writer keys', () {
     final binding = _binding();
     final again = deviceBindingFromWire(deviceBindingToWire(binding));

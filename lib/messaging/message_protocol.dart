@@ -30,6 +30,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import '../attachments/attachment_keys.dart';
 import '../attachments/temp_attachment.dart';
 import '../core/bundle_cache.dart';
 import '../core/prekey_bundle.dart';
@@ -97,6 +98,7 @@ class ReliableInboundCtx {
     this.onUnexpectedPlaintext,
     this.persistInbound,
     this.isPeerBlocked,
+    this.attachmentKeys,
     Set<String>? processingMsgIds,
   }) : processingMsgIds = processingMsgIds ?? <String>{};
 
@@ -182,6 +184,9 @@ class ReliableInboundCtx {
   final void Function(Object err)? onHandshakeError;
   final void Function(Object err)? onDecryptError;
   final void Function(Object? data)? onUnexpectedPlaintext;
+
+  /// Per-transfer attachment keys. Filled only after a ratchet decrypt.
+  final AttachmentKeyStore? attachmentKeys;
 }
 
 // в”Ђв”Ђв”Ђ Ephemeral dispatch в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
@@ -303,6 +308,14 @@ Future<bool> dispatchReliablePlaintext(
   }
 
   final type = data['type'];
+
+  if (type == kAttachmentKeyMessageType) {
+    final store = ctx.attachmentKeys;
+    if (store != null) {
+      tryAcceptAttachmentKeyMessage(store, remoteId, data);
+    }
+    return true;
+  }
 
   // в”Ђв”Ђв”Ђ profile_req вЂ” remote wants our profile card в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
   if (type == 'profile_req') {

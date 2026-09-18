@@ -192,5 +192,36 @@ void main() {
     await projector.applyAll(journal);
     expect(decrypted, 0);
     expect(projector.messages, isEmpty);
+    expect(projector.seenEventIds, isEmpty);
+  });
+
+  test('failed decrypt does not burn the event id', () async {
+    var attempts = 0;
+    final journal = MemoryJournal('dev-a');
+    journal.appendEnvelope(
+      const MessageEnvelopeCreated(
+        eventId: 'late',
+        conversationId: 'c1',
+        senderIdentity: 'alice',
+        senderDeviceId: 'dev-a',
+        logicalSequence: 1,
+        createdAt: 1,
+        encryptedEnvelope: <int>[70],
+      ),
+    );
+    final projector = JournalProjector(
+      decrypt: (enc, _) async {
+        attempts += 1;
+        if (attempts == 1) return null;
+        return {'text': String.fromCharCodes(enc)};
+      },
+    );
+    await projector.applyAll(journal);
+    expect(projector.messages, isEmpty);
+    expect(projector.seenEventIds, isEmpty);
+    projector.cursor = 0;
+    await projector.applyAll(journal);
+    expect(projector.messages['late']?.plaintext, 'F');
+    expect(projector.seenEventIds, contains('late'));
   });
 }

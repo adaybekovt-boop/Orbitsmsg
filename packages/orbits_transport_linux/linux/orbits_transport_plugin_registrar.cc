@@ -154,6 +154,9 @@ static void orbits_transport_plugin_handle_method_call(
     response = reply_host(orbits_bare_host_suspend(&self->host));
   } else if (strcmp(method, "resume") == 0) {
     response = reply_host(orbits_bare_host_resume(&self->host));
+  } else if (strcmp(method, "authorize") == 0 || strcmp(method, "deny") == 0 ||
+             strcmp(method, "runtimeInfo") == 0) {
+    response = reply_host(kOrbitsHostBareMissing);
   } else {
     response = FL_METHOD_RESPONSE(fl_method_not_implemented_response_new());
   }

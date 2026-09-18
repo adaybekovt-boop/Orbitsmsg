@@ -118,6 +118,51 @@ void main() {
     );
   });
 
+  test('empty sha256 offer is refused and attachment-key JSON is not accepted on the file channel', () async {
+    final incoming = Directory.systemTemp.createTempSync('orbits-empty-sha-');
+    addTearDown(() {
+      if (incoming.existsSync()) incoming.deleteSync(recursive: true);
+    });
+    final recv = FileTransferCoordinator()
+      ..keys = AttachmentKeyStore()
+      ..incomingBase = incoming
+      ..send = (_, __) async {};
+    await recv.handleInbound(
+      'alice',
+      utf8.encode(
+        jsonEncode({
+          'type': 'file-offer',
+          'protocol': kFileTransferProtocol,
+          'transferId': 'nosha0000000001',
+          'name': 'x.bin',
+          'size': 4,
+          'sha256': '',
+        }),
+      ),
+    );
+    expect(incomingRoot(incoming).existsSync() ? incomingRoot(incoming).listSync() : const [], isEmpty);
+
+    final key = List<int>.filled(32, 4);
+    final accepted = await recv.handleInbound(
+      'alice',
+      utf8.encode(
+        jsonEncode(
+          attachmentKeyMessage(
+            transferId: 'plainkey0000001',
+            key: key,
+            sender: 'alice',
+            receiver: 'bob',
+            name: 'x.bin',
+            size: 4,
+            sha256hex: 'aa',
+          ),
+        ),
+      ),
+    );
+    expect(accepted, isTrue);
+    expect(recv.keys!.has('alice', 'plainkey0000001'), isFalse);
+  });
+
   test('wrong sender on attachment-key message is ignored', () {
     final store = AttachmentKeyStore();
     final key = List<int>.filled(32, 9);

@@ -89,7 +89,6 @@ class JournalProjector {
       case ReplicationEventKind.messageEnvelopeCreated:
         final id = record.fields['eventId'] as String?;
         if (id == null || seenEventIds.contains(id)) return;
-        seenEventIds.add(id);
         final sender = record.fields['senderIdentity'] as String? ?? '';
         if (sender.isNotEmpty && (isBlocked?.call(sender) ?? false)) {
           return;
@@ -98,6 +97,7 @@ class JournalProjector {
         if (enc is! List<int>) return;
         final plain = await decrypt(enc, record);
         if (plain == null) return;
+        seenEventIds.add(id);
         messages[id] = ProjectedMessage(
           eventId: id,
           conversationId: record.fields['conversationId'] as String? ?? '',

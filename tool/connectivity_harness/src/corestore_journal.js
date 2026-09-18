@@ -60,7 +60,7 @@ class CorestoreJournal {
   }
 
   list() {
-    return this.blocks.slice()
+    return this.blocks.filter((block) => fieldsAreSafe(block.fields))
   }
 
   publicKeyHex() {
@@ -108,7 +108,14 @@ class RealCorestoreJournal {
     const blocks = []
     for (let i = 0; i < this.core.length; i++) {
       const raw = await this.core.get(i)
-      blocks.push(JSON.parse(Buffer.from(raw).toString('utf8')))
+      let parsed
+      try {
+        parsed = JSON.parse(Buffer.from(raw).toString('utf8'))
+      } catch {
+        continue
+      }
+      if (!parsed || !fieldsAreSafe(parsed.fields)) continue
+      blocks.push(parsed)
     }
     return blocks
   }

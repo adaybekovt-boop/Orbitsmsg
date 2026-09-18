@@ -204,6 +204,17 @@ void main() {
     );
     expect(world.bob.diagnostics().containsKey('rootKey'), isFalse);
   });
+
+  test('restore refuses a revoked device pair', () async {
+    final world = await _threeDevices();
+    final snap = await world.bob.snapshot(
+      DeviceRatchetSessions.sessionKey('bob', 'alice-phone'),
+    );
+    final restored = DeviceRatchetSessions(localDeviceId: 'bob')
+      ..revoke('alice-phone');
+    await expectLater(restored.restore(snap), throwsStateError);
+    expect(restored.sessionCount, 0);
+  });
 }
 
 class _World {

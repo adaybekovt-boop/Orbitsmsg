@@ -137,6 +137,21 @@ class DeviceRatchetSessions {
     if (key.isEmpty || !row.containsKey('rootKey')) {
       throw const FormatException('incomplete ratchet snapshot');
     }
+    final sep = key.indexOf('->');
+    if (sep <= 0 || sep + 2 >= key.length) {
+      throw const FormatException('incomplete ratchet snapshot');
+    }
+    final localId = key.substring(0, sep);
+    final remoteId = key.substring(sep + 2);
+    if (_revoked.contains(localId) || _revoked.contains(remoteId)) {
+      throw StateError('revoked device cannot restore a ratchet session');
+    }
+    final rootKey = base64ToBytes(row['rootKey'] as String);
+    for (final existing in _sessions.values) {
+      if (_bytesEqual(existing.rootKey, rootKey)) {
+        throw StateError('devices must not share a rootKey');
+      }
+    }
     final pub = base64ToBytes(row['dhPubSpki'] as String);
     final point = parseP256Spki(pub);
     final pair = EcKeyPairData(
@@ -147,7 +162,7 @@ class DeviceRatchetSessions {
     );
     final skippedRaw = row['skipped'] as Map? ?? const {};
     _sessions[key] = RatchetState(
-      rootKey: base64ToBytes(row['rootKey'] as String),
+      rootKey: rootKey,
       sendCk: row['sendCk'] is String
           ? base64ToBytes(row['sendCk'] as String)
           : null,

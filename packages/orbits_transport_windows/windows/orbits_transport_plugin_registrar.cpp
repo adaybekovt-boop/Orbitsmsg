@@ -220,6 +220,10 @@ void OrbitsTransportPluginImpl::HandleMethodCall(
     ReplyHost(orbits_bare_host_resume(&host_), *result);
     return;
   }
+  if (method == "authorize" || method == "deny" || method == "runtimeInfo") {
+    ReplyHost(kOrbitsHostBareMissing, *result);
+    return;
+  }
   result->NotImplemented();
 }
 

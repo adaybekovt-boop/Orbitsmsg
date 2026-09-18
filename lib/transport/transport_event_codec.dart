@@ -25,11 +25,12 @@ List<int> frameBytesFromWire(Map<String, Object?> event) {
   return const <int>[];
 }
 
-TransportChannel channelFromWire(String? name) {
-  return TransportChannel.values.firstWhere(
-    (c) => c.name == name,
-    orElse: () => TransportChannel.message,
-  );
+TransportChannel? channelFromWire(String? name) {
+  if (name == null || name.isEmpty) return null;
+  for (final channel in TransportChannel.values) {
+    if (channel.name == name) return channel;
+  }
+  return null;
 }
 
 /// Decode a flattened platform / IPC map. Does not invent a Noise key
@@ -77,11 +78,9 @@ TransportEvent? platformMapToTransportEvent(Map<String, Object?> event) {
     case 'resumed':
       return const TransportResumed();
     case 'frame':
-      return TransportFrame(
-        peerId,
-        channelFromWire(event['channel'] as String?),
-        frameBytesFromWire(event),
-      );
+      final channel = channelFromWire(event['channel'] as String?);
+      if (channel == null) return null;
+      return TransportFrame(peerId, channel, frameBytesFromWire(event));
     case 'deliveryState':
       return TransportDeliveryState(peerId, event['state'] as String? ?? '');
     case 'error':

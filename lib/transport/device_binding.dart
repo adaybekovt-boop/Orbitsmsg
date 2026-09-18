@@ -114,6 +114,7 @@ DeviceBinding? deviceBindingFromWire(Map<String, Object?>? raw) {
     if (deviceId.isEmpty ||
         identity.isEmpty ||
         transport.isEmpty ||
+        hypercore.isEmpty ||
         signature.isEmpty) {
       return null;
     }

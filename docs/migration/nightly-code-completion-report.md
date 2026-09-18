@@ -88,6 +88,37 @@ share `sanitizeTransferId`. Lookup compares sanitized external ids so
 receive. Traversal checks stay. The blob is still copied into Drift
 for the chat decoder (path-only persist is a later slice).
 
+## 2026-09-18 fail-closed handwritten slice
+
+Ported leftover fail-open defects found in the handwritten review.
+Did **not** claim migration complete, turn Hyperswarm on, rewrite
+mailbox HTTP, merge call machines, or add `room_crypto.dart`.
+
+- DualStack no longer side-decrypts inbound ciphertext (that burned the
+  ratchet). Attachment keys are accepted only after
+  `dispatchReliablePlaintext` decrypts once
+- Mailbox drain requires `fromPeerId`, blocks before journal/Hypercore,
+  and does not invent a sender from the writer key or mailbox id
+- Sync `depositMailbox` no longer pretends a remote HTTP write finished
+- Unknown IPC channels are dropped, not remapped to `message`
+- Worklet `noisePublicKey()` no longer invents `SHA256(seed)`
+- Non-loopback `authorize()` requires a device binding
+- Incoming file offers with an empty SHA-256 fail closed
+- Attachment-key JSON on the file channel is ignored
+- Projector marks `seen` only after a successful decrypt
+- `StoragePeerClient.local` requires HMAC; HTTP client requires an
+  explicit `http(s)` origin
+- Empty Hypercore writer keys are rejected on inbound decode
+- `DeviceRatchetSessions.restore` refuses revoked devices
+- JS OTP1 decoder caps payload at 256 KiB; Corestore journal re-checks
+  forbidden fields on read
+- Windows Bare spawn hashes `bare.exe` against the sidecar
+- Desktop plugins answer `authorize` / `deny` / `runtimeInfo` fail-closed
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. Rooms stay host-plaintext. PeerJS remains the production
+default.
+
 ## 2026-09-17 event codec + host teardown
 
 - One `platformMapToTransportEvent` /

@@ -16,4 +16,11 @@ test('journal stores encrypted envelopes and rejects plaintext', () => {
     /secret field/,
   )
   assert.throws(() => journal.append({ fields: { kek: 'nope' } }), /secret field|encryptedEnvelope/)
+  journal.blocks.push({
+    seq: 99,
+    writerDeviceId: 'dev-a',
+    kind: 'messageEnvelopeCreated',
+    fields: { kek: 'tampered', encryptedEnvelope: 'x' },
+  })
+  assert.equal(journal.list().length, 1)
 })

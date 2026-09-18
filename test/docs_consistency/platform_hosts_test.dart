@@ -33,6 +33,9 @@ void main() {
           'suspend',
           'resume',
           'refreshNetwork',
+          'authorize',
+          'deny',
+          'runtimeInfo',
         ]) {
           expect(text, contains(method), reason: '$path missing $method');
         }
