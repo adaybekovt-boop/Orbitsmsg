@@ -74,6 +74,10 @@ on.
 - FileJournal rejected-replay assertion uses hashed
   `conversationIdForPeers` and `FileJournal.memory` as
   `durableJournal`
+- FileJournal replay no longer drops accepted remote writers.
+  `MemoryJournal.importPersisted` keeps the original writer and
+  reassigns a local seq so the projector cursor cannot skip mixed
+  feeds. Rejected inbound frames still never reach the file.
 
 ## Identity (historical repair pass; do not treat as current HEAD)
 

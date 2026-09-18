@@ -98,10 +98,10 @@ void main() {
   });
 
   test('buildApnsSendHttp rejects forbidden body keys', () {
-    final request = ApnsOpaqueRequest(
+    const request = ApnsOpaqueRequest(
       host: kApnsProductionHost,
       path: '/3/device/$_safeToken',
-      headers: const {'apns-topic': kApnsTopic},
+      headers: {'apns-topic': kApnsTopic},
       body: <String, Object?>{
         'aps': <String, Object?>{'content-available': 1},
         'opaqueWakeToken': 'tok',

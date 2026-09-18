@@ -669,13 +669,22 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 80));
     expect(alice.isAuthenticated(bobId), isTrue);
 
-    alice.appendAndReplicate(
-      _envelope(
-        conversationId: conversationIdForPeers(aliceId, bobId),
-        ciphertext: utf8.encode('ALICE-OK'),
-      ),
+    await pair.$2.send(
+      aliceId,
+      TransportChannel.replication,
+      jsonPayload(<String, Object?>{
+        'type': 'repl-event',
+        'info': kReplicationEventInfo,
+        'kind': ReplicationEventKind.messageEnvelopeCreated.name,
+        'seq': 1,
+        'writerDeviceId': 'dev-bob',
+        'fields': <String, Object?>{
+          'conversationId': conversationIdForPeers(aliceId, bobId),
+          'encryptedEnvelope': base64Encode(utf8.encode('BOB-OK')),
+          'senderIdentity': bobId,
+        },
+      }),
     );
-    await Future<void>.delayed(const Duration(milliseconds: 20));
 
     await pair.$2.send(
       aliceId,
@@ -732,7 +741,8 @@ void main() {
       replayed.records.any((r) {
         final env = r.fields['encryptedEnvelope'];
         if (env is List<int>) {
-          return utf8.decode(env, allowMalformed: true).contains('ALICE-OK');
+          return r.writerDeviceId == 'dev-bob' &&
+              utf8.decode(env, allowMalformed: true).contains('BOB-OK');
         }
         return false;
       }),

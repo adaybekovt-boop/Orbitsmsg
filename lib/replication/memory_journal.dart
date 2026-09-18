@@ -48,6 +48,24 @@ class MemoryJournal {
     return record;
   }
 
+  /// Restore a record that already passed persist-time authorization.
+  /// Keeps the original writer so accepted remotes survive restart.
+  /// Seq is reassigned locally so mixed writers cannot collide the
+  /// projector cursor.
+  JournalRecord importPersisted(JournalRecord record) {
+    if (!replicationFieldsAreSafe(record.fields.keys)) {
+      throw ArgumentError('refusing secret field in journal');
+    }
+    final imported = JournalRecord(
+      seq: _seq++,
+      writerDeviceId: record.writerDeviceId,
+      kind: record.kind,
+      fields: Map<String, Object?>.from(record.fields),
+    );
+    _records.add(imported);
+    return imported;
+  }
+
   JournalRecord appendEnvelope(MessageEnvelopeCreated event) {
     if (!event.isSafeForHypercore) {
       throw ArgumentError('envelope is not safe for Hypercore');

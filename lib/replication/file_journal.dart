@@ -80,7 +80,9 @@ class FileJournal {
         }
         final row = decoded.cast<String, Object?>();
         final writer = row['writerDeviceId'] as String? ?? writerDeviceId;
-        if (writer != writerDeviceId) continue;
+        if (writer.isEmpty) {
+          throw const FormatException('journal line missing writer');
+        }
         final kindName = row['kind'] as String?;
         if (kindName == null) {
           throw const FormatException('journal line missing kind');
@@ -96,11 +98,21 @@ class FileJournal {
           throw const FormatException('journal fields missing');
         }
         final decodedFields = _decodeFields(fields);
+        if (!replicationFieldsAreSafe(decodedFields.keys)) {
+          throw const FormatException('journal line has a secret field');
+        }
         final eventId = decodedFields['eventId'] as String?;
         if (eventId != null && !_seenEventIds.add(eventId)) {
           continue;
         }
-        out.append(kind.first, decodedFields);
+        out.importPersisted(
+          JournalRecord(
+            seq: row['seq'] is int ? row['seq'] as int : out.length,
+            writerDeviceId: writer,
+            kind: kind.first,
+            fields: decodedFields,
+          ),
+        );
       } catch (_) {
         final isTail = i == lines.length - 1;
         if (isTail) {

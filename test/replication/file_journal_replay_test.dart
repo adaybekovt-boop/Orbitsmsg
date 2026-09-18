@@ -88,6 +88,26 @@ void main() {
     expect(result.journal.records.single.fields['eventId'], 'e1');
   });
 
+  test('accepted remote writer survives replay', () async {
+    final journal = FileJournal.memory('dev-alice');
+    await journal.append(
+      const JournalRecord(
+        seq: 0,
+        writerDeviceId: 'dev-bob',
+        kind: ReplicationEventKind.messageEnvelopeCreated,
+        fields: <String, Object?>{
+          'eventId': 'remote-1',
+          'conversationId': 'c-ab',
+          'encryptedEnvelope': <int>[1, 2, 3],
+        },
+      ),
+    );
+    final replayed = await journal.replay();
+    expect(replayed.records, hasLength(1));
+    expect(replayed.records.single.writerDeviceId, 'dev-bob');
+    expect(replayed.records.single.fields['eventId'], 'remote-1');
+  });
+
   test('owner-namespaced journal files do not collide', () {
     expect(
       'orbits-hypercore-ORBIT-AAAAAAAAAAAAAAAA.ndjson',
