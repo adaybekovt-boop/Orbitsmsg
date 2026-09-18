@@ -109,4 +109,43 @@ void main() {
     expect(pod, contains('vendored_frameworks'));
     expect(pod, contains('BareKit.xcframework'));
   });
+
+  test('native hosts hash-verify the executed worklet tree (P1-12)', () {
+    final android = File(
+      'packages/orbits_transport_android/android/src/main/kotlin/app/orbits/transport/OrbitsBareRuntime.kt',
+    ).readAsStringSync();
+    expect(android, contains('verifyWorkletTree'));
+    expect(android, contains('BUNDLE.manifest'));
+    expect(android, contains('BUNDLE_TAMPERED'));
+    expect(android, contains('deleteRecursively'));
+    expect(android, contains('MessageDigest.isEqual'));
+    for (final path in [
+      'packages/orbits_transport_ios/ios/Classes/OrbitsBareRuntime.swift',
+      'packages/orbits_transport_macos/macos/Classes/OrbitsBareRuntime.swift',
+    ]) {
+      final text = File(path).readAsStringSync();
+      expect(text, contains('BUNDLE.manifest'), reason: path);
+      expect(text, contains('sha256Hex'), reason: path);
+      expect(text, contains('#if DEBUG'), reason: path);
+    }
+    final macos = File(
+      'packages/orbits_transport_macos/macos/Classes/OrbitsBareRuntime.swift',
+    ).readAsStringSync();
+    expect(macos, contains('manifestWorkletHash'));
+    expect(macos, contains('sha256Hex(binary) == want'));
+    final ios = File(
+      'packages/orbits_transport_ios/ios/Classes/OrbitsBareRuntime.swift',
+    ).readAsStringSync();
+    expect(ios, contains('verifyWorkletTree'));
+    expect(ios, contains('removeItem(at: dest)'));
+    final desktop = File(
+      'lib/transport/worklet_orbits_transport_io.dart',
+    ).readAsStringSync();
+    expect(desktop, contains('verifyResolvedWorkletTree'));
+    final ci = File('.github/workflows/build.yml').readAsStringSync();
+    final iosJob = ci.split('build-ios:').last.split('build-android:').first;
+    final androidJob = ci.split('build-android:').last.split('build-web:').first;
+    expect(iosJob, contains('verify_worklet_bundle.sh'));
+    expect(androidJob, contains('verify_worklet_bundle.sh'));
+  });
 }

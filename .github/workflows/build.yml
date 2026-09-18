@@ -339,6 +339,9 @@ jobs:
           flutter pub get
           dart run build_runner build --delete-conflicting-outputs
 
+      - name: Pin worklet bundle hash (no remote JS)
+        run: bash tool/ci/verify_worklet_bundle.sh
+
       - name: Generate and verify iOS assets
         run: |
           set -euo pipefail
@@ -438,6 +441,9 @@ jobs:
 
       - name: flutter pub get
         run: flutter pub get
+
+      - name: Pin worklet bundle hash (no remote JS)
+        run: bash tool/ci/verify_worklet_bundle.sh
 
       - name: Verify committed Android security configs
         run: |

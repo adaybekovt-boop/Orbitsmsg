@@ -1,6 +1,9 @@
 import Flutter
 import Foundation
 
+#if canImport(CryptoKit)
+import CryptoKit
+#endif
 #if canImport(BareKit)
 import BareKit
 #endif
@@ -318,23 +321,89 @@ enum OrbitsBareRuntime {
 
   private static func extractWorkletTree(registrar: FlutterPluginRegistrar?) -> URL? {
     let dest = applicationSupport().appendingPathComponent("orbits-worklet", isDirectory: true)
-    try? FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+    do {
+      try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+      let names = [
+        "worklet.js", "mux.js", "discovery.js", "loopback.js", "ipc.js",
+        "swarm.js", "corestore_journal.js", "bare_compat.js", "incoming_paths.js",
+      ]
+      for name in names {
+        if let data = workletSourceData(registrar: registrar, file: name) {
+          try data.write(to: dest.appendingPathComponent(name), options: .atomic)
+        }
+      }
+      try extractModuleZip(into: dest, registrar: registrar)
+      try verifyWorkletTree(registrar: registrar, dest: dest)
+      let script = dest.appendingPathComponent("worklet.js")
+      let hyperswarm = dest.appendingPathComponent("node_modules/hyperswarm/package.json")
+      guard FileManager.default.fileExists(atPath: script.path),
+            FileManager.default.fileExists(atPath: hyperswarm.path)
+      else { throw HostError.workletFailed }
+      return script
+    } catch {
+      // Never leave a partial/tampered tree behind: a stale
+      // node_modules dir must not satisfy the next startup.
+      try? FileManager.default.removeItem(at: dest)
+      return nil
+    }
+  }
+
+  /// Hash every executed JS file against the pinned BUNDLE.manifest
+  /// shipped as a Flutter asset. Throws BUNDLE_TAMPERED on any
+  /// mismatch, missing file, or remoteJs manifest.
+  private static func verifyWorkletTree(registrar: FlutterPluginRegistrar?, dest: URL) throws {
+    guard let manifestData = manifestAssetData(registrar: registrar) else {
+      throw HostError.bundleTampered
+    }
+    guard let manifest = try? JSONSerialization.jsonObject(with: manifestData) as? [String: Any],
+          manifest["remoteJs"] as? Bool == false,
+          let files = manifest["files"] as? [String: String] else {
+      throw HostError.bundleTampered
+    }
     let names = [
       "worklet.js", "mux.js", "discovery.js", "loopback.js", "ipc.js",
       "swarm.js", "corestore_journal.js", "bare_compat.js", "incoming_paths.js",
     ]
     for name in names {
-      if let data = workletSourceData(registrar: registrar, file: name) {
-        try? data.write(to: dest.appendingPathComponent(name), options: .atomic)
+      guard let expected = files[name] else { throw HostError.bundleTampered }
+      let url = dest.appendingPathComponent(name)
+      guard FileManager.default.fileExists(atPath: url.path),
+            let data = try? Data(contentsOf: url) else {
+        throw HostError.bundleTampered
+      }
+      guard sha256Hex(data) == expected else { throw HostError.bundleTampered }
+    }
+  }
+
+  private static func manifestAssetData(registrar: FlutterPluginRegistrar?) -> Data? {
+    var keys: [String] = []
+    if let registrar {
+      keys.append(registrar.lookupKey(forAsset: "tool/connectivity_harness/BUNDLE.manifest"))
+    }
+    keys.append("flutter_assets/tool/connectivity_harness/BUNDLE.manifest")
+    for key in keys {
+      if let path = Bundle.main.path(forResource: key, ofType: nil),
+         let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+         !data.isEmpty {
+        return data
       }
     }
-    extractModuleZip(into: dest, registrar: registrar)
-    let script = dest.appendingPathComponent("worklet.js")
-    let hyperswarm = dest.appendingPathComponent("node_modules/hyperswarm/package.json")
-    guard FileManager.default.fileExists(atPath: script.path),
-          FileManager.default.fileExists(atPath: hyperswarm.path)
-    else { return nil }
-    return script
+    return nil
+  }
+
+  private static func sha256Hex(_ data: Data) -> String {
+#if canImport(CryptoKit)
+    if #available(iOS 13.0, *) {
+      return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+#endif
+    return sha256FallbackHex(data)
+  }
+
+  /// FNV-1a is NOT a substitute: without CryptoKit there is no trusted
+  /// hash, so verification fails closed (mismatch guaranteed).
+  private static func sha256FallbackHex(_ data: Data) -> String {
+    return "unavailable-no-cryptokit"
   }
 
   private static func workletSourceData(registrar: FlutterPluginRegistrar?, file: String) -> Data? {
@@ -361,9 +430,12 @@ enum OrbitsBareRuntime {
     {
       candidates.append(app)
     }
-    if file == "worklet.js",
-       let env = ProcessInfo.processInfo.environment["ORBITS_WORKLET_JS"], !env.isEmpty {
-      candidates.append(URL(fileURLWithPath: env))
+    if file == "worklet.js" {
+#if DEBUG
+      if let env = ProcessInfo.processInfo.environment["ORBITS_WORKLET_JS"], !env.isEmpty {
+        candidates.append(URL(fileURLWithPath: env))
+      }
+#endif
     }
     for url in candidates {
       if FileManager.default.fileExists(atPath: url.path),
@@ -376,7 +448,7 @@ enum OrbitsBareRuntime {
     return nil
   }
 
-  private static func extractModuleZip(into dest: URL, registrar: FlutterPluginRegistrar?) {
+  private static func extractModuleZip(into dest: URL, registrar: FlutterPluginRegistrar?) throws {
     let fm = FileManager.default
     var zips: [URL] = []
     for bundle in Bundle.allBundles {
@@ -406,7 +478,9 @@ enum OrbitsBareRuntime {
     }
     for zipURL in zips where fm.fileExists(atPath: zipURL.path) {
       if let data = try? Data(contentsOf: zipURL), !data.isEmpty {
-        try? ZipExtract.unzip(data: data, into: dest)
+        // A present-but-corrupt zip fails startup; a missing asset
+        // falls through to the next candidate below.
+        try ZipExtract.unzip(data: data, into: dest)
         return
       }
     }
@@ -423,11 +497,12 @@ enum OrbitsBareRuntime {
           }
           let target = dest.appendingPathComponent(item.lastPathComponent)
           try? fm.removeItem(at: target)
-          try? fm.copyItem(at: item, to: target)
+          try fm.copyItem(at: item, to: target)
         }
         return
       }
     }
+    throw HostError.workletFailed
   }
 
   private static func applicationSupport() -> URL {
@@ -442,6 +517,7 @@ enum OrbitsBareRuntime {
 enum HostError: Error, LocalizedError {
   case runtimeMissing
   case workletFailed
+  case bundleTampered
   case notStarted
   case timeout
   case backpressure
@@ -452,6 +528,7 @@ enum HostError: Error, LocalizedError {
     switch self {
     case .runtimeMissing: return "BARE_RUNTIME_MISSING"
     case .workletFailed: return "BARE_WORKLET_FAILED"
+    case .bundleTampered: return "BUNDLE_TAMPERED"
     case .notStarted: return "NOT_STARTED"
     case .timeout: return "IPC_TIMEOUT"
     case .backpressure: return "IPC_BACKPRESSURE"

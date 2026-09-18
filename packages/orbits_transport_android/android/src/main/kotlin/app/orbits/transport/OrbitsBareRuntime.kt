@@ -10,6 +10,7 @@ import java.io.FileOutputStream
 import java.lang.reflect.Proxy
 import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.ArrayDeque
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -18,6 +19,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipInputStream
+import org.json.JSONObject
 
 /**
  * Official BareKit / packaged-runtime host.
@@ -644,36 +646,118 @@ internal object OrbitsBareRuntime {
     binding: FlutterPlugin.FlutterPluginBinding?,
   ): File {
     val dest = File(context.filesDir, "orbits-worklet")
-    dest.mkdirs()
-    val assets = context.assets
-    for (name in workletFiles) {
-      val flutterName = "tool/connectivity_harness/src/$name"
-      val lookup = try {
-        binding?.flutterAssets?.getAssetFilePathByName(flutterName)
-      } catch (_: Throwable) {
-        null
+    try {
+      dest.mkdirs()
+      val assets = context.assets
+      for (name in workletFiles) {
+        val flutterName = "tool/connectivity_harness/src/$name"
+        val lookup = try {
+          binding?.flutterAssets?.getAssetFilePathByName(flutterName)
+        } catch (_: Throwable) {
+          null
+        }
+        var copied = false
+        for (candidate in listOfNotNull(lookup, flutterName, "flutter_assets/$flutterName")) {
+          try {
+            assets.open(candidate).use { input ->
+              FileOutputStream(File(dest, name)).use { output -> input.copyTo(output) }
+            }
+            copied = true
+            break
+          } catch (_: Throwable) {}
+        }
+        if (!copied && name == "worklet.js") {
+          throw IllegalStateException("BARE_WORKLET_FAILED")
+        }
       }
-      var copied = false
-      for (candidate in listOfNotNull(lookup, flutterName, "flutter_assets/$flutterName")) {
-        try {
-          assets.open(candidate).use { input ->
-            FileOutputStream(File(dest, name)).use { output -> input.copyTo(output) }
-          }
-          copied = true
-          break
-        } catch (_: Throwable) {}
-      }
-      if (!copied && name == "worklet.js") {
+      extractModuleZip(context, dest)
+      verifyWorkletTree(context, binding, dest)
+      val script = File(dest, "worklet.js")
+      val hyperswarm = File(dest, "node_modules/hyperswarm/package.json")
+      if (!script.isFile || script.length() == 0L || !hyperswarm.isFile) {
         throw IllegalStateException("BARE_WORKLET_FAILED")
       }
+      return script
+    } catch (e: Throwable) {
+      // Never leave a partial/tampered tree behind: a stale
+      // node_modules dir must not satisfy the next startup.
+      try {
+        dest.deleteRecursively()
+      } catch (_: Throwable) {}
+      throw e
     }
-    extractModuleZip(context, dest)
-    val script = File(dest, "worklet.js")
-    val hyperswarm = File(dest, "node_modules/hyperswarm/package.json")
-    if (!script.isFile || script.length() == 0L || !hyperswarm.isFile) {
-      throw IllegalStateException("BARE_WORKLET_FAILED")
+  }
+
+  /**
+   * Hash every executed JS file against the pinned BUNDLE.manifest
+   * shipped as a Flutter asset. Any mismatch or missing file wipes the
+   * tree and fails with BUNDLE_TAMPERED — never a silent fallback.
+   */
+  private fun verifyWorkletTree(
+    context: Context,
+    binding: FlutterPlugin.FlutterPluginBinding?,
+    dest: File,
+  ) {
+    val flutterName = "tool/connectivity_harness/BUNDLE.manifest"
+    val lookup = try {
+      binding?.flutterAssets?.getAssetFilePathByName(flutterName)
+    } catch (_: Throwable) {
+      null
     }
-    return script
+    var manifestBytes: ByteArray? = null
+    for (candidate in listOfNotNull(lookup, flutterName, "flutter_assets/$flutterName")) {
+      try {
+        context.assets.open(candidate).use { input ->
+          manifestBytes = input.readBytes()
+        }
+        break
+      } catch (_: Throwable) {}
+    }
+    val raw = manifestBytes ?: throw IllegalStateException("BUNDLE_TAMPERED")
+    val manifest = try {
+      JSONObject(String(raw, StandardCharsets.UTF_8))
+    } catch (_: Throwable) {
+      throw IllegalStateException("BUNDLE_TAMPERED")
+    }
+    if (manifest.optBoolean("remoteJs", true)) {
+      throw IllegalStateException("BUNDLE_TAMPERED")
+    }
+    val files = try {
+      manifest.getJSONObject("files")
+    } catch (_: Throwable) {
+      throw IllegalStateException("BUNDLE_TAMPERED")
+    }
+    val digest = MessageDigest.getInstance("SHA-256")
+    for (name in workletFiles) {
+      val expected = try {
+        files.getString(name)
+      } catch (_: Throwable) {
+        throw IllegalStateException("BUNDLE_TAMPERED")
+      }
+      val file = File(dest, name)
+      if (!file.isFile) throw IllegalStateException("BUNDLE_TAMPERED")
+      val actual = try {
+        digest.reset()
+        file.inputStream().use { input ->
+          val buffer = ByteArray(8192)
+          var r = input.read(buffer)
+          while (r != -1) {
+            digest.update(buffer, 0, r)
+            r = input.read(buffer)
+          }
+        }
+        digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
+      } catch (_: Throwable) {
+        throw IllegalStateException("BUNDLE_TAMPERED")
+      }
+      if (!MessageDigest.isEqual(
+          actual.toByteArray(StandardCharsets.UTF_8),
+          expected.toByteArray(StandardCharsets.UTF_8),
+        )
+      ) {
+        throw IllegalStateException("BUNDLE_TAMPERED")
+      }
+    }
   }
 
   /**
@@ -691,8 +775,10 @@ internal object OrbitsBareRuntime {
     val maxTotalExpanded = 150 * 1024 * 1024L // 150MB
 
     for (name in names) {
+      var opened = false
       try {
         context.assets.open(name).use { input ->
+          opened = true
           val tempExtractDir = File(context.cacheDir, "worklet-extract-" + UUID.randomUUID()).apply { mkdirs() }
           try {
             var totalBytes = 0L
@@ -757,7 +843,13 @@ internal object OrbitsBareRuntime {
             tempExtractDir.deleteRecursively()
           }
         }
-      } catch (_: Throwable) {}
+      } catch (e: Throwable) {
+        // A missing asset under one name falls through to the next
+        // candidate; a corrupt/unreadable zip fails the whole startup —
+        // never boot on a stale node_modules from a previous install.
+        if (opened) throw IllegalStateException("BARE_WORKLET_FAILED")
+      }
     }
+    throw IllegalStateException("BARE_WORKLET_FAILED")
   }
 }

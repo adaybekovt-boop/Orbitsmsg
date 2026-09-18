@@ -6,6 +6,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:path_provider/path_provider.dart';
@@ -13,7 +14,7 @@ import 'package:path_provider/path_provider.dart';
 import 'bare_ipc_client.dart';
 import 'bare_runtime.dart';
 import 'device_binding.dart';
-import 'local_worklet_bundle.dart';
+import 'local_worklet_bundle.dart' show kWorkletManifestPath;
 import 'transport_api.dart';
 import 'transport_event_codec.dart';
 
@@ -32,11 +33,23 @@ const _bundledWorkletFiles = <String>[
 Future<WorkletOrbitsTransport?> spawnWorkletTransport({
   String backend = 'loopback',
 }) async {
-  inspectLocalWorkletBundle().assertSafeForProduction();
-  final script =
-      _resolveWorklet(releaseMode: kReleaseMode) ??
+  final fromEnv = Platform.environment['ORBITS_WORKLET_JS'];
+  final script = _resolveWorklet(releaseMode: kReleaseMode) ??
       await extractBundledWorklet();
   if (script == null) return null;
+  // Verify the EXECUTED tree, not just the CWD sources: every sibling
+  // next to the resolved script must match the pinned manifest. The
+  // explicit ORBITS_WORKLET_JS debug override (release-disabled) is the
+  // only unverified path, and it is still a local absolute file.
+  final usesEnvOverride =
+      fromEnv != null && fromEnv.isNotEmpty && !kReleaseMode;
+  if (!usesEnvOverride) {
+    try {
+      await verifyResolvedWorkletTree(script);
+    } catch (_) {
+      return null;
+    }
+  }
   try {
     final launch = resolveBareRuntime(
       script,
@@ -87,6 +100,61 @@ File? _resolveWorklet({required bool releaseMode}) {
   return null;
 }
 
+/// Hash-verify the tree NEXT TO the resolved script against the pinned
+/// manifest. The manifest is read from disk first (explicit path, then
+/// the script tree layout, then the dev tree); the rootBundle asset is
+/// the last resort. Throws on any mismatch, missing file, or remoteJs
+/// manifest.
+Future<void> verifyResolvedWorkletTree(
+  File script, {
+  String? manifestPath,
+}) async {
+  final candidates = <String>[
+    if (manifestPath != null) manifestPath,
+    // Extracted layout: manifest copied next to the files.
+    '${script.parent.path}${Platform.pathSeparator}BUNDLE.manifest',
+    // Packaged/dev layout: manifest above src/.
+    '${script.parent.path}${Platform.pathSeparator}..${Platform.pathSeparator}BUNDLE.manifest',
+    kWorkletManifestPath,
+  ];
+  Map? manifest;
+  for (final path in candidates) {
+    final file = File(path);
+    if (!file.existsSync()) continue;
+    try {
+      manifest = jsonDecode(file.readAsStringSync()) as Map;
+      break;
+    } catch (_) {}
+  }
+  manifest ??= await _loadManifestAsset();
+  if (manifest['remoteJs'] != false) {
+    throw StateError('production Bare must not fetch remote JS');
+  }
+  final files = manifest['files'];
+  if (files is! Map || files.isEmpty) {
+    throw StateError('local bundle manifest missing files');
+  }
+  for (final entry in files.entries) {
+    final name = entry.key.toString();
+    final sibling =
+        File('${script.parent.path}${Platform.pathSeparator}$name');
+    if (!sibling.existsSync()) {
+      throw StateError('local Bare bundle missing: $name');
+    }
+    final digest = sha256.convert(sibling.readAsBytesSync()).toString();
+    if (digest != entry.value.toString()) {
+      throw StateError('local bundle hash mismatch: $name');
+    }
+  }
+}
+
+Future<Map> _loadManifestAsset() async {
+  final data =
+      await rootBundle.load('tool/connectivity_harness/BUNDLE.manifest');
+  final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+  return jsonDecode(utf8.decode(bytes)) as Map;
+}
+
 /// Copy the hashed in-app worklet tree to a writable dir. Never downloads JS.
 Future<File?> extractBundledWorklet() async {
   try {
@@ -99,8 +167,16 @@ Future<File?> extractBundledWorklet() async {
       final data = await rootBundle.load('tool/connectivity_harness/src/$name');
       await File(
         '${dest.path}${Platform.pathSeparator}$name',
-      ).writeAsBytes(data.buffer.asUint8List());
+      ).writeAsBytes(data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes));
     }
+    // Ship the manifest alongside so the extracted tree self-verifies
+    // from disk (no asset round-trip at verify time).
+    final manifest =
+        await rootBundle.load('tool/connectivity_harness/BUNDLE.manifest');
+    await File(
+      '${dest.path}${Platform.pathSeparator}BUNDLE.manifest',
+    ).writeAsBytes(
+        manifest.buffer.asUint8List(manifest.offsetInBytes, manifest.lengthInBytes));
     final script = File('${dest.path}${Platform.pathSeparator}worklet.js');
     return script.existsSync() ? script : null;
   } catch (_) {
