@@ -98,8 +98,8 @@ sync copy; revoke in the authorization log.
 
 | Phase | Work | Gate |
 |------:|------|------|
-| 0 | ADRs, threat model, API, lifecycle, mailbox model, PWA, versions | No layer confusion |
-| 1 | Headless Bare + Hyperswarm harness (echo, files, path, suspend) | No Hypercore / UI / Drift |
+| 0 | ADRs + remediations landed; default live path still PeerJS (`kCompletedMigrationPhase = 0`) | Contracts locked; not a Holepunch default |
+| 1 | Headless Bare + Hyperswarm harness scaffold (echo, files, path, suspend) | Scaffold ready / hardware-NAT validation pending |
 | 2 | Network stand (KZ operators, NAT, UDP-block, handover) | Not worse than PeerJS |
 | 3 | Federated Flutter plugin | Unit + integration + platform tests |
 | 4 | Dual-stack next to PeerJS | Two natives exchange current E2E msgs |

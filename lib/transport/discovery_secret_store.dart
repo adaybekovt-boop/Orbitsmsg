@@ -3,16 +3,12 @@
 
 import 'dart:async';
 import 'dart:math';
-import 'dart:typed_data';
 
 import '../core/vault_kek.dart';
 import '../peer/helpers.dart';
 import '../storage/wrapped_snapshot.dart';
 
 const String kLocalDiscoverySecretId = 'self';
-
-typedef WrappedSnapshotWriter = Future<void> Function(List<int> plaintext);
-typedef WrappedSnapshotReader = Future<Uint8List?> Function();
 
 class DiscoverySecretStore {
   DiscoverySecretStore({
@@ -34,6 +30,9 @@ class DiscoverySecretStore {
   }
 
   List<int>? get(String peerId) => _secrets[normalizePeerId(peerId)];
+
+  /// Contact ids that already have a discovery secret. Not DHT topics.
+  Iterable<String> get knownPeerIds => _secrets.keys;
 
   void remove(String peerId) {
     _secrets.remove(normalizePeerId(peerId));

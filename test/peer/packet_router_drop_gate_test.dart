@@ -1,6 +1,7 @@
 // Phase 3.1: Drop / file-transfer frames must not reach the engine before
 // a verified wire handshake.
 
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -144,6 +145,101 @@ void main() {
       await handler(<String, Object?>{'type': 'room_join', 'roomId': 'r1'});
       expect(rooms, hasLength(1));
       expect(rooms.first['type'], 'room_join');
+    });
+  });
+
+  group('nested secret refuse', () {
+    test('file-start with nested fileKey never reaches dropInbound', () async {
+      final seen = <Object>[];
+      final handler = createPacketHandler(
+        'reliable',
+        peer,
+        _ctx(
+          dropAllowed: (_) => true,
+          dropInbound: (_, packet) => seen.add(packet),
+        ),
+      );
+      await handler(<String, Object?>{
+        'type': 'file-start',
+        'fileId': 'abc',
+        'meta': <String, Object?>{'fileKey': 'x'},
+      });
+      expect(seen, isEmpty);
+    });
+
+    test('room_msg with nested fileKey never reaches roomInbound', () async {
+      final rooms = <Map<String, Object?>>[];
+      final handler = createPacketHandler(
+        'reliable',
+        peer,
+        _ctx(roomInbound: (_, data) => rooms.add(data)),
+      );
+      await handler(<String, Object?>{
+        'type': 'room_msg',
+        'roomId': 'r1',
+        'text': 'hello',
+        'meta': <String, Object?>{'fileKey': 'x'},
+      });
+      expect(rooms, isEmpty);
+    });
+
+    test('legit room_join still reaches roomInbound', () async {
+      final rooms = <Map<String, Object?>>[];
+      final handler = createPacketHandler(
+        'reliable',
+        peer,
+        _ctx(roomInbound: (_, data) => rooms.add(data)),
+      );
+      await handler(<String, Object?>{'type': 'room_join', 'roomId': 'r1'});
+      expect(rooms, hasLength(1));
+    });
+
+    test('chat msg maps are not swallowed by the Drop/room secret gate', () {
+      // Reliable chat is ciphertext → dispatchReliablePlaintext, which
+      // drops nested sticker secrets but keeps text. The router must not
+      // apply a blanket map walk before reliableMiddleware.
+      final src = File('lib/peer/packet_router.dart').readAsStringSync();
+      final reliable = src
+          .split('// Reliable channel: file-transfer traffic first')[1]
+          .split('Future<bool> reliableMiddleware')[0];
+      expect(reliable, contains('_fileTransferTypes'));
+      expect(reliable, contains('isRoomPacket'));
+      expect(reliable, contains('replicationValueIsSafe'));
+      expect(reliable, contains('reliableMiddleware'));
+      final dropGate = reliable.split('if (data is Map && _fileTransferTypes')[1]
+          .split('if (data is Map && isRoomPacket')[0];
+      expect(dropGate, contains('replicationValueIsSafe'));
+      final roomGate = reliable.split('if (data is Map && isRoomPacket')[1]
+          .split('if (dropMiddleware')[0];
+      expect(roomGate, contains('replicationValueIsSafe'));
+      expect(reliable.contains('if (!replicationValueIsSafe(data)) return;'),
+          isTrue);
+      // No all-maps refuse before the Drop/room type checks.
+      final beforeTypes = reliable.split("if (data is Uint8List)")[0];
+      expect(beforeTypes.contains('replicationValueIsSafe'), isFalse);
+    });
+
+    test('ephemeral typing with nested kek does not applyTyping', () async {
+      var typed = false;
+      final handler = createPacketHandler(
+        'ephemeral',
+        peer,
+        PacketRouterCtx(
+          conn: (_) {},
+          reliable: _reliable(),
+          ephemeral: EphemeralInboundCtx(
+            applyTyping: (_) => typed = true,
+            onHeartbeat: () {},
+          ),
+          flushOutbox: () {},
+        ),
+      );
+      await handler(<String, Object?>{
+        'type': 'typing',
+        'isTyping': true,
+        'extra': <String, Object?>{'kek': 'x'},
+      });
+      expect(typed, isFalse);
     });
   });
 }

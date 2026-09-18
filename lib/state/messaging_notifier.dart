@@ -24,7 +24,10 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../attachments/resumable_blob.dart';
+import '../core/attachment_store.dart';
 import '../core/error_reporter.dart';
+import '../core/path_byte_stream.dart';
 import '../utils/heavy_codec.dart';
 
 import '../messaging/lost_inbound_ledger.dart';
@@ -32,6 +35,8 @@ import '../messaging/message_protocol.dart' show InboundPersistResult;
 import '../messaging/sent_ack_guard.dart';
 import '../peer/helpers.dart';
 import '../storage/db.dart' as db;
+import '../transport/layers.dart';
+import '../transport/dual_stack_bridge.dart';
 import 'auth_notifier.dart';
 import 'connections_notifier.dart';
 import 'local_profile_provider.dart';
@@ -68,10 +73,33 @@ const int _maxTextLen = 32 * 1024;
 const int _maxStickerLen = 512 * 1024;
 const int _maxVoiceRawBytes = 6 * 1024 * 1024; // ~8 MiB base64
 const int _maxVoiceB64Len = 8 * 1024 * 1024;
-const int _maxFileRawBytes = 12 * 1024 * 1024; // JS UI gate (Chats.jsx:822)
+const int _maxFileRawBytes = kMaxPeerJsFileRawBytes; // JS UI gate (Chats.jsx:822)
 const int _maxFileB64Len = 16 * 1024 * 1024;
 const int _maxFileThumbLen = 48 * 1024;
 const int _maxFileNameLen = 200; // JS: messageProtocol.js:347
+
+const List<String> _nestedChatMapKeys = <String>[
+  'sticker',
+  'replyTo',
+  'voice',
+  'attachment',
+];
+
+/// Drops inbound UI nested maps that nest [kForbiddenReplicationFields].
+///
+/// Defense-in-depth after the dispatcher already nulls unsafe `sticker` /
+/// `replyTo` / `voice`. Does not copy `fileKey` / `fileKeyB64` onto the
+/// message — an `attachment` that carries them (assembly-only on the
+/// dispatcher) is dropped because those keys are forbidden.
+Map<String, Object?> clampChatMessageMaps(Map<String, Object?> msg) {
+  for (final key in _nestedChatMapKeys) {
+    final value = msg[key];
+    if (value is Map && !replicationValueIsSafe(value)) {
+      msg[key] = null;
+    }
+  }
+  return msg;
+}
 
 // в”Ђв”Ђв”Ђ State в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
 
@@ -324,7 +352,17 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
 
     final safe = _clampChatMessage(Map<String, Object?>.from(uiMsg));
     final ts = (safe['ts'] as num?)?.toInt() ?? now();
-    final msgId = (safe['id'] as String?) ?? '$normalized:$ts:${_shortId()}';
+    final rawId = safe['id'];
+    // URL-shaped ids are hostile (file/http schemes). Refuse before Drift
+    // persist — do not fall through to a generated id for a caller-sent URL.
+    if (rawId is String && rawId.contains('://')) {
+      return InboundPersistResult.failed;
+    }
+    // Missing id (null / non-String) still gets a generated suffix.
+    final msgId = (rawId as String?) ?? '$normalized:$ts:${_shortId()}';
+    if (msgId.contains('://')) {
+      return InboundPersistResult.failed;
+    }
 
     try {
       await db.saveMessage({
@@ -337,6 +375,11 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       });
     } catch (e) {
       _lostInbound.recordDrop(msgId: msgId, fromPeer: normalized, error: e);
+      final DualStackBridge? dual =
+          _ref.read(connectionsNotifierProvider.notifier).nativeBridge;
+      if (dual != null && dual.nativeEnabled) {
+        dual.noteMessagesLost('inbound persist failed');
+      }
       if (mounted) {
         state = state.copyWith(
           lostInboundCount: state.lostInboundCount + 1,
@@ -373,7 +416,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     String msgId,
     Map<String, Object?> patch,
   ) {
-    if (msgId.isEmpty) return;
+    if (msgId.isEmpty || msgId.contains('://')) return;
     // Normalize `delivery: 'sent'|'delivered'|'read'` into the DB's `status`
     // column so the message stream renders the right tick.
     final mapped = <String, Object?>{...patch};
@@ -476,7 +519,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     if (normalized.isEmpty) return;
     if (_isPeerBlocked(normalized)) return;
     final conns = _ref.read(connectionsNotifierProvider.notifier);
-    if (conns.getConn(normalized, 'reliable')?.open != true) return;
+    if (!_readyToShip(conns, normalized)) return;
 
     List<Map<String, Object?>> rows;
     try {
@@ -496,6 +539,28 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       if (payload == null) continue;
       final type = (payload['type'] as String?) ?? 'text';
 
+      if (type == 'file') {
+        final att = payload['attachment'];
+        if (att is Map && att['chunked'] == true) {
+          final streamed = await _flushChunkedNativeFile(
+            conns,
+            normalized,
+            id,
+            payload,
+          );
+          if (!streamed) {
+            unawaited(db.updateMessageStatus(id, 'failed'));
+            continue;
+          }
+          unawaited(db.updateMessage(id, {
+            'status': 'inflight',
+            'outboxAttempt': ((r['outboxAttempt'] as num?)?.toInt() ?? 0) + 1,
+            'outboxDeadline': now() + sentAckTimeout.inMilliseconds,
+          }));
+          _sentAckGuard.arm(id);
+          continue;
+        }
+      }
       final envelope = await _buildOutboxEnvelope(id, payload, type);
       if (envelope == null) {
         // Row isn't recoverable вЂ” the underlying blob went missing
@@ -536,13 +601,18 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     String type,
   ) async {
     final replyTo = payload['replyTo'];
+    Map<String, Object?>? replyToWire;
+    if (replyTo is Map) {
+      final copied = Map<String, Object?>.from(replyTo);
+      if (replicationValueIsSafe(copied)) replyToWire = copied;
+    }
     final common = <String, Object?>{
       'type': 'msg',
       'id': msgId,
       'text': (payload['text'] as String?) ?? '',
       'ts': payload['ts'],
       'from': payload['from'],
-      if (replyTo is Map) 'replyTo': Map<String, Object?>.from(replyTo),
+      if (replyToWire != null) 'replyTo': replyToWire,
     };
 
     switch (type) {
@@ -552,10 +622,11 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       case 'sticker':
         final sticker = payload['sticker'];
         if (sticker is! Map) return null;
+        final stickerMap = Map<String, Object?>.from(sticker);
         return <String, Object?>{
           ...common,
           'msgType': 'sticker',
-          'sticker': Map<String, Object?>.from(sticker),
+          if (replicationValueIsSafe(stickerMap)) 'sticker': stickerMap,
         };
 
       case 'voice':
@@ -613,26 +684,94 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
           }
         }
 
+        final rebuiltAtt = <String, Object?>{
+          'name': attMap['name'] ?? 'file',
+          'size': attMap['size'] ?? bytes.length,
+          'mime': attMap['mime'] ?? 'application/octet-stream',
+          'kind': attMap['kind'] ?? 'file',
+          'thumb': thumbDataUrl,
+          'width': attMap['width'] ?? 0,
+          'height': attMap['height'] ?? 0,
+          'duration': attMap['duration'] ?? 0,
+          'b64': b64,
+        };
+        // Chunked-file outbox retry still needs the ratchet key.
+        if (attMap.containsKey('fileKeyB64')) {
+          rebuiltAtt['fileKeyB64'] = attMap['fileKeyB64'];
+        }
         return <String, Object?>{
           ...common,
           'msgType': 'file',
-          'attachment': <String, Object?>{
-            'name': attMap['name'] ?? 'file',
-            'size': attMap['size'] ?? bytes.length,
-            'mime': attMap['mime'] ?? 'application/octet-stream',
-            'kind': attMap['kind'] ?? 'file',
-            'thumb': thumbDataUrl,
-            'width': attMap['width'] ?? 0,
-            'height': attMap['height'] ?? 0,
-            'duration': attMap['duration'] ?? 0,
-            'b64': b64,
-          },
+          'attachment': rebuiltAtt,
         };
     }
     return null;
   }
 
-  // в”Ђв”Ђв”Ђ sendText (MVP path) в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  bool _readyToShip(ConnectionsNotifier conns, String peerId) =>
+      conns.hasReliable(peerId) || conns.canDepositMailbox(peerId);
+
+  List<int> _freshFileKey() {
+    final rng = Random.secure();
+    return List<int>.generate(32, (_) => rng.nextInt(256));
+  }
+
+  Future<bool> _flushChunkedNativeFile(
+    ConnectionsNotifier conns,
+    String peerId,
+    String msgId,
+    Map<String, Object?> payload,
+  ) async {
+    if (!conns.canUseNative(peerId)) return false;
+    final att = payload['attachment'];
+    if (att is! Map) return false;
+    final path = att['localPath'];
+    if (path is! String || path.isEmpty) return false;
+    final fileId = (att['fileId'] as String?) ?? msgId;
+    final attMap = Map<String, Object?>.from(att);
+    final existing = nativeAttachFileKeyFromPayload(attMap);
+    final List<int> fileKey;
+    if (existing == null) {
+      fileKey = _freshFileKey();
+      attMap['fileKeyB64'] = base64Encode(fileKey);
+      payload['attachment'] = attMap;
+      unawaited(db.updateMessage(msgId, {'payload': payload}));
+    } else {
+      fileKey = existing;
+    }
+    final streamed = await conns.sendChatAttachmentFromPath(
+      peerId,
+      path,
+      fileKey: fileKey,
+      fileId: fileId,
+    );
+    if (!streamed) return false;
+    return conns.sendEncrypted(peerId, {
+      'type': 'msg',
+      'id': msgId,
+      'text': (payload['text'] as String?) ?? '',
+      'ts': payload['ts'],
+      'from': payload['from'],
+      'msgType': 'file',
+      'attachment': <String, Object?>{
+        'name': att['name'] ?? 'file',
+        'size': att['size'] ?? 0,
+        'mime': att['mime'] ?? 'application/octet-stream',
+        'kind': att['kind'] ?? 'file',
+        'thumb': att['thumb'],
+        'width': att['width'] ?? 0,
+        'height': att['height'] ?? 0,
+        'duration': att['duration'] ?? 0,
+        'chunked': true,
+        'fileId': fileId,
+        'fileKeyB64': base64Encode(fileKey),
+      },
+      if (payload['replyTo'] is Map)
+        'replyTo': Map<String, Object?>.from(payload['replyTo'] as Map),
+    });
+  }
+
+  // sendText (MVP path)
 
   /// Send a plain text message to [targetId]. Returns the generated message
   /// id on success, null on validation failure. Does NOT wait for delivery;
@@ -666,12 +805,11 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final ts = now();
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
-    final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
+    final open = _readyToShip(conns, normalized);
 
     final sanitizedReply = _sanitizeReplyTo(replyTo);
 
-    // Persist the outbound row first вЂ” pending status if the channel's
+    // Persist the outbound row first — pending status if the channel's
     // offline, sent otherwise. On refresh/app-restart the outbox picks up
     // pending rows from here.
     //
@@ -771,8 +909,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final ts = now();
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
-    final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
+    final open = _readyToShip(conns, normalized);
 
     // Clamp free-text fields on the sticker blob itself (packName, emoji,
     // label) so a custom pack with 100KB of text fields can't blow up the
@@ -872,8 +1009,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final ts = now();
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
-    final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
+    final open = _readyToShip(conns, normalized);
 
     // Defensive clamp вЂ” recorder should produce values in 0..1 already,
     // but a broken input doesn't get to push the UI past that range.
@@ -1012,8 +1148,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final ts = now();
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
-    final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
+    final open = _readyToShip(conns, normalized);
 
     final safeName = name.length > _maxFileNameLen
         ? name.substring(0, _maxFileNameLen)
@@ -1124,7 +1259,136 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     return msgId;
   }
 
-  // в”Ђв”Ђв”Ђ Reply helpers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  /// Native path-streamed chat attachment. The file never becomes one
+  /// Dart `Uint8List` on the wire or over Bare IPC. PeerJS live path
+  /// still uses [sendFile] (base64). [fileKey] is ratcheted, never
+  /// journaled.
+  Future<String?> sendFileFromPath(
+    String targetId,
+    String path, {
+    required String name,
+    required String mime,
+    required String kind,
+    int width = 0,
+    int height = 0,
+    double durationSec = 0,
+    Map<String, Object?>? replyTo,
+  }) async {
+    final normalized = normalizePeerId(targetId);
+    if (!isValidPeerId(normalized)) return null;
+    if (_isPeerBlocked(normalized)) return null;
+    if (name.isEmpty || mime.isEmpty || kind.isEmpty) return null;
+
+    final conns = _ref.read(connectionsNotifierProvider.notifier);
+    if (!conns.canUseNative(normalized)) return null;
+
+    final size = localPathLength(path);
+    if (size == null || size <= 0) return null;
+    if (size > kMaxNativeAttachBytes) return null;
+
+    final selfId = _ref.read(currentPeerIdProvider) ?? '';
+    if (selfId.isEmpty) return null;
+
+    final ts = now();
+    final msgId = '$selfId:$ts:${_shortId()}';
+    final safeName = name.length > _maxFileNameLen
+        ? name.substring(0, _maxFileNameLen)
+        : name;
+    final sanitizedReply = _sanitizeReplyTo(replyTo);
+    final fileId = msgId;
+    final fileKey = _freshFileKey();
+    final persistPath = await persistLocalAttachmentPath(path);
+
+    final attachmentRef = <String, Object?>{
+      'name': safeName,
+      'size': size,
+      'mime': mime,
+      'kind': kind,
+      'width': width,
+      'height': height,
+      'duration': durationSec,
+      'chunked': true,
+      'fileId': fileId,
+      'localPath': persistPath,
+      'fileKeyB64': base64Encode(fileKey),
+    };
+    final payload = <String, Object?>{
+      'id': msgId,
+      'from': selfId,
+      'to': normalized,
+      'text': '',
+      'ts': ts,
+      'type': 'file',
+      'attachment': attachmentRef,
+      if (sanitizedReply != null) 'replyTo': sanitizedReply,
+    };
+    await db.saveMessage({
+      'id': msgId,
+      'peerId': normalized,
+      'timestamp': ts,
+      'direction': 'out',
+      'status': 'pending',
+      'payload': payload,
+    });
+    // Persist a local path, not a plaintext blob. FileTile reads
+    // `localPath` from file_blobs; Drift never holds the 50 MiB body.
+    await db.saveFileBlobFromPath(
+      msgId,
+      persistPath,
+      mime: mime,
+      name: safeName,
+      kind: kind,
+      size: size,
+      width: width,
+      height: height,
+      duration: durationSec.round(),
+    );
+    unawaited(db.savePeer({'id': normalized, 'lastSeenAt': now()}));
+
+    if (!_readyToShip(conns, normalized)) return msgId;
+
+    final streamed = await conns.sendChatAttachmentFromPath(
+      normalized,
+      path,
+      fileKey: fileKey,
+      fileId: fileId,
+    );
+    if (!streamed) {
+      unawaited(db.updateMessageStatus(msgId, 'pending'));
+      return msgId;
+    }
+
+    final ok = await conns.sendEncrypted(normalized, {
+      'type': 'msg',
+      'id': msgId,
+      'text': '',
+      'ts': ts,
+      'from': selfId,
+      'msgType': 'file',
+      'attachment': <String, Object?>{
+        'name': safeName,
+        'size': size,
+        'mime': mime,
+        'kind': kind,
+        'width': width,
+        'height': height,
+        'duration': durationSec,
+        'chunked': true,
+        'fileId': fileId,
+        'fileKeyB64': base64Encode(fileKey),
+      },
+      if (sanitizedReply != null) 'replyTo': sanitizedReply,
+    });
+    if (!ok) {
+      _sentAckGuard.disarm(msgId);
+      unawaited(db.updateMessageStatus(msgId, 'pending'));
+    } else {
+      _sentAckGuard.arm(msgId);
+    }
+    return msgId;
+  }
+
+  // Reply helpers
 
   /// Clamp a `replyTo` blob into a predictable, size-bounded shape. The
   /// user can technically pick *any* bubble to reply to, including a
@@ -1177,6 +1441,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
   /// hostile peer could otherwise send a 1 GB text or voice blob and
   /// exhaust device memory (the chat view can hold 500 entries per peer).
   Map<String, Object?> _clampChatMessage(Map<String, Object?> msg) {
+    clampChatMessageMaps(msg);
     final text = msg['text'];
     if (text is String && text.length > _maxTextLen) {
       msg['text'] = '${text.substring(0, _maxTextLen)}вЂ¦';

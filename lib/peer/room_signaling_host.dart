@@ -12,6 +12,7 @@ import 'package:flutter/foundation.dart'
 import 'peerjs_client.dart';
 import 'room_invite.dart';
 import 'signaling.dart';
+import '../transport/peerjs_window.dart';
 // dart:io impls on desktop/mobile; no-op stubs on web.
 import 'embedded_signaling_server.dart'
     if (dart.library.html) 'embedded_signaling_server_stub.dart';
@@ -63,6 +64,9 @@ enum SelfHostFailure {
   /// Hosting was requested on a platform that can't host (defensive — the UI
   /// blocks this earlier).
   unsupported,
+
+  /// Phase 14 isolation forbids constructing a PeerJS signaling listener.
+  peerjsIsolation,
 }
 
 /// A self-host startup failure carrying a [SelfHostFailure] reason and an
@@ -88,6 +92,9 @@ PeerJsClient buildRoomScopedClient({
   required int port,
   String key = 'peerjs',
 }) {
+  if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+    throw StateError('peerjs isolation');
+  }
   final env = PeerEnv(
     peerPort: port,
     peerSecure: false,
@@ -151,6 +158,9 @@ class RoomSignalingHost {
   /// [SelfHostException] tagged with a specific [SelfHostFailure] reason so the
   /// caller can show a clear diagnostic instead of a generic error.
   Future<RoomInvite> start({required String roomId, String key = 'peerjs'}) async {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      throw SelfHostException(SelfHostFailure.peerjsIsolation);
+    }
     if (!canHostSignalingServer) {
       throw SelfHostException(SelfHostFailure.unsupported);
     }

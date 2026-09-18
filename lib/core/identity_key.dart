@@ -152,6 +152,13 @@ Future<EcKeyPair> getOrCreateSigningKey() async {
   return pair;
 }
 
+/// Cached local identity SPKI, or null before [exportIdentityPubSpki].
+List<int>? cachedIdentityPubSpki() {
+  final cached = _cachedSigningPubSpki;
+  if (cached == null || cached.isEmpty) return null;
+  return List<int>.from(cached);
+}
+
 /// SPKI bytes of the local identity public key.
 Future<Uint8List> exportIdentityPubSpki() async {
   if (_cachedSigningPubSpki != null) return _cachedSigningPubSpki!;

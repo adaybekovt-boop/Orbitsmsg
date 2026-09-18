@@ -16,6 +16,7 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -26,6 +27,7 @@ import '../peer/peerjs_client.dart';
 import '../peer/helpers.dart';
 import '../peer/signaling.dart';
 import '../peer/turn_runtime.dart';
+import '../transport/peerjs_window.dart';
 import 'auth_notifier.dart';
 import 'hide_ip_provider.dart';
 
@@ -123,16 +125,40 @@ class PeerConnectionNotifier extends StateNotifier<PeerConnectionState> {
   /// Start (or restart) the peer pipeline for `peerId`. Safe to call
   /// repeatedly — subsequent calls with the same id are no-ops, and calls
   /// with a different id tear down and recreate.
-  Future<void> start(String peerId) {
-    final next = _startChain.then((_) => _startLocked(peerId));
+  ///
+  /// [isolationMode] defaults to the product [kPeerjsIsolationMode]. Tests
+  /// pass an explicit mode. When PeerJS is forbidden, this fail-closes
+  /// without constructing [PeerConnectionManager] / [PeerJsClient].
+  Future<void> start(String peerId, {String? isolationMode}) {
+    final next =
+        _startChain.then((_) => _startLocked(peerId, isolationMode: isolationMode));
     // Don't let one failure poison the chain — every pending caller should
     // still get its own shot.
     _startChain = next.catchError((_) {});
     return next;
   }
 
-  Future<void> _startLocked(String peerId) async {
+  /// Whether a [PeerConnectionManager] is live. Isolation fail-closed
+  /// leaves this false — no PeerJS client was constructed.
+  @visibleForTesting
+  bool get hasPeerConnectionManager => _manager != null;
+
+  Future<void> _startLocked(String peerId, {String? isolationMode}) async {
     if (_disposed) return;
+
+    // Phase 14 isolation: fail closed before constructing a manager.
+    // Product default-live still starts PeerJS. Tests pass an override.
+    final allowPeerJs = isolationMode != null
+        ? peerjsAllowedOnNativeFor(isolationMode, isWeb: kIsWeb)
+        : peerjsAllowedOnNative(isWeb: kIsWeb);
+    if (!allowPeerJs) {
+      if (_manager != null) await _teardown();
+      if (!_disposed) {
+        state = const PeerConnectionState.idle();
+      }
+      return;
+    }
+
     final existing = _manager;
     if (existing != null && existing.desiredPeerId == peerId) return;
     if (existing != null) await _teardown();

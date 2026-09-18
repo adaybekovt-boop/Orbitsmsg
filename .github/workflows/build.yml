@@ -79,9 +79,57 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Vendor linux-x64 Bare at build time (not shipped in the app)
+        run: tool/bare/vendor.sh linux-x64
+
+      - name: Embed linux-x64 Bare into the Linux plugin (not the app bundle)
+        run: |
+          set -euo pipefail
+          tool/bare/embed.sh linux-x64
+          test -x packages/orbits_transport_linux/linux/bare
+          echo "plugin host has a local linux-x64 binary; kBareBinaryShipped stays false"
+
+      - name: Vendor linux-arm64 Bare beside the x64 host (do not overwrite)
+        run: |
+          set -euo pipefail
+          tool/bare/vendor.sh linux-arm64
+          test -x tool/bare/linux-arm64/bare
+          mkdir -p packages/orbits_transport_linux/linux
+          cp -f tool/bare/linux-arm64/bare packages/orbits_transport_linux/linux/bare-arm64
+          test -x packages/orbits_transport_linux/linux/bare
+          test -x packages/orbits_transport_linux/linux/bare-arm64
+          echo "linux-arm64 vendored beside x64 host; kBareBinaryShipped stays false"
+
+      - name: Optionally embed local Corestore addon (slot may be empty)
+        run: |
+          set -euo pipefail
+          bash tool/bare/addons/embed-corestore.sh
+          echo "kHolepunchCorestoreAddonLinked stays false"
+
       - name: Connectivity harness (loopback, no hardware)
         working-directory: tool/connectivity_harness
-        run: node --test test/*.test.js
+        run: |
+          npm ci --omit=dev --no-fund --no-audit
+          node --test --test-force-exit test/*.test.js
+          ./pack-bare-stdlib.sh
+          python3 - <<'PY'
+          import zipfile
+          names = zipfile.ZipFile("bare_stdlib.zip").namelist()
+          if "node_modules/bare-fs/package.json" not in names:
+              raise SystemExit("stdlib zip missing bare-fs")
+          blob = "\n".join(names).lower()
+          if "hyperswarm" in blob or "hyperdht" in blob:
+              raise SystemExit("stdlib zip must not contain hyperswarm/hyperdht")
+          if "corestore" in blob or "hypercore" in blob:
+              raise SystemExit("stdlib zip must not contain corestore/hypercore")
+          print("local bare stdlib zip packed; kBareBinaryShipped stays false")
+          PY
+
+      - name: Local mailbox, fleet, and opaque wake (not public)
+        run: |
+          node --test tool/storage_peer/test.js
+          node --test --test-force-exit tool/fleet/test.js
+          node --test tool/push_gateway/test.js
 
       - name: Pin worklet bundle hash (no remote JS)
         run: |
@@ -89,7 +137,8 @@ jobs:
           python3 - <<'PY'
           import hashlib, json
           from pathlib import Path
-          worklet = Path("tool/connectivity_harness/src/worklet.js").read_bytes()
+          src_dir = Path("tool/connectivity_harness/src")
+          worklet = (src_dir / "worklet.js").read_bytes()
           digest = hashlib.sha256(worklet).hexdigest()
           manifest = json.loads(Path("tool/connectivity_harness/BUNDLE.manifest").read_text())
           if manifest.get("remoteJs") is not False:
@@ -97,12 +146,62 @@ jobs:
           pinned = manifest.get("workletSha256")
           if pinned != digest:
               raise SystemExit(f"worklet hash {digest} != pinned {pinned}")
+          pkg = Path("tool/connectivity_harness/package.json").read_bytes()
+          pkg_digest = hashlib.sha256(pkg).hexdigest()
+          pkg_pin = manifest.get("packageJsonSha256")
+          if pkg_pin != pkg_digest:
+              raise SystemExit(f"package.json hash {pkg_digest} != pinned {pkg_pin}")
+          sources = manifest.get("sources") or {}
+          if not sources:
+              raise SystemExit("BUNDLE.manifest sources must pin every worklet file")
+          if sources.get("worklet.js") != pinned:
+              raise SystemExit("workletSha256 must match sources[worklet.js]")
+          for name, src_pin in sources.items():
+              if "/" in name or "\\" in name or name.startswith("."):
+                  raise SystemExit(f"illegal source name {name}")
+              src_digest = hashlib.sha256((src_dir / name).read_bytes()).hexdigest()
+              if src_digest != src_pin:
+                  raise SystemExit(f"{name} hash {src_digest} != pinned {src_pin}")
           print(f"worklet.js sha256={digest}")
+          print(f"package.json sha256={pkg_digest}")
+          print(f"pinned sources={len(sources)}")
           PY
+
+      - name: Pin Bare vendor tarball hashes (Dart never fetches)
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path("tool/bare/BARE.manifest").read_text())
+          if manifest.get("remoteFetch") is not False:
+              raise SystemExit("BARE.manifest must set remoteFetch=false")
+          if manifest.get("downloadUrl") is not None or manifest.get("bundleUrl") is not None:
+              raise SystemExit("BARE.manifest downloadUrl/bundleUrl must stay null")
+          if manifest.get("shipped") is not False:
+              raise SystemExit("BARE.manifest shipped must stay false until every OS slot is in the app bundle")
+          slots = [
+              "linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64",
+              "windows-x64", "android-arm64", "ios-arm64",
+          ]
+          assets = (manifest.get("vendor") or {}).get("assets") or {}
+          for slot in slots:
+              asset = assets.get(slot) or {}
+              digest = asset.get("sha256")
+              if not isinstance(digest, str) or len(digest) != 64:
+                  raise SystemExit(f"missing sha256 pin for {slot}")
+          print("bare vendor hashes pinned for", ", ".join(slots))
+          PY
+
+      - name: Pin in-tree SBOM against worklet and Bare hashes
+        run: python3 tool/sbom/generate.py --check
 
       - name: Transport plugin lifecycle
         working-directory: packages/orbits_transport
-        run: flutter test
+        run: |
+          flutter pub get
+          flutter analyze --no-fatal-infos
+          flutter test
 
   # ────────────────────────────────────────────────────────────────────
   # Native platform folders are committed and must not be regenerated with
@@ -140,6 +239,32 @@ jobs:
           flutter pub get
           dart run build_runner build --delete-conflicting-outputs
 
+      - name: Vendor and embed iOS/macOS Bare slots (not the shipped flag)
+        run: |
+          set -euo pipefail
+          tool/bare/vendor.sh ios-arm64
+          tool/bare/embed.sh ios-arm64
+          test -f packages/orbits_transport_ios/ios/bare
+          tool/bare/vendor.sh darwin-arm64
+          tool/bare/embed.sh darwin-arm64
+          test -f packages/orbits_transport_macos/macos/bare
+          tool/bare/vendor.sh darwin-x64
+          test -f tool/bare/darwin-x64/bare
+          mkdir -p packages/orbits_transport_macos/macos
+          cp -f tool/bare/darwin-x64/bare packages/orbits_transport_macos/macos/bare-x64
+          test -f packages/orbits_transport_macos/macos/bare
+          test -f packages/orbits_transport_macos/macos/bare-x64
+          echo "darwin-x64 vendored beside arm64 host; kBareBinaryShipped stays false"
+          bash tool/bare/addons/embed-corestore.sh
+          echo "kHolepunchCorestoreAddonLinked stays false"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Pack local bare-* stdlib zip (not hyperswarm)
+        run: bash tool/ci/vendor_bare_stdlib.sh
+
       - name: Generate and verify iOS assets
         run: |
           set -euo pipefail
@@ -170,9 +295,54 @@ jobs:
             --dart-define=PEER_SECURE_SET="${PEER_SECURE:+true}"
           test -d build/ios/iphoneos/Runner.app
           test -f build/ios/iphoneos/Runner.app/PrivacyInfo.xcprivacy
+          if ! find build/ios/iphoneos/Runner.app -name 'bare' -type f | grep -q .; then
+            echo "::error::iOS app bundle missing local Bare slot"
+            find build/ios/iphoneos/Runner.app -maxdepth 4 -type f | head -n 40
+            exit 1
+          fi
+          echo "ios app bundle has local Bare; kBareBinaryShipped stays false"
+          if ! find build/ios/iphoneos/Runner.app -name 'bare_stdlib.zip' -type f | grep -q .; then
+            echo "::error::iOS app bundle missing local bare stdlib zip"
+            exit 1
+          fi
 
       - name: Build iOS Simulator debug app
         run: flutter build ios --simulator --debug
+
+      - name: Enable macos desktop
+        run: flutter config --enable-macos-desktop
+
+      - name: flutter build macos (release)
+        env:
+          TURN_URL: ${{ secrets.TURN_URL }}
+          RELAY_ONLY: ${{ vars.RELAY_ONLY }}
+          PEER_SERVER: ${{ vars.PEER_SERVER }}
+          PEER_HOST: ${{ vars.PEER_HOST }}
+          PEER_PATH: ${{ vars.PEER_PATH }}
+          PEER_PORT: ${{ vars.PEER_PORT }}
+          PEER_SECURE: ${{ vars.PEER_SECURE }}
+        run: |
+          set -euo pipefail
+          flutter build macos --release \
+            --dart-define=TURN_URL="$TURN_URL" \
+            --dart-define=RELAY_ONLY="${RELAY_ONLY:-false}" \
+            --dart-define=PEER_SERVER="$PEER_SERVER" \
+            --dart-define=PEER_HOST="$PEER_HOST" \
+            --dart-define=PEER_PATH="${PEER_PATH:-/}" \
+            --dart-define=PEER_PORT="${PEER_PORT:--1}" \
+            --dart-define=PEER_SECURE="$PEER_SECURE" \
+            --dart-define=PEER_SECURE_SET="${PEER_SECURE:+true}"
+          test -d build/macos/Build/Products/Release/orbits_flutter.app
+          if ! find build/macos/Build/Products/Release/orbits_flutter.app -name 'bare' -type f | grep -q .; then
+            echo "::error::macOS app bundle missing local Bare slot"
+            find build/macos/Build/Products/Release/orbits_flutter.app -maxdepth 5 -type f | head -n 40
+            exit 1
+          fi
+          echo "macos desktop linked; kBareBinaryShipped stays false"
+          if ! find build/macos/Build/Products/Release/orbits_flutter.app -name 'bare_stdlib.zip' -type f | grep -q .; then
+            echo "::error::macOS app bundle missing local bare stdlib zip"
+            exit 1
+          fi
 
   # Android release signing (GH-C01 / U-5) never uses the SDK debug key.
   # Tags/main use owner secrets; PRs use a cached CI sideload key.
@@ -280,6 +450,23 @@ jobs:
       - name: Generate code (drift / build_runner)
         run: dart run build_runner build --delete-conflicting-outputs
 
+      - name: Vendor and embed android-arm64 Bare (not the shipped flag)
+        run: |
+          set -euo pipefail
+          tool/bare/vendor.sh android-arm64
+          tool/bare/embed.sh android-arm64
+          test -f packages/orbits_transport_android/android/src/main/assets/bare
+          bash tool/bare/addons/embed-corestore.sh
+          echo "kBareBinaryShipped stays false"
+          echo "kHolepunchCorestoreAddonLinked stays false"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Pack local bare-* stdlib zip (not hyperswarm)
+        run: bash tool/ci/vendor_bare_stdlib.sh
+
       # TURN URL (not a secret) + PeerJS config. Username/credential are
       # loaded at runtime — never baked via --dart-define into the APK.
       - name: Compose --dart-define flags (TURN URL / PeerJS)
@@ -302,12 +489,32 @@ jobs:
 
       - name: Stage APKs for upload
         run: |
+          set -euo pipefail
+          shopt -s nullglob
           mkdir -p dist
+          apks=(build/app/outputs/flutter-apk/*.apk)
+          if [ ${#apks[@]} -eq 0 ]; then
+            echo "::error::flutter build apk produced no APKs under build/app/outputs/flutter-apk/"
+            find build/app/outputs -name '*.apk' -print || true
+            exit 1
+          fi
           cp build/app/outputs/flutter-apk/app-release.apk            dist/orbits-android-universal.apk || true
           cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk  dist/orbits-android-arm64.apk     || true
           cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk dist/orbits-android-arm32.apk    || true
           cp build/app/outputs/flutter-apk/app-x86_64-release.apk     dist/orbits-android-x86_64.apk    || true
+          # Split / universal names differ across Flutter patches; keep every APK.
+          for apk in "${apks[@]}"; do
+            base="$(basename "$apk")"
+            dest="dist/${base}"
+            if [ ! -f "$dest" ]; then
+              cp "$apk" "$dest"
+            fi
+          done
           ls -lah dist/
+          if ! compgen -G 'dist/*.apk' >/dev/null; then
+            echo "::error::staging left dist/ empty"
+            exit 1
+          fi
 
       - name: Verify APKs are not debug-signed (GH-C01 / U-5)
         run: |
@@ -319,6 +526,31 @@ jobs:
             exit 1
           fi
           bash tool/ci/verify_apk_not_debug_signed.sh "${apks[@]}"
+          python3 - <<'PY'
+          import zipfile
+          from pathlib import Path
+          apks = sorted(Path('dist').glob('*.apk'))
+          if not apks:
+              raise SystemExit('no APKs in dist/')
+          found = False
+          stdlib = False
+          for apk in apks:
+              with zipfile.ZipFile(apk) as z:
+                  names = z.namelist()
+              if any(n.endswith('assets/bare') for n in names):
+                  found = True
+                  print(f'{apk.name} contains assets/bare')
+              if any(n.endswith('assets/bare_stdlib.zip') for n in names):
+                  stdlib = True
+                  print(f'{apk.name} contains assets/bare_stdlib.zip')
+              if not found and not stdlib:
+                  print(f'{apk.name} bare-like entries:', [n for n in names if 'bare' in n.lower()][:20])
+          if not found:
+              raise SystemExit('apk missing assets/bare')
+          if not stdlib:
+              raise SystemExit('apk missing assets/bare_stdlib.zip')
+          print('apk has local Bare + stdlib zip; kBareBinaryShipped stays false')
+          PY
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -432,6 +664,102 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # Linux desktop. Compiles the federated Bare host so generated
+  # registrant can link orbits_transport_plugin_register_with_registrar.
+  # Does not ship the product Bare flag. Never embed.sh linux-arm64
+  # (that slot stays beside the host-arch binary).
+  build-linux:
+    name: Build Linux
+    needs: analyze
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+
+      - name: Linux desktop toolchain
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libsecret-1-dev libjsoncpp-dev
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: ${{ env.FLUTTER_CHANNEL }}
+          cache: true
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Enable linux desktop
+        run: flutter config --enable-linux-desktop
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: Generate code (drift / build_runner)
+        run: dart run build_runner build --delete-conflicting-outputs
+
+      - name: Vendor and embed linux-x64 Bare (not the shipped flag)
+        run: |
+          set -euo pipefail
+          tool/bare/vendor.sh linux-x64
+          tool/bare/embed.sh linux-x64
+          test -x packages/orbits_transport_linux/linux/bare
+          tool/bare/vendor.sh linux-arm64
+          test -x tool/bare/linux-arm64/bare
+          mkdir -p packages/orbits_transport_linux/linux
+          cp -f tool/bare/linux-arm64/bare packages/orbits_transport_linux/linux/bare-arm64
+          test -x packages/orbits_transport_linux/linux/bare
+          test -x packages/orbits_transport_linux/linux/bare-arm64
+          echo "kBareBinaryShipped stays false"
+          bash tool/bare/addons/embed-corestore.sh
+          echo "kHolepunchCorestoreAddonLinked stays false"
+
+      - name: Pack local bare-* stdlib zip (not hyperswarm)
+        run: bash tool/ci/vendor_bare_stdlib.sh
+
+      - name: flutter build linux (release)
+        env:
+          TURN_URL: ${{ secrets.TURN_URL }}
+          RELAY_ONLY: ${{ vars.RELAY_ONLY }}
+          PEER_SERVER: ${{ vars.PEER_SERVER }}
+          PEER_HOST: ${{ vars.PEER_HOST }}
+          PEER_PATH: ${{ vars.PEER_PATH }}
+          PEER_PORT: ${{ vars.PEER_PORT }}
+          PEER_SECURE: ${{ vars.PEER_SECURE }}
+        run: |
+          set -euo pipefail
+          flutter build linux --release \
+            --dart-define=TURN_URL="$TURN_URL" \
+            --dart-define=RELAY_ONLY="${RELAY_ONLY:-false}" \
+            --dart-define=PEER_SERVER="$PEER_SERVER" \
+            --dart-define=PEER_HOST="$PEER_HOST" \
+            --dart-define=PEER_PATH="${PEER_PATH:-/}" \
+            --dart-define=PEER_PORT="${PEER_PORT:--1}" \
+            --dart-define=PEER_SECURE="$PEER_SECURE" \
+            --dart-define=PEER_SECURE_SET="${PEER_SECURE:+true}"
+          test -x build/linux/x64/release/bundle/orbits_flutter \
+            -o -x build/linux/arm64/release/bundle/orbits_flutter
+          chmod +x build/linux/x64/release/bundle/lib/bare 2>/dev/null || true
+          chmod +x build/linux/arm64/release/bundle/lib/bare 2>/dev/null || true
+          if [ -x build/linux/x64/release/bundle/lib/bare ] || \
+             [ -x build/linux/arm64/release/bundle/lib/bare ]; then
+            echo "linux app bundle has local Bare; kBareBinaryShipped stays false"
+          else
+            echo "::error::linux app bundle missing lib/bare"
+            find build/linux -name 'bare' -o -name 'bare-arm64' || true
+            exit 1
+          fi
+          if [ -f build/linux/x64/release/bundle/lib/bare_stdlib.zip ] || \
+             [ -f build/linux/arm64/release/bundle/lib/bare_stdlib.zip ]; then
+            echo "linux app bundle has local bare stdlib zip; kBareBinaryShipped stays false"
+          else
+            echo "::error::linux app bundle missing lib/bare_stdlib.zip"
+            exit 1
+          fi
+
   # ────────────────────────────────────────────────────────────────────
   # Windows. Flutter's raw `Release/` folder contains an exe plus DLLs and
   # data files, so shipping only that runner exe would not start on a user's
@@ -504,6 +832,25 @@ jobs:
       - name: Generate code (drift / build_runner)
         run: dart run build_runner build --delete-conflicting-outputs
 
+      - name: Vendor and embed windows-x64 Bare (not the shipped flag)
+        shell: bash
+        run: |
+          set -euo pipefail
+          tool/bare/vendor.sh windows-x64
+          tool/bare/embed.sh windows-x64
+          test -f packages/orbits_transport_windows/windows/bare.exe
+          echo "kBareBinaryShipped stays false"
+          bash tool/bare/addons/embed-corestore.sh
+          echo "kHolepunchCorestoreAddonLinked stays false"
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22'
+
+      - name: Pack local bare-* stdlib zip (not hyperswarm)
+        shell: bash
+        run: bash tool/ci/vendor_bare_stdlib.sh
+
       - name: flutter build windows (release)
         env:
           TURN_URL: ${{ secrets.TURN_URL }}
@@ -528,6 +875,13 @@ jobs:
             "--dart-define=PEER_SECURE_SET=$(if ($env:PEER_SECURE) { 'true' } else { 'false' })"
           )
           flutter build windows --release @defines
+          if (-not (Test-Path "build/windows/x64/runner/Release/bare.exe")) {
+            throw "windows app folder missing bare.exe"
+          }
+          if (-not (Test-Path "build/windows/x64/runner/Release/bare_stdlib.zip")) {
+            throw "windows app folder missing bare_stdlib.zip"
+          }
+          Write-Host "windows app folder has local Bare; kBareBinaryShipped stays false"
 
       - name: Install Inno Setup
         shell: pwsh

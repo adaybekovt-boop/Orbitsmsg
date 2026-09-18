@@ -38,5 +38,174 @@ void main() {
       ),
       isFalse,
     );
+    // Noise / Hypercore writer keys are not the identity key.
+    expect(link.transportPublicKey, isNot(equals(spki)));
+    expect(link.hypercorePublicKey, isNot(equals(spki)));
+    expect(link.identityPublicKey, spki);
+  });
+
+  test('honest toQrJson still fromQrJson and verifyDeviceLink', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final link = await issueDeviceLink(
+      deviceId: 'phone-honest',
+      transportPublicKey: Uint8List.fromList(List<int>.filled(32, 7)),
+      hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 8)),
+      createdAt: 1,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    final json = link.toQrJson();
+    expect(json.containsKey('fileKey'), isFalse);
+    expect(json.containsKey('opaqueWakeToken'), isFalse);
+    expect(json.containsKey('deviceId'), isTrue);
+    expect(json.keys, isNot(contains(contains('://'))));
+
+    final again = DeviceLinkPayload.fromQrJson(json);
+    expect(again.deviceId, 'phone-honest');
+    expect(again.signature, link.signature);
+    expect(again.signedPayload(), link.signedPayload());
+    expect(again.identityPublicKey, spki);
+    expect(await verifyDeviceLink(again), isTrue);
+  });
+
+  test('DeviceLinkPayload.fromQrJson refuses nested secret fields', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final link = await issueDeviceLink(
+      deviceId: 'phone-refuse',
+      transportPublicKey: Uint8List.fromList(List<int>.filled(32, 7)),
+      hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 8)),
+      createdAt: 1,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    final json = link.toQrJson();
+
+    expect(
+      () => DeviceLinkPayload.fromQrJson({
+        ...json,
+        'extra': {'fileKey': 'x'},
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => DeviceLinkPayload.fromQrJson({
+        ...json,
+        'opaqueWakeToken': 'tok',
+      }),
+      throwsArgumentError,
+    );
+    expect(
+      () => DeviceLinkPayload.fromQrJson({
+        ...json,
+        'extra': {'https://evil': 'x'},
+      }),
+      throwsArgumentError,
+    );
+  });
+
+  test('fromQrJson refuses URL-shaped deviceId value', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final link = await issueDeviceLink(
+      deviceId: 'phone-2',
+      transportPublicKey: Uint8List.fromList(List<int>.filled(32, 7)),
+      hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 8)),
+      createdAt: 1,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    expect(
+      () => DeviceLinkPayload.fromQrJson({
+        ...link.toQrJson(),
+        'deviceId': 'https://evil',
+      }),
+      throwsArgumentError,
+    );
+  });
+
+  test('fromQrJson refuses empty deviceId value', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final link = await issueDeviceLink(
+      deviceId: 'phone-2',
+      transportPublicKey: Uint8List.fromList(List<int>.filled(32, 7)),
+      hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 8)),
+      createdAt: 1,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    expect(
+      () => DeviceLinkPayload.fromQrJson({
+        ...link.toQrJson(),
+        'deviceId': '',
+      }),
+      throwsArgumentError,
+    );
+  });
+
+  test('issueDeviceLink refuses URL-shaped deviceId', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    var signed = false;
+    await expectLater(
+      issueDeviceLink(
+        deviceId: 'https://evil',
+        transportPublicKey: Uint8List.fromList(List<int>.filled(32, 7)),
+        hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 8)),
+        createdAt: 1,
+        identityPublicKey: spki,
+        sign: (payload) async {
+          signed = true;
+          return signP256Ecdsa(pair, payload);
+        },
+      ),
+      throwsArgumentError,
+    );
+    expect(signed, isFalse);
+  });
+
+  test('transportPeerIdFromPublicKey is stable, distinct, and ORBIT-shaped',
+      () {
+    final keyA = List<int>.filled(32, 7);
+    final keyB = List<int>.filled(32, 8);
+    final idA = transportPeerIdFromPublicKey(keyA);
+    final idB = transportPeerIdFromPublicKey(keyB);
+    expect(idA, transportPeerIdFromPublicKey(List<int>.filled(32, 7)));
+    expect(idA, isNot(idB));
+    expect(idA, matches(RegExp(r'^ORBIT-[0-9A-F]{16}$')));
+    expect(idB, matches(RegExp(r'^ORBIT-[0-9A-F]{16}$')));
+    expect(idA.contains('://'), isFalse);
+    expect(idB.contains('://'), isFalse);
+  });
+
+  test('transportPeerIdFromPublicKey refuses an empty key', () {
+    expect(
+      () => transportPeerIdFromPublicKey(const <int>[]),
+      throwsArgumentError,
+    );
+  });
+
+  test('verifyDeviceLink is false for constructed :// deviceId', () async {
+    final pair = await generateP256EcdsaKey();
+    final spki = buildP256Spki(x: pair.x, y: pair.y);
+    final honest = await issueDeviceLink(
+      deviceId: 'phone-2',
+      transportPublicKey: Uint8List.fromList(List<int>.filled(32, 7)),
+      hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 8)),
+      createdAt: 1,
+      identityPublicKey: spki,
+      sign: (payload) async => signP256Ecdsa(pair, payload),
+    );
+    final constructed = DeviceLinkPayload(
+      deviceId: 'https://evil',
+      transportPublicKey: honest.transportPublicKey,
+      hypercorePublicKey: honest.hypercorePublicKey,
+      createdAt: honest.createdAt,
+      signature: honest.signature,
+      identityPublicKey: honest.identityPublicKey,
+    );
+    expect(await verifyDeviceLink(constructed), isFalse);
   });
 }

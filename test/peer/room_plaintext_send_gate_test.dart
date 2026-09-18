@@ -33,6 +33,43 @@ void main() {
     expect(sent, [packet]);
   });
 
+  test('sendRoomPacket blocks room_file_chunk without session ack', () {
+    expect(kRoomPlaintextSessionAck.isAcknowledged, isFalse);
+    final sent = <Map<String, Object?>>[];
+    final ok = sendGuardedRoomPacket(
+      {
+        'type': 'room_file_chunk',
+        'id': 'f1',
+        'offset': 0,
+        'b64': 'AQIDBA==',
+      },
+      connected: true,
+      send: sent.add,
+    );
+    expect(
+      ok,
+      isFalse,
+      reason: 'wire send must refuse un-acked room_file_chunk',
+    );
+    expect(sent, isEmpty);
+  });
+
+  test('sendRoomPacket allows room_file_chunk after ack', () {
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    final sent = <Map<String, Object?>>[];
+    final packet = {
+      'type': 'room_file_chunk',
+      'id': 'f1',
+      'offset': 0,
+      'b64': 'AQIDBA==',
+    };
+    expect(
+      sendGuardedRoomPacket(packet, connected: true, send: sent.add),
+      isTrue,
+    );
+    expect(sent, [packet]);
+  });
+
   test('control packets still send without ack', () {
     final sent = <Map<String, Object?>>[];
     final ok = sendGuardedRoomPacket(
@@ -42,6 +79,87 @@ void main() {
     );
     expect(ok, isTrue);
     expect(sent.single['type'], 'room_join');
+  });
+
+  test('sendRoomPacket refuses nested fileKey after ack', () {
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    final sent = <Map<String, Object?>>[];
+    final ok = sendGuardedRoomPacket(
+      {
+        'type': 'room_msg',
+        'text': 'hello',
+        'meta': {'fileKey': 'x'},
+      },
+      connected: true,
+      send: sent.add,
+    );
+    expect(ok, isFalse, reason: 'nested fileKey must never leave the host');
+    expect(sent, isEmpty);
+  });
+
+  test('sendRoomPacket refuses nested kek on room_file_chunk after ack', () {
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    final sent = <Map<String, Object?>>[];
+    final ok = sendGuardedRoomPacket(
+      {
+        'type': 'room_file_chunk',
+        'id': 'f1',
+        'offset': 0,
+        'b64': 'AQIDBA==',
+        'extra': {'kek': 'x'},
+      },
+      connected: true,
+      send: sent.add,
+    );
+    expect(ok, isFalse, reason: 'nested kek must never leave the host');
+    expect(sent, isEmpty);
+  });
+
+  test('control room_join with nested rootKey is refused without ack', () {
+    expect(kRoomPlaintextSessionAck.isAcknowledged, isFalse);
+    final sent = <Map<String, Object?>>[];
+    final ok = sendGuardedRoomPacket(
+      {
+        'type': 'room_join',
+        'roomId': 'r',
+        'meta': {'rootKey': 'x'},
+      },
+      connected: true,
+      send: sent.add,
+    );
+    expect(ok, isFalse, reason: 'secrets never send, even on control packets');
+    expect(sent, isEmpty);
+  });
+
+  test('sendRoomPacket refuses URL-shaped roomId', () {
+    kRoomPlaintextSessionAck.setAcknowledged(true);
+    final sent = <Map<String, Object?>>[];
+    expect(
+      sendGuardedRoomPacket(
+        {
+          'type': 'room_join',
+          'roomId': 'https://evil',
+          'guestPeerId': 'p1',
+        },
+        connected: true,
+        send: sent.add,
+      ),
+      isFalse,
+    );
+    expect(sent, isEmpty);
+    expect(
+      sendGuardedRoomPacket(
+        {
+          'type': 'room_join',
+          'roomId': 'r',
+          'guestPeerId': 'p1',
+        },
+        connected: true,
+        send: sent.add,
+      ),
+      isTrue,
+    );
+    expect(sent.single['roomId'], 'r');
   });
 
   test('disconnected peer is not a silent ack bypass', () {

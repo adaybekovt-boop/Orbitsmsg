@@ -14,11 +14,13 @@
 //     tracks. Both sides return to `idle`.
 //
 //   • `setMicEnabled` / `setVideoEnabled` toggle the corresponding track
-//     `enabled` flag (no track replacement, no signaling round-trip).
+//     `enabled` flag (no track replacement). Native DualStack also emits
+//     `CallSignalType.mediaState` so the remote overlay can update.
 //
 //   • `toggleScreenShare` replaces the outgoing video track with one
-//     from `getDisplayMedia` (and back). On unsupported platforms it
-//     no-ops and surfaces an error.
+//     from `getDisplayMedia` (and back) on the PeerJS or native
+//     `RTCPeerConnection`. On unsupported platforms it no-ops and
+//     surfaces an error.
 //
 // Everything platform-specific (getUserMedia, getDisplayMedia, RTC
 // peer connection plumbing) lives behind the `flutter_webrtc` package
@@ -33,13 +35,15 @@
 
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
 import '../calls/hyperswarm_signaling.dart';
+import '../calls/native_call_media.dart';
 import '../calls/system_calling.dart';
-import '../core/feature_flags.dart';
 import '../peer/peerjs_client.dart';
+import '../transport/peerjs_window.dart';
 import 'connections_notifier.dart';
 import 'peer_connection_provider.dart';
 
@@ -72,6 +76,9 @@ class CallState {
     this.micEnabled = true,
     this.videoEnabled = false,
     this.screenSharing = false,
+    this.remoteMicEnabled = true,
+    this.remoteVideoEnabled = false,
+    this.remoteScreenSharing = false,
   });
 
   const CallState.idle() : this();
@@ -104,6 +111,13 @@ class CallState {
   /// perspective — the UI shows one or the other, never both.
   final bool screenSharing;
 
+  /// Remote mute / camera / screen-share from `CallSignalType.mediaState`.
+  /// Defaults assume the peer starts unmuted; PeerJS-only calls never
+  /// update these (track `enabled` is enough on a shared PC).
+  final bool remoteMicEnabled;
+  final bool remoteVideoEnabled;
+  final bool remoteScreenSharing;
+
   bool get isActive => status != CallStatus.idle;
 
   CallState copyWith({
@@ -116,6 +130,9 @@ class CallState {
     bool? micEnabled,
     bool? videoEnabled,
     bool? screenSharing,
+    bool? remoteMicEnabled,
+    bool? remoteVideoEnabled,
+    bool? remoteScreenSharing,
   }) {
     return CallState(
       status: status ?? this.status,
@@ -135,6 +152,9 @@ class CallState {
       micEnabled: micEnabled ?? this.micEnabled,
       videoEnabled: videoEnabled ?? this.videoEnabled,
       screenSharing: screenSharing ?? this.screenSharing,
+      remoteMicEnabled: remoteMicEnabled ?? this.remoteMicEnabled,
+      remoteVideoEnabled: remoteVideoEnabled ?? this.remoteVideoEnabled,
+      remoteScreenSharing: remoteScreenSharing ?? this.remoteScreenSharing,
     );
   }
 }
@@ -174,6 +194,7 @@ class CallsNotifier extends StateNotifier<CallState> {
   /// leaks the notifier and can fire after dispose (audit M7).
   MediaStreamTrack? _shareTrack;
   NativeCallSession? _nativeSession;
+  NativeCallMedia? _nativeMedia;
 
   // ─── Public API ───────────────────────────────────────────────
 
@@ -187,7 +208,12 @@ class CallsNotifier extends StateNotifier<CallState> {
     if (state.status != CallStatus.idle) return;
     final peer = _boundPeer;
     final conns = _ref.read(connectionsNotifierProvider.notifier);
-    if (peer == null && !conns.canUseNative(remotePeerId)) {
+    // Isolation fail-closed before media acquire: leftover PeerJS clients
+    // do not count when isolation forbids. Native DualStack still proceeds.
+    final takeNative = conns.canUseNative(remotePeerId) &&
+        conns.remoteUnderstandsNativeCall(remotePeerId);
+    if ((!peerjsAllowedOnNative(isWeb: kIsWeb) || peer == null) &&
+        !takeNative) {
       state = state.copyWith(lastError: 'Нет активного P2P-соединения');
       return;
     }
@@ -198,6 +224,9 @@ class CallsNotifier extends StateNotifier<CallState> {
       videoEnabled: video,
       micEnabled: true,
       screenSharing: false,
+      remoteMicEnabled: true,
+      remoteVideoEnabled: false,
+      remoteScreenSharing: false,
       lastError: null,
       localStream: null,
       remoteStream: null,
@@ -223,37 +252,53 @@ class CallsNotifier extends StateNotifier<CallState> {
     }
     state = state.copyWith(localStream: local);
 
-    if (conns.canUseNative(remotePeerId)) {
+    if (takeNative) {
       _nativeSession = NativeCallSession(
         send: (signal) => conns.sendCallSignal(remotePeerId, signal),
       );
-      String sdp = 'v=0';
-      try {
-        final pc = await createPeerConnection(<String, dynamic>{
-          'sdpSemantics': 'unified-plan',
-        });
-        for (final track in local.getTracks()) {
-          await pc.addTrack(track, local);
-        }
-        final offer = await pc.createOffer();
-        await pc.setLocalDescription(offer);
-        sdp = offer.sdp ?? sdp;
-      } catch (_) {
-        // Signaling still proceeds; media attach can use PeerJS fallback.
-      }
-      await _nativeSession!.startOutgoing(
-        callId: remotePeerId,
-        sdp: sdp,
-        media: {'video': video},
+      _nativeSession!.callId = remotePeerId;
+      _nativeMedia = NativeCallMedia(
+        session: _nativeSession!,
+        onRemoteStream: _onNativeRemoteStream,
       );
-      if (!isPeerjsFallbackEnabled() || peer == null) return;
+      String? sdp;
+      try {
+        await _nativeMedia!.attachLocal(local);
+        sdp = await _nativeMedia!.createOfferSdp();
+      } catch (_) {
+        sdp = null;
+      }
+      final sent = sdp != null &&
+          await _nativeSession!.startOutgoingIfValid(
+            callId: remotePeerId,
+            sdp: sdp,
+            media: {'video': video},
+          );
+      if (!sent) {
+        try {
+          local.getTracks().forEach((t) => t.stop());
+        } catch (_) {}
+        await _failNativeSdp('Не удалось создать SDP');
+        return;
+      }
+      // Native-only when the remote advertised call-v1. Do not also
+      // open a PeerJS media dial — that double-rings new DualStack pairs.
+      return;
+    }
+
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      try {
+        local.getTracks().forEach((t) => t.stop());
+      } catch (_) {}
+      _resetIdleWithError('Нет активного P2P-соединения');
+      return;
     }
 
     try {
       final conn = await peer!.callPeer(remotePeerId, local);
       if (!mounted) {
         try {
-          await conn?.close();
+          await conn.close();
         } catch (_) {}
         try {
           local.getTracks().forEach((t) => t.stop());
@@ -276,6 +321,15 @@ class CallsNotifier extends StateNotifier<CallState> {
     final conn = _conn;
     if (state.status != CallStatus.ringing) return;
     if (conn == null && _nativeSession == null) return;
+    // Isolation fail-closed before media acquire when there is no native
+    // session. Leftover PeerJS `_conn` must not open the mic.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb) && _nativeSession == null) {
+      try {
+        unawaited(conn?.close().catchError((_) {}));
+      } catch (_) {}
+      _resetIdleWithError('Нет активного P2P-соединения');
+      return;
+    }
     state = state.copyWith(
       video: video,
       videoEnabled: video,
@@ -305,20 +359,44 @@ class CallsNotifier extends StateNotifier<CallState> {
     }
     state = state.copyWith(localStream: local);
     if (_nativeSession != null) {
-      String sdp = 'v=0';
+      String? sdp;
       try {
-        final pc = await createPeerConnection(<String, dynamic>{
-          'sdpSemantics': 'unified-plan',
-        });
-        for (final track in local.getTracks()) {
-          await pc.addTrack(track, local);
+        _nativeMedia ??= NativeCallMedia(
+          session: _nativeSession!,
+          onRemoteStream: _onNativeRemoteStream,
+        );
+        await _nativeMedia!.attachLocal(local);
+        for (final ice in _nativeSession!.remoteIce) {
+          await _nativeMedia!.addRemoteIce(ice);
         }
-        final answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        sdp = answer.sdp ?? sdp;
+        final offer = _nativeSession!.remoteSdp ?? '';
+        sdp = await _nativeMedia!.createAnswerSdp(offer);
+      } catch (_) {
+        sdp = null;
+      }
+      final sent = sdp != null && await _nativeSession!.acceptIfValid(sdp: sdp);
+      if (!sent) {
+        try {
+          local.getTracks().forEach((t) => t.stop());
+        } catch (_) {}
+        await _failNativeSdp('Не удалось создать SDP');
+        return;
+      }
+      if (conn != null) {
+        _conn = null;
+        unawaited(conn.close().catchError((_) {}));
+      }
+      return;
+    }
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      try {
+        local.getTracks().forEach((t) => t.stop());
       } catch (_) {}
-      await _nativeSession!.accept(sdp: sdp);
-      if (!isPeerjsFallbackEnabled()) return;
+      try {
+        await conn?.close();
+      } catch (_) {}
+      _resetIdleWithError('Нет активного P2P-соединения');
+      return;
     }
     try {
       await conn?.answer(local);
@@ -342,7 +420,8 @@ class CallsNotifier extends StateNotifier<CallState> {
   }
 
   /// Toggle our outgoing audio. Synchronous from the peer's POV — no
-  /// renegotiation, just flips the track's `enabled` bit.
+  /// renegotiation, just flips the track's `enabled` bit. Native
+  /// DualStack also publishes `mediaState` for the remote overlay.
   void setMicEnabled(bool enabled) {
     final stream = state.localStream;
     if (stream == null) return;
@@ -350,6 +429,7 @@ class CallsNotifier extends StateNotifier<CallState> {
       t.enabled = enabled;
     }
     state = state.copyWith(micEnabled: enabled);
+    _publishNativeMediaState();
   }
 
   /// Toggle our outgoing camera (or whatever video track we're sending
@@ -361,6 +441,7 @@ class CallsNotifier extends StateNotifier<CallState> {
       t.enabled = enabled;
     }
     state = state.copyWith(videoEnabled: enabled);
+    _publishNativeMediaState();
   }
 
   /// Replace the camera track with a `getDisplayMedia` track, or
@@ -368,9 +449,15 @@ class CallsNotifier extends StateNotifier<CallState> {
   /// support (`flutter_webrtc` mobile) this surfaces an error and
   /// the state stays unchanged.
   Future<void> toggleScreenShare() async {
-    final conn = _conn;
+    // Isolation fail-closed: leftover PeerJS `_conn` must not start
+    // screen share or re-acquire camera unless native DualStack media
+    // already owns the RTCPeerConnection.
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb) && _nativeMedia == null) {
+      return;
+    }
     final local = state.localStream;
-    if (conn == null || local == null) return;
+    if (local == null) return;
+    if (_nativeMedia == null && _conn == null) return;
 
     if (state.screenSharing) {
       // Restore camera. Use the track we backed up when share started;
@@ -378,8 +465,8 @@ class CallsNotifier extends StateNotifier<CallState> {
       MediaStreamTrack? cameraTrack = _cameraTrackBackup;
       if (cameraTrack == null) {
         try {
-          final tmp = await navigator.mediaDevices
-              .getUserMedia({'audio': false, 'video': true});
+          final tmp = await navigator.mediaDevices.getUserMedia(
+              {'audio': false, 'video': true});
           cameraTrack = tmp.getVideoTracks().firstOrNull;
         } catch (_) {
           state = state.copyWith(lastError: 'Не удалось вернуть камеру');
@@ -400,6 +487,7 @@ class CallsNotifier extends StateNotifier<CallState> {
         videoEnabled: true,
         lastError: null,
       );
+      _publishNativeMediaState();
       return;
     }
 
@@ -448,6 +536,7 @@ class CallsNotifier extends StateNotifier<CallState> {
       videoEnabled: true,
       lastError: null,
     );
+    _publishNativeMediaState();
   }
 
   /// End the active call (or cancel a still-dialing one). Both sides
@@ -469,6 +558,11 @@ class CallsNotifier extends StateNotifier<CallState> {
       unawaited(systemCalling.endCall(remote));
     }
     _nativeSession = null;
+    final nativeMedia = _nativeMedia;
+    _nativeMedia = null;
+    if (nativeMedia != null) {
+      unawaited(nativeMedia.close());
+    }
     _cameraTrackBackup = null;
     try {
       _shareTrack?.onEnded = null;
@@ -484,7 +578,7 @@ class CallsNotifier extends StateNotifier<CallState> {
     _closeSub = null;
     if (conn != null) {
       try {
-        await conn?.close();
+        await conn.close();
       } catch (_) {}
     }
     if (stream != null) {
@@ -504,9 +598,11 @@ class CallsNotifier extends StateNotifier<CallState> {
 
   Future<void> _replaceVideoTrack(
       MediaStreamTrack newTrack, MediaStream stream) async {
-    final conn = _conn;
-    if (conn == null) return;
-    final senders = await conn.peerConnection.getSenders();
+    // Prefer the native DualStack PC so leftover PeerJS `_conn` cannot
+    // steal replaceTrack under isolation.
+    final pc = _nativeMedia?.peerConnection ?? _conn?.peerConnection;
+    if (pc == null) return;
+    final senders = await pc.getSenders();
     final videoSender = senders.firstWhere(
       (s) => s.track?.kind == 'video',
       orElse: () => senders.first,
@@ -524,6 +620,17 @@ class CallsNotifier extends StateNotifier<CallState> {
   }
 
   void _attachConnection(PeerMediaConnection conn) {
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) {
+      unawaited(conn.close().catchError((_) {}));
+      return;
+    }
+    final nativeCall = _ref
+        .read(connectionsNotifierProvider.notifier)
+        .remoteUnderstandsNativeCall(conn.peer);
+    if (nativeCall) {
+      unawaited(conn.close().catchError((_) {}));
+      return;
+    }
     _conn = conn;
     _remoteStreamSub = conn.onStream.listen((remote) {
       if (!mounted) return;
@@ -543,16 +650,74 @@ class CallsNotifier extends StateNotifier<CallState> {
     state = const CallState.idle().copyWith(lastError: message);
   }
 
+  Future<void> _failNativeSdp(String message) async {
+    final media = _nativeMedia;
+    _nativeMedia = null;
+    _nativeSession = null;
+    if (media != null) {
+      try {
+        await media.close();
+      } catch (_) {}
+    }
+    _resetIdleWithError(message);
+  }
+
+  void _onNativeRemoteStream(MediaStream remote) {
+    if (!mounted) return;
+    state = state.copyWith(
+      status: CallStatus.inCall,
+      remoteStream: remote,
+    );
+  }
+
+  void _publishNativeMediaState() {
+    final session = _nativeSession;
+    if (session == null) return;
+    unawaited(
+      session.publishMediaState(
+        micEnabled: state.micEnabled,
+        videoEnabled: state.videoEnabled,
+        screenSharing: state.screenSharing,
+      ),
+    );
+  }
+
   void _onNativeCallSignal(String from, CallSignal signal) {
+    if (signal.isRoomVoice) return;
+    final boundFrom = signal.from ?? from;
+    if (!acceptInboundCallSignal(
+          from: boundFrom,
+          signal: signal,
+          activeRemotePeerId: state.remotePeerId,
+          sessionCallId: _nativeSession?.callId,
+          sessionActive: state.isActive,
+        )) {
+      return;
+    }
     _nativeSession ??= NativeCallSession(
       send: (next) =>
           _ref.read(connectionsNotifierProvider.notifier).sendCallSignal(from, next),
     );
     _nativeSession!.applyRemote(signal);
+    if (signal.type == CallSignalType.iceCandidate && signal.candidate != null) {
+      unawaited(_nativeMedia?.addRemoteIce(signal.candidate!));
+    }
+    if (signal.type == CallSignalType.answer && signal.sdp != null) {
+      unawaited(_nativeMedia?.setRemoteAnswer(signal.sdp!));
+    }
     if (!mounted) return;
     if (signal.type == CallSignalType.hangup ||
         signal.type == CallSignalType.reject) {
       unawaited(hangUp());
+      return;
+    }
+    if (signal.type == CallSignalType.mediaState) {
+      final media = signal.media;
+      state = state.copyWith(
+        remoteMicEnabled: media?['mic'] != false,
+        remoteVideoEnabled: media?['video'] == true,
+        remoteScreenSharing: media?['screen'] == true,
+      );
       return;
     }
     if (signal.type == CallSignalType.offer && !state.isActive) {
@@ -569,10 +734,6 @@ class CallsNotifier extends StateNotifier<CallState> {
         ),
       );
     }
-    if (signal.type == CallSignalType.answer &&
-        state.status == CallStatus.calling) {
-      state = state.copyWith(status: CallStatus.inCall);
-    }
   }
 
   // ─── PeerJS binding ───────────────────────────────────────────
@@ -588,12 +749,22 @@ class CallsNotifier extends StateNotifier<CallState> {
 
     _boundPeer = current;
     if (current == null) return;
+    if (!peerjsAllowedOnNative(isWeb: kIsWeb)) return;
 
     _callSub = current.onCall.listen((conn) {
       // Room voice calls carry a `room-voice` tag and are owned by RoomManager —
       // never surface them as a 1:1 call (audit item 6). Normal 1:1 calls have
       // no such tag and continue exactly as before.
       if (conn.metadata['channel'] == 'room-voice') return;
+      final conns = _ref.read(connectionsNotifierProvider.notifier);
+      if (shouldCloseLeftoverPeerJsCall(
+        canUseNative: conns.canUseNative(conn.peer),
+        remoteUnderstandsNativeCall: conns.remoteUnderstandsNativeCall(conn.peer),
+        nativeSessionExists: _nativeSession != null || _nativeMedia != null,
+      )) {
+        unawaited(conn.close().catchError((_) {}));
+        return;
+      }
       // Only one call at a time. If we're already busy, decline so
       // the caller's pill clears cleanly.
       if (state.isActive) {
@@ -623,7 +794,7 @@ class CallsNotifier extends StateNotifier<CallState> {
     } catch (_) {}
     // Best-effort: tear down any active call on dispose. We don't
     // await — the provider container is going away regardless.
-    if (_conn != null || state.localStream != null) {
+    if (_conn != null || _nativeMedia != null || state.localStream != null) {
       unawaited(hangUp());
     }
     super.dispose();

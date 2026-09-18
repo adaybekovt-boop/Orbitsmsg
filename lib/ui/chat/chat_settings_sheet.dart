@@ -24,6 +24,7 @@ import '../../core/peer_pins.dart' as peer_pins;
 import '../../pages/settings/complaint_page.dart';
 import '../../state/chat_list_provider.dart';
 import '../../storage/db.dart' as db;
+import '../../state/connections_notifier.dart';
 import '../../state/peers_provider.dart';
 import '../primitives/orbits_glass_button.dart';
 import '../primitives/orbits_glass_dialog.dart';
@@ -350,7 +351,9 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
                 ),
               ),
               child: ListTile(
-                onTap: () => db.setPeerBlocked(widget.peerId, !isBlocked),
+                onTap: () => ref
+                    .read(connectionsNotifierProvider.notifier)
+                    .setPeerBlockedAndJournal(widget.peerId, !isBlocked),
                 leading: Icon(
                   Icons.block,
                   color: isBlocked
@@ -370,7 +373,9 @@ class _ChatSettingsSheetState extends ConsumerState<ChatSettingsSheet> {
                 ),
                 trailing: OrbitsGlassSwitch(
                   value: isBlocked,
-                  onChanged: (v) => db.setPeerBlocked(widget.peerId, v),
+                  onChanged: (v) => ref
+                      .read(connectionsNotifierProvider.notifier)
+                      .setPeerBlockedAndJournal(widget.peerId, v),
                   semanticLabel: 'Заблокировать собеседника',
                 ),
               ),

@@ -31,8 +31,8 @@ function percentile(sorted, p) {
 }
 
 async function runPairOnce() {
-  const a = new Worklet({ backend: 'loopback' })
-  const b = new Worklet({ backend: 'loopback' })
+  const a = new Worklet({ backend: 'loopback', harnessAuth: 'local' })
+  const b = new Worklet({ backend: 'loopback', harnessAuth: 'local' })
   const secret = Buffer.alloc(32, 7)
   const t0 = Date.now()
   await a.start({ peerId: 'ORBIT-AAAAAAAAAAAAAAAA', discoverySecret: secret })

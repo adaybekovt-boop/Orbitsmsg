@@ -16,7 +16,9 @@ import 'package:mime/mime.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../core/attachment_preview.dart' show formatBytes;
-import '../core/orbits_drop.dart' show DropDirection, uniqueDropSaveFileName;
+import '../core/orbits_drop.dart'
+    show DropDirection, kMaxDropFileBytes, uniqueDropSaveFileName;
+import '../core/read_picked_bytes.dart';
 import '../state/connections_notifier.dart';
 import '../state/drop_provider.dart';
 import '../state/peers_provider.dart';
@@ -45,33 +47,66 @@ class _DropPageState extends ConsumerState<DropPage> {
     if (_sendingToPeer != null) return;
     FilePickerResult? picked;
     try {
-      picked = await FilePicker.platform
-          .pickFiles(type: FileType.any, allowMultiple: false, withData: true);
+      picked = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        allowMultiple: false,
+        withData: false,
+        withReadStream: true,
+      );
     } catch (_) {
       _toast('Не удалось открыть файловый выбор');
       return;
     }
     if (picked == null || picked.files.isEmpty) return;
     final pf = picked.files.single;
-
-    Uint8List? bytes = pf.bytes;
-    if ((bytes == null || bytes.isEmpty) && pf.path != null) {
-      try {
-        bytes = await File(pf.path!).readAsBytes();
-      } catch (_) {
-        bytes = null;
-      }
-    }
-    if (bytes == null || bytes.isEmpty) {
-      _toast('Не удалось прочитать файл');
-      return;
-    }
-
     final name = pf.name;
     final mime = lookupMimeType(name) ?? 'application/octet-stream';
 
     setState(() => _sendingToPeer = peerId);
     try {
+      if (!kIsWeb) {
+        final material = await materializePickedLocalPath(
+          pf,
+          maxBytes: kMaxDropFileBytes,
+        );
+        if (material.tooLarge) {
+          _toast('Файл слишком большой');
+          return;
+        }
+        final nativePath = material.path;
+        if (nativePath != null && nativePath.isNotEmpty) {
+          final id =
+              await ref.read(dropNotifierProvider.notifier).sendFileFromPath(
+                    peerId,
+                    path: nativePath,
+                    name: name,
+                    mime: mime,
+                    sizeBytes: material.sizeBytes,
+                  );
+          if (id == null) _toast('Нет соединения с получателем');
+          return;
+        }
+      }
+
+      final stream = pf.readStream;
+      if (stream != null) {
+        final id = await ref.read(dropNotifierProvider.notifier).sendFileFromStream(
+              peerId,
+              stream,
+              name: name,
+              mime: mime,
+              sizeBytes: pf.size,
+            );
+        if (id == null) _toast('Нет соединения с получателем');
+        return;
+      }
+
+      final bytes = pf.bytes;
+      if (bytes == null || bytes.isEmpty) {
+        _toast('Не удалось прочитать файл');
+        return;
+      }
+
       final id = await ref
           .read(dropNotifierProvider.notifier)
           .sendFile(peerId, bytes, name: name, mime: mime);
@@ -82,6 +117,27 @@ class _DropPageState extends ConsumerState<DropPage> {
   }
 
   Future<void> _saveReceived(DropTransfer t) async {
+    final localPath = t.localPath;
+    if (localPath != null && localPath.isNotEmpty && !kIsWeb) {
+      try {
+        final src = File(localPath);
+        if (!src.existsSync()) {
+          _toast('Файл недоступен');
+          return;
+        }
+        final dir = await getApplicationDocumentsDirectory();
+        final sep = Platform.pathSeparator;
+        final safeName = uniqueDropSaveFileName(
+          t.name,
+          exists: (candidate) => File('${dir.path}$sep$candidate').existsSync(),
+        );
+        await src.copy('${dir.path}$sep$safeName');
+        _toast('Сохранено: $safeName');
+      } catch (_) {
+        _toast('Не удалось сохранить файл');
+      }
+      return;
+    }
     final blobId = t.blobId;
     if (blobId == null) return;
     try {
@@ -539,7 +595,10 @@ class _TransferRow extends StatelessWidget {
                       size: OrbitsGlassSize.small,
                       onPressed: onCancel,
                     )
-                  else if (completed && incoming && t.blobId != null)
+                  else if (completed &&
+                      incoming &&
+                      (t.blobId != null ||
+                          (t.localPath != null && t.localPath!.isNotEmpty)))
                     OrbitsGlassIconButton(
                       icon: Icons.save_alt,
                       tooltip: 'Сохранить',

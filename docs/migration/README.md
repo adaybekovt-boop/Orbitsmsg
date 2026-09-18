@@ -39,6 +39,8 @@ Passed when all of the following are true and tested:
 
 ## Next (not this session)
 
-Phase 1 is a **headless connectivity harness**. It needs the user's
-hardware and real networks. Wait for an explicit go-ahead before starting
-device or NAT checks.
+Phase 1 harness **scaffold** is in tree
+([phase1-harness.md](phase1-harness.md)): loopback `npm test` plus
+optional two-process CLI. Hardware / NAT / Kazakhstan validation is
+**pending**. Do not start those checks unless the user is free and asks.
+Do not treat Phase 1 as closed.

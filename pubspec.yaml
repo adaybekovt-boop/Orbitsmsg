@@ -127,12 +127,21 @@ dependencies:
   # by `SecureKekVault.isSupported` (web/desktop never invoke it).
   local_auth: ^2.3.0
 
+  # Unzip a locally packed Holepunch bare-* stdlib next to the worklet.
+  # Never used to fetch remote JS.
+  archive: ^4.0.9
+
   # HKDF-SHA256 (HMAC) for the SQLCipher DB-key derivation in
   # storage/database.dart. Tiny, pure-Dart, web-safe.
   crypto: ^3.0.0
   http: ^1.6.0
   url_launcher: ^6.3.2
   package_info_plus: ^9.0.1
+
+  # Federated Bare host. No web implementation — PWA stays on PeerJS.
+  # kBareBinaryShipped stays false until every OS slot is in the app bundle.
+  orbits_transport:
+    path: packages/orbits_transport
 
 dev_dependencies:
   flutter_test:
@@ -158,6 +167,7 @@ flutter:
   uses-material-design: true
   assets:
     - tool/connectivity_harness/BUNDLE.manifest
+    - tool/connectivity_harness/package.json
     - tool/connectivity_harness/src/worklet.js
     - tool/connectivity_harness/src/mux.js
     - tool/connectivity_harness/src/discovery.js
@@ -166,6 +176,7 @@ flutter:
     - tool/connectivity_harness/src/swarm.js
     - tool/connectivity_harness/src/stand.js
     - tool/connectivity_harness/src/corestore_journal.js
+    - tool/connectivity_harness/src/autobase.js
 
   fonts:
     - family: Manrope

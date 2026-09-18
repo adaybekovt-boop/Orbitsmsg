@@ -21,6 +21,7 @@
 import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -28,6 +29,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/auth_validation.dart';
 import '../../core/avatar_resize.dart';
 import '../../core/haptics.dart';
+import '../../core/read_picked_bytes.dart';
 import '../../state/auth_notifier.dart';
 import '../../themes/orbits_tokens.dart';
 import '../primitives/orbits_glass_button.dart';
@@ -110,17 +112,26 @@ class _ProfileEditPageState extends ConsumerState<ProfileEditPage> {
       _busy = true;
     });
     try {
+      // Native: path only, then [readPickedBytes] stats the cap before
+      // loading. Web still needs picker bytes. Native must not ask the
+      // picker for an uncapped byte array.
       final picked = await FilePicker.platform.pickFiles(
         type: FileType.image,
         allowMultiple: false,
-        withData: true,
+        withData: kIsWeb,
       );
       if (picked == null || picked.files.isEmpty) {
         setState(() => _busy = false);
         return;
       }
       final file = picked.files.single;
-      final bytes = file.bytes;
+      final read = await readPickedBytes(file, maxRawBytes: defaultMaxBytes);
+      if (read.tooLarge) {
+        throw AvatarError(
+          'Аватар слишком большой (макс ${(defaultMaxBytes / (1024 * 1024)).round()}MB)',
+        );
+      }
+      final bytes = read.bytes;
       if (bytes == null || bytes.isEmpty) {
         setState(() {
           _busy = false;

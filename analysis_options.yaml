@@ -17,6 +17,11 @@ analyzer:
     # Promote a few forward-compatibility info-level warnings to actual
     # warnings so they surface in CI output.
     deprecated_member_use_from_same_package: warning
+  exclude:
+    # Federated plugin packages have their own pubspecs. Root `flutter
+    # analyze` cannot resolve their path deps; CI analyzes the facade
+    # from packages/orbits_transport.
+    - packages/**
   # NOTE: we *don't* enable strict-casts / strict-inference yet — they
   # would cascade through Drift codegen + cryptography_flutter shape-
   # checks and need their own cleanup pass. Tracked for post-launch.

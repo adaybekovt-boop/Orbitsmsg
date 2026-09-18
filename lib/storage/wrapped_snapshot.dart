@@ -8,6 +8,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/vault_kek.dart';
 
+typedef WrappedSnapshotWriter = Future<void> Function(List<int> plaintext);
+typedef WrappedSnapshotReader = Future<Uint8List?> Function();
+
 const String kDiscoverySecretsPrefsKey = 'orbits.discovery.secrets.v1';
 const String kDeviceRegistryPrefsKey = 'orbits.device.registry.v1';
 

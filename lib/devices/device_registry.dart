@@ -8,9 +8,13 @@ import 'dart:typed_data';
 import '../core/vault_kek.dart';
 import '../peer/helpers.dart';
 import '../storage/wrapped_snapshot.dart';
-import '../transport/discovery_secret_store.dart';
 
 enum DeviceStatus { active, revoked }
+
+bool _deviceIdSafe(String id) => id.isNotEmpty && !id.contains('://');
+
+bool _optionalPeerSafe(String? id) =>
+    id == null || id.isEmpty || !id.contains('://');
 
 class AuthorizedDevice {
   const AuthorizedDevice({
@@ -66,8 +70,17 @@ class AuthorizedDevice {
 
   static AuthorizedDevice fromJson(Map<String, Object?> json) {
     final statusName = json['status'] as String? ?? DeviceStatus.active.name;
+    final deviceId = json['deviceId'] as String? ?? '';
+    if (!_deviceIdSafe(deviceId)) {
+      throw ArgumentError('refusing secret field in device registry');
+    }
+    final ownerPeerId = json['ownerPeerId'] as String? ?? '';
+    final transportPeerId = json['transportPeerId'] as String?;
+    if (!_optionalPeerSafe(ownerPeerId) || !_optionalPeerSafe(transportPeerId)) {
+      throw ArgumentError('refusing secret field in device registry');
+    }
     return AuthorizedDevice(
-      deviceId: json['deviceId'] as String? ?? '',
+      deviceId: deviceId,
       transportPublicKey: base64Decode(json['transportPublicKey'] as String? ?? ''),
       hypercorePublicKey: base64Decode(json['hypercorePublicKey'] as String? ?? ''),
       name: json['name'] as String? ?? '',
@@ -77,8 +90,8 @@ class AuthorizedDevice {
         (s) => s.name == statusName,
         orElse: () => DeviceStatus.active,
       ),
-      ownerPeerId: json['ownerPeerId'] as String? ?? '',
-      transportPeerId: json['transportPeerId'] as String?,
+      ownerPeerId: ownerPeerId,
+      transportPeerId: transportPeerId,
     );
   }
 }
@@ -101,7 +114,14 @@ class DeviceRegistry {
       .where((d) => d.status == DeviceStatus.active)
       .toList(growable: false);
 
+  AuthorizedDevice? getDevice(String deviceId) => _devices[deviceId];
+
   void authorize(AuthorizedDevice device) {
+    if (!_deviceIdSafe(device.deviceId) ||
+        !_optionalPeerSafe(device.ownerPeerId) ||
+        !_optionalPeerSafe(device.transportPeerId)) {
+      throw ArgumentError('refusing secret field in device registry');
+    }
     final existing = _devices[device.deviceId];
     if (existing?.status == DeviceStatus.revoked) {
       throw StateError('revoked device cannot be re-authorized in place');
@@ -110,16 +130,26 @@ class DeviceRegistry {
     unawaited(persist());
   }
 
-  void revoke(String deviceId) {
+  AuthorizedDevice? revoke(String deviceId) {
+    if (!_deviceIdSafe(deviceId)) return null;
     final existing = _devices[deviceId];
-    if (existing == null) return;
-    _devices[deviceId] = existing.revoke();
+    if (existing == null) return null;
+    final revoked = existing.revoke();
+    _devices[deviceId] = revoked;
     unawaited(persist());
+    return revoked;
   }
 
   bool acceptsWriter(String deviceId) {
     final device = _devices[deviceId];
     return device != null && device.status == DeviceStatus.active;
+  }
+
+  /// True only for a known revoked writer. Unknown ids stay allowed so
+  /// 1:1 Hypercore frames are not dropped before a device-link exists.
+  bool isRevoked(String deviceId) {
+    final device = _devices[deviceId];
+    return device != null && device.status == DeviceStatus.revoked;
   }
 
   /// Fan-out targets: every active device of the recipient, plus own
@@ -141,13 +171,56 @@ class DeviceRegistry {
     final primary = normalizePeerId(ownerPeerId);
     final out = <String>{primary};
     for (final device in active) {
-      if (device.transportPeerId == null || device.transportPeerId!.isEmpty) {
-        continue;
-      }
+      final transportId = device.transportPeerId;
+      if (transportId == null || transportId.isEmpty) continue;
       if (normalizePeerId(device.ownerPeerId) != primary) continue;
-      out.add(normalizePeerId(device.transportPeerId!));
+      out.add(normalizePeerId(transportId));
     }
     return out;
+  }
+
+  /// Live send fan-out: every active recipient device, plus own devices
+  /// except the sending one (sync copy). Never the local live peer id.
+  Set<String> sendTargets(
+    String recipientPeerId, {
+    required String selfPeerId,
+    required String sendingDeviceId,
+  }) {
+    final out = transportTargets(recipientPeerId);
+    final self = normalizePeerId(selfPeerId);
+    if (self.isEmpty || sendingDeviceId.contains('://')) return out;
+    for (final device in active) {
+      if (device.deviceId == sendingDeviceId) continue;
+      if (!_deviceIdSafe(device.deviceId)) continue;
+      if (normalizePeerId(device.ownerPeerId) != self) continue;
+      final tid = device.transportPeerId;
+      if (tid == null || tid.isEmpty || !_optionalPeerSafe(tid)) continue;
+      final norm = normalizePeerId(tid);
+      if (norm.isEmpty || norm == self) continue;
+      out.add(norm);
+    }
+    return out;
+  }
+
+  /// Noise public key for a transport or owner id. Not the identity key.
+  List<int>? noisePublicKeyFor(String peerId) {
+    final norm = normalizePeerId(peerId);
+    AuthorizedDevice? ownerMatch;
+    for (final device in active) {
+      final transport = device.transportPeerId;
+      if (transport != null &&
+          transport.isNotEmpty &&
+          normalizePeerId(transport) == norm &&
+          device.transportPublicKey.isNotEmpty) {
+        return List<int>.from(device.transportPublicKey);
+      }
+      if (normalizePeerId(device.ownerPeerId) == norm &&
+          device.transportPublicKey.isNotEmpty) {
+        ownerMatch ??= device;
+      }
+    }
+    final key = ownerMatch?.transportPublicKey;
+    return key == null || key.isEmpty ? null : List<int>.from(key);
   }
 
   Future<void> hydrate() async {
@@ -161,8 +234,23 @@ class DeviceRegistry {
       if (list is! List) return;
       for (final item in list) {
         if (item is! Map) continue;
-        final device = AuthorizedDevice.fromJson(Map<String, Object?>.from(item));
-        if (device.deviceId.isEmpty) continue;
+        final rawId = item['deviceId'] as String? ?? '';
+        if (!_deviceIdSafe(rawId)) continue;
+        final owner = item['ownerPeerId'];
+        if (owner is String && !_optionalPeerSafe(owner)) continue;
+        final transport = item['transportPeerId'];
+        if (transport is String && !_optionalPeerSafe(transport)) continue;
+        final AuthorizedDevice device;
+        try {
+          device = AuthorizedDevice.fromJson(Map<String, Object?>.from(item));
+        } catch (_) {
+          continue;
+        }
+        if (!_deviceIdSafe(device.deviceId)) continue;
+        if (!_optionalPeerSafe(device.ownerPeerId) ||
+            !_optionalPeerSafe(device.transportPeerId)) {
+          continue;
+        }
         _devices[device.deviceId] = device;
       }
     } catch (_) {}
@@ -183,6 +271,16 @@ class DeviceRegistry {
   Map<String, Object?> toJson() => <String, Object?>{
         'devices': all.map((d) => d.toJson()).toList(),
       };
+}
+
+/// Transport ids that hold a distinct Double Ratchet snapshot for this
+/// device. Never the owner identity peer id — revoking a tablet must
+/// not tear down the phone's conversation ratchet.
+List<String> ratchetKeysForRevokedDevice(AuthorizedDevice? device) {
+  if (device == null) return const [];
+  final tid = device.transportPeerId;
+  if (tid == null || tid.isEmpty) return const [];
+  return [normalizePeerId(tid)];
 }
 
 final deviceRegistry = DeviceRegistry();

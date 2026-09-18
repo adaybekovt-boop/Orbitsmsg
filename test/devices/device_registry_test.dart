@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -28,6 +29,16 @@ void main() {
     expect(alice.acceptsWriter('a1'), isTrue);
     alice.revoke('a1');
     expect(alice.acceptsWriter('a1'), isFalse);
+    expect(alice.isRevoked('a1'), isTrue);
+    expect(alice.isRevoked('unknown-device'), isFalse);
+    expect(
+      alice.sendTargets(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        selfPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        sendingDeviceId: 'a1',
+      ),
+      {'ORBIT-BBBBBBBBBBBBBBBB'},
+    );
     expect(
       () => alice.authorize(dev('a1')),
       throwsStateError,
@@ -73,5 +84,212 @@ void main() {
       again.transportTargets('ORBIT-BBBBBBBBBBBBBBBB'),
       {'ORBIT-BBBBBBBBBBBBBBBB', 'ORBIT-B1B1B1B1B1B1B1B1'},
     );
+    expect(
+      again.noisePublicKeyFor('ORBIT-B1B1B1B1B1B1B1B1'),
+      List<int>.filled(32, 1),
+    );
+    expect(
+      again.noisePublicKeyFor('ORBIT-BBBBBBBBBBBBBBBB'),
+      List<int>.filled(32, 1),
+    );
+  });
+
+  test('sendTargets include recipient devices and own-device sync copies', () {
+    final reg = DeviceRegistry()
+      ..authorize(
+        AuthorizedDevice(
+          deviceId: 'alice-phone',
+          transportPublicKey: List<int>.filled(32, 1),
+          hypercorePublicKey: List<int>.filled(32, 2),
+          name: 'phone',
+          kind: 'phone',
+          createdAt: 1,
+          status: DeviceStatus.active,
+          ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+          transportPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        ),
+      )
+      ..authorize(
+        AuthorizedDevice(
+          deviceId: 'alice-tablet',
+          transportPublicKey: List<int>.filled(32, 3),
+          hypercorePublicKey: List<int>.filled(32, 4),
+          name: 'tablet',
+          kind: 'tablet',
+          createdAt: 2,
+          status: DeviceStatus.active,
+          ownerPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+          transportPeerId: 'ORBIT-A2A2A2A2A2A2A2A2',
+        ),
+      )
+      ..authorize(
+        AuthorizedDevice(
+          deviceId: 'bob-phone',
+          transportPublicKey: List<int>.filled(32, 5),
+          hypercorePublicKey: List<int>.filled(32, 6),
+          name: 'phone',
+          kind: 'phone',
+          createdAt: 3,
+          status: DeviceStatus.active,
+          ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+          transportPeerId: 'ORBIT-B1B1B1B1B1B1B1B1',
+        ),
+      );
+    expect(
+      reg.sendTargets(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        selfPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        sendingDeviceId: 'alice-phone',
+      ),
+      {
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        'ORBIT-B1B1B1B1B1B1B1B1',
+        'ORBIT-A2A2A2A2A2A2A2A2',
+      },
+    );
+    expect(
+      reg.sendTargets(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        selfPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        sendingDeviceId: 'alice-phone',
+      ),
+      isNot(contains('ORBIT-AAAAAAAAAAAAAAAA')),
+    );
+    reg.revoke('alice-tablet');
+    expect(
+      reg.sendTargets(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        selfPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+        sendingDeviceId: 'alice-phone',
+      ),
+      isNot(contains('ORBIT-A2A2A2A2A2A2A2A2')),
+    );
+  });
+
+  test('revoke drops only that device transport ratchet key', () {
+    final phone = AuthorizedDevice(
+      deviceId: 'phone',
+      transportPublicKey: List<int>.filled(32, 1),
+      hypercorePublicKey: List<int>.filled(32, 2),
+      name: 'phone',
+      kind: 'phone',
+      createdAt: 1,
+      status: DeviceStatus.active,
+      ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+      transportPeerId: 'ORBIT-B1B1B1B1B1B1B1B1',
+    );
+    expect(
+      ratchetKeysForRevokedDevice(phone),
+      ['ORBIT-B1B1B1B1B1B1B1B1'],
+    );
+    expect(
+      ratchetKeysForRevokedDevice(phone),
+      isNot(contains('ORBIT-BBBBBBBBBBBBBBBB')),
+    );
+    expect(ratchetKeysForRevokedDevice(dev('a1')), isEmpty);
+  });
+
+  test('authorize refuses URL-shaped deviceId without storing', () {
+    var persisted = false;
+    final reg = DeviceRegistry(
+      writeSnapshot: (_) async {
+        persisted = true;
+      },
+    );
+    expect(
+      () => reg.authorize(dev('https://evil')),
+      throwsA(
+        isA<ArgumentError>().having(
+          (e) => e.message,
+          'message',
+          'refusing secret field in device registry',
+        ),
+      ),
+    );
+    expect(reg.all, isEmpty);
+    expect(reg.acceptsWriter('https://evil'), isFalse);
+    expect(persisted, isFalse);
+  });
+
+  test('revoke of URL-shaped deviceId is a no-op', () {
+    var persisted = false;
+    final reg = DeviceRegistry(
+      writeSnapshot: (_) async {
+        persisted = true;
+      },
+    );
+    expect(reg.revoke('https://evil'), isNull);
+    expect(persisted, isFalse);
+  });
+
+  test('fromJson refuses URL-shaped deviceId', () {
+    expect(
+      () => AuthorizedDevice.fromJson(<String, Object?>{
+        'deviceId': 'https://evil',
+        'transportPublicKey': '',
+        'hypercorePublicKey': '',
+        'name': 'x',
+        'kind': 'phone',
+        'createdAt': 1,
+        'status': 'active',
+      }),
+      throwsA(
+        isA<ArgumentError>().having(
+          (e) => e.message,
+          'message',
+          'refusing secret field in device registry',
+        ),
+      ),
+    );
+  });
+
+  test('hydrate skips URL-shaped deviceId and keeps honest phone', () async {
+    final saved = <int>[];
+    final alice = DeviceRegistry(
+      writeSnapshot: (bytes) async {
+        saved
+          ..clear()
+          ..addAll(bytes);
+      },
+      readSnapshot: () async => Uint8List.fromList(saved),
+    );
+    alice.authorize(
+      AuthorizedDevice(
+        deviceId: 'phone',
+        transportPublicKey: List<int>.filled(32, 1),
+        hypercorePublicKey: List<int>.filled(32, 2),
+        name: 'phone',
+        kind: 'phone',
+        createdAt: 1,
+        status: DeviceStatus.active,
+        ownerPeerId: 'ORBIT-BBBBBBBBBBBBBBBB',
+        transportPeerId: 'ORBIT-B1B1B1B1B1B1B1B1',
+      ),
+    );
+    await alice.persist();
+    final decoded = jsonDecode(utf8.decode(saved)) as Map<String, dynamic>;
+    final devices = List<Object?>.from(decoded['devices'] as List);
+    devices.add(dev('https://evil').toJson());
+    decoded['devices'] = devices;
+    final snapshot = Uint8List.fromList(utf8.encode(jsonEncode(decoded)));
+
+    final again = DeviceRegistry(
+      writeSnapshot: (bytes) async {},
+      readSnapshot: () async => snapshot,
+    );
+    await again.hydrate();
+    expect(again.acceptsWriter('phone'), isTrue);
+    expect(again.acceptsWriter('https://evil'), isFalse);
+    expect(again.getDevice('https://evil'), isNull);
+    expect(again.all.map((d) => d.deviceId), ['phone']);
+  });
+
+  test('honest authorize and revoke still work', () {
+    final alice = DeviceRegistry();
+    alice.authorize(dev('a1'));
+    expect(alice.acceptsWriter('a1'), isTrue);
+    expect(alice.revoke('a1')?.status, DeviceStatus.revoked);
+    expect(alice.acceptsWriter('a1'), isFalse);
+    expect(alice.isRevoked('a1'), isTrue);
   });
 }

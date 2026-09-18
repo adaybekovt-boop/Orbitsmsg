@@ -85,6 +85,38 @@ void main() {
       expect(build, isNot(contains('storepass android')));
     });
 
+    test('retry_flutter_apk.sh exits with flutter status after a failed assemble',
+        () {
+      final tmp = Directory.systemTemp.createTempSync('orbits-apk-retry-');
+      addTearDown(() {
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
+      final fakeBin = Directory('${tmp.path}/bin')..createSync();
+      File('${fakeBin.path}/flutter').writeAsStringSync(
+        '#!/usr/bin/env bash\n'
+        'echo "Gradle task assembleRelease failed with exit code 1" >&2\n'
+        'exit 7\n',
+      );
+      final chmod = Process.runSync('chmod', ['+x', '${fakeBin.path}/flutter']);
+      expect(chmod.exitCode, 0, reason: '${chmod.stderr}');
+      final result = Process.runSync(
+        '/bin/bash',
+        [file('tool/ci/retry_flutter_apk.sh').path, '--release'],
+        environment: childEnv({
+          'PATH': '${fakeBin.path}:${Platform.environment['PATH'] ?? ''}',
+          'ORBITS_APK_RETRIES': '2',
+          'ORBITS_APK_RETRY_DELAY_SEC': '0',
+        }),
+      );
+      expect(result.exitCode, 7, reason: '${result.stderr}\n${result.stdout}');
+      expect(
+        result.stderr.toString(),
+        contains('failed after 2 attempts'),
+      );
+    }, skip: (!Platform.isLinux && !Platform.isMacOS)
+        ? 'retry_flutter_apk.sh is a bash helper'
+        : false);
+
     test('docs describe secrets, rotation, and compromise', () {
       final docs = read('docs/android-signing.md');
       expect(docs, contains('GH-C01'));

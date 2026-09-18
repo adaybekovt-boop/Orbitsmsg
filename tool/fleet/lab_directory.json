@@ -1,0 +1,94 @@
+{
+  "issuedAt": 1,
+  "expiresAt": 10,
+  "signature": "",
+  "identityPublicKey": "",
+  "live": false,
+  "note": "Unsigned loopback lab directory from tool/fleet/directory.js. Not a public fleet. kLiveSignedRelayDirectory stays false.",
+  "peers": [
+    {
+      "id": "bootstrap-1",
+      "kind": "bootstrap",
+      "host": "127.0.0.1",
+      "port": 49737,
+      "healthPort": 18001,
+      "region": "ca",
+      "rttMs": 0,
+      "unsound": false,
+      "live": false,
+      "protocol": "http"
+    },
+    {
+      "id": "bootstrap-2",
+      "kind": "bootstrap",
+      "host": "127.0.0.1",
+      "port": 49738,
+      "healthPort": 18002,
+      "region": "eu",
+      "rttMs": 1,
+      "unsound": false,
+      "live": false,
+      "protocol": "http"
+    },
+    {
+      "id": "bootstrap-3",
+      "kind": "bootstrap",
+      "host": "127.0.0.1",
+      "port": 49739,
+      "healthPort": 18003,
+      "region": "spare",
+      "rttMs": 2,
+      "unsound": false,
+      "live": false,
+      "protocol": "http"
+    },
+    {
+      "id": "relay-1",
+      "kind": "relay",
+      "host": "127.0.0.1",
+      "port": 49740,
+      "healthPort": 18004,
+      "region": "ca",
+      "rttMs": 0,
+      "unsound": false,
+      "live": false,
+      "protocol": "http"
+    },
+    {
+      "id": "relay-2",
+      "kind": "relay",
+      "host": "127.0.0.1",
+      "port": 49741,
+      "healthPort": 18005,
+      "region": "eu",
+      "rttMs": 1,
+      "unsound": false,
+      "live": false,
+      "protocol": "http"
+    },
+    {
+      "id": "storage-1",
+      "kind": "storage",
+      "host": "127.0.0.1",
+      "port": 8787,
+      "healthPort": 8787,
+      "region": "ca",
+      "rttMs": 0,
+      "unsound": false,
+      "live": false,
+      "protocol": "http"
+    },
+    {
+      "id": "storage-2",
+      "kind": "storage",
+      "host": "127.0.0.1",
+      "port": 8788,
+      "healthPort": 8788,
+      "region": "eu",
+      "rttMs": 1,
+      "unsound": false,
+      "live": false,
+      "protocol": "http"
+    }
+  ]
+}

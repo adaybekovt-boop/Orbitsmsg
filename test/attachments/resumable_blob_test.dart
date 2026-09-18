@@ -1,11 +1,26 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/attachments/resumable_blob.dart';
 
+const _scope = 'test-scope';
+
 void main() {
+  test('PeerJS stays 12 MiB; native path chat may use 50 MiB', () {
+    expect(kMaxPeerJsFileRawBytes, 12 * 1024 * 1024);
+    expect(kMaxNativeAttachBytes, 50 * 1024 * 1024);
+  });
+
   test('chunk, drop one piece, resume, then decrypt', () {
     final key = List<int>.generate(32, (i) => i + 1);
     final plain = List<int>.generate(70 * 1024, (i) => i % 251);
-    final chunks = ResumableAttachment.chunk(plain, key);
+    final chunks = ResumableAttachment.chunk(
+      plain,
+      key,
+      scope: _scope,
+      fileId: 'f1',
+    );
     expect(chunks, hasLength(2));
     final firstOnly = ResumableAttachment(
       fileId: 'f1',
@@ -21,12 +36,26 @@ void main() {
       chunks: [...firstOnly.chunks, chunks.last],
     );
     expect(resumed.isComplete, isTrue);
-    expect(ResumableAttachment.decrypt(resumed.chunks, key), plain);
+    expect(
+      ResumableAttachment.decrypt(
+        resumed.chunks,
+        key,
+        scope: _scope,
+        fileId: 'f1',
+        totalBytes: plain.length,
+      ),
+      plain,
+    );
   });
 
   test('tampered chunk is rejected', () {
-    final key = List<int>.filled(8, 3);
-    final chunks = ResumableAttachment.chunk(List<int>.filled(16, 1), key);
+    final key = List<int>.generate(32, (i) => i + 3);
+    final chunks = ResumableAttachment.chunk(
+      List<int>.filled(16, 1),
+      key,
+      scope: _scope,
+      fileId: 'tamper',
+    );
     final bad = AttachmentChunk(
       index: chunks.first.index,
       offset: chunks.first.offset,
@@ -34,15 +63,26 @@ void main() {
       hash: 'deadbeef',
     );
     expect(
-      () => ResumableAttachment.decrypt([bad], key),
-      throwsStateError,
+      () => ResumableAttachment.decrypt(
+        [bad],
+        key,
+        scope: _scope,
+        fileId: 'tamper',
+        totalBytes: 16,
+      ),
+      throwsA(isA<AttachmentAeadError>()),
     );
   });
 
   test('10 MiB attachment survives a dropped middle chunk', () {
     final key = List<int>.generate(32, (i) => i + 3);
     final plain = List<int>.generate(10 * 1024 * 1024, (i) => i % 251);
-    final chunks = ResumableAttachment.chunk(plain, key);
+    final chunks = ResumableAttachment.chunk(
+      plain,
+      key,
+      scope: _scope,
+      fileId: 'big',
+    );
     expect(chunks.length, greaterThan(100));
     final dropped = chunks.where((c) => c.index != 3).toList();
     expect(
@@ -61,31 +101,155 @@ void main() {
       chunks: [...dropped, chunks[3]],
     );
     expect(resumed.isComplete, isTrue);
-    expect(ResumableAttachment.decrypt(resumed.chunks, key), plain);
+    expect(
+      ResumableAttachment.decrypt(
+        resumed.chunks,
+        key,
+        scope: _scope,
+        fileId: 'big',
+        totalBytes: plain.length,
+      ),
+      plain,
+    );
   });
 
-  test('50 MiB attachment survives a dropped middle chunk', () {
-    final key = List<int>.generate(32, (i) => i + 5);
-    final plain = List<int>.generate(50 * 1024 * 1024, (i) => i % 251);
-    final chunks = ResumableAttachment.chunk(plain, key);
-    expect(chunks.length, greaterThan(400));
-    final dropped = chunks.where((c) => c.index != 7).toList();
-    expect(
-      ResumableAttachment(
+  test(
+    '50 MiB attachment survives a dropped middle chunk',
+    () {
+      final key = List<int>.generate(32, (i) => i + 5);
+      final plain = List<int>.generate(50 * 1024 * 1024, (i) => i % 251);
+      final chunks = ResumableAttachment.chunk(
+        plain,
+        key,
+        scope: _scope,
+        fileId: 'huge',
+      );
+      expect(chunks.length, greaterThan(400));
+      final dropped = chunks.where((c) => c.index != 7).toList();
+      expect(
+        ResumableAttachment(
+          fileId: 'huge',
+          totalBytes: plain.length,
+          fileKey: key,
+          chunks: dropped,
+        ).isComplete,
+        isFalse,
+      );
+      final resumed = ResumableAttachment(
         fileId: 'huge',
         totalBytes: plain.length,
         fileKey: key,
-        chunks: dropped,
-      ).isComplete,
-      isFalse,
-    );
-    final resumed = ResumableAttachment(
-      fileId: 'huge',
+        chunks: [...dropped, chunks[7]],
+      );
+      expect(resumed.isComplete, isTrue);
+      expect(
+        ResumableAttachment.decrypt(
+          resumed.chunks,
+          key,
+          scope: _scope,
+          fileId: 'huge',
+          totalBytes: plain.length,
+        ),
+        plain,
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
+  test(
+    'chunkFromByteStream matches chunk() without a single plaintext buffer',
+    () async {
+      final key = List<int>.generate(32, (i) => i + 7);
+      final plain = List<int>.generate(70 * 1024, (i) => i % 251);
+      final pieces = <List<int>>[];
+      for (var i = 0; i < plain.length; i += 8000) {
+        final end = i + 8000 > plain.length ? plain.length : i + 8000;
+        pieces.add(plain.sublist(i, end));
+      }
+      final streamed = await ResumableAttachment.chunkFromByteStream(
+        Stream<List<int>>.fromIterable(pieces),
+        key,
+        scope: _scope,
+        fileId: 'stream',
+        totalBytes: plain.length,
+      );
+      final bulk = ResumableAttachment.chunk(
+        plain,
+        key,
+        scope: _scope,
+        fileId: 'stream',
+      );
+      expect(streamed.length, bulk.length);
+      expect(
+        ResumableAttachment.decrypt(
+          streamed,
+          key,
+          scope: _scope,
+          fileId: 'stream',
+          totalBytes: plain.length,
+        ),
+        plain,
+      );
+    },
+  );
+
+  test('chunkStream yields without collecting the caller list', () async {
+    final key = List<int>.generate(32, (i) => i + 9);
+    final plain = List<int>.generate(70 * 1024, (i) => i % 199);
+    var yielded = 0;
+    final out = <AttachmentChunk>[];
+    await for (final chunk in ResumableAttachment.chunkStream(
+      Stream<List<int>>.fromIterable(<List<int>>[plain]),
+      key,
+      scope: _scope,
+      fileId: 'yield',
       totalBytes: plain.length,
-      fileKey: key,
-      chunks: [...dropped, chunks[7]],
+    )) {
+      yielded++;
+      out.add(chunk);
+    }
+    expect(yielded, 2);
+    expect(
+      ResumableAttachment.decrypt(
+        out,
+        key,
+        scope: _scope,
+        fileId: 'yield',
+        totalBytes: plain.length,
+      ),
+      plain,
     );
-    expect(resumed.isComplete, isTrue);
-    expect(ResumableAttachment.decrypt(resumed.chunks, key), plain);
-  }, timeout: const Timeout(Duration(minutes: 2)));
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      contains('chunkStream'),
+    );
+    expect(
+      File('lib/transport/dual_stack_bridge.dart').readAsStringSync(),
+      isNot(contains('chunkFromByteStream(plaintext, fileKey)')),
+    );
+  });
+
+  test('native attach fileKey is reused from the pending payload', () {
+    final key = List<int>.generate(32, (i) => i + 4);
+    final b64 = base64Encode(key);
+    expect(nativeAttachFileKeyFromPayload({'fileKeyB64': b64}), key);
+    expect(
+      nativeAttachFileKeyFromPayload({'fileKeyB64': b64}),
+      nativeAttachFileKeyFromPayload({'fileKeyB64': b64}),
+    );
+    expect(nativeAttachFileKeyFromPayload(null), isNull);
+    expect(nativeAttachFileKeyFromPayload({'fileKeyB64': 'short'}), isNull);
+    expect(
+      nativeAttachFileKeyFromPayload({'fileKeyB64': 'https://evil.example/k'}),
+      isNull,
+    );
+    expect(
+      File('lib/state/messaging_notifier.dart').readAsStringSync(),
+      contains('nativeAttachFileKeyFromPayload'),
+    );
+    expect(
+      File('lib/state/messaging_notifier.dart').readAsStringSync(),
+      contains("unawaited(db.updateMessage(msgId, {'payload': payload}))"),
+    );
+  });
 }

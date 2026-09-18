@@ -28,7 +28,9 @@
 //   base64-decoded bytes straight through.
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import '../core/bundle_cache.dart';
 import '../core/prekey_bundle.dart';
@@ -36,6 +38,8 @@ import '../core/wire_crypto.dart';
 import '../peer/helpers.dart';
 import '../utils/heavy_codec.dart';
 import '../storage/db.dart' as db;
+import '../transport/hello_capabilities.dart';
+import '../transport/layers.dart';
 import '../utils/common.dart';
 import 'message_auth.dart';
 
@@ -94,8 +98,12 @@ class ReliableInboundCtx {
     this.onHandshakeError,
     this.onDecryptError,
     this.onUnexpectedPlaintext,
+    this.onDeliveryAcked,
     this.persistInbound,
     this.isPeerBlocked,
+    this.assembleNativeAttachment,
+    this.assembleNativeAttachmentPath,
+    this.onMailboxGrant,
     Set<String>? processingMsgIds,
   }) : processingMsgIds = processingMsgIds ?? <String>{};
 
@@ -181,6 +189,29 @@ class ReliableInboundCtx {
   final void Function(Object err)? onHandshakeError;
   final void Function(Object err)? onDecryptError;
   final void Function(Object? data)? onUnexpectedPlaintext;
+  final void Function(String remoteId, String eventId)? onDeliveryAcked;
+
+  /// Native `attach-chunk` reassembly. [fileKey] comes from the ratcheted
+  /// envelope, never from the journal. Null when the default PeerJS
+  /// path is in use.
+  final Future<Uint8List?> Function(
+    String remoteId,
+    String fileId,
+    List<int> fileKey,
+  )? assembleNativeAttachment;
+
+  /// Native `attach-chunk` decrypt-to-path. Persist via
+  /// [db.saveFileBlobFromPath] so Drift does not hold the plaintext.
+  final Future<String?> Function(
+    String remoteId,
+    String fileId,
+    List<int> fileKey,
+  )? assembleNativeAttachmentPath;
+
+  /// Ratcheted mailbox deposit grant from a contact. [data] is the
+  /// decrypted `mailboxGrant` map.
+  final void Function(String remoteId, Map<String, Object?> data)?
+      onMailboxGrant;
 }
 
 // в”Ђв”Ђв”Ђ Ephemeral dispatch в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
@@ -193,6 +224,7 @@ void dispatchEphemeralInbound(
   EphemeralInboundCtx ctx,
 ) {
   if (data is! Map) return;
+  if (!replicationValueIsSafe(data)) return;
   final type = data['type'];
   if (type == 'typing') {
     ctx.applyTyping(data['isTyping'] == true);
@@ -228,6 +260,11 @@ Future<bool> dispatchReliableInbound(
   if (data is Map) {
     final type = data['type'];
     if (type == 'wireHello' || type == 'wireRekey') {
+      // Stricter than [replicationValueIsSafe]: refuse wake tokens and
+      // URL-ish keys before the handshake runs. Consumed, no reply.
+      if (!helloEnvelopeIsSafe(data)) {
+        return true;
+      }
       try {
         final result = await acceptWireHello(
           peerId: remoteId,
@@ -304,9 +341,19 @@ Future<bool> dispatchReliablePlaintext(
   final type = data['type'];
 
   // в”Ђв”Ђв”Ђ profile_req вЂ” remote wants our profile card в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  if (type == 'mailboxGrant') {
+    if (!replicationValueIsSafe(data)) return true;
+    ctx.onMailboxGrant?.call(remoteId, data);
+    return true;
+  }
+
   if (type == 'profile_req') {
     final lp = ctx.localProfile();
     if (lp == null) return true;
+    // Do not reply with a secret-bearing card if localProfile itself
+    // nests [kForbiddenReplicationFields] (`peerId` / `avatarDataUrl` are
+    // legitimate leaves and stay allowed).
+    if (!replicationValueIsSafe(lp)) return true;
     final nonce = data['nonce'] is num
         ? (data['nonce'] as num).toInt()
         : DateTime.now().millisecondsSinceEpoch;
@@ -328,6 +375,7 @@ Future<bool> dispatchReliablePlaintext(
     final p = data['profile'];
     if (p is! Map) return true;
     final pMap = Map<String, Object?>.from(p);
+    if (!replicationValueIsSafe(pMap)) return true;
     final avatarRaw = pMap['avatarDataUrl'];
 
     // Remote avatars are untrusted вЂ” validate MIME + size strictly (the
@@ -417,19 +465,34 @@ Future<bool> dispatchReliablePlaintext(
       'delivery': 'delivered',
     });
     ctx.queueAckStatus(ackId, 'delivered');
+    try {
+      ctx.onDeliveryAcked?.call(remoteId, ackId);
+    } catch (_) {}
     return true;
   }
 
   // в”Ђв”Ђв”Ђ game вЂ” mini-game piggyback on the reliable channel в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
   if (type == 'game') {
+    final payload = data['payload'];
+    // Nested secret in a Map payload: consume without handing it to the
+    // game observer. Non-Map payloads keep current behavior unless the
+    // envelope itself nests a forbidden key.
+    if (payload is Map) {
+      if (!replicationValueIsSafe(payload)) return true;
+    } else if (!replicationValueIsSafe(data)) {
+      return true;
+    }
     try {
-      ctx.onGameMessage?.call(remoteId, data['payload']);
+      ctx.onGameMessage?.call(remoteId, payload);
     } catch (_) {}
     return true;
   }
 
   // в”Ђв”Ђв”Ђ edit вЂ” remote edited an earlier message в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
   if (type == 'edit') {
+    // `text` is a legitimate leaf (not in [kForbiddenReplicationFields]);
+    // a nested secret on the envelope must not reach updateMessage / Drift.
+    if (!replicationValueIsSafe(data)) return true;
     final id = data['id'];
     if (id is! String || id.isEmpty) return true;
     final existing = await db.getMessageById(id);
@@ -463,6 +526,8 @@ Future<bool> dispatchReliablePlaintext(
 
   // в”Ђв”Ђв”Ђ delete вЂ” remote tombstones an earlier message в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
   if (type == 'delete') {
+    // Hostile envelope with a nested secret must not tombstone.
+    if (!replicationValueIsSafe(data)) return true;
     final id = data['id'];
     if (id is! String || id.isEmpty) return true;
     final existing = await db.getMessageById(id);
@@ -506,19 +571,27 @@ Future<bool> dispatchReliablePlaintext(
   final fromRaw = data['from'];
   final from = normalizePeerId(fromRaw is String ? fromRaw : remoteId);
   final rawId = data['id'];
+  // Fail-close: URL-shaped ids must not be used as msgId, minted around,
+  // persisted, or echoed in an ack.
+  if (rawId is String && rawId.contains('://')) {
+    return true;
+  }
   final msgId = (rawId is String && rawId.isNotEmpty)
       ? rawId
       : '$from:$ts:${_randomHex()}';
   final msgType = data['msgType'] is String ? data['msgType'] as String : 'text';
-  final sticker = data['sticker'] is Map
+  JsonMap? sticker = data['sticker'] is Map
       ? Map<String, Object?>.from(data['sticker'] as Map)
       : null;
-  final replyTo = data['replyTo'] is Map
+  if (sticker != null && !replicationValueIsSafe(sticker)) sticker = null;
+  JsonMap? replyTo = data['replyTo'] is Map
       ? Map<String, Object?>.from(data['replyTo'] as Map)
       : null;
-  final voiceMeta = data['voice'] is Map
+  if (replyTo != null && !replicationValueIsSafe(replyTo)) replyTo = null;
+  JsonMap? voiceMeta = data['voice'] is Map
       ? Map<String, Object?>.from(data['voice'] as Map)
       : null;
+  if (voiceMeta != null && !replicationValueIsSafe(voiceMeta)) voiceMeta = null;
   final attachmentMeta = data['attachment'] is Map
       ? Map<String, Object?>.from(data['attachment'] as Map)
       : null;
@@ -635,7 +708,7 @@ Future<bool> dispatchReliablePlaintext(
           final b64 = attachmentMeta['b64'] as String;
           // Anti-OOM (audit finding 4): cap base64 length BEFORE decode.
           // Mirrors the send-side gate `_maxFileB64Len` (16 MiB) in
-          // messaging_notifier.dart. Oversized в†’ marked missing (below).
+          // messaging_notifier.dart. Oversized → marked missing (below).
           if (b64.length > 16 * 1024 * 1024) {
             throw const FormatException('attachment b64 exceeds inbound cap');
           }
@@ -652,13 +725,28 @@ Future<bool> dispatchReliablePlaintext(
             duration: duration,
             // `thumb` on the wire is a dataURL string; persisting it as bytes
             // would round-trip through utf8 which hurts nothing but adds
-            // nothing either вЂ” we keep the string copy inside the UI-side
+            // nothing either — we keep the string copy inside the UI-side
             // attachmentRef and leave the bytes-column null for now.
           );
           attachmentRef = metaOut;
         } catch (_) {
           attachmentRef = <String, Object?>{...metaOut, 'missing': true};
         }
+      } else if (attachmentMeta['chunked'] == true) {
+        attachmentRef = await _assembleChunkedAttachment(
+          ctx: ctx,
+          remoteId: remoteId,
+          msgId: msgId,
+          meta: attachmentMeta,
+          metaOut: metaOut,
+          mime: mime,
+          name: name,
+          kind: kind,
+          size: size,
+          width: width,
+          height: height,
+          duration: duration,
+        );
       } else {
         attachmentRef = <String, Object?>{...metaOut, 'missing': true};
       }
@@ -761,6 +849,81 @@ List<double>? _numListToDoubles(Object? v) {
     }
   }
   return out;
+}
+
+Future<JsonMap> _assembleChunkedAttachment({
+  required ReliableInboundCtx ctx,
+  required String remoteId,
+  required String msgId,
+  required JsonMap meta,
+  required JsonMap metaOut,
+  required String mime,
+  required String name,
+  required String kind,
+  required int size,
+  required int width,
+  required int height,
+  required int duration,
+}) async {
+  final missing = <String, Object?>{...metaOut, 'missing': true};
+  final fileId = meta['fileId'];
+  final keyB64 = meta['fileKeyB64'];
+  if (fileId is! String ||
+      fileId.isEmpty ||
+      fileId.length > 200 ||
+      fileId.contains('://') ||
+      keyB64 is! String ||
+      keyB64.isEmpty ||
+      keyB64.length > 64) {
+    return missing;
+  }
+  List<int> key;
+  try {
+    key = base64Decode(keyB64);
+  } catch (_) {
+    return missing;
+  }
+  if (key.length < 8) return missing;
+  final pathAssemble = ctx.assembleNativeAttachmentPath;
+  if (pathAssemble != null) {
+    try {
+      final path = await pathAssemble(remoteId, fileId, key);
+      if (path != null && path.isNotEmpty && !path.contains('://')) {
+        final ok = await db.saveFileBlobFromPath(
+          msgId,
+          path,
+          mime: mime,
+          name: name,
+          kind: kind,
+          size: size,
+          width: width,
+          height: height,
+          duration: duration,
+        );
+        if (ok) return metaOut;
+      }
+    } catch (_) {}
+  }
+  final assemble = ctx.assembleNativeAttachment;
+  if (assemble == null) return missing;
+  try {
+    final bytes = await assemble(remoteId, fileId, key);
+    if (bytes == null || bytes.isEmpty) return missing;
+    await db.saveFileBlob(
+      msgId,
+      bytes,
+      mime: mime,
+      name: name,
+      kind: kind,
+      size: size == 0 ? bytes.length : size,
+      width: width,
+      height: height,
+      duration: duration,
+    );
+    return metaOut;
+  } catch (_) {
+    return missing;
+  }
 }
 
 /// Entropy for fallback [msgId] generation. Message ids are not keys, but
