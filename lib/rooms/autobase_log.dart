@@ -134,6 +134,7 @@ class RoomAutobaseLog {
   final List<RoomEvent> events = <RoomEvent>[];
   Future<void> _persistChain = Future<void>.value();
   bool _restoring = false;
+  String lastPersistError = '';
 
   int nextSeq(String writerId) =>
       _seq[writerId] = (_seq[writerId] ?? -1) + 1;
@@ -215,7 +216,10 @@ class RoomAutobaseLog {
       final raw = jsonDecode(utf8.decode(bytes));
       if (raw is! Map) return;
       restore(Map<String, Object?>.from(raw));
-    } catch (_) {}
+      lastPersistError = '';
+    } catch (err) {
+      lastPersistError = err.toString();
+    }
   }
 
   Future<void> persist() {
@@ -230,7 +234,10 @@ class RoomAutobaseLog {
     if (writer == null) return;
     try {
       await writer(utf8.encode(jsonEncode(snapshot())));
-    } catch (_) {}
+      lastPersistError = '';
+    } catch (err) {
+      lastPersistError = err.toString();
+    }
   }
 
   void clear() {

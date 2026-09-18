@@ -13,6 +13,7 @@ void main() {
     expect(host, contains('persistProjectedMessage'));
     expect(host, contains('ratchets: ratchets'));
     expect(host, contains('await ratchets!.hydrate()'));
+    expect(host, contains('bindAutobaseSnapshot()'));
     expect(
       host.contains('if (isMobileBareHost())') &&
           host.contains('spawnWorklet(backend:'),
@@ -65,6 +66,16 @@ void main() {
     expect(conns, contains('_closePeerjsFallback'));
     expect(conns, contains('onAuthorizationRejected'));
     expect(conns, contains('if (canUseNative(normalized)) return;'));
+    final presence = conns.split('..onPresence').elementAt(1);
+    expect(
+      presence.split('..onAuthorizationRejected').first,
+      contains('_closePeerjsFallback'),
+    );
+    final nativeThen = conns.split('Future<void> _openNativeThenMaybePeerjs').elementAt(1);
+    expect(
+      nativeThen.split('void _openPeerjsChannel').first,
+      contains('_closePeerjsFallback'),
+    );
     final openPeerjs = conns.split('void _openPeerjsChannel').last;
     expect(
       openPeerjs.split('final peer = _boundPeer').first,

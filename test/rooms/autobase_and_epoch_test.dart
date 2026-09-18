@@ -239,4 +239,20 @@ void main() {
     );
     expect(kRoomsApplicationE2eImplemented, isFalse);
   });
+
+  test('Autobase persist failure is visible', () async {
+    final log = RoomAutobaseLog(
+      writeSnapshot: (_) async {
+        throw StateError('autobase-persist-failed');
+      },
+    );
+    log.append(
+      writerId: 'host',
+      kind: 'membership',
+      payload: {'peerId': 'g1', 'action': 'join'},
+    );
+    await log.persist();
+    expect(log.lastPersistError, contains('autobase-persist-failed'));
+    expect(kRoomsApplicationE2eImplemented, isFalse);
+  });
 }

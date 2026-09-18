@@ -1,5 +1,21 @@
 # PR #62 repair report
 
+## 2026-09-18 RoomManager DualStack Autobase + persist errors
+
+Software path only. External gates stay open.
+
+- Host+guest `RoomManager` now has a live DualStack integration:
+  join and a relayed message converge Autobase projections with no
+  PeerJS DataChannel
+- `RoomAutobaseLog.lastPersistError` surfaces vault-wrap persist /
+  hydrate failures instead of swallowing them
+- DualStack inbound replication decode failures set
+  `lastReplicationError`. Native host projector persist/tombstone
+  failures set `lastProjectorError`
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
 ## 2026-09-18 Autobase persist / live membership projector
 
 Software path only. External gates stay open.

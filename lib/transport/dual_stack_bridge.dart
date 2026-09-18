@@ -1250,7 +1250,9 @@ class DualStackBridge {
         unawaited(durableJournal?.append(record));
         unawaited(onRemoteRecord?.call(record));
       }
-    } catch (_) {}
+    } catch (err) {
+      lastReplicationError = err.toString();
+    }
   }
 
   Future<bool> _authorizeInboundReplication(

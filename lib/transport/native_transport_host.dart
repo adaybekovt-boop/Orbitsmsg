@@ -64,6 +64,7 @@ class NativeTransportHost {
   OrbitsTransport? transport;
   String backend = 'none';
   String lastError = '';
+  String lastProjectorError = '';
   NativeBackendDecision? lastDecision;
   bool attached = false;
   TransportLifecycle? lifecycle;
@@ -216,12 +217,18 @@ class NativeTransportHost {
             selfPeerId: _sessionPeerId ?? '',
             save: db.saveMessage,
           );
-        } catch (_) {}
+          lastProjectorError = '';
+        } catch (err) {
+          lastProjectorError = err.toString();
+        }
       },
       tombstone: (id) async {
         try {
           await db.deleteMessageRow(id);
-        } catch (_) {}
+          lastProjectorError = '';
+        } catch (err) {
+          lastProjectorError = err.toString();
+        }
       },
     );
     await projector!.applyAll(memory);
