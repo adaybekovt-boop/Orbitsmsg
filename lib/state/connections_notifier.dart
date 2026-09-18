@@ -351,6 +351,17 @@ class ConnectionsNotifier extends StateNotifier<ConnectionsState> {
 
   DualStackBridge? get nativeBridge => _dual;
 
+  /// Test-only: bind a DualStack without [attach] so widget tests can
+  /// exercise authorize/revoke without a live transport timer.
+  @visibleForTesting
+  void debugBindNativeBridge(
+    DualStackBridge bridge, {
+    MemoryJournal? journal,
+  }) {
+    _dual = bridge;
+    _nativeJournal = journal ?? bridge.journal;
+  }
+
   bool canUseNative(String peerId) => _dual?.canUseNative(peerId) == true;
 
   void bindCallHandler(void Function(String from, CallSignal signal)? handler) {

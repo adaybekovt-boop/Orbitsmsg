@@ -409,17 +409,32 @@ class DualStackBridge {
   Future<bool> depositMailboxRemote(
     List<int> encryptedEnvelope, {
     String? envelopeId,
+    String? writerKey,
   }) async {
     final client = storagePeer;
     final cap = mailboxCapability;
-    if (client == null || cap == null) return false;
+    final sender = normalizePeerId(writerKey ?? selfPeerId());
+    final bucket = _mailboxSenderBucket(sender);
+    if (client == null || cap == null || bucket == null) return false;
     await _mailboxPump.depositRemote(
       client: client,
       capability: cap,
       envelopeId: envelopeId ?? _stableEnvelopeId(encryptedEnvelope),
       encryptedEnvelope: encryptedEnvelope,
+      senderBucket: bucket,
     );
     return true;
+  }
+
+  String? _mailboxSenderBucket(String senderPeerId) {
+    final cap = mailboxCapability;
+    final sender = normalizePeerId(senderPeerId);
+    if (cap == null || sender.isEmpty) return null;
+    final bucket = mailboxSenderBucket(
+      mailboxId: cap.mailboxId,
+      senderPeerId: sender,
+    );
+    return bucket.isEmpty ? null : bucket;
   }
 
   String _stableEnvelopeId(List<int> encryptedEnvelope) {
@@ -525,27 +540,32 @@ class DualStackBridge {
   Future<int> drainMailboxRemote({String? fromPeerId}) async {
     final client = storagePeer;
     final cap = mailboxCapability;
-    if (client == null || cap == null) return 0;
+    final from = normalizePeerId(fromPeerId ?? '');
+    final bucket = _mailboxSenderBucket(from);
+    if (client == null || cap == null || bucket == null) return 0;
     final blocks = await _mailboxPump.collectRemote(
       client: client,
       capability: cap,
+      senderBucket: bucket,
     );
     return _projectMailboxBlocks(
       blocks,
-      fromPeerId: fromPeerId,
+      fromPeerId: from,
       acknowledge: (id) => _mailboxPump.acknowledgeRemote(
         client: client,
         capability: cap,
         envelopeId: id,
+        senderBucket: bucket,
       ),
     );
   }
 
   /// Drain once per known contact bucket. Never invents a sender from the
   /// mailbox writer key or a shared remote dump. Blocked peers are skipped
-  /// before collect/project. Remote v2 wires stay unattributed (explicit
-  /// [drainMailbox] is required). Device-ratchet frames attribute via the
-  /// authorized [fromDeviceId] owner, not the first peer in the list.
+  /// before collect/project. Remote HTTP uses the same per-sender buckets as
+  /// local (`senderBucket` is HASH(info||mailboxId||sender), never a peer
+  /// ID). Unbucketed legacy dumps stay unattributed for v2 wires; device-
+  /// ratchet frames still attribute via the authorized [fromDeviceId] owner.
   Future<int> drainKnownMailboxes(Iterable<String> peerIds) async {
     final known = <String>[];
     for (final raw in peerIds) {
@@ -558,14 +578,17 @@ class DualStackBridge {
       final client = storagePeer;
       final cap = mailboxCapability;
       if (client == null || cap == null) return 0;
-      final blocks = await _mailboxPump.collectRemote(
+      var projected = 0;
+      for (final peerId in known) {
+        projected += await drainMailboxRemote(fromPeerId: peerId);
+      }
+      final legacy = await _mailboxPump.collectRemote(
         client: client,
         capability: cap,
       );
-      var projected = 0;
       for (final peerId in known) {
         projected += await _projectMailboxBlocks(
-          blocks,
+          legacy,
           fromPeerId: peerId,
           acknowledge: (id) => _mailboxPump.acknowledgeRemote(
             client: client,

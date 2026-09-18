@@ -9,10 +9,10 @@ class MailboxPump {
   int _seq = 0;
   int _requestNonce = 0;
   final Set<String> projectedEnvelopeIds = <String>{};
-
   String nextRequestId(String prefix) {
     _requestNonce += 1;
-    return '$prefix-$_requestNonce';
+    return '$prefix-${identityHashCode(this)}-'
+        '${DateTime.now().microsecondsSinceEpoch}-$_requestNonce';
   }
 
   void deposit({
@@ -62,6 +62,7 @@ class MailboxPump {
     required SignedMailboxCapability capability,
     required String envelopeId,
     required List<int> encryptedEnvelope,
+    String? senderBucket,
   }) {
     return client.deposit(
       depositRequest(
@@ -69,6 +70,7 @@ class MailboxPump {
         envelopeId: envelopeId,
         ciphertext: wrapOpaqueEnvelope(encryptedEnvelope),
         requestId: nextRequestId('dep'),
+        senderBucket: senderBucket,
       ),
     );
   }
@@ -77,12 +79,14 @@ class MailboxPump {
     required StoragePeerClient client,
     required SignedMailboxCapability capability,
     int fromSeq = 0,
+    String? senderBucket,
   }) async {
     final blocks = await client.drain(
       drainRequest(
         capability: capability,
         requestId: nextRequestId('drn'),
         fromSeq: fromSeq,
+        senderBucket: senderBucket,
       ),
     );
     return [
@@ -102,12 +106,14 @@ class MailboxPump {
     required StoragePeerClient client,
     required SignedMailboxCapability capability,
     required String envelopeId,
+    String? senderBucket,
   }) {
     return client.ack(
       ackRequest(
         capability: capability,
         envelopeId: envelopeId,
         requestId: nextRequestId('ack'),
+        senderBucket: senderBucket,
       ),
     );
   }

@@ -1,5 +1,22 @@
 # PR #62 repair report
 
+## 2026-09-18 remote mailbox sender buckets / DeviceLinkPage widget
+
+Software path only. External gates stay open.
+
+- Remote `/v1/mailbox` deposit/drain/ack carry an opaque `senderBucket`
+  (`HASH("orbits-mailbox-sender-v1" || mailboxId || senderPeerId)`).
+  Storage peers never see a peer ID. `drainKnownMailboxes` attributes
+  contact-level `v2` wires from those buckets the same way local
+  `writerKey` buckets do. A peer-ID `senderBucket` is rejected.
+  Unbucketed legacy dumps still skip `v2` in the known-sender sweep
+- `DeviceLinkPage` widget test pastes a signed QR, calls DualStack
+  `authorizeDevice`, then revoke; private ratchet material stays out
+  of the JSON
+
+`kCompletedMigrationPhase` stays **0**. `HyperswarmRollout` stays
+**off**. PeerJS remains the production default.
+
 ## 2026-09-18 room path-descriptor / exclusive-native teardown / DualStack restart
 
 Software path only. External gates stay open.

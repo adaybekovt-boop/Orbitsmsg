@@ -265,6 +265,127 @@ void main() {
     },
   );
 
+  test('senderBucket must be an opaque hash, never a peer id', () {
+    final alice = mailboxSenderBucket(
+      mailboxId: cap.mailboxId,
+      senderPeerId: 'ORBIT-AAAAAAAAAAAAAAAA',
+    );
+    expect(isMailboxSenderBucket(alice), isTrue);
+    expect(alice.contains('ORBIT-'), isFalse);
+    expect(alice, isNot(cap.mailboxId));
+    expect(
+      () => MailboxHttpRequest.parse({
+        'v': kMailboxHttpVersion,
+        'op': 'drain',
+        'requestId': 'bad-bucket',
+        'issuedAt': DateTime.now().millisecondsSinceEpoch,
+        'capability': cap.toJson(),
+        'senderBucket': 'ORBIT-AAAAAAAAAAAAAAAA',
+      }, bodyBytes: 32),
+      throwsA(
+        isA<MailboxProtocolException>().having(
+          (e) => e.code,
+          'code',
+          'malformed',
+        ),
+      ),
+    );
+  });
+
+  test(
+    'drainKnownMailboxes attributes remote v2 per sender bucket',
+    () async {
+      final server = StoragePeerHttp(
+        BlindMailboxStore(),
+        grantSecret: grantSecret,
+      );
+      await server.start();
+      addTearDown(server.stop);
+      final client = httpStoragePeerClient(server.origin);
+      final seen = <String>[];
+
+      Future<DualStackBridge> sender(String peerId, String deviceId) async {
+        final bridge = DualStackBridge(
+          transport: LoopbackOrbitsTransport(),
+          journal: MemoryJournal(deviceId),
+          selfPeerId: () => peerId,
+          selfDeviceId: deviceId,
+          isBlocked: (_) => false,
+          storagePeer: client,
+          mailboxCapability: cap,
+          onPacket: (_, __) async {},
+        )..attach();
+        return bridge;
+      }
+
+      final alice = await sender('ORBIT-AAAAAAAAAAAAAAAA', 'alice-dev');
+      final carol = await sender('ORBIT-CCCCCCCCCCCCCCCC', 'carol-dev');
+      expect(
+        await alice.depositMailboxRemote(
+          utf8.encode('v2:hdr:iv:from-alice'),
+          envelopeId: 'alice-1',
+        ),
+        isTrue,
+      );
+      expect(
+        await carol.depositMailboxRemote(
+          utf8.encode('v2:hdr:iv:from-carol'),
+          envelopeId: 'carol-1',
+        ),
+        isTrue,
+      );
+      await alice.detach();
+      await carol.detach();
+
+      final bob = DualStackBridge(
+        transport: LoopbackOrbitsTransport(),
+        journal: MemoryJournal('bob-dev'),
+        selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+        selfDeviceId: 'bob-dev',
+        isBlocked: (id) => id == 'ORBIT-CCCCCCCCCCCCCCCC',
+        storagePeer: client,
+        mailboxCapability: cap,
+        onPacket: (peer, data) async => seen.add('$peer|$data'),
+      )..attach();
+      expect(
+        await bob.drainKnownMailboxes(const [
+          'ORBIT-CCCCCCCCCCCCCCCC',
+          'ORBIT-AAAAAAAAAAAAAAAA',
+        ]),
+        1,
+      );
+      expect(seen, ['ORBIT-AAAAAAAAAAAAAAAA|v2:hdr:iv:from-alice']);
+      expect(
+        await bob.drainMailbox(fromPeerId: 'ORBIT-CCCCCCCCCCCCCCCC'),
+        0,
+      );
+      await bob.detach();
+
+      final later = DualStackBridge(
+        transport: LoopbackOrbitsTransport(),
+        journal: MemoryJournal('bob-later'),
+        selfPeerId: () => 'ORBIT-BBBBBBBBBBBBBBBB',
+        selfDeviceId: 'bob-later',
+        isBlocked: (_) => false,
+        storagePeer: client,
+        mailboxCapability: cap,
+        onPacket: (peer, data) async => seen.add('$peer|$data'),
+      )..attach();
+      expect(
+        await later.drainKnownMailboxes(const [
+          'ORBIT-CCCCCCCCCCCCCCCC',
+          'ORBIT-AAAAAAAAAAAAAAAA',
+        ]),
+        1,
+      );
+      expect(seen, [
+        'ORBIT-AAAAAAAAAAAAAAAA|v2:hdr:iv:from-alice',
+        'ORBIT-CCCCCCCCCCCCCCCC|v2:hdr:iv:from-carol',
+      ]);
+      await later.detach();
+    },
+  );
+
   test(
     'duplicate deposit is idempotent and drain then ack hides the envelope',
     () async {

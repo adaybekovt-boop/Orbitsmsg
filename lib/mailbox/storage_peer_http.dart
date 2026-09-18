@@ -107,11 +107,11 @@ class StoragePeerHttp {
     switch (request.op) {
       case MailboxOp.deposit:
         final existed = store.hasEnvelope(
-          request.effectiveMailboxId,
+          request.storageKey,
           request.envelopeId!,
         );
         store.depositEnvelope(
-          mailboxId: request.effectiveMailboxId,
+          mailboxId: request.storageKey,
           envelopeId: request.envelopeId!,
           bytes: request.ciphertext!,
           quotaBytes: request.capability.quotaBytes,
@@ -121,7 +121,7 @@ class StoragePeerHttp {
         _json(req, MailboxHttpResponse(ok: true, duplicate: existed).toJson());
       case MailboxOp.drain:
         final blocks = store.drainMailbox(
-          mailboxId: request.effectiveMailboxId,
+          mailboxId: request.storageKey,
           retentionMs: request.capability.retentionMs,
           fromSeq: request.fromSeq,
         );
@@ -141,11 +141,11 @@ class StoragePeerHttp {
           ).toJson(),
         );
       case MailboxOp.ack:
-        store.acknowledge(request.effectiveMailboxId, request.envelopeId!);
+        store.acknowledge(request.storageKey, request.envelopeId!);
         await store.persist();
         _json(req, const MailboxHttpResponse(ok: true).toJson());
       case MailboxOp.delete:
-        store.deleteEnvelope(request.effectiveMailboxId, request.envelopeId!);
+        store.deleteEnvelope(request.storageKey, request.envelopeId!);
         await store.persist();
         _json(req, const MailboxHttpResponse(ok: true).toJson());
     }

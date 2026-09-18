@@ -45,7 +45,35 @@ const Set<String> kMailboxRequestKeys = {
   'envelopeId',
   'ciphertextB64',
   'fromSeq',
+  'senderBucket',
 };
+
+/// Opaque per-sender core inside one recipient mailbox. Never a peer ID.
+const String kMailboxSenderBucketInfo = 'orbits-mailbox-sender-v1';
+final RegExp kMailboxSenderBucketPattern = RegExp(r'^[a-f0-9]{64}$');
+
+bool isMailboxSenderBucket(String value) =>
+    kMailboxSenderBucketPattern.hasMatch(value);
+
+/// Recipient-derived bucket. Storage peers see only this hash.
+String mailboxSenderBucket({
+  required String mailboxId,
+  required String senderPeerId,
+}) {
+  final id = mailboxId.trim();
+  final sender = senderPeerId.trim();
+  if (id.isEmpty || sender.isEmpty) return '';
+  return sha256
+      .convert(utf8.encode('$kMailboxSenderBucketInfo|$id|$sender'))
+      .toString();
+}
+
+/// Store key for one mailbox, optionally one sender bucket.
+String mailboxStorageKey(String mailboxId, String? senderBucket) {
+  final bucket = (senderBucket ?? '').trim();
+  if (bucket.isEmpty) return mailboxId;
+  return '$mailboxId#$bucket';
+}
 
 const Set<String> kMailboxCapabilityKeys = {
   'v',
@@ -235,6 +263,7 @@ class MailboxHttpRequest {
     this.envelopeId,
     this.ciphertext,
     this.fromSeq = 0,
+    this.senderBucket,
   });
 
   final MailboxOp op;
@@ -245,8 +274,12 @@ class MailboxHttpRequest {
   final String? envelopeId;
   final Uint8List? ciphertext;
   final int fromSeq;
+  final String? senderBucket;
 
   String get effectiveMailboxId => mailboxId ?? capability.mailboxId;
+
+  /// Capability mailbox plus optional sender bucket. Never a peer ID.
+  String get storageKey => mailboxStorageKey(effectiveMailboxId, senderBucket);
 
   Map<String, Object?> toJson() => <String, Object?>{
     'v': kMailboxHttpVersion,
@@ -258,6 +291,7 @@ class MailboxHttpRequest {
     if (envelopeId != null) 'envelopeId': envelopeId,
     if (ciphertext != null) 'ciphertextB64': base64Encode(ciphertext!),
     if (op == MailboxOp.drain) 'fromSeq': fromSeq,
+    if (senderBucket != null) 'senderBucket': senderBucket,
   };
 
   static MailboxHttpRequest parse(Object? raw, {required int bodyBytes}) {
@@ -331,6 +365,14 @@ class MailboxHttpRequest {
     if (mailboxId != null && mailboxId is! String) {
       throw MailboxProtocolException('malformed', 'mailboxId type');
     }
+    String? senderBucket;
+    final rawBucket = json['senderBucket'];
+    if (rawBucket != null) {
+      if (rawBucket is! String || !isMailboxSenderBucket(rawBucket)) {
+        throw MailboxProtocolException('malformed', 'senderBucket is invalid');
+      }
+      senderBucket = rawBucket;
+    }
     return MailboxHttpRequest(
       op: op,
       requestId: requestId,
@@ -340,6 +382,7 @@ class MailboxHttpRequest {
       envelopeId: envelopeId,
       ciphertext: ciphertext,
       fromSeq: json.containsKey('fromSeq') ? _requireInt(json, 'fromSeq') : 0,
+      senderBucket: senderBucket,
     );
   }
 }

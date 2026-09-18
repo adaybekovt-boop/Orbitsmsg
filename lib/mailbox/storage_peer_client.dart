@@ -128,11 +128,11 @@ class StoragePeerClient {
       depositRemote: (request) async {
         authorize(request);
         final existed = store.hasEnvelope(
-          request.effectiveMailboxId,
+          request.storageKey,
           request.envelopeId!,
         );
         final block = store.depositEnvelope(
-          mailboxId: request.effectiveMailboxId,
+          mailboxId: request.storageKey,
           envelopeId: request.envelopeId!,
           bytes: request.ciphertext!,
           quotaBytes: request.capability.quotaBytes,
@@ -144,19 +144,19 @@ class StoragePeerClient {
       drainRemote: (request) async {
         authorize(request);
         return store.drainMailbox(
-          mailboxId: request.effectiveMailboxId,
+          mailboxId: request.storageKey,
           retentionMs: request.capability.retentionMs,
           fromSeq: request.fromSeq,
         );
       },
       ackRemote: (request) async {
         authorize(request);
-        store.acknowledge(request.effectiveMailboxId, request.envelopeId!);
+        store.acknowledge(request.storageKey, request.envelopeId!);
         await store.persist();
       },
       deleteRemote: (request) async {
         authorize(request);
-        store.deleteEnvelope(request.effectiveMailboxId, request.envelopeId!);
+        store.deleteEnvelope(request.storageKey, request.envelopeId!);
         await store.persist();
       },
     );
@@ -183,6 +183,7 @@ MailboxHttpRequest depositRequest({
   required List<int> ciphertext,
   required String requestId,
   int? issuedAt,
+  String? senderBucket,
 }) {
   return MailboxHttpRequest(
     op: MailboxOp.deposit,
@@ -192,6 +193,7 @@ MailboxHttpRequest depositRequest({
     mailboxId: capability.mailboxId,
     envelopeId: envelopeId,
     ciphertext: Uint8List.fromList(ciphertext),
+    senderBucket: senderBucket,
   );
 }
 
@@ -200,6 +202,7 @@ MailboxHttpRequest drainRequest({
   required String requestId,
   int fromSeq = 0,
   int? issuedAt,
+  String? senderBucket,
 }) {
   return MailboxHttpRequest(
     op: MailboxOp.drain,
@@ -208,6 +211,7 @@ MailboxHttpRequest drainRequest({
     capability: capability,
     mailboxId: capability.mailboxId,
     fromSeq: fromSeq,
+    senderBucket: senderBucket,
   );
 }
 
@@ -216,6 +220,7 @@ MailboxHttpRequest ackRequest({
   required String envelopeId,
   required String requestId,
   int? issuedAt,
+  String? senderBucket,
 }) {
   return MailboxHttpRequest(
     op: MailboxOp.ack,
@@ -224,6 +229,7 @@ MailboxHttpRequest ackRequest({
     capability: capability,
     mailboxId: capability.mailboxId,
     envelopeId: envelopeId,
+    senderBucket: senderBucket,
   );
 }
 
@@ -232,6 +238,7 @@ MailboxHttpRequest deleteRequest({
   required String envelopeId,
   required String requestId,
   int? issuedAt,
+  String? senderBucket,
 }) {
   return MailboxHttpRequest(
     op: MailboxOp.delete,
@@ -240,5 +247,6 @@ MailboxHttpRequest deleteRequest({
     capability: capability,
     mailboxId: capability.mailboxId,
     envelopeId: envelopeId,
+    senderBucket: senderBucket,
   );
 }
