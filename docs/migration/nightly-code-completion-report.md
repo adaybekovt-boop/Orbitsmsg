@@ -79,6 +79,15 @@ on.
   reassigns a local seq so the projector cursor cannot skip mixed
   feeds. Rejected inbound frames still never reach the file.
 
+## 2026-09-17 incoming transfer-id alignment
+
+Chat `msgId` (`ORBIT-…:ts:short`) is no longer used as
+`localTransferId`. Send, file-offer, and `meta.externalTransferId`
+share `sanitizeTransferId`. Lookup compares sanitized external ids so
+`readIncomingTransfer` finds `sender/<local-id>/blob` after a native
+receive. Traversal checks stay. The blob is still copied into Drift
+for the chat decoder (path-only persist is a later slice).
+
 ## Identity (historical repair pass; do not treat as current HEAD)
 
 | Field | Value |

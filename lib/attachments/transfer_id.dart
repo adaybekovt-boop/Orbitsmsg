@@ -1,5 +1,5 @@
-/// Wire / meta transfer ids. Never used as a path fragment until
-/// [sanitizeTransferId] has stripped separators. Not a discovery secret.
+// Wire / meta transfer ids. Never used as a path fragment until
+// sanitizeTransferId has stripped separators. Not a discovery secret.
 
 final _safeId = RegExp(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$');
 final _unsafe = RegExp(r'[^A-Za-z0-9._-]');
