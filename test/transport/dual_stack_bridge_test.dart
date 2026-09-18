@@ -293,6 +293,21 @@ void main() {
       isTrue,
     );
     expect(kRoomsApplicationE2eImplemented, isFalse);
+
+    expect(
+      a.sendRoomPacket(
+        'ORBIT-BBBBBBBBBBBBBBBB',
+        encodeRoomAutobasePacket('room-1', event),
+      ),
+      isTrue,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    expect(
+      a.journal.records
+          .where((r) => r.kind == ReplicationEventKind.roomMembershipChanged)
+          .length,
+      1,
+    );
   });
 
   test('recipient reads mailbox after the sender is gone', () async {

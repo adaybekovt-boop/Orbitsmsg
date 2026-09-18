@@ -613,12 +613,22 @@ class DualStackBridge {
     if (member.isEmpty || action.isEmpty) return;
     final writer = packet['writerId'] as String? ?? selfDeviceId;
     final seq = (packet['seq'] as num?)?.toInt() ?? 0;
+    final eventId = '$writer:$seq:$roomId';
+    final conversationId = conversationIdForPeers(selfPeerId(), peerId);
+    if (journal.records.any(
+      (r) =>
+          r.kind == ReplicationEventKind.roomMembershipChanged &&
+          r.fields['eventId'] == eventId &&
+          r.fields['conversationId'] == conversationId,
+    )) {
+      return;
+    }
     try {
       final record = journal.append(
         ReplicationEventKind.roomMembershipChanged,
         <String, Object?>{
-          'eventId': '$writer:$seq:$roomId',
-          'conversationId': conversationIdForPeers(selfPeerId(), peerId),
+          'eventId': eventId,
+          'conversationId': conversationId,
           'senderIdentity': selfPeerId(),
           'senderDeviceId': selfDeviceId,
           'createdAt': DateTime.now().millisecondsSinceEpoch,
