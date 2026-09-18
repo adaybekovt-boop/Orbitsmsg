@@ -163,6 +163,9 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
+    - assets/wallpapers/
+    - assets/orbits.svg
+    - assets/liquid-disp-map.webp
     - tool/connectivity_harness/BUNDLE.manifest
     - tool/connectivity_harness/src/worklet.js
     - tool/connectivity_harness/src/mux.js
@@ -175,6 +178,9 @@ flutter:
     - tool/connectivity_harness/src/incoming_paths.js
     - tool/bare/pins.json
     - tool/bare/BARE.manifest
+
+  shaders:
+    - shaders/liquid_refraction.frag
 
   fonts:
     - family: Manrope

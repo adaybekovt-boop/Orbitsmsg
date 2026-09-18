@@ -180,9 +180,7 @@ class OrbsIconButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = OrbitsTokens.of(context);
-    final fg = danger
-        ? tokens.danger
-        : (tinted ? tokens.accent : tokens.text);
+    final fg = danger ? tokens.danger : (tinted ? tokens.accent : tokens.text);
     final bg = tinted
         ? tokens.accentAlpha(0.18)
         : (danger ? tokens.dangerAlpha(0.10) : Colors.transparent);
@@ -208,11 +206,7 @@ class OrbsIconButton extends StatelessWidget {
 /// Custom h-5 w-9 toggle that matches the JS pill-switch — animated dot
 /// slides 0 → 16 px, background lerps from surface to accent.
 class OrbsToggle extends StatelessWidget {
-  const OrbsToggle({
-    super.key,
-    required this.value,
-    required this.onChanged,
-  });
+  const OrbsToggle({super.key, required this.value, required this.onChanged});
 
   final bool value;
   final ValueChanged<bool>? onChanged;
@@ -257,10 +251,7 @@ class OrbsSettingRow extends StatelessWidget {
       padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 8),
       child: Row(
         children: [
-          if (leading != null) ...[
-            leading!,
-            const SizedBox(width: 12),
-          ],
+          if (leading != null) ...[leading!, const SizedBox(width: 12)],
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -289,10 +280,7 @@ class OrbsSettingRow extends StatelessWidget {
               ],
             ),
           ),
-          if (trailing != null) ...[
-            const SizedBox(width: 12),
-            trailing!,
-          ],
+          if (trailing != null) ...[const SizedBox(width: 12), trailing!],
         ],
       ),
     );
@@ -352,8 +340,7 @@ class OrbsAvatar extends StatelessWidget {
           width: size,
           height: size,
           fit: BoxFit.cover,
-          cacheWidth:
-              (size * MediaQuery.devicePixelRatioOf(context)).round(),
+          cacheWidth: (size * MediaQuery.devicePixelRatioOf(context)).round(),
         ),
       );
     } else {
@@ -361,8 +348,23 @@ class OrbsAvatar extends StatelessWidget {
         width: size,
         height: size,
         decoration: BoxDecoration(
-          color: tokens.accentAlpha(0.18),
           shape: BoxShape.circle,
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [
+              Color.lerp(tokens.accent, tokens.surface, 0.45)!,
+              tokens.accent.withValues(alpha: 0.55),
+            ],
+          ),
+          border: Border.all(color: tokens.glassBorder),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.25),
+              blurRadius: 8,
+              offset: const Offset(0, 3),
+            ),
+          ],
         ),
         alignment: Alignment.center,
         child: Text(
@@ -371,7 +373,9 @@ class OrbsAvatar extends StatelessWidget {
             fontSize: size * 0.42,
             fontWeight: FontWeight.w600,
             fontFamily: tokens.fontHeading,
-            color: tokens.accent,
+            color: tokens.accent.computeLuminance() > 0.6
+                ? tokens.bg
+                : tokens.text,
           ),
         ),
       );

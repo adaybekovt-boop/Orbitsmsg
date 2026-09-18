@@ -105,9 +105,8 @@ class OrbitsTokens extends ThemeExtension<OrbitsTokens> {
   /// it to a brand blue regardless.
   final Color deliveryRead;
 
-  /// Outgoing message-bubble fill (see [ThemeTokenColors.bubbleOut]). A deep
-  /// graphite-blue glass tone in dark, confident dark ink in light — never the
-  /// blinding near-white `accent`.
+  /// Outgoing message-bubble fill. React design uses brand blue `#2563eb`
+  /// (with a `#1d4ed8` gradient stop painted in the bubble).
   final Color bubbleOut;
 
   // ── shape ──────────────────────────────────────────────────────────
@@ -194,8 +193,10 @@ class OrbitsTokens extends ThemeExtension<OrbitsTokens> {
   /// ensures every screen runs under a real manifest in dev.
   static OrbitsTokens of(BuildContext context) {
     final t = Theme.of(context).extension<OrbitsTokens>();
-    assert(t != null,
-        'OrbitsTokens missing — wrap MaterialApp in buildOrbitsTheme(...)');
+    assert(
+      t != null,
+      'OrbitsTokens missing — wrap MaterialApp in buildOrbitsTheme(...)',
+    );
     return t!;
   }
 
@@ -317,8 +318,11 @@ class OrbitsTokens extends ThemeExtension<OrbitsTokens> {
       fontHeading: t < 0.5 ? fontHeading : other.fontHeading,
       fontBody: t < 0.5 ? fontBody : other.fontBody,
       fontMono: t < 0.5 ? fontMono : other.fontMono,
-      letterSpacingHeading:
-          _lerpDouble(letterSpacingHeading, other.letterSpacingHeading, t),
+      letterSpacingHeading: _lerpDouble(
+        letterSpacingHeading,
+        other.letterSpacingHeading,
+        t,
+      ),
       lineHeightBody: _lerpDouble(lineHeightBody, other.lineHeightBody, t),
       durationShort: _lerpDuration(durationShort, other.durationShort, t),
       durationMedium: _lerpDuration(durationMedium, other.durationMedium, t),
@@ -340,8 +344,8 @@ class OrbitsTokens extends ThemeExtension<OrbitsTokens> {
 
   static double _lerpDouble(double a, double b, double t) => a + (b - a) * t;
 
-  static Duration _lerpDuration(Duration a, Duration b, double t) =>
-      Duration(microseconds: (a.inMicroseconds +
-              (b.inMicroseconds - a.inMicroseconds) * t)
-          .round());
+  static Duration _lerpDuration(Duration a, Duration b, double t) => Duration(
+    microseconds: (a.inMicroseconds + (b.inMicroseconds - a.inMicroseconds) * t)
+        .round(),
+  );
 }

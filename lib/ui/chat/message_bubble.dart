@@ -135,8 +135,9 @@ class MessageBubble extends StatelessWidget {
         : null;
     final msgId = (row['id'] as String?) ?? '';
     final replyRaw = payloadMap['replyTo'];
-    final replyTo =
-        replyRaw is Map ? Map<String, Object?>.from(replyRaw) : null;
+    final replyTo = replyRaw is Map
+        ? Map<String, Object?>.from(replyRaw)
+        : null;
 
     final scheme = Theme.of(context).colorScheme;
     final tokens = OrbitsTokens.of(context);
@@ -150,7 +151,8 @@ class MessageBubble extends StatelessWidget {
     final isRoom = (row['roomId'] as String?) != null;
     final showSender = isRoom && !mine && !groupedWithPrevious;
     final senderName = showSender ? _roomSenderName(payloadMap, row) : '';
-    final senderIsHost = isRoom &&
+    final senderIsHost =
+        isRoom &&
         hostPeerId != null &&
         hostPeerId!.isNotEmpty &&
         (row['peerId'] as String?) == hostPeerId;
@@ -174,10 +176,15 @@ class MessageBubble extends StatelessWidget {
           alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
           child: Padding(
             padding: EdgeInsets.only(
-                left: 8, right: 8, top: groupedWithPrevious ? 1.5 : 4, bottom: 2),
+              left: 8,
+              right: 8,
+              top: groupedWithPrevious ? 1.5 : 4,
+              bottom: 2,
+            ),
             child: Column(
-              crossAxisAlignment:
-                  mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              crossAxisAlignment: mine
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (replyTo != null)
@@ -230,11 +237,7 @@ class MessageBubble extends StatelessWidget {
         replyTo: replyTo,
         canReply: canReply,
         maxW: maxW,
-        body: VoicePlayer(
-          msgId: msgId,
-          voiceRef: voice,
-          mine: mine,
-        ),
+        body: VoicePlayer(msgId: msgId, voiceRef: voice, mine: mine),
       );
     }
     if (attachment != null) {
@@ -249,10 +252,15 @@ class MessageBubble extends StatelessWidget {
           alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
           child: Padding(
             padding: EdgeInsets.only(
-                left: 8, right: 8, top: groupedWithPrevious ? 1.5 : 4, bottom: 2),
+              left: 8,
+              right: 8,
+              top: groupedWithPrevious ? 1.5 : 4,
+              bottom: 2,
+            ),
             child: Column(
-              crossAxisAlignment:
-                  mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              crossAxisAlignment: mine
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
               mainAxisSize: MainAxisSize.min,
               children: [
                 if (replyTo != null)
@@ -265,11 +273,7 @@ class MessageBubble extends StatelessWidget {
                     ),
                   ),
                 if (replyTo != null) const SizedBox(height: 4),
-                FileTile(
-                  msgId: msgId,
-                  attachment: attachment,
-                  mine: mine,
-                ),
+                FileTile(msgId: msgId, attachment: attachment, mine: mine),
                 const SizedBox(height: 2),
                 _MetaRow(
                   ts: ts,
@@ -299,7 +303,6 @@ class MessageBubble extends StatelessWidget {
 
     // Regular text bubble — same layout as before, with an optional
     // reply quote pinned to the top of the column.
-    final bg = mine ? tokens.bubbleOut : scheme.surfaceContainerHighest;
     final fg = mine ? _outgoingTextColor(tokens) : scheme.onSurface;
     final timeColor = fg.withValues(alpha: 0.72);
 
@@ -312,12 +315,10 @@ class MessageBubble extends StatelessWidget {
           constraints: BoxConstraints(maxWidth: maxW),
           margin: _bubbleMargin(),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: _bubbleRadius(mine),
-            border: mine
-                ? Border.all(color: tokens.accentAlpha(0.22), width: 1)
-                : null,
+          decoration: _bubbleBox(
+            context,
+            mine: mine,
+            radius: _bubbleRadius(mine),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -377,12 +378,53 @@ class MessageBubble extends StatelessWidget {
 
   /// Cluster-aware outer margin: tight top gap when this bubble continues a
   /// run from the same author, normal gap when it starts a new block.
-  EdgeInsets _bubbleMargin() => EdgeInsets.only(
-        left: 12,
-        right: 12,
-        top: groupedWithPrevious ? 1.5 : 6,
-        bottom: 1.5,
+  BoxDecoration _bubbleBox(
+    BuildContext context, {
+    required bool mine,
+    required BorderRadius radius,
+  }) {
+    final tokens = OrbitsTokens.of(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    if (mine) {
+      return BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF2563EB), Color(0xFF1D4ED8)],
+        ),
+        borderRadius: radius,
+        border: Border.all(color: Colors.white.withValues(alpha: 0.22)),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(
+              0xFF2563EB,
+            ).withValues(alpha: isDark ? 0.0 : 0.25),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       );
+    }
+    return BoxDecoration(
+      color: isDark ? const Color(0x750E0E0E) : const Color(0xE6FFFFFF),
+      borderRadius: radius,
+      border: Border.all(color: tokens.glassBorder),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.04),
+          blurRadius: isDark ? 12 : 6,
+          offset: const Offset(0, 3),
+        ),
+      ],
+    );
+  }
+
+  EdgeInsets _bubbleMargin() => EdgeInsets.only(
+    left: 12,
+    right: 12,
+    top: groupedWithPrevious ? 1.5 : 6,
+    bottom: 1.5,
+  );
 
   /// Bubble corner radii by chat-preference style. 'rounded' (default) keeps
   /// the cluster-aware asymmetric "tail" corner; the other styles are uniform.
@@ -422,7 +464,6 @@ class MessageBubble extends StatelessWidget {
   }) {
     final scheme = Theme.of(context).colorScheme;
     final tokens = OrbitsTokens.of(context);
-    final bg = mine ? tokens.bubbleOut : scheme.surfaceContainerHighest;
     final fg = mine ? _outgoingTextColor(tokens) : scheme.onSurface;
     final timeColor = fg.withValues(alpha: 0.72);
 
@@ -435,12 +476,10 @@ class MessageBubble extends StatelessWidget {
           constraints: BoxConstraints(maxWidth: maxW),
           margin: _bubbleMargin(),
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-          decoration: BoxDecoration(
-            color: bg,
-            borderRadius: _bubbleRadius(mine),
-            border: mine
-                ? Border.all(color: tokens.accentAlpha(0.22), width: 1)
-                : null,
+          decoration: _bubbleBox(
+            context,
+            mine: mine,
+            radius: _bubbleRadius(mine),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -546,9 +585,7 @@ class _StickerImage extends StatelessWidget {
       return SizedBox(
         width: 112,
         height: 112,
-        child: Center(
-          child: Text(emoji, style: const TextStyle(fontSize: 96)),
-        ),
+        child: Center(child: Text(emoji, style: const TextStyle(fontSize: 96))),
       );
     }
     // Custom-pack fallback. Shows the user *something* so the bubble
@@ -609,8 +646,7 @@ class _ReplyQuote extends StatelessWidget {
     // real surface. The vertical accent strip is always the primary.
     // For "mine" we mirror the bubble's derived text colour so the quote stays
     // legible on the dark graphite-blue fill (scheme.onPrimary would be dark).
-    final textOnFilled =
-        mine ? _outgoingTextColor(tokens) : scheme.onSurface;
+    final textOnFilled = mine ? _outgoingTextColor(tokens) : scheme.onSurface;
     final textOnOpaque = scheme.onSurface;
     final authorColor = onOpaque
         ? scheme.primary
@@ -624,8 +660,8 @@ class _ReplyQuote extends StatelessWidget {
         color: onOpaque
             ? scheme.surfaceContainerHighest.withValues(alpha: 0.9)
             : (mine
-                ? Colors.black.withValues(alpha: 0.15)
-                : Colors.black.withValues(alpha: 0.08)),
+                  ? Colors.black.withValues(alpha: 0.15)
+                  : Colors.black.withValues(alpha: 0.08)),
         borderRadius: BorderRadius.circular(10),
       ),
       padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
@@ -780,13 +816,18 @@ class _DeliveryIcon extends StatelessWidget {
     final readColor = OrbitsTokens.of(context).deliveryRead;
 
     return switch (delivery) {
-      BubbleDelivery.pending =>
-        Icon(Icons.access_time, size: size, color: color),
+      BubbleDelivery.pending => Icon(
+        Icons.access_time,
+        size: size,
+        color: color,
+      ),
       BubbleDelivery.sent => Icon(Icons.check, size: size, color: color),
-      BubbleDelivery.delivered =>
-        Icon(Icons.done_all, size: size, color: color),
-      BubbleDelivery.read =>
-        Icon(Icons.done_all, size: size, color: readColor),
+      BubbleDelivery.delivered => Icon(
+        Icons.done_all,
+        size: size,
+        color: color,
+      ),
+      BubbleDelivery.read => Icon(Icons.done_all, size: size, color: readColor),
     };
   }
 }
@@ -986,8 +1027,8 @@ void _showUnverifiedWarning(BuildContext context, OrbitsTokens t) {
 /// dark glass tile.
 Color _outgoingTextColor(OrbitsTokens tokens) =>
     ThemeData.estimateBrightnessForColor(tokens.bubbleOut) == Brightness.dark
-        ? Colors.white.withValues(alpha: 0.95)
-        : Colors.black.withValues(alpha: 0.9);
+    ? Colors.white.withValues(alpha: 0.95)
+    : Colors.black.withValues(alpha: 0.9);
 
 String _formatTime(int epochMs, [bool showSeconds = false]) {
   if (epochMs <= 0) return '';

@@ -18,11 +18,10 @@
 // theme_data_factory from kIsWeb/defaultTargetPlatform) — this widget never
 // touches dart:io, so it stays web-safe.
 
-import 'dart:ui' show ImageFilter;
-
 import 'package:flutter/material.dart';
 
 import '../../themes/orbits_tokens.dart';
+import 'orbits_liquid_optics.dart';
 
 enum OrbitsGlassRole {
   appBar,
@@ -52,6 +51,8 @@ class OrbitsGlassSurface extends StatelessWidget {
     this.prismatic = false,
     this.live,
     this.clipBehavior = Clip.antiAlias,
+    this.refract,
+    this.refractionStrength,
   });
 
   final Widget child;
@@ -99,6 +100,13 @@ class OrbitsGlassSurface extends StatelessWidget {
 
   final Clip clipBehavior;
 
+  /// When true, chrome uses the Impeller displacement shader on the live
+  /// backdrop. Null follows [_roleWantsRefraction]. List rows stay false.
+  final bool? refract;
+
+  /// UV displacement amplitude. Null → rest 0.10 / selected 0.22.
+  final double? refractionStrength;
+
   /// Roles that get the pointer-reactive live sheen by default.
   static bool _roleWantsLive(OrbitsGlassRole role) {
     switch (role) {
@@ -112,6 +120,24 @@ class OrbitsGlassSurface extends StatelessWidget {
         return true;
       case OrbitsGlassRole.button:
       case OrbitsGlassRole.pill:
+      case OrbitsGlassRole.chatBubble:
+        return false;
+    }
+  }
+
+  /// Roles allowed to attach the displacement shader (chrome only).
+  static bool _roleWantsRefraction(OrbitsGlassRole role) {
+    switch (role) {
+      case OrbitsGlassRole.appBar:
+      case OrbitsGlassRole.navBar:
+      case OrbitsGlassRole.sidebar:
+      case OrbitsGlassRole.sheet:
+      case OrbitsGlassRole.dialog:
+      case OrbitsGlassRole.input:
+      case OrbitsGlassRole.button:
+      case OrbitsGlassRole.pill:
+        return true;
+      case OrbitsGlassRole.card:
       case OrbitsGlassRole.chatBubble:
         return false;
     }
@@ -188,7 +214,8 @@ class OrbitsGlassSurface extends StatelessWidget {
     final highContrast = MediaQuery.maybeOf(context)?.highContrast ?? false;
     if (highContrast) return _solidPlate(t, radius);
 
-    final useRealBlur = !isFilled &&
+    final useRealBlur =
+        !isFilled &&
         t.allowRealBlur &&
         (realBlur ?? _roleWantsRealBlur(role)) &&
         t.glassBlurSigma > 0;
@@ -225,11 +252,13 @@ class OrbitsGlassSurface extends StatelessWidget {
       rimHi = selected
           ? t.accentAlpha(0.65)
           : t.glassHighlight.withValues(
-              alpha: (t.glassHighlight.a * 1.7 * intensity).clamp(0.0, 1.0));
+              alpha: (t.glassHighlight.a * 1.7 * intensity).clamp(0.0, 1.0),
+            );
       rimLo = selected
           ? t.accentAlpha(0.18)
           : t.glassBorder.withValues(
-              alpha: (t.glassBorder.a * 0.7 * intensity).clamp(0.0, 1.0));
+              alpha: (t.glassBorder.a * 0.7 * intensity).clamp(0.0, 1.0),
+            );
     }
 
     // Inner specular highlight (a soft bright line just inside the top edge)
@@ -237,9 +266,11 @@ class OrbitsGlassSurface extends StatelessWidget {
     final Color innerHi = isFilled
         ? Colors.white.withValues(alpha: 0.28)
         : t.glassHighlight.withValues(
-            alpha: (t.glassHighlight.a * 1.2 * intensity).clamp(0.0, 1.0));
-    final double prismaticOpacity =
-        (prismatic || selected) ? (selected ? 0.16 : 0.12) : 0.0;
+            alpha: (t.glassHighlight.a * 1.2 * intensity).clamp(0.0, 1.0),
+          );
+    final double prismaticOpacity = (prismatic || selected)
+        ? (selected ? 0.16 : 0.12)
+        : 0.0;
 
     // Fill gradient runs top-left → bottom-right so the specular sheen sits
     // under a single (top-left) light source, matching the rim below.
@@ -260,11 +291,13 @@ class OrbitsGlassSurface extends StatelessWidget {
       borderRadius: radius,
       clipBehavior: clipBehavior,
       child: useRealBlur
-          ? BackdropFilter(
-              filter: ImageFilter.blur(
-                sigmaX: t.glassBlurSigma,
-                sigmaY: t.glassBlurSigma,
-              ),
+          ? _OpticsBackdrop(
+              role: role,
+              selected: selected,
+              radius: radius,
+              blurSigma: t.glassBlurSigma,
+              refract: refract ?? _roleWantsRefraction(role),
+              strength: refractionStrength,
               child: surface,
             )
           : surface,
@@ -328,6 +361,66 @@ class OrbitsGlassSurface extends StatelessWidget {
         ],
       ),
       child: padding == null ? child : Padding(padding: padding!, child: child),
+    );
+  }
+}
+
+/// Chrome-only backdrop: clipped blur, plus Impeller displacement when the
+/// shader loaded. List rows never reach this widget.
+class _OpticsBackdrop extends StatelessWidget {
+  const _OpticsBackdrop({
+    required this.role,
+    required this.selected,
+    required this.radius,
+    required this.blurSigma,
+    required this.refract,
+    required this.strength,
+    required this.child,
+  });
+
+  final OrbitsGlassRole role;
+  final bool selected;
+  final BorderRadius radius;
+  final double blurSigma;
+  final bool refract;
+  final double? strength;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
+    final optics = OrbitsLiquidOptics.instance;
+    final sigma = blurSigma;
+    final disp =
+        strength ??
+        (selected
+            ? 0.22
+            : (role == OrbitsGlassRole.button || role == OrbitsGlassRole.pill
+                  ? 0.16
+                  : 0.10));
+
+    return ValueListenableBuilder<bool>(
+      valueListenable: optics.ready,
+      builder: (context, _, child) {
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final size = Size(
+              constraints.hasBoundedWidth ? constraints.maxWidth : 200,
+              constraints.hasBoundedHeight ? constraints.maxHeight : 80,
+            );
+            final strength = refract && !reduceMotion && optics.refractionReady
+                ? disp
+                : 0.0;
+            final filter = optics.backdropFilter(
+              blurSigma: sigma,
+              strength: strength,
+              bounds: Offset.zero & size,
+            );
+            return BackdropFilter(filter: filter, child: child);
+          },
+        );
+      },
+      child: child,
     );
   }
 }
@@ -416,7 +509,11 @@ class _GlassEdgePainter extends CustomPainter {
           Paint()
             ..strokeWidth = 1.0
             ..shader = LinearGradient(
-              colors: [const Color(0x00FFFFFF), innerHi, const Color(0x00FFFFFF)],
+              colors: [
+                const Color(0x00FFFFFF),
+                innerHi,
+                const Color(0x00FFFFFF),
+              ],
               stops: const [0.0, 0.5, 1.0],
             ).createShader(Rect.fromPoints(p1, p2)),
         );
@@ -542,7 +639,5 @@ class _SheenPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(_SheenPainter old) =>
-      old.center != center ||
-      old.opacity != opacity ||
-      old.color != color;
+      old.center != center || old.opacity != opacity || old.color != color;
 }

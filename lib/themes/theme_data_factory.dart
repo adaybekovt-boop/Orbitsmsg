@@ -36,19 +36,16 @@ import 'orbits_tokens.dart';
 /// film on Dark, each with a hairline + ambient shadow that reads on its
 /// canvas.
 ({Color tint, Color border, Color highlight, Color shadow, double blurSigma})
-    glassPaletteForBrightness(Brightness brightness) {
+glassPaletteForBrightness(Brightness brightness) {
   final isDark = brightness == Brightness.dark;
   return (
-    tint: isDark ? const Color(0x14FFFFFF) : const Color(0x8AFFFFFF),
-    border: isDark ? const Color(0x2EFFFFFF) : const Color(0x1F1B2533),
-    highlight: isDark ? const Color(0x3DFFFFFF) : const Color(0xCCFFFFFF),
-    shadow: isDark ? const Color(0x59000000) : const Color(0x1A1B2533),
-    // Kept inside the deep-research budget (effective blur radius ≤ ~40px on
-    // compact phones; ≤ 3 simultaneous blur layers). 26/22 over-frosts and
-    // over-spends GPU; 22/20 reads as confident frosted glass — a touch
-    // stronger than the old 18/16 so the real BackdropFilter (now also live on
-    // Windows) clearly refracts the content behind chrome without smearing.
-    blurSigma: isDark ? 22.0 : 20.0,
+    tint: isDark ? const Color(0x3D0A0A0A) : const Color(0x59FFFFFF),
+    border: isDark ? const Color(0x29FFFFFF) : const Color(0xD9FFFFFF),
+    highlight: isDark ? const Color(0x59FFFFFF) : const Color(0xF2FFFFFF),
+    shadow: isDark ? const Color(0xBF000000) : const Color(0x2E64748B),
+    // React chrome uses blur(16px). Flutter sigma is not a CSS px; 16/14
+    // reads as the same frost without overspending GPU on Impeller.
+    blurSigma: isDark ? 16.0 : 14.0,
   );
 }
 
@@ -70,11 +67,13 @@ ThemeData buildOrbitsTheme(ThemeManifest manifest) {
   // a glass surface sits over a transparent area (Windows Mica margin) the
   // filter samples transparent pixels and is a harmless no-op. The painted path
   // remains the fallback whenever glassBlurSigma is 0.
-  final allowRealBlur = kIsWeb ||
+  final allowRealBlur =
+      kIsWeb ||
       defaultTargetPlatform == TargetPlatform.android ||
       defaultTargetPlatform == TargetPlatform.iOS ||
       defaultTargetPlatform == TargetPlatform.macOS ||
-      defaultTargetPlatform == TargetPlatform.windows;
+      defaultTargetPlatform == TargetPlatform.windows ||
+      defaultTargetPlatform == TargetPlatform.linux;
 
   // Glass palette is brightness-derived (pure helper so it's unit-testable
   // without booting fonts/ThemeData).
@@ -157,10 +156,10 @@ ThemeData buildOrbitsTheme(ThemeManifest manifest) {
     weight: FontWeight.w600,
   );
   TextStyle headingAt(double size) => heading.copyWith(
-        fontSize: size,
-        // approximate CSS em → pixel: em * font size.
-        letterSpacing: manifest.typography.letterSpacingHeading * size,
-      );
+    fontSize: size,
+    // approximate CSS em → pixel: em * font size.
+    letterSpacing: manifest.typography.letterSpacingHeading * size,
+  );
 
   final textTheme = TextTheme(
     displayLarge: headingAt(36),
@@ -177,16 +176,20 @@ ThemeData buildOrbitsTheme(ThemeManifest manifest) {
     bodySmall: body.copyWith(fontSize: 12, color: colors.muted),
     labelLarge: body.copyWith(fontSize: 14, fontWeight: FontWeight.w600),
     labelMedium: body.copyWith(fontSize: 12, fontWeight: FontWeight.w600),
-    labelSmall:
-        body.copyWith(fontSize: 11, color: colors.muted, letterSpacing: 0.4),
+    labelSmall: body.copyWith(
+      fontSize: 11,
+      color: colors.muted,
+      letterSpacing: 0.4,
+    ),
   );
 
   // When the manifest provides an animated background, every Scaffold needs
   // a transparent canvas so the background paints through. Pages that want
   // an opaque sheet (chat composer, modal bottom sheets) still use the
   // `surface` token. Classic themes without a background keep the bg fill.
-  final scaffoldBg =
-      manifest.background != null ? Colors.transparent : colors.bg;
+  final scaffoldBg = manifest.background != null
+      ? Colors.transparent
+      : colors.bg;
 
   return ThemeData(
     useMaterial3: true,

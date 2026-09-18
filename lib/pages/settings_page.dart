@@ -19,9 +19,13 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../state/appearance_prefs_provider.dart';
 import '../state/auth_notifier.dart';
 import '../state/local_profile_provider.dart';
 import '../themes/orbits_tokens.dart';
+import '../themes/theme_notifier.dart';
+import '../ui/layout/orbits_breakpoints.dart';
+import '../ui/primitives/liquid_theme_switcher.dart';
 import '../ui/peer/peer_status_pill.dart';
 import '../ui/primitives/adaptive_page_frame.dart';
 import '../ui/primitives/orbits_glass_button.dart';
@@ -61,11 +65,32 @@ class SettingsPage extends ConsumerWidget {
       body: AdaptivePageFrame(
         maxWidth: 760,
         child: ListView(
-          padding: const EdgeInsets.only(
+          padding: EdgeInsets.only(
             top: kPillReserveHeight + 4,
-            bottom: 32,
+            bottom: isPhoneLayout(context) ? 88 : 32,
           ),
           children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Оформление',
+                      style: TextStyle(
+                        fontFamily: tokens.fontHeading,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: tokens.muted,
+                      ),
+                    ),
+                  ),
+                  const LiquidThemeSwitcher(compact: true),
+                ],
+              ),
+            ),
+            const _ThemeCards(),
+            const _GlassAppearanceControls(),
             // ── Аккаунт ──
             if (user != null) ...[
               _SectionLabel(text: 'Аккаунт', tokens: tokens),
@@ -377,6 +402,187 @@ class _ActionRow extends StatelessWidget {
         title: Text(title),
         subtitle: Text(subtitle),
         trailing: Icon(Icons.chevron_right, color: tokens.muted),
+      ),
+    );
+  }
+}
+
+class _ThemeCards extends ConsumerWidget {
+  const _ThemeCards();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: _ThemeCard(
+              label: 'Тёмная',
+              icon: Icons.dark_mode_outlined,
+              selected: isDark,
+              preview: const Color(0xFF0C0C0C),
+              onTap: () => ref
+                  .read(themeNotifierProvider.notifier)
+                  .setThemeId('orbits-dark'),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: _ThemeCard(
+              label: 'Светлая',
+              icon: Icons.light_mode_outlined,
+              selected: !isDark,
+              preview: const Color(0xFFF8FAFC),
+              onTap: () => ref
+                  .read(themeNotifierProvider.notifier)
+                  .setThemeId('orbits-light'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ThemeCard extends StatelessWidget {
+  const _ThemeCard({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.preview,
+    required this.onTap,
+  });
+
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final Color preview;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(17),
+        child: OrbitsGlassSurface(
+          role: OrbitsGlassRole.card,
+          selected: selected,
+          padding: const EdgeInsets.fromLTRB(16, 18, 16, 16),
+          child: Row(
+            children: [
+              Container(
+                width: 28,
+                height: 28,
+                decoration: BoxDecoration(
+                  color: preview,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: tokens.border),
+                ),
+                alignment: Alignment.center,
+                child: Icon(icon, size: 14, color: tokens.text),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    fontFamily: tokens.fontHeading,
+                    fontWeight: FontWeight.w600,
+                    color: tokens.text,
+                  ),
+                ),
+              ),
+              if (selected) Icon(Icons.check, size: 16, color: tokens.accent),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _GlassAppearanceControls extends ConsumerWidget {
+  const _GlassAppearanceControls();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final tokens = OrbitsTokens.of(context);
+    final prefs = ref.watch(appearancePrefsProvider);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+      child: OrbitsGlassSurface(
+        role: OrbitsGlassRole.card,
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'Интенсивность Liquid Glass',
+              style: TextStyle(
+                fontFamily: tokens.fontHeading,
+                fontWeight: FontWeight.w600,
+                color: tokens.text,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Размытие и плотность стекла. На Skia это blur-fallback, не шейдер.',
+              style: TextStyle(color: tokens.muted, fontSize: 12, height: 1.4),
+            ),
+            Row(
+              children: [
+                Expanded(
+                  child: Slider(
+                    value: prefs.glassStrength.toDouble(),
+                    min: 0,
+                    max: 100,
+                    label: '${prefs.glassStrength}%',
+                    onChanged: (v) => ref
+                        .read(appearancePrefsProvider.notifier)
+                        .setGlassStrength(v.round()),
+                  ),
+                ),
+                SizedBox(
+                  width: 40,
+                  child: Text(
+                    '${prefs.glassStrength}%',
+                    textAlign: TextAlign.end,
+                    style: TextStyle(
+                      fontFamily: tokens.fontMono,
+                      fontSize: 12,
+                      color: tokens.text,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: Text(
+                'Уменьшить прозрачность',
+                style: TextStyle(
+                  fontFamily: tokens.fontHeading,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                  color: tokens.text,
+                ),
+              ),
+              subtitle: Text(
+                'Плотные панели без blur и преломления',
+                style: TextStyle(color: tokens.muted, fontSize: 12),
+              ),
+              value: prefs.reduceTransparency,
+              onChanged: (v) => ref
+                  .read(appearancePrefsProvider.notifier)
+                  .setReduceTransparency(v),
+            ),
+          ],
+        ),
       ),
     );
   }
