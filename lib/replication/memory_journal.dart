@@ -2,8 +2,10 @@
 // events; this memory log lets the projector and mailbox be tested
 // without a Bare Corestore yet.
 
+import '../peer/helpers.dart';
 import '../transport/layers.dart';
 import '../transport/replication_schema.dart';
+import 'replication_authorization.dart';
 
 class JournalRecord {
   const JournalRecord({
@@ -46,6 +48,24 @@ class MemoryJournal {
     return record;
   }
 
+  /// Restore a record that already passed persist-time authorization.
+  /// Keeps the original writer so accepted remotes survive restart.
+  /// Seq is reassigned locally so mixed writers cannot collide the
+  /// projector cursor.
+  JournalRecord importPersisted(JournalRecord record) {
+    if (!replicationFieldsAreSafe(record.fields.keys)) {
+      throw ArgumentError('refusing secret field in journal');
+    }
+    final imported = JournalRecord(
+      seq: _seq++,
+      writerDeviceId: record.writerDeviceId,
+      kind: record.kind,
+      fields: Map<String, Object?>.from(record.fields),
+    );
+    _records.add(imported);
+    return imported;
+  }
+
   JournalRecord appendEnvelope(MessageEnvelopeCreated event) {
     if (!event.isSafeForHypercore) {
       throw ArgumentError('envelope is not safe for Hypercore');
@@ -55,4 +75,16 @@ class MemoryJournal {
 
   List<JournalRecord> since(int cursor) =>
       _records.where((r) => r.seq >= cursor).toList(growable: false);
+
+  /// Contact-scoped filter. Unscoped / device records are excluded.
+  List<JournalRecord> recordsForConversations(
+    Set<String> authorizedConversations,
+  ) {
+    final allowed = authorizedConversations.map(normalizePeerId).toSet();
+    return _records.where((r) {
+      if (isOwnerDeviceScopedKind(r.kind)) return false;
+      final cid = normalizedConversationId(r.fields);
+      return cid != null && allowed.contains(cid);
+    }).toList(growable: false);
+  }
 }

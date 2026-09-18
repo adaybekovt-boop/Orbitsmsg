@@ -19,5 +19,8 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        OrbitsWakeReceiver.bind(
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "app.orbits/wake"),
+        )
     }
 }

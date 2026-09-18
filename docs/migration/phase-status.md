@@ -1,45 +1,57 @@
 # Phase status
 
-Implementation is in the tree. **Gates that need hardware, a public
-fleet, store review, or an independent crypto audit are not closed.**
-`kCompletedMigrationPhase` stays **0** because the default live path is
-still PeerJS.
+This table is evidence-only. **Implemented in production path** means
+the live app can reach that code when the corresponding flag is on.
+**Automated evidence** is a command that passed on the repair SHA.
+**External/manual gate** stays open until a human or signed artifact
+exists.
 
-| Phase | In tree | Gate |
-|------:|---------|------|
-| 0 | ADRs, contracts, tests | Closed |
-| 1 | Harness + loopback echo/file/suspend | NAT matrix **blocked** |
-| 2 | Stand runner + metrics schema | Live KZ matrix **blocked** |
-| 3 | Plugin + worklet IPC + OS hosts refuse remote JS; spawn prefers local `bare` then Node | Bare binary not shipped in this tree |
-| 4 | App boot binds native host when rollout ≠ off; loopback natives exchange `v2:` / wireHello | Default still PeerJS; two physical natives not run |
-| 5 | Identity-signed caps on native connect and as a PeerJS `wireHello.caps` sibling; contact QR may carry discovery secret `d=`; secrets persist vault-wrapped | Physical pair not run |
-| 6 | Native `call` channel + CallKit / Telecom in-app sheet (opaque handle, name “Orbits”) | No PushKit / `voip` background; no physical call |
-| 7 | File journal + Hypercore local store + worklet Corestore journal (encrypted envelopes only) | Not a Holepunch Corestore native addon |
-| 8 | Blind mailbox + lifecycle resume drain + opaque wake intake | No deployed storage peers / APNs gateway |
-| 9 | Drop packets on native `attachment` channel; 10–50 MiB resume tests | In-memory Drop still used when PeerJS |
-| 10 | Device-link QR + revoke journal events + per-identity fan-out | No live multi-device ratchet sessions on hardware |
-| 11–12 | Room maps on native carrier; Autobase writers converge | Live rooms still PeerJS host-plaintext |
-| 13 | Sender-key epoch tests + [phase13-group-e2e-review.md](phase13-group-e2e-review.md) | Flag false; no independent audit |
-| 14 | [peerjs-support-window.md](peerjs-support-window.md); isolation mode `default-live` | Support window not started |
+`kCompletedMigrationPhase` stays **0**. The default live path is still
+PeerJS. `HyperswarmRollout` default remains **off**.
+`kRoomsApplicationE2eImplemented` remains **false**.
+`kPeerjsSupportWindowOpen` remains **true**.
+
+The SHA column below is historical. After 2026-09-17 the working
+lineage is `cursor/orbits-holepunch-green-baseline-e7fb` (PR #62 plus
+Apache-2.0 `main` plus the green-baseline compile/asset/whitespace
+repair, then the correctness slice: incoming-path lookup, identity-signed
+own-account replication, Corestore writer-key remember, fail-closed
+projector decrypt, then the side-branch port slice: refuse-to-send APNs
+shape, capped transport-downgrade log, identity-key match on
+own-account inbound, FileJournal rejected-replay, then the 2026-09-18
+fail-closed handwritten slice, then the 2026-09-18 plan-DoD
+slice: exclusive native data dial, projector→Drift persist,
+live DualStack per-device ratchets when sessions are bound,
+host-plaintext Autobase in RoomManager, DozeAdapter on the
+native host). Treat CI on that
+branch as current evidence, not the older repair SHAs in this file.
+
+After 2026-09-18 the lineage continues on
+`cursor/orbits-holepunch-fixes-c26c`: the independent-audit fix slice
+(P0 keystore/Drop/handshake/revocation/mailbox + P1 fail-closed
+breadth). Rows below marked *(audit-fix)* changed there; older SHAs
+in this file predate the fixes.
+
+| Phase | Implemented in production path | Automated evidence on repair SHA | External/manual gate |
+|------:|--------------------------------|----------------------------------|----------------------|
+| 0 | ADRs and contracts in tree | `test/docs_consistency/migration_phase0_test.dart` | Closed |
+| 1 | Loopback harness only | `tool/connectivity_harness` `node --test` (loopback + official Bare IPC) | NAT / device matrix **open** |
+| 2 | Modeled stand schema only | `tool/connectivity_harness/test/stand.test.js` | Live Kazakhstan matrix **open** |
+| 3 | Official Holepunch `bare-runtime` **1.31.0** is pinned and fetched at **build time**; Linux/Windows hosts spawn that verified CLI with the bundled worklet; Android/iOS CI fetch official BareKit 2.4.3, link the exploded AAR / XCFramework into the plugins, and package `libbare-kit.so` / `BareKit.framework` into the APK / Runner.app. Release still refuses Node. | `fetch-official-runtime.sh --kit` + `verify-runtime.sh --kit` + `verify-kit-start.sh` + `verify-packaged-kit.sh`; hook tests; harness Bare/Corestore/DHT/two-runtime tests; Linux/Windows bundle presence checks | Apple/Authenticode signing of the Holepunch binary **open** |
+| 4 | App `NativeTransportHost` talks only through `PluginOrbitsTransport` when rollout ≠ off; default rollout still off so boot stays PeerJS. `_openChannel` prefers DualStack even when a PeerJS slot is already open: it dials native, then `_closePeerjsFallback` tears the pre-opened PeerJS slot down. *(audit-fix)* Exclusive native is proven on real `PeerDataConnection` stubs with the fallback policy ON (no devBare): native auth closes the stub, zero PeerJS sends and zero inbound dispatch after `canUseNative`, exactly one `initiateHandshake` (shared guard), a native throw never falls through to PeerJS, and a pending native dial suppresses the PeerJS dial (no auth-timeout flap). A native binding reject does not fall back to PeerJS. A `TransportPathChanged` to relay keeps the same DualStack session and still delivers | `test/transport/plugin_boundary_test.dart`, `native_backend_policy_test.dart`, `test/state/peerjs_data_fallback_test.dart`, `test/state/outbox_reliable_transport_test.dart`, `test/state/exclusive_native_peerjs_stub_test.dart`, `test/transport/dual_stack_bridge_test.dart` | Two physical natives **open** |
+| 5 | Identity-signed capabilities in tree. Dart connect-time auth rejects a missing connection Noise key | `test/transport/capability_matrix_test.dart`; `test/transport/binding_authorization_test.dart` | Physical pair **open** |
+| 6 | In-app call machine; native start no longer also opens PeerJS media; no PushKit. `ConnectionsNotifier.sendCallSignal` uses DualStack when `canUseNative` and does not open a PeerJS slot. *(audit-fix)* Inbound PeerJS `onCall` is closed (not ringing) while `canUseNative`; a native-ready transition drops the PeerJS media leg without hanging up the native session; `acceptCurrent` answers exactly once (native priority, PeerJS only on native failure); `shouldOpenPeerjsCallFallback` takes `nativeUsable`. An inbound DualStack offer reaches `CallsNotifier` as `CallStatus.ringing` with no PeerJS DataChannel. Malformed call frames are visible on DualStack `lastCallSignalError`, as are native send failures | `test/calls/native_call_machine_test.dart`; `test/calls/peerjs_call_fallback_test.dart`; `test/calls/native_inbound_dual_stack_test.dart`; `test/state/outbox_reliable_transport_test.dart`; `test/state/exclusive_native_peerjs_stub_test.dart`; `test/transport/dual_stack_bridge_test.dart` | Physical call / PushKit **open** |
+| 7 | Encrypted journal + revoked-writer projector; worklet can expose the Corestore public key; blocked senders are dropped before decrypt. *(audit-fix)* Ciphertext journal rows stay off the live projector: `onPacket` owns decrypt (clamps, receipts, sender keyed by the transport peer). The live projector records a pending stub without decrypting and writes no Drift rows for envelopes; `roomMembershipChanged` still live-projects through `onRemoteRecord`. Decrypt/replay equivalence unit tests are explicit opt-in (`persistEnvelopePlaintext: true`) with STUB decrypt (`String.fromCharCodes`) — they prove projector mechanics, not the production ratchet. Clone-decrypt without advancing the live session is a ratchet-level property (`RatchetState.clone/adopt`, `commit: false`). Device-fanout rows are tagged `deviceRatchetV1`. Already-consumed envelopes fail closed (Double Ratchet cannot rebuild wiped Drift). Writer-matched tombstones apply. `lastProjectorError` records journal-open/persist/tombstone failures; a null decrypt skips silently by design (no error row) | `test/replication/journal_projector_test.dart`; `test/replication/journal_projector_drift_restart_test.dart`; `test/replication/journal_device_ratchet_decrypt_test.dart`; `test/replication/journal_wire_ciphertext_test.dart`; `test/replication/file_journal_replay_test.dart`; `test/replication/replication_authorization_test.dart`; `test/transport/dual_stack_bridge_test.dart`; `tool/connectivity_harness/test/corestore_persist.test.js` | Live multi-device Corestore hardware **open** |
+| 8 | `/v1/mailbox` only; framed opaque envelope; `/v1/blocks` default off; replay persisted. Local deposit/collect is per sender bucket (`fromPeerId`). Remote HTTP uses the same model: `senderBucket` is `HASH("orbits-mailbox-sender-v1"\|mailboxId\|senderPeerId)` (never a peer ID) — implemented in the Dart client/server AND the Node peer. *(audit-fix)* `drainKnownMailboxes` drains each known contact bucket and never invents a sender from a shared dump: unbucketed non-ciphertext is skipped (`unbucketed-legacy-skipped`, no `onPacket`, no journal append) and `_appendEnvelope` only journals wire ciphertext or device-ratchet frames. Offline send without a remote storage peer fails closed BEFORE any ratchet step (outbox stays pending); a local in-process store is not delivery. Offline device-ratchet fan-out drains as `deviceRatchetV1`, not a contact-level wire. `NativeTransportHost` wires `app.orbits/wake` → `OpaqueWakeService` → `DozeAdapter.onOpaqueWake` → `drainKnownMailboxes`. iOS `didReceiveRemoteNotification` and Android `OrbitsWakeReceiver` hop only the three safe keys — proven by source-text guards over the Swift/Kotlin, not by executing the OS hop. A payload with a peer ID is rejected; a safe opaque token drains. Journal append without a conversation member is fail-closed (`lastReplicationError`) and does not crash wake. `kLiveApnsGateway` stays false. No `voip` / PushKit | `test/mailbox/storage_peer_http_test.dart`; `test/transport/dual_stack_bridge_test.dart`; `test/devices/dual_stack_device_ratchet_test.dart`; `test/transport/native_transport_lifecycle_test.dart`; `test/push/doze_adapter_test.dart`; `test/transport/lifecycle_wake_test.dart`; `node --test tool/storage_peer/server.test.js` **7/7** | Public storage fleet / live APNs **open** |
+| 9 | Product files are the Dart `FileTransferCoordinator` (`orbits-file-v1`): `DualStackBridge.sendFile` → `files.sendPath` → 64 KiB attachment frames via `transport.send`. Bare/plugin `sendFile` is harness-only (`harness-file-*`) and is not on the chat/room path. *(audit-fix)* Incoming lookup is canonical + sender meta-scan only — the sender-less legacy layout was removed. The attachment channel only forwards allowlisted Drop control frames (never a `path`); coordinator completion is local-only; path-backed blobs are jailed after symlink resolution and Drop rows are keyed `peerId\|id`. Native offers/chunks are capped at 50 MiB, room files at 12 MiB (claimed + on-disk stat). The plaintext-ack gate runs before any room file bytes move. A native send failure stays `pending` + `lastReplicationError` and never falls back to whole-file base64. Native inbound (chat + Drop) persists a path/sha256 descriptor, not the blob bytes. Native outbound `MessagingNotifier.sendFile` writes a temp path, stores path+sha256 in Drift (empty blob column), and puts `sha256` on the native file meta. Room files on DualStack use the same path descriptor; PeerJS guests still get host-plaintext base64 (read capped from the jail path). Host relay is per-peer and never materializes native bytes for native guests. Incoming native room blobs look up the jail by the authenticated transport sender everywhere (1:1 fixed to match rooms). A DualStack room send resumes a pre-seeded partial `orbits-incoming` blob (`file-accept.resumeOffset`) and finishes the same jail path + sha256 | `test/attachments/incoming_paths_test.dart`; `test/attachments/file_transfer_resume_test.dart`; `test/attachments/attachment_transfer_security_test.dart`; `test/storage/db_secure_storage_test.dart`; `test/state/native_outbound_file_persist_test.dart`; `test/security/drop_remote_path_injection_test.dart`; `test/messaging/native_attachment_jail_test.dart`; `test/peer/room_attachments_test.dart`; `test/peer/room_dual_stack_test.dart`; `tool/connectivity_harness/test/echo_file.test.js` (10 MiB + 50 MiB) | 10–50 MiB on two devices **open** |
+| 10 | Distinct persisted transport/writer keys + signed local binding. *(audit-fix)* `DriftKeyStore` serves the `device-material` table (schema v4, isolated) and the transport seed is vault-wrapped (`orb-wrap-v1:`) at rest with legacy-plaintext reseal — the production host starts on a real build. After any native admit DualStack offers a per-device ratchet on the transport id (not only the dialer / expected peer). `fromDeviceId` on offer/accept/frame must equal the authenticated binding device and registry owner (spoofed ids are rejected with `lastDeviceRatchetError`). DualStack fans out through those sessions and revoke drops them. A three-device loopback mesh (phone / tablet / contact) fans out, delivers the own-device sync copy, and drops a revoked device. *(audit-fix)* Revocation propagates: signed own-account `deviceRevoked`/`deviceAuthorized` records apply to the admitting registry+ratchets live and on journal replay; registry hydrate is revoke-wins and unknown statuses are rejected. Combined DualStack + snapshot: after persist/hydrate/re-dial the same per-device sessions encrypt, and revoke after restart stays in the snapshot (proven through inject IO; at-rest wrapping of snapshots is provided by `wrapped_snapshot.dart`, not proven end-to-end here). Hydrate/persist failures are visible (`lastError`/`hydrateFailed`) and fail closed instead of becoming silent empty sets. Offer / accept / decrypt failures are visible on `lastDeviceRatchetError`. QR `acceptDeviceLink` pins the QR identity to the trusted/local identity (foreign-signed and empty-owner QRs are rejected), journals `deviceAuthorized` via `onAuthorized`, and does not put private ratchet material in the QR; mint waits for admit DH. `DeviceLinkPage` calls DualStack authorize/revoke when the native bridge is bound. Native auth tears down a pre-opened PeerJS slot. RESIDUAL: no vault-wrapped identity-transfer ceremony exists, so real two-handset multi-device (distinct minted identities) still cannot pass binding auth outside loopback | `test/devices/local_device_material_test.dart`; `test/devices/dual_stack_device_ratchet_test.dart`; `test/devices/device_ratchet_persist_test.dart`; `test/devices/device_link_material_test.dart`; `test/devices/device_link_page_test.dart`; `test/devices/device_registry_test.dart`; `test/storage/key_store_at_rest_test.dart`; `test/transport/native_transport_lifecycle_test.dart`; `test/state/outbox_reliable_transport_test.dart` | Live multi-device hardware + identity-transfer ceremony **open** |
+| 11–12 | RoomManager records host-plaintext Autobase membership/channel/message events and replicates them on `room_autobase` over DualStack when `canUseNative`. Late joiners receive the Autobase log; host+guest projections match after join and after a relayed message, including on a live DualStack pair with no PeerJS DataChannel (`test/peer/room_dual_stack_test.dart`). Membership metadata is journaled as `roomMembershipChanged` (no message bodies). *(audit-fix)* A failed Hypercore membership append is visible on `lastReplicationError` and the Autobase packet is not sent — including on retry (Hypercore-first append with honest dual-store dedup) — and RoomManager propagates the failure (`RoomState.lastReplicationError`) instead of dropping the bool. Autobase snapshots carry `roomId` (foreign rejected), `createRoom`/`joinRoom` clear the log (no cross-room replay), per-writer seq is monotonic, and the log/replay is capped at 2048 events. Writer-log persist/hydrate failures are visible on `RoomAutobaseLog.lastPersistError`. The writer log is vault-wrapped (`orbits.rooms.autobase.v1`) and hydrates after `bindAutobaseSnapshot` (NativeTransportHost after unlock; tests inject memory IO so vault-KEK room tests stay off SharedPreferences). Writers converge in `RoomAutobaseLog` / `AutobaseProjection`. Warning and `kRoomsApplicationE2eImplemented` stay false. Desktop native plugins stay OTP1 fail-closed (`BARE_RUNTIME_MISSING`); debug desktop uses `LocalWorkletPlatform` | `test/rooms/autobase_and_epoch_test.dart`; `test/transport/dual_stack_bridge_test.dart`; `test/peer/room_network_test.dart`; `test/peer/room_manager_test.dart`; `test/peer/room_dual_stack_test.dart` | Live rooms / signed desktop OTP1 **open** |
+| 13 | Sender-key helpers; flag false. RESIDUAL: the VM P-256 backend is pure-Dart PointyCastle (variable-time; `sharedSecretKey` relies on upstream point validation) with self-consistency tests only — no vectors/interop until the independent audit | `test/rooms/autobase_and_epoch_test.dart` | Independent crypto audit **open** |
+| 14 | Isolation + fail-closed removal gate | `test/transport/peerjs_isolation_test.dart`, `tool/peerjs-removal-gate.sh` | Support window **not started** |
 
 PWA official mode today: **compatibility client on PeerJS**.
 
-Hardware / Kazakhstan checks: **blocked** until the user is free.
+Hardware / Kazakhstan / store / fleet / push checks remain **open**.
 
-## Unfinished in-tree slices (do not treat as gates)
-
-Started, not wired/tested:
-
-- `lib/mailbox/storage_peer_client.dart`, `lib/mailbox/storage_peer_http.dart`,
-  `tool/storage_peer/server.js` — local blind HTTP peer. Not bound on
-  `DualStackBridge`. No fleet, no APNs/FCM gateway.
-- `lib/transport/relay_directory.dart` — identity-signed directory + RTT
-  pick. No tests, no live signed directory.
-- `NativeTransportHost` still `spawnWorkletTransport(backend: 'loopback')`.
-  Prefer Hyperswarm only when rollout ≠ off, then fall back to loopback.
-- Phase 10 still needs a three-device `RatchetState` isolation test
-  (Alice phone / Alice tablet / Bob — no shared ratchet). Registry fan-out
-  exists; live encrypt/decrypt pairs do not.
-
-Do not mark the migration done until every Definition of Done line in
-`master-plan.md` has current-state evidence.
+A fail-closed native host, an in-process test adapter, or a source-text
+guard is **not** counted as a production Bare runtime.

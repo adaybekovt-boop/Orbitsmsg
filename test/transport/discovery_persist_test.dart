@@ -33,5 +33,7 @@ void main() {
     final local = again.getOrCreateLocal();
     expect(local.length, 32);
     expect(local, isNot(equals(secret)));
+    expect(again.knownPeerIds.toList(), ['ORBIT-AAAAAAAAAAAAAAAA']);
+    expect(again.knownPeerIds, isNot(contains(kLocalDiscoverySecretId)));
   });
 }

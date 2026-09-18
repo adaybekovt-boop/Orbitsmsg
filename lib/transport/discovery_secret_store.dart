@@ -3,16 +3,12 @@
 
 import 'dart:async';
 import 'dart:math';
-import 'dart:typed_data';
 
 import '../core/vault_kek.dart';
 import '../peer/helpers.dart';
 import '../storage/wrapped_snapshot.dart';
 
 const String kLocalDiscoverySecretId = 'self';
-
-typedef WrappedSnapshotWriter = Future<void> Function(List<int> plaintext);
-typedef WrappedSnapshotReader = Future<Uint8List?> Function();
 
 class DiscoverySecretStore {
   DiscoverySecretStore({
@@ -34,6 +30,15 @@ class DiscoverySecretStore {
   }
 
   List<int>? get(String peerId) => _secrets[normalizePeerId(peerId)];
+
+  /// Contact ids that have a discovery secret. Never includes the local
+  /// advertise secret — mailbox drain must not invent a sender from self.
+  Iterable<String> get knownPeerIds {
+    final local = normalizePeerId(kLocalDiscoverySecretId);
+    return _secrets.keys.where(
+      (id) => id.isNotEmpty && id != kLocalDiscoverySecretId && id != local,
+    );
+  }
 
   void remove(String peerId) {
     _secrets.remove(normalizePeerId(peerId));

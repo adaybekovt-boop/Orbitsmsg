@@ -52,36 +52,42 @@ class AdvancedPage extends StatelessWidget {
               ),
             ),
             const _AdvancedRow(
+              rowKey: Key('settings-row-connections'),
               icon: Icons.wifi_tethering,
               title: 'Соединение',
               subtitle: 'Состояние сети и мой код',
               page: NetworkPage(),
             ),
             const _AdvancedRow(
+              rowKey: Key('settings-row-mic'),
               icon: Icons.mic,
               title: 'Микрофон',
               subtitle: 'Звонки в чате работают; эхо/AGC — позже',
               page: MicPage(),
             ),
             const _AdvancedRow(
+              rowKey: Key('settings-row-power-saving'),
               icon: Icons.bolt,
               title: 'Экономия батареи',
               subtitle: 'Меньше анимаций и нагрузки',
               page: PowerSaverPage(),
             ),
             const _AdvancedRow(
+              rowKey: Key('settings-row-diagnostics'),
               icon: Icons.insights,
               title: 'Диагностика',
               subtitle: 'Версия, кэш, состояние приложения',
               page: DiagnosticsPage(),
             ),
             const _AdvancedRow(
+              rowKey: Key('settings-row-agreement'),
               icon: Icons.gavel,
               title: 'Соглашение и конфиденциальность',
               subtitle: 'Условия и обработка данных',
               page: TermsPage(),
             ),
             const _AdvancedRow(
+              rowKey: Key('settings-row-report'),
               icon: Icons.report_gmailerrorred_outlined,
               title: 'Жалоба',
               subtitle: 'Форма и внешний канал (пока GitHub Issues)',
@@ -96,12 +102,14 @@ class AdvancedPage extends StatelessWidget {
 
 class _AdvancedRow extends StatelessWidget {
   const _AdvancedRow({
+    this.rowKey,
     required this.icon,
     required this.title,
     required this.subtitle,
     required this.page,
   });
 
+  final Key? rowKey;
   final IconData icon;
   final String title;
   final String subtitle;
@@ -113,6 +121,7 @@ class _AdvancedRow extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: OrbitsGlassListTile(
+        key: rowKey,
         onTap: () => Navigator.of(
           context,
         ).push(MaterialPageRoute<void>(builder: (_) => page)),

@@ -21,10 +21,15 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/error_reporter.dart';
+import '../attachments/temp_attachment.dart';
+import '../attachments/transfer_id.dart';
+import '../transport/dev_bare_transport.dart';
+import '../transport/transport_api.dart';
 import '../utils/heavy_codec.dart';
 
 import '../messaging/lost_inbound_ledger.dart';
@@ -476,7 +481,7 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     if (normalized.isEmpty) return;
     if (_isPeerBlocked(normalized)) return;
     final conns = _ref.read(connectionsNotifierProvider.notifier);
-    if (conns.getConn(normalized, 'reliable')?.open != true) return;
+    if (!conns.hasReliable(normalized)) return;
 
     List<Map<String, Object?>> rows;
     try {
@@ -583,7 +588,13 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       case 'file':
         final att = payload['attachment'];
         if (att is! Map) return null;
-        final blob = await db.getFileBlob(msgId);
+        Map<String, Object?>? blob;
+        try {
+          blob = await db.getFileBlob(msgId);
+        } catch (_) {
+          // Oversize/unreadable path blob: dead-letter via the null path.
+          return null;
+        }
         if (blob == null) return null;
         final bytes = blob['blob'];
         if (bytes is! Uint8List || bytes.isEmpty) return null;
@@ -666,8 +677,15 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final ts = now();
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
+    // Always (re)kick the dial. Chat mount used to be the only caller of
+    // openReliable; sendText no-op'd when the channel looked open even if
+    // handshake never ran, leaving the row status=pending forever.
+    conns.openReliable(normalized);
     final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
+    final open =
+        conn?.open == true ||
+        conns.hasReliable(normalized) ||
+        isDevBareTransportRequested();
 
     final sanitizedReply = _sanitizeReplyTo(replyTo);
 
@@ -772,7 +790,10 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
     final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
+    final open =
+        conn?.open == true ||
+        conns.hasReliable(normalized) ||
+        isDevBareTransportRequested();
 
     // Clamp free-text fields on the sticker blob itself (packName, emoji,
     // label) so a custom pack with 100KB of text fields can't blow up the
@@ -873,7 +894,10 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
     final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
+    final open =
+        conn?.open == true ||
+        conns.hasReliable(normalized) ||
+        isDevBareTransportRequested();
 
     // Defensive clamp вЂ” recorder should produce values in 0..1 already,
     // but a broken input doesn't get to push the UI past that range.
@@ -1013,7 +1037,10 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     final msgId = '$selfId:$ts:${_shortId()}';
     final conns = _ref.read(connectionsNotifierProvider.notifier);
     final conn = conns.getConn(normalized, 'reliable');
-    final open = conn?.open == true;
+    final open =
+        conn?.open == true ||
+        conns.hasReliable(normalized) ||
+        isDevBareTransportRequested();
 
     final safeName = name.length > _maxFileNameLen
         ? name.substring(0, _maxFileNameLen)
@@ -1040,9 +1067,25 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
 
     final sanitizedReply = _sanitizeReplyTo(replyTo);
 
+    final useNativePath =
+        conns.canUseNative(normalized) || isDevBareTransportRequested();
+    String? outboundPath;
+    String? outboundSha;
+    if (useNativePath) {
+      final desc = await writeTempAttachment(
+        bytes: bytes,
+        name: safeName,
+        mime: mime,
+      );
+      if (desc != null) {
+        outboundPath = desc.path;
+        outboundSha = sha256.convert(bytes).toString();
+      }
+    }
+
     await db.saveFileBlob(
       msgId,
-      bytes,
+      outboundPath == null ? bytes : const <int>[],
       mime: mime,
       name: safeName,
       kind: kind,
@@ -1051,6 +1094,8 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
       height: height,
       duration: durationSec.toInt(),
       thumb: thumbBytes,
+      path: outboundPath,
+      sha256hex: outboundSha,
     );
 
     // `duration` stays a double for parity with the JS wire convention
@@ -1088,6 +1133,54 @@ class MessagingNotifier extends StateNotifier<MessagingState> {
     unawaited(db.savePeer({'id': normalized, 'lastSeenAt': now()}));
 
     if (!open) return msgId;
+
+    if (useNativePath) {
+      if (outboundPath == null) {
+        unawaited(db.updateMessageStatus(msgId, 'pending'));
+        return msgId;
+      } else {
+        try {
+          final fileTransferId = sanitizeTransferId(msgId);
+          await conns.sendFile(
+            normalized,
+            TransportFileDescriptor(
+              path: outboundPath,
+              sizeBytes: size,
+              fileName: safeName,
+              mime: mime,
+              transferId: fileTransferId,
+            ),
+          );
+          final metaOk = await conns.sendEncrypted(normalized, {
+            'type': 'msg',
+            'id': msgId,
+            'text': '',
+            'ts': ts,
+            'from': selfId,
+            'msgType': 'file',
+            'attachment': <String, Object?>{
+              ...attachmentRef,
+              'transferId': fileTransferId,
+              'native': true,
+              if (outboundSha != null) 'sha256': outboundSha,
+            },
+            if (sanitizedReply != null) 'replyTo': sanitizedReply,
+          });
+          if (metaOk) {
+            _sentAckGuard.arm(msgId);
+          } else {
+            unawaited(db.updateMessageStatus(msgId, 'pending'));
+          }
+          return msgId;
+        } catch (err) {
+          // Native path failed: stay pending, record the error. Never
+          // fall through to whole-file base64 on a native peer.
+          unawaited(db.updateMessageStatus(msgId, 'pending'));
+          conns.nativeBridge?.lastReplicationError = err.toString();
+          return msgId;
+        }
+      }
+    }
 
     final b64 = await b64EncodeHeavy(bytes);
     if (b64.length > _maxFileB64Len) {

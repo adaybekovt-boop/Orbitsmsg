@@ -24,6 +24,7 @@ part 'database.g.dart';
   KeysTable,
   PrekeysTable,
   RatchetsTable,
+  DeviceMaterialTable,
   PeersTable,
   AvatarsTable,
   SessionKeysTable,
@@ -52,8 +53,10 @@ class OrbitsDatabase extends _$OrbitsDatabase {
   //   v3 — Rooms: rooms / room_channels / room_members tables for the
   //        Discord-style multi-channel networks, plus nullable room_id +
   //        channel_id routing columns on messages.
+  //   v4 — device_material: KeyStore table 'device-material' (transport
+  //        seed + device public material). Isolated from keys/prekeys/ratchets.
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   /// Indexes we need on top of the primary key. Drift generates the
   /// primary-key B-tree automatically; everything else goes here so the
@@ -160,6 +163,9 @@ class OrbitsDatabase extends _$OrbitsDatabase {
               'CREATE INDEX IF NOT EXISTS idx_room_members_room '
               'ON room_members(room_id, joined_at)',
             );
+          }
+          if (from < 4) {
+            await m.createTable(deviceMaterialTable);
           }
         },
         beforeOpen: (details) async {

@@ -1,5 +1,43 @@
 // Deterministic multiwriter projection for rooms (Phase 12).
 // Does not encrypt. Host-plaintext warning stays in place.
+// DualStack carries [kRoomAutobaseType] as a room_* control packet.
+// The writer log is vault-wrapped locally so a host restart can still
+// replay Autobase events. Message bodies never enter Hypercore.
+
+import 'dart:async';
+import 'dart:convert';
+
+import '../storage/wrapped_snapshot.dart';
+
+/// Host-plaintext Autobase event on the room control channel.
+const String kRoomAutobaseType = 'room_autobase';
+
+/// Fail-closed cap on the local Autobase event list. Replay refuses to
+/// send past this instead of streaming an unbounded log.
+const int kMaxRoomAutobaseEvents = 2048;
+
+Map<String, Object?> encodeRoomAutobasePacket(String roomId, RoomEvent event) =>
+    <String, Object?>{
+      'type': kRoomAutobaseType,
+      'roomId': roomId,
+      'writerId': event.writerId,
+      'seq': event.seq,
+      'kind': event.kind,
+      'payload': event.payload,
+    };
+
+RoomEvent? decodeRoomEventFromPacket(Map<String, Object?> packet) {
+  final writerId = packet['writerId'] as String? ?? '';
+  final kind = packet['kind'] as String? ?? '';
+  final raw = packet['payload'];
+  if (writerId.isEmpty || kind.isEmpty || raw is! Map) return null;
+  return RoomEvent(
+    writerId: writerId,
+    seq: (packet['seq'] as num?)?.toInt() ?? 0,
+    kind: kind,
+    payload: Map<String, Object?>.from(raw),
+  );
+}
 
 class RoomEvent {
   const RoomEvent({
@@ -28,9 +66,18 @@ class RoomState {
 }
 
 class AutobaseProjection {
+  AutobaseProjection({Set<String>? revokedWriters})
+    : revokedWriters = revokedWriters ?? <String>{};
+
   final RoomState state = RoomState();
+  final Set<String> revokedWriters;
+
+  void revokeWriter(String writerId) {
+    revokedWriters.add(writerId);
+  }
 
   void apply(RoomEvent event) {
+    if (revokedWriters.contains(event.writerId)) return;
     final key = state.keyOf(event);
     if (state.applied.contains(key)) return;
     state.applied.add(key);
@@ -74,4 +121,212 @@ class AutobaseProjection {
       apply(event);
     }
   }
+}
+
+/// Local writer-seq tracker used by RoomManager. Payload stays host-plaintext.
+class RoomAutobaseLog {
+  RoomAutobaseLog({
+    Set<String>? revokedWriters,
+    this.writeSnapshot,
+    this.readSnapshot,
+  }) : projection = AutobaseProjection(revokedWriters: revokedWriters);
+
+  final AutobaseProjection projection;
+  WrappedSnapshotWriter? writeSnapshot;
+  WrappedSnapshotReader? readSnapshot;
+  final Map<String, int> _seq = <String, int>{};
+  final List<RoomEvent> events = <RoomEvent>[];
+  Future<void> _persistChain = Future<void>.value();
+  bool _restoring = false;
+  String lastPersistError = '';
+
+  /// Room this log belongs to. Hydrate rejects foreign snapshots.
+  String? roomId;
+
+  int nextSeq(String writerId) =>
+      _seq[writerId] = (_seq[writerId] ?? -1) + 1;
+
+  RoomEvent append({
+    required String writerId,
+    required String kind,
+    required Map<String, Object?> payload,
+    int? seq,
+  }) {
+    final current = _seq[writerId] ?? -1;
+    final resolved = seq ?? nextSeq(writerId);
+    if (seq != null && seq <= current) {
+      // Same writer:seq as an applied event is an idempotent redelivery
+      // only when it is the SAME event; same seq with different content
+      // is a rewind/fork and is rejected without touching projection.
+      final probe = RoomEvent(
+        writerId: writerId,
+        seq: seq,
+        kind: kind,
+        payload: payload,
+      );
+      final key = projection.state.keyOf(probe);
+      if (projection.state.applied.contains(key)) {
+        RoomEvent? prior;
+        for (final e in events) {
+          if (projection.state.keyOf(e) == key) {
+            prior = e;
+            break;
+          }
+        }
+        if (prior != null &&
+            prior.kind == kind &&
+            _payloadsEqual(prior.payload, payload)) {
+          return probe;
+        }
+      }
+      lastPersistError = 'autobase-seq-rewind';
+      return probe;
+    }
+    if (seq != null) _seq[writerId] = seq;
+    final event = RoomEvent(
+      writerId: writerId,
+      seq: resolved,
+      kind: kind,
+      payload: payload,
+    );
+    final already = projection.state.applied.contains(projection.state.keyOf(event));
+    if (!already && events.length >= kMaxRoomAutobaseEvents) {
+      lastPersistError = 'autobase-cap';
+      return event;
+    }
+    projection.apply(event);
+    if (!already) {
+      events.add(event);
+      if (!_restoring) unawaited(persist());
+    }
+    return event;
+  }
+
+  Map<String, Object?> snapshot() => <String, Object?>{
+        if (roomId != null && roomId!.isNotEmpty) 'roomId': roomId,
+        'revoked': (projection.revokedWriters.toList()..sort()),
+        'events': [
+          for (final event in events)
+            <String, Object?>{
+              'writerId': event.writerId,
+              'seq': event.seq,
+              'kind': event.kind,
+              'payload': event.payload,
+            },
+        ],
+      };
+
+  void restore(Map<String, Object?> row) {
+    _restoring = true;
+    try {
+      final incomingRoom = row['roomId'] as String? ?? '';
+      if (incomingRoom.isNotEmpty &&
+          roomId != null &&
+          roomId!.isNotEmpty &&
+          incomingRoom != roomId) {
+        lastPersistError = 'autobase-room-mismatch';
+        return;
+      }
+      if (incomingRoom.isEmpty && roomId != null && roomId!.isNotEmpty) {
+        // Legacy room-less snapshot into a bound log: reject rather
+        // than merge foreign history.
+        lastPersistError = 'autobase-room-mismatch';
+        return;
+      }
+      lastPersistError = '';
+      clear();
+      if (incomingRoom.isNotEmpty) roomId = incomingRoom;
+      final revoked = row['revoked'];
+      if (revoked is List) {
+        for (final id in revoked) {
+          if (id is String && id.isNotEmpty) projection.revokeWriter(id);
+        }
+      }
+      final list = row['events'];
+      if (list is! List) return;
+      for (final item in list) {
+        if (item is! Map) continue;
+        final raw = item['payload'];
+        append(
+          writerId: item['writerId'] as String? ?? '',
+          kind: item['kind'] as String? ?? '',
+          payload: raw is Map
+              ? Map<String, Object?>.from(raw)
+              : <String, Object?>{},
+          seq: (item['seq'] as num?)?.toInt(),
+        );
+      }
+    } finally {
+      _restoring = false;
+    }
+  }
+
+  Future<void> hydrate() async {
+    final reader = readSnapshot;
+    if (reader == null) return;
+    try {
+      final bytes = await reader();
+      if (bytes == null || bytes.isEmpty) return;
+      final raw = jsonDecode(utf8.decode(bytes));
+      if (raw is! Map) return;
+      restore(Map<String, Object?>.from(raw));
+    } catch (err) {
+      lastPersistError = err.toString();
+    }
+  }
+
+  Future<void> persist() {
+    if (writeSnapshot == null) return Future<void>.value();
+    final next = _persistChain.then((_) => _persistNow());
+    _persistChain = next.catchError((_) {});
+    return next;
+  }
+
+  Future<void> _persistNow() async {
+    final writer = writeSnapshot;
+    if (writer == null) return;
+    try {
+      await writer(utf8.encode(jsonEncode(snapshot())));
+      lastPersistError = '';
+    } catch (err) {
+      lastPersistError = err.toString();
+    }
+  }
+
+  void clear() {
+    projection.state.members.clear();
+    projection.state.roles.clear();
+    projection.state.channels.clear();
+    projection.state.messages.clear();
+    projection.state.applied.clear();
+    _seq.clear();
+    events.clear();
+    roomId = null;
+  }
+}
+
+bool _payloadsEqual(Map<String, Object?> a, Map<String, Object?> b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (final key in a.keys) {
+    if (!b.containsKey(key)) return false;
+    final va = a[key];
+    final vb = b[key];
+    if (va is Map && vb is Map) {
+      if (!_payloadsEqual(
+        Map<String, Object?>.from(va),
+        Map<String, Object?>.from(vb),
+      )) {
+        return false;
+      }
+    } else if (va is List && vb is List) {
+      if (va.length != vb.length) return false;
+      for (var i = 0; i < va.length; i++) {
+        if (va[i] != vb[i]) return false;
+      }
+    } else if (va != vb) {
+      return false;
+    }
+  }
+  return true;
 }

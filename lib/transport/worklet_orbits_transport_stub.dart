@@ -3,10 +3,13 @@ import 'transport_api.dart';
 
 Future<WorkletOrbitsTransport?> spawnWorkletTransport({
   String backend = 'loopback',
-}) async =>
-    null;
+}) async => null;
 
 class WorkletOrbitsTransport implements OrbitsTransport {
+  String get runtime => 'missing';
+  List<int>? lastNoisePublicKey;
+  List<int>? lastHypercorePublicKey;
+
   @override
   Stream<TransportEvent> get events => const Stream.empty();
 
@@ -27,6 +30,14 @@ class WorkletOrbitsTransport implements OrbitsTransport {
 
   @override
   Future<void> disconnect(String peerId) async {}
+
+  @override
+  Future<void> authorizePeer(String peerId, {required bool authorized}) async {}
+
+  Future<void> confirmAuthorization(
+    String peerId, {
+    required bool authorized,
+  }) => authorizePeer(peerId, authorized: authorized);
 
   @override
   Future<void> send(

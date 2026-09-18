@@ -47,15 +47,14 @@ class CapabilityRecord {
   }
 
   Map<String, Object?> toWire() => <String, Object?>{
-        'peerId': peerId,
-        'deviceId': deviceId,
-        'capabilities':
-            (capabilities.map((c) => c.wireName).toList()..sort()),
-        'issuedAt': issuedAt,
-        'expiresAt': expiresAt,
-        'signature': base64Encode(signature),
-        'identityPublicKey': base64Encode(identityPublicKey),
-      };
+    'peerId': peerId,
+    'deviceId': deviceId,
+    'capabilities': (capabilities.map((c) => c.wireName).toList()..sort()),
+    'issuedAt': issuedAt,
+    'expiresAt': expiresAt,
+    'signature': base64Encode(signature),
+    'identityPublicKey': base64Encode(identityPublicKey),
+  };
 
   static CapabilityRecord fromWire(Map<String, Object?> json) {
     final names = (json['capabilities'] as List? ?? const [])
@@ -137,8 +136,13 @@ Future<Uint8List> signCapabilityPayload(
   return Uint8List.fromList(sig.bytes);
 }
 
-Future<bool> verifyCapabilityRecord(CapabilityRecord record) async {
+Future<bool> verifyCapabilityRecord(
+  CapabilityRecord record, {
+  int? nowMs,
+}) async {
   if (record.expiresAt <= record.issuedAt) return false;
+  final now = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+  if (now > record.expiresAt) return false;
   return verifyIdentitySignedBytes(
     record.identityPublicKey,
     record.signedPayload(),
@@ -153,11 +157,7 @@ Future<bool> verifyIdentitySignedBytes(
   List<int> signature,
 ) async {
   try {
-    final ok = await verifyWithRemoteSpki(
-      identitySpki,
-      payload,
-      signature,
-    );
+    final ok = await verifyWithRemoteSpki(identitySpki, payload, signature);
     if (ok) return true;
   } catch (_) {}
   return _verifySpkiP256(identitySpki, payload, signature);
@@ -169,10 +169,9 @@ bool _verifySpkiP256(List<int> spki, List<int> data, List<int> sig) {
   if (sig.length != 64) return false;
   try {
     final point = parseP256Spki(spki);
-    final q = pc.ECDomainParameters('prime256v1').curve.createPoint(
-          _bytesToBigInt(point.x),
-          _bytesToBigInt(point.y),
-        );
+    final q = pc.ECDomainParameters(
+      'prime256v1',
+    ).curve.createPoint(_bytesToBigInt(point.x), _bytesToBigInt(point.y));
     final pub = pc.ECPublicKey(q, pc.ECDomainParameters('prime256v1'));
     final verifier = pc.ECDSASigner(pc.SHA256Digest())
       ..init(false, pc.PublicKeyParameter<pc.ECPublicKey>(pub));
@@ -207,6 +206,13 @@ class TransportDowngrade {
   final String reason;
 }
 
+/// Live send/fallback sink. Empty while rollout is off (PeerJS is the
+/// product path, not a downgrade). Tests clear via
+/// [clearTransportDowngradeLogForTests]. Capped so a long session cannot
+/// grow an unbounded list.
+const int kTransportDowngradeLogLimit = 64;
+final List<TransportDowngrade> transportDowngradeLog = <TransportDowngrade>[];
+
 TransportDowngrade? logDowngrade({
   required TransportRoute selected,
   required bool preferHyperswarm,
@@ -227,4 +233,34 @@ TransportDowngrade? logDowngrade({
     to: TransportRoute.peerjs,
     reason: 'remote-missing-hyperswarm-v1',
   );
+}
+
+/// Record a live native→PeerJS downgrade. No-op when [logDowngrade]
+/// returns null (rollout off, or the selected route is not PeerJS).
+TransportDowngrade? recordTransportDowngrade({
+  required TransportRoute selected,
+  required bool preferHyperswarm,
+  required bool localIsPwa,
+  required bool remoteIsPwa,
+}) {
+  final event = logDowngrade(
+    selected: selected,
+    preferHyperswarm: preferHyperswarm,
+    localIsPwa: localIsPwa,
+    remoteIsPwa: remoteIsPwa,
+  );
+  if (event != null) {
+    transportDowngradeLog.add(event);
+    if (transportDowngradeLog.length > kTransportDowngradeLogLimit) {
+      transportDowngradeLog.removeRange(
+        0,
+        transportDowngradeLog.length - kTransportDowngradeLogLimit,
+      );
+    }
+  }
+  return event;
+}
+
+void clearTransportDowngradeLogForTests() {
+  transportDowngradeLog.clear();
 }

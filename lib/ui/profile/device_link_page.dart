@@ -2,32 +2,36 @@
 // not share a ratchet snapshot.
 
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../../core/identity_key.dart';
 import '../../devices/device_link.dart';
 import '../../devices/device_registry.dart';
+import '../../devices/local_device_material.dart';
+import '../../state/connections_notifier.dart';
 import '../../themes/orbits_tokens.dart';
+import '../../transport/trusted_identity_store.dart';
 import '../primitives/orbits_glass_app_bar.dart';
 import '../primitives/orbits_glass_button.dart';
 import '../primitives/orbits_glass_list_tile.dart';
 import '../primitives/orbits_glass_surface.dart';
 
-class DeviceLinkPage extends StatefulWidget {
+class DeviceLinkPage extends ConsumerStatefulWidget {
   const DeviceLinkPage({super.key, required this.peerId});
 
   final String peerId;
 
   @override
-  State<DeviceLinkPage> createState() => _DeviceLinkPageState();
+  ConsumerState<DeviceLinkPage> createState() => _DeviceLinkPageState();
 }
 
-class _DeviceLinkPageState extends State<DeviceLinkPage> {
+class _DeviceLinkPageState extends ConsumerState<DeviceLinkPage> {
   String? _payload;
   String? _error;
+  String? _localDeviceId;
   final _paste = TextEditingController();
 
   @override
@@ -45,30 +49,19 @@ class _DeviceLinkPageState extends State<DeviceLinkPage> {
   Future<void> _build() async {
     try {
       await deviceRegistry.hydrate();
+      final material = await loadOrCreateLocalDeviceMaterial();
       final pub = await exportIdentityPubSpki();
-      final link = await issueDeviceLink(
-        deviceId: 'local-device',
-        transportPublicKey: Uint8List.fromList(List<int>.filled(32, 1)),
-        hypercorePublicKey: Uint8List.fromList(List<int>.filled(32, 2)),
-        createdAt: DateTime.now().millisecondsSinceEpoch,
+      final link = await issueLocalDeviceLink(
+        material: material,
+        ownerPeerId: widget.peerId,
         identityPublicKey: pub,
         sign: signBytes,
       );
-      deviceRegistry.authorize(
-        AuthorizedDevice(
-          deviceId: link.deviceId,
-          transportPublicKey: link.transportPublicKey,
-          hypercorePublicKey: link.hypercorePublicKey,
-          name: widget.peerId,
-          kind: 'this',
-          createdAt: link.createdAt,
-          status: DeviceStatus.active,
-          ownerPeerId: widget.peerId,
-          transportPeerId: widget.peerId,
-        ),
-      );
       if (!mounted) return;
-      setState(() => _payload = jsonEncode(link.toQrJson()));
+      setState(() {
+        _localDeviceId = material.deviceId;
+        _payload = jsonEncode(link.toQrJson());
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() => _error = e.toString());
@@ -79,21 +72,22 @@ class _DeviceLinkPageState extends State<DeviceLinkPage> {
     try {
       final raw = jsonDecode(_paste.text) as Map<String, dynamic>;
       final link = DeviceLinkPayload.fromQrJson(Map<String, Object?>.from(raw));
-      if (!await verifyDeviceLink(link)) {
-        throw StateError('device-link signature failed');
-      }
-      deviceRegistry.authorize(
-        AuthorizedDevice(
-          deviceId: link.deviceId,
-          transportPublicKey: link.transportPublicKey,
-          hypercorePublicKey: link.hypercorePublicKey,
-          name: link.deviceId,
-          kind: 'linked',
-          createdAt: link.createdAt,
-          status: DeviceStatus.active,
-          ownerPeerId: widget.peerId,
-        ),
+      final ok = await acceptDeviceLink(
+        link,
+        ownerPeerId: widget.peerId,
+        registry: deviceRegistry,
+        identities: trustedIdentityStore,
+        localIdentityPublicKey: await exportIdentityPubSpki(),
+        onAuthorized: (device) {
+          ref
+              .read(connectionsNotifierProvider.notifier)
+              .nativeBridge
+              ?.authorizeDevice(device);
+        },
       );
+      if (!ok) {
+        throw StateError('device-link rejected');
+      }
       if (!mounted) return;
       setState(() {
         _error = null;
@@ -179,10 +173,15 @@ class _DeviceLinkPageState extends State<DeviceLinkPage> {
                     : device.kind,
               ),
               trailing: device.status == DeviceStatus.active &&
-                      device.deviceId != 'local-device'
+                      device.deviceId != _localDeviceId
                   ? TextButton(
                       onPressed: () {
-                        deviceRegistry.revoke(device.deviceId);
+                        final id = device.deviceId;
+                        deviceRegistry.revoke(id);
+                        ref
+                            .read(connectionsNotifierProvider.notifier)
+                            .nativeBridge
+                            ?.revokeDevice(id);
                         setState(() {});
                       },
                       child: const Text('Отозвать'),

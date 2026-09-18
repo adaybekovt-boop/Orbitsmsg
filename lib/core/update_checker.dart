@@ -72,7 +72,7 @@ class UpdateChecker {
         _latestReleaseUri,
         headers: const {
           'Accept': 'application/vnd.github+json',
-          'User-Agent': 'TK-Messenger-update-checker',
+          'User-Agent': 'Orbits-update-checker',
         },
       ).timeout(_timeout);
 

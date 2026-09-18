@@ -98,6 +98,13 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
       ref
           .read(connectionsNotifierProvider.notifier)
           .openReliable(widget.peerId);
+      // Handshake / first flush can miss if onOpen already fired. Re-flush
+      // pending rows now that the chat is visible and the DC may be live.
+      unawaited(
+        ref
+            .read(messagingNotifierProvider.notifier)
+            .flushOutboxForPeer(widget.peerId),
+      );
     });
     // The user opened the chat → everything up to *now* counts as read.
     // Stamping on mount ensures the badge clears even if no new inbound

@@ -1,7 +1,16 @@
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
+export 'bare_host_machine.dart';
+
 /// Binary IPC version spoken by every platform implementation.
 const String kOrbitsBareIpcInfo = 'orbits-bare-ipc-v1';
+const int kOrbitsBareIpcMaxFrameBytes = 256 * 1024;
+
+void assertIpcFrameSize(List<int> frame) {
+  if (frame.length > kOrbitsBareIpcMaxFrameBytes) {
+    throw StateError('IPC frame exceeds orbits-bare-ipc-v1 cap');
+  }
+}
 
 /// Production Bare must ship a hashed local bundle. Remote executable JS
 /// is forbidden on every host.
@@ -37,11 +46,22 @@ abstract class OrbitsTransportPlatform extends PlatformInterface {
   Future<void> unpublish();
   Future<void> connect(Map<String, Object?> peer);
   Future<void> disconnect(String peerId);
+
+  /// Resolve a runtime identity-pending gate. Platforms that do not implement
+  /// the Bare IPC authorization contract fail closed by default.
+  Future<void> authorizePeer(String peerId, {required bool authorized}) =>
+      Future<void>.error(UnimplementedError('authorizePeer'));
+
   Future<void> send(String peerId, String channel, List<int> frame);
   Future<void> sendFile(String peerId, String path, int sizeBytes);
   Future<void> suspend();
   Future<void> resume();
   Future<void> refreshNetwork();
+
+  Future<Map<String, Object?>> runtimeInfo() async => const <String, Object?>{};
+
+  /// Privacy-safe structured events. Default is empty.
+  Stream<Map<String, Object?>> get events => const Stream.empty();
 }
 
 class _UnimplementedTransport extends OrbitsTransportPlatform {

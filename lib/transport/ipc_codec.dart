@@ -13,6 +13,7 @@ import 'dart:typed_data';
 const int kOrbitsIpcMagic = 0x4F545031;
 const int kOrbitsIpcVersion = 1;
 const String kOrbitsBareIpcInfo = 'orbits-bare-ipc-v1';
+const int kOrbitsIpcMaxPayloadBytes = 256 * 1024;
 
 const int kIpcRequest = 1;
 const int kIpcResponse = 2;
@@ -30,6 +31,9 @@ class OrbitsIpcCodec {
 
   static Uint8List encode(OrbitsIpcMessage message) {
     final payload = utf8.encode(jsonEncode(message.body));
+    if (payload.length > kOrbitsIpcMaxPayloadBytes) {
+      throw FormatException('IPC payload exceeds orbits-bare-ipc-v1 cap');
+    }
     final out = BytesBuilder(copy: false);
     final header = ByteData(10);
     header.setUint32(0, kOrbitsIpcMagic);
@@ -58,6 +62,9 @@ class OrbitsIpcCodec {
       }
       final type = view.getUint8(offset + 5);
       final len = view.getUint32(offset + 6);
+      if (len > kOrbitsIpcMaxPayloadBytes) {
+        throw FormatException('IPC payload exceeds orbits-bare-ipc-v1 cap');
+      }
       if (offset + 10 + len > data.length) break;
       final payload = data.sublist(offset + 10, offset + 10 + len);
       final decoded = jsonDecode(utf8.decode(payload));
@@ -65,14 +72,17 @@ class OrbitsIpcCodec {
         throw FormatException('IPC payload must be a JSON object');
       }
       out.add(
-        OrbitsIpcMessage(
-          type: type,
-          body: decoded.cast<String, Object?>(),
-        ),
+        OrbitsIpcMessage(type: type, body: decoded.cast<String, Object?>()),
       );
       offset += 10 + len;
     }
     if (offset < data.length) {
+      if (data.length - offset >= 4) {
+        final magic = view.getUint32(offset);
+        if (magic != kOrbitsIpcMagic) {
+          throw FormatException('bad IPC magic: 0x${magic.toRadixString(16)}');
+        }
+      }
       _buf.add(data.sublist(offset));
     }
     return out;

@@ -14,7 +14,10 @@ void main() {
     final ok = sendGuardedRoomPacket(
       {'type': 'room_msg', 'text': 'hello from bypass'},
       connected: true,
-      send: sent.add,
+      send: (p) {
+        sent.add(p);
+        return true;
+      },
     );
     expect(ok, isFalse, reason: 'wire send must refuse un-acked room_msg');
     expect(sent, isEmpty);
@@ -27,7 +30,10 @@ void main() {
     final ok = sendGuardedRoomPacket(
       packet,
       connected: true,
-      send: sent.add,
+      send: (p) {
+        sent.add(p);
+        return true;
+      },
     );
     expect(ok, isTrue);
     expect(sent, [packet]);
@@ -38,10 +44,48 @@ void main() {
     final ok = sendGuardedRoomPacket(
       {'type': 'room_join', 'roomId': 'r'},
       connected: true,
-      send: sent.add,
+      send: (p) {
+        sent.add(p);
+        return true;
+      },
     );
     expect(ok, isTrue);
     expect(sent.single['type'], 'room_join');
+  });
+
+  test('Autobase message events require the same plaintext ack as room_msg', () {
+    final sent = <Map<String, Object?>>[];
+    expect(
+      sendGuardedRoomPacket(
+        {
+          'type': 'room_autobase',
+          'kind': 'message',
+          'payload': {'text': 'bypass'},
+        },
+        connected: true,
+        send: (p) {
+        sent.add(p);
+        return true;
+      },
+      ),
+      isFalse,
+    );
+    expect(sent, isEmpty);
+    expect(
+      sendGuardedRoomPacket(
+        {
+          'type': 'room_autobase',
+          'kind': 'membership',
+          'payload': {'peerId': 'g', 'action': 'join'},
+        },
+        connected: true,
+        send: (p) {
+        sent.add(p);
+        return true;
+      },
+      ),
+      isTrue,
+    );
   });
 
   test('disconnected peer is not a silent ack bypass', () {
@@ -51,7 +95,10 @@ void main() {
       sendGuardedRoomPacket(
         {'type': 'room_msg', 'text': 'x'},
         connected: false,
-        send: sent.add,
+        send: (p) {
+        sent.add(p);
+        return true;
+      },
       ),
       isFalse,
     );

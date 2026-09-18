@@ -187,6 +187,14 @@ void main() {
     final guestChannels = await db.getRoomChannels(hostId);
     expect(guestChannels.length, 2,
         reason: 'guest should receive both default channels');
+    expect(
+      guest.roomLog.projection.state.members.keys,
+      host.roomLog.projection.state.members.keys,
+    );
+    expect(
+      guest.roomLog.projection.state.channels,
+      host.roomLog.projection.state.channels,
+    );
     final generalId = (guestChannels.firstWhere(
         (c) => c['type'] == 'text')['id']) as String;
 
@@ -206,6 +214,14 @@ void main() {
     final hostMsgs = await db.watchChannelMessages(generalId).first;
     expect(hostMsgs, hasLength(1));
     expect((hostMsgs.first['payload'] as Map)['text'], 'Привет, хост! 👋');
+    expect(
+      guest.roomLog.projection.state.messages.any((m) => m['text'] == 'Привет, хост! 👋'),
+      isTrue,
+    );
+    expect(
+      host.roomLog.projection.state.messages.any((m) => m['text'] == 'Привет, хост! 👋'),
+      isTrue,
+    );
 
     // ── 4. Host tears the room down → guest session closes + room offline. ──
     setOrbitsDatabase(hostDb);

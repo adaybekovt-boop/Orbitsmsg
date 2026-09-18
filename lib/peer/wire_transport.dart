@@ -12,6 +12,10 @@
 // `false` (or silently completes for the handshake). The caller is expected
 // to surface UX via the connection status channel, not exceptions.
 
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+
 import '../core/wire_crypto.dart';
 import 'helpers.dart';
 import 'peerjs_client.dart';
@@ -24,6 +28,27 @@ class WireTransport {
   /// rebuild of [WireTransport].
   final String Function() selfPeerId;
 
+  /// PeerIds whose handshake is currently in flight — prevents a second
+  /// hello from racing the first when sendEncrypted and onOpen both kick.
+  final Set<String> _handshakeInFlight = <String>{};
+
+  /// Test-only count of started handshakes (exactly one per peer).
+  @visibleForTesting
+  int debugHandshakeStarts = 0;
+
+  /// Begin a handshake unless one is already in flight. Shared by the
+  /// PeerJS-open path and the native-open path so a peer gets one hello.
+  bool tryBeginHandshake(String remoteId) {
+    final norm = normalizePeerId(remoteId);
+    if (!_handshakeInFlight.add(norm)) return false;
+    debugHandshakeStarts += 1;
+    return true;
+  }
+
+  void endHandshake(String remoteId) {
+    _handshakeInFlight.remove(normalizePeerId(remoteId));
+  }
+
   /// Reliable-channel send. Waits up to 8s for the wire session to become
   /// ready (handshake rebuild) before encrypting. Returns `false` on any
   /// error, timeout, or missing/closed connection.
@@ -32,14 +57,22 @@ class WireTransport {
     String remoteId,
     Object? msg,
   ) async {
-    if (!conn.open) return false;
+    if (conn.closed) return false;
+    if (!conn.open) {
+      try {
+        await conn.onOpen.first.timeout(const Duration(seconds: 8));
+      } catch (_) {
+        if (!conn.open) return false;
+      }
+    }
     final norm = normalizePeerId(remoteId);
     try {
       if (!isWireReady(norm)) {
+        unawaited(initiateHandshakeOnOpen(conn, remoteId));
         await waitForWireReady(norm, timeout: const Duration(seconds: 8));
       }
       final wire = await encryptWirePayload(norm, msg);
-      return conn.send(wire);
+      return _sendWithOpenRetry(conn, wire);
     } catch (_) {
       return false;
     }
@@ -73,17 +106,50 @@ class WireTransport {
     String remoteId,
   ) async {
     final norm = normalizePeerId(remoteId);
+    if (!tryBeginHandshake(norm)) {
+      await waitForWireReady(norm, timeout: const Duration(seconds: 8))
+          .catchError((_) {});
+      return;
+    }
     try {
       final result = await initWireSession(peerId: norm, myPeerId: selfPeerId());
-      try {
-        conn.send(result.hello);
-      } catch (_) {}
+      _sendWithOpenRetry(conn, result.hello);
       await waitForWireReady(norm, timeout: const Duration(seconds: 8))
           .catchError((_) {});
     } catch (_) {
       // Handshake errors bubble from the ratchet layer — swallow so the
       // caller doesn't have to wrap. If the session never becomes ready,
       // the next sendEncryptedOn will surface the issue as `false`.
+    } finally {
+      endHandshake(norm);
     }
+  }
+
+  /// [PeerDataConnection.send] returns false when `_open` hasn't latched
+  /// yet even though the native channel is live. Retry once after [onOpen]
+  /// only if the channel is still not flagged open.
+  bool _sendWithOpenRetry(PeerDataConnection conn, Object? value) {
+    try {
+      if (conn.send(value)) return true;
+    } catch (_) {
+      return false;
+    }
+    if (conn.closed) return false;
+    if (conn.open) {
+      try {
+        return conn.send(value);
+      } catch (_) {
+        return false;
+      }
+    }
+    unawaited(() async {
+      try {
+        await conn.onOpen.first.timeout(const Duration(seconds: 8));
+      } catch (_) {}
+      try {
+        conn.send(value);
+      } catch (_) {}
+    }());
+    return false;
   }
 }

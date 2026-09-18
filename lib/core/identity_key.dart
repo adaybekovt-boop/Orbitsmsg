@@ -17,6 +17,7 @@
 // which has no Flutter equivalent; we extract raw private-key bytes and
 // re-import, relying on the vault KEK + OS secure storage to protect them).
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
@@ -38,10 +39,17 @@ final _ecdh = Ecdh.p256(length: 32);
 EcKeyPair? _cachedSigningKeyPair;
 Uint8List? _cachedSigningPubSpki;
 String? _cachedFingerprint;
+bool _signingPersisted = false;
+
+/// Last identity persist failure. Write failures stay best-effort (the
+/// handshake must not die), but they are recorded here; an existing row
+/// whose pubSpki differs from the RAM key is fail-closed (throw).
+String lastIdentityError = '';
 
 EcKeyPair? _cachedX3dhKeyPair;
 Uint8List? _cachedX3dhPubSpki;
 Uint8List? _cachedX3dhBindingSig;
+bool _x3dhPersisted = false;
 
 // ─────────────────────────────────────────────────────────────
 // Generic helpers (private-key round-trip + SPKI export)
@@ -125,31 +133,76 @@ Future<void> _migrateLegacyPlaintext(
 // ECDSA signing identity
 // ─────────────────────────────────────────────────────────────
 
-/// Return the cached identity signing key pair, creating+persisting one on
-/// first call. Mirrors `getOrCreateSigningKey`.
+/// Return the cached identity signing key pair, creating one on first call.
+/// Persistence is best-effort: a locked vault or store write must not
+/// fail-close the in-memory key used to sign wireHello, or 1:1 chat
+/// handshake never starts (empty `keys` table, pending outbox).
 Future<EcKeyPair> getOrCreateSigningKey() async {
-  if (_cachedSigningKeyPair != null) return _cachedSigningKeyPair!;
+  if (_cachedSigningKeyPair != null) {
+    if (!_signingPersisted) await _persistSigningIfNeeded();
+    return _cachedSigningKeyPair!;
+  }
 
   final existing = await keyStore().get(_keysTable, _signingKeyId);
   if (existing != null) {
     _cachedSigningKeyPair = await _importKeyPair(existing, ecdsa: true);
     _cachedSigningPubSpki = Uint8List.fromList(existing['pubSpki'] as List<int>);
+    _signingPersisted = true;
     await _migrateLegacyPlaintext(_signingKeyId, existing);
     return _cachedSigningKeyPair!;
   }
 
   final pair = await _ecdsa.newKeyPair();
   final pubSpki = await _exportPubSpki(pair);
-  final row = await _serializeKeyPair(pair, pubSpki: pubSpki);
-  await keyStore().put(_keysTable, {
-    'id': _signingKeyId,
-    ...row,
-    'createdAt': DateTime.now().millisecondsSinceEpoch,
-  });
   _cachedSigningKeyPair = pair;
   _cachedSigningPubSpki = pubSpki;
   _cachedFingerprint = null;
+  await _persistSigningIfNeeded();
   return pair;
+}
+
+Future<void> _persistSigningIfNeeded() async {
+  final pair = _cachedSigningKeyPair;
+  final pubSpki = _cachedSigningPubSpki;
+  if (pair == null || pubSpki == null || _signingPersisted) return;
+  try {
+    final existing = await keyStore().get(_keysTable, _signingKeyId);
+    if (existing != null) {
+      final stored = existing['pubSpki'];
+      if (stored is! List<int> ||
+          stored.length != pubSpki.length ||
+          !_identityBytesEqual(stored, pubSpki)) {
+        lastIdentityError = 'identity-persist-mismatch';
+        throw StateError('identity-persist-mismatch');
+      }
+      _signingPersisted = true;
+      lastIdentityError = '';
+      return;
+    }
+    final row = await _serializeKeyPair(pair, pubSpki: pubSpki);
+    await keyStore().put(_keysTable, {
+      'id': _signingKeyId,
+      ...row,
+      'createdAt': DateTime.now().millisecondsSinceEpoch,
+    });
+    _signingPersisted = true;
+    lastIdentityError = '';
+  } on StateError catch (err) {
+    if (err.message == 'identity-persist-mismatch') rethrow;
+    lastIdentityError = err.toString();
+  } catch (err) {
+    // Best-effort write. Handshake must not die because wrapSecret/put
+    // failed — but the failure is recorded, not swallowed.
+    lastIdentityError = err.toString();
+  }
+}
+
+bool _identityBytesEqual(List<int> a, List<int> b) {
+  var mismatch = 0;
+  for (var i = 0; i < a.length; i++) {
+    mismatch |= a[i] ^ b[i];
+  }
+  return mismatch == 0;
 }
 
 /// SPKI bytes of the local identity public key.
@@ -160,6 +213,9 @@ Future<Uint8List> exportIdentityPubSpki() async {
   _cachedSigningPubSpki = spki;
   return spki;
 }
+
+/// Cached identity SPKI if already loaded. Does not create keys.
+Uint8List? cachedIdentityPubSpki() => _cachedSigningPubSpki;
 
 /// SHA-256 fingerprint (lowercase hex) over raw SPKI bytes.
 Future<String> computeFingerprint(List<int> spkiBytes) async {
@@ -288,6 +344,7 @@ Future<X3dhIdentity> getOrCreateX3DHIdentity() async {
   if (_cachedX3dhKeyPair != null &&
       _cachedX3dhBindingSig != null &&
       _cachedX3dhPubSpki != null) {
+    if (!_x3dhPersisted) await _persistX3dhIfNeeded();
     return X3dhIdentity(
       keyPair: _cachedX3dhKeyPair!,
       bindingSig: _cachedX3dhBindingSig!,
@@ -304,6 +361,7 @@ Future<X3dhIdentity> getOrCreateX3DHIdentity() async {
     _cachedX3dhKeyPair = pair;
     _cachedX3dhPubSpki = pubSpki;
     _cachedX3dhBindingSig = bindingSig;
+    _x3dhPersisted = true;
     await _migrateLegacyPlaintext(_x3dhKeyId, existing);
     return X3dhIdentity(
       keyPair: pair,
@@ -315,21 +373,54 @@ Future<X3dhIdentity> getOrCreateX3DHIdentity() async {
   final pair = await _ecdh.newKeyPair();
   final pubSpki = await _exportPubSpki(pair);
   final bindingSig = await signBytes(_buildX3dhBindingBlob(pubSpki));
-  final row = await _serializeKeyPair(pair, pubSpki: pubSpki);
-  await keyStore().put(_keysTable, {
-    'id': _x3dhKeyId,
-    ...row,
-    'bindingSig': bindingSig,
-    'createdAt': DateTime.now().millisecondsSinceEpoch,
-  });
   _cachedX3dhKeyPair = pair;
   _cachedX3dhPubSpki = pubSpki;
   _cachedX3dhBindingSig = bindingSig;
+  await _persistX3dhIfNeeded();
   return X3dhIdentity(
     keyPair: pair,
     bindingSig: bindingSig,
     pubSpki: pubSpki,
   );
+}
+
+Future<void> _persistX3dhIfNeeded() async {
+  final pair = _cachedX3dhKeyPair;
+  final pubSpki = _cachedX3dhPubSpki;
+  final bindingSig = _cachedX3dhBindingSig;
+  if (pair == null || pubSpki == null || bindingSig == null || _x3dhPersisted) {
+    return;
+  }
+  try {
+    final existing = await keyStore().get(_keysTable, _x3dhKeyId);
+    if (existing != null) {
+      final stored = existing['pubSpki'];
+      if (stored is! List<int> ||
+          stored.length != pubSpki.length ||
+          !_identityBytesEqual(stored, pubSpki)) {
+        lastIdentityError = 'x3dh-persist-mismatch';
+        throw StateError('x3dh-persist-mismatch');
+      }
+      _x3dhPersisted = true;
+      lastIdentityError = '';
+      return;
+    }
+    final row = await _serializeKeyPair(pair, pubSpki: pubSpki);
+    await keyStore().put(_keysTable, {
+      'id': _x3dhKeyId,
+      ...row,
+      'bindingSig': bindingSig,
+      'createdAt': DateTime.now().millisecondsSinceEpoch,
+    });
+    _x3dhPersisted = true;
+    lastIdentityError = '';
+  } on StateError catch (err) {
+    if (err.message == 'x3dh-persist-mismatch') rethrow;
+    lastIdentityError = err.toString();
+  } catch (err) {
+    // Best-effort — same contract as signing-key persist.
+    lastIdentityError = err.toString();
+  }
 }
 
 Future<Uint8List> exportX3DHIdentityPubSpki() async {
@@ -359,9 +450,12 @@ void resetIdentityCaches() {
   _cachedSigningKeyPair = null;
   _cachedSigningPubSpki = null;
   _cachedFingerprint = null;
+  _signingPersisted = false;
   _cachedX3dhKeyPair = null;
   _cachedX3dhPubSpki = null;
   _cachedX3dhBindingSig = null;
+  _x3dhPersisted = false;
+  lastIdentityError = '';
 }
 
 /// Test alias for [resetIdentityCaches].

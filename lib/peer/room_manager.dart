@@ -18,6 +18,7 @@
 //   room_destroy         host → guests  {roomId}
 //   room_leave           guest → host   {roomId, guestPeerId}
 //   room_spatial_update  both           {roomId, peerId, x, y}  (host relays)
+//   room_autobase        host → guests  {roomId, writerId, seq, kind, payload}
 //
 // Architecture mirrors `messaging_notifier` / `connections_notifier`: the
 // manager registers a [RoomBridge] on the connection registry (no provider
@@ -28,19 +29,25 @@
 // refs here would risk using a swapped-out connection.
 
 import 'dart:async';
-import 'dart:convert' show base64Decode, base64Encode;
+import 'dart:convert' as convert;
 import 'dart:math';
 import 'dart:typed_data' show Uint8List;
 import 'dart:ui' show Offset;
 
+import 'package:crypto/crypto.dart' show sha256;
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 
+import '../attachments/temp_attachment.dart';
+import '../attachments/transfer_id.dart';
+import '../rooms/autobase_log.dart';
+import '../transport/transport_api.dart' show TransportFileDescriptor;
 import '../state/connections_notifier.dart';
 import '../state/local_profile_provider.dart';
 import '../state/peer_connection_provider.dart';
 import '../storage/db.dart' as db;
+import '../storage/wrapped_snapshot.dart';
 import '../utils/common.dart' show safeAvatarDataUrl;
 import 'helpers.dart';
 import 'peerjs_client.dart';
@@ -51,6 +58,7 @@ import 'room_scoped_transport.dart';
 import 'room_signaling_host.dart';
 import 'security_monitor.dart';
 import 'spatial_audio_engine.dart';
+import 'webrtc_audio_lifecycle.dart';
 
 /// Whether the local user is hosting a room, visiting one as a guest, or in
 /// no room at all.
@@ -97,6 +105,7 @@ const Set<String> kRoomPacketTypes = <String>{
   'room_destroy',
   'room_leave',
   'room_spatial_update',
+  'room_autobase',
 };
 
 /// Pure authorization check for an incoming room-voice media call (audit item
@@ -142,6 +151,7 @@ class RoomState {
     this.micAvailable = false,
     this.selfHostInvite,
     this.internetAccessMessage,
+    this.lastReplicationError = '',
   });
 
   /// Current role.
@@ -201,6 +211,11 @@ class RoomState {
   /// sharing the invite. Null for guests / cloud rooms.
   final String? internetAccessMessage;
 
+  /// Last Autobase broadcast/replay failure. Empty when the last
+  /// host broadcast succeeded. A failed replication is never reported
+  /// as sent: callers check the bool result, this is diagnostics.
+  final String lastReplicationError;
+
   /// True when this session runs its own embedded signaling server.
   bool get isSelfHosted => selfHostInvite != null;
 
@@ -223,6 +238,7 @@ class RoomState {
     bool? micAvailable,
     Object? selfHostInvite = _unset,
     Object? internetAccessMessage = _unset,
+    String? lastReplicationError,
   }) =>
       RoomState(
         role: role ?? this.role,
@@ -253,6 +269,8 @@ class RoomState {
         internetAccessMessage: identical(internetAccessMessage, _unset)
             ? this.internetAccessMessage
             : internetAccessMessage as String?,
+        lastReplicationError:
+            lastReplicationError ?? this.lastReplicationError,
       );
 }
 
@@ -268,6 +286,9 @@ class _RoomContent {
     this.sticker,
     this.attachment,
     this.b64,
+    this.native = false,
+    this.transferId,
+    this.sha256hex,
   });
 
   final String kind; // 'text' | 'sticker' | 'file'
@@ -275,6 +296,9 @@ class _RoomContent {
   final Map<String, Object?>? sticker;
   final Map<String, Object?>? attachment;
   final String? b64;
+  final bool native;
+  final String? transferId;
+  final String? sha256hex;
 
   /// Extra fields the host folds into the relayed packet for this kind.
   Map<String, Object?> wireFields() {
@@ -282,7 +306,14 @@ class _RoomContent {
       case 'sticker':
         return {'sticker': sticker};
       case 'file':
-        return {'attachment': attachment, if (b64 != null) 'b64': b64};
+        return {
+          'attachment': attachment,
+          if (b64 != null) 'b64': b64,
+          if (native) 'native': true,
+          if (transferId != null && transferId!.isNotEmpty)
+            'transferId': transferId,
+          if (sha256hex != null && sha256hex!.isNotEmpty) 'sha256': sha256hex,
+        };
       default:
         return {'text': text};
     }
@@ -309,6 +340,17 @@ class RoomManager extends StateNotifier<RoomState> {
     // as MessagingNotifier/DropNotifier.
     _defaultTransport = _ref.read(roomTransportProvider);
     _defaultTransport.bindRoom(RoomBridge(handleInbound: _handleInbound));
+  }
+
+  /// Vault-wrapped Autobase writer log. Tests inject memory IO; the
+  /// native host binds the production prefs wrappers after unlock.
+  void bindAutobaseSnapshot({
+    WrappedSnapshotWriter? write,
+    WrappedSnapshotReader? read,
+  }) {
+    roomLog.writeSnapshot = write ?? writeRoomAutobaseSnapshot;
+    roomLog.readSnapshot = read ?? readRoomAutobaseSnapshot;
+    unawaited(roomLog.hydrate());
   }
 
   final Ref _ref;
@@ -359,6 +401,10 @@ class RoomManager extends StateNotifier<RoomState> {
   /// and was removed so it could not look like live protection.
   final SecurityMonitor _security = SecurityMonitor();
 
+  /// Host-plaintext Autobase log. Writers converge; no room_crypto.
+  /// Vault-wrapped locally so a host restart can still replay events.
+  final RoomAutobaseLog roomLog = RoomAutobaseLog();
+
   /// Delegates to the (possibly faked) transport. Named `_connections` for
   /// continuity — the method surface (sendRoomPacket/openReliable/hasReliable)
   /// matches the registry it wraps in production.
@@ -400,6 +446,11 @@ class RoomManager extends StateNotifier<RoomState> {
     }
 
     final roomId = selfId; // host peer code IS the room code
+
+    // Fresh Autobase log per room: a hydrated foreign log must never
+    // replay room A history into room B.
+    roomLog.clear();
+    roomLog.roomId = roomId;
 
     // Self-hosted: stand up the embedded signaling server + the host's loopback
     // client BEFORE persisting anything. A start failure must surface a SPECIFIC
@@ -444,8 +495,27 @@ class RoomManager extends StateNotifier<RoomState> {
       'isOnline': true,
       'joinedAt': now(),
     });
+    roomLog.append(
+      writerId: selfId,
+      kind: 'membership',
+      payload: {
+        'peerId': selfId,
+        'action': 'join',
+        'displayName': self?.displayName ?? selfId,
+      },
+    );
 
     final channels = await db.getRoomChannels(roomId);
+    for (final channel in channels) {
+      final id = channel['id'] as String?;
+      final name = channel['name'] as String?;
+      if (id == null || name == null) continue;
+      roomLog.append(
+        writerId: selfId,
+        kind: 'channel',
+        payload: {'id': id, 'name': name},
+      );
+    }
     final general = channels.firstWhere(
       (c) => c['type'] == 'text',
       orElse: () => channels.isNotEmpty ? channels.first : const {},
@@ -569,6 +639,9 @@ class RoomManager extends StateNotifier<RoomState> {
     }
     final roomId = hostPeerId;
 
+    roomLog.clear();
+    roomLog.roomId = roomId;
+
     await db.saveRoom({
       'id': roomId,
       'name': '',
@@ -648,6 +721,8 @@ class RoomManager extends StateNotifier<RoomState> {
     }
 
     final roomId = hostPeerId;
+    roomLog.clear();
+    roomLog.roomId = roomId;
     await db.saveRoom({
       'id': roomId,
       'name': '',
@@ -803,6 +878,16 @@ class RoomManager extends StateNotifier<RoomState> {
       'payload': {'kind': 'text', 'text': trimmed, 'fromName': fromName},
     });
 
+    final event = roomLog.append(
+      writerId: selfId,
+      kind: 'message',
+      payload: {
+        'id': id,
+        'text': trimmed,
+        'roomId': roomId,
+        'channelId': channelId,
+      },
+    );
     final ok = _dispatchRoomPacket(<String, Object?>{
       'type': 'room_msg',
       'kind': 'text',
@@ -813,6 +898,8 @@ class RoomManager extends StateNotifier<RoomState> {
       'fromName': fromName,
       'fromPeerId': selfId,
       'ts': ts,
+      'abWriter': event.writerId,
+      'abSeq': event.seq,
     });
     if (ok) {
       await db.updateMessageStatus(id, 'sent');
@@ -863,10 +950,10 @@ class RoomManager extends StateNotifier<RoomState> {
     }
   }
 
-  /// Send a file attachment to [channelId] in [roomId]. The raw bytes go to
-  /// `file_blobs` (keyed by the message id, so [FileTile] can render/download)
-  /// and ride the `room_msg` packet as base64 (`b64`); the host relays the full
-  /// packet to every other guest, who each persist their own blob copy.
+  /// Send a file attachment to [channelId] in [roomId]. Local Drift stores a
+  /// path descriptor when a temp file exists. Native DualStack peers get
+  /// `sendFile` plus a `room_msg` with `native`/`transferId`/`sha256` and no
+  /// `b64`; PeerJS / old clients still receive host-plaintext base64.
   /// [kind] is `'image' | 'video' | 'audio' | 'file'`. Returns silently on a
   /// validation/size failure.
   Future<void> sendRoomFile(
@@ -896,13 +983,20 @@ class RoomManager extends StateNotifier<RoomState> {
 
     String? thumbDataUrl;
     if (thumbBytes != null && thumbBytes.isNotEmpty) {
-      final candidate = 'data:image/jpeg;base64,${base64Encode(thumbBytes)}';
+      final candidate =
+          'data:image/jpeg;base64,${convert.base64Encode(thumbBytes)}';
       if (candidate.length <= kMaxRoomFileThumbLen) thumbDataUrl = candidate;
     }
 
+    final desc = await writeTempAttachment(
+      bytes: bytes,
+      name: safeName,
+      mime: mime,
+    );
+    final digest = sha256.convert(bytes).toString();
     await db.saveFileBlob(
       id,
-      bytes,
+      desc == null ? bytes : const <int>[],
       mime: mime,
       name: safeName,
       kind: kind,
@@ -911,6 +1005,8 @@ class RoomManager extends StateNotifier<RoomState> {
       height: height,
       duration: durationSec.toInt(),
       thumb: thumbBytes,
+      path: desc?.path,
+      sha256hex: digest,
     );
 
     final attachment = <String, Object?>{
@@ -936,25 +1032,26 @@ class RoomManager extends StateNotifier<RoomState> {
       'payload': {'type': 'file', 'attachment': attachment, 'fromName': fromName},
     });
 
-    final b64 = base64Encode(bytes);
-    if (b64.length > kMaxRoomFileB64Len) {
-      // Too big to ship; the local copy is kept but peers won't receive it.
+    final nativePeer = _roomFileHasNativePeer();
+    final b64 = convert.base64Encode(bytes);
+    if (b64.length > kMaxRoomFileB64Len && !nativePeer) {
+      // Too big to ship on PeerJS; the local copy is kept.
       debugPrint('[room] file too large to relay (${b64.length} b64 bytes)');
       return;
     }
 
-    final ok = _dispatchRoomPacket(<String, Object?>{
-      'type': 'room_msg',
-      'kind': 'file',
-      'id': id,
-      'roomId': roomId,
-      'channelId': channelId,
-      'attachment': attachment,
-      'b64': b64,
-      'fromName': fromName,
-      'fromPeerId': selfId,
-      'ts': ts,
-    });
+    final ok = await _dispatchRoomFile(
+      id: id,
+      roomId: roomId,
+      channelId: channelId,
+      fromName: fromName,
+      fromPeerId: selfId,
+      ts: ts,
+      attachment: attachment,
+      localPath: desc?.path,
+      sha256hex: digest,
+      bytes: bytes,
+    );
     if (ok) {
       await db.updateMessageStatus(id, 'sent');
     }
@@ -971,7 +1068,10 @@ class RoomManager extends StateNotifier<RoomState> {
   ///     link leaves the message queued instead of silently dropped.
   bool _dispatchRoomPacket(Map<String, Object?> packet) {
     if (state.role == RoomRole.host) {
-      _broadcastToGuests(packet);
+      final ok = _broadcastToGuests(packet);
+      // Autobase events are replicated state, not best-effort chat:
+      // report the broadcast result so callers don't claim replication.
+      if (packet['type'] == kRoomAutobaseType) return ok;
       return true;
     }
     if (state.role == RoomRole.guest) {
@@ -979,6 +1079,184 @@ class RoomManager extends StateNotifier<RoomState> {
       if (host != null) return _connections.sendRoomPacket(host, packet);
     }
     return false;
+  }
+
+  RoomNativeFileSink? get _nativeFileSink {
+    final t = _transport;
+    return t is RoomNativeFileSink ? t as RoomNativeFileSink : null;
+  }
+
+  bool _peerCanUseNative(String peerId) =>
+      _nativeFileSink?.canUseNative(peerId) ?? false;
+
+  bool _roomFileHasNativePeer() {
+    if (state.role == RoomRole.host) {
+      return state.guestPeerIds.any(_peerCanUseNative);
+    }
+    final host = state.hostPeerId;
+    return host != null && _peerCanUseNative(host);
+  }
+
+  Future<bool> _sendNativeRoomFile(
+    String peerId, {
+    required String path,
+    required int sizeBytes,
+    required String fileName,
+    required String mime,
+    required String transferId,
+  }) async {
+    final sink = _nativeFileSink;
+    if (sink == null) return false;
+    return sink.sendRoomFilePath(
+      peerId,
+      path: path,
+      sizeBytes: sizeBytes,
+      fileName: fileName,
+      mime: mime,
+      transferId: transferId,
+    );
+  }
+
+  Future<bool> _dispatchRoomFile({
+    required String id,
+    required String roomId,
+    required String channelId,
+    required String fromName,
+    required String fromPeerId,
+    required int ts,
+    required Map<String, Object?> attachment,
+    required String? localPath,
+    required String? sha256hex,
+    required Uint8List bytes,
+    String? except,
+    Map<String, Object?> extra = const {},
+  }) async {
+    if (state.role == RoomRole.host) {
+      for (final g in state.guestPeerIds) {
+        if (g == except) continue;
+        await _sendRoomFileToPeer(
+          g,
+          id: id,
+          roomId: roomId,
+          channelId: channelId,
+          fromName: fromName,
+          fromPeerId: fromPeerId,
+          ts: ts,
+          attachment: attachment,
+          localPath: localPath,
+          sha256hex: sha256hex,
+          bytes: bytes,
+          extra: extra,
+        );
+      }
+      return true;
+    }
+    if (state.role == RoomRole.guest) {
+      final host = state.hostPeerId;
+      if (host == null) return false;
+      return _sendRoomFileToPeer(
+        host,
+        id: id,
+        roomId: roomId,
+        channelId: channelId,
+        fromName: fromName,
+        fromPeerId: fromPeerId,
+        ts: ts,
+        attachment: attachment,
+        localPath: localPath,
+        sha256hex: sha256hex,
+        bytes: bytes,
+        extra: extra,
+      );
+    }
+    return false;
+  }
+
+  Future<bool> _sendRoomFileToPeer(
+    String to, {
+    required String id,
+    required String roomId,
+    required String channelId,
+    required String fromName,
+    required String fromPeerId,
+    required int ts,
+    required Map<String, Object?> attachment,
+    required String? localPath,
+    required String? sha256hex,
+    required Uint8List bytes,
+    Map<String, Object?> extra = const {},
+  }) async {
+    final packet = <String, Object?>{
+      'type': 'room_msg',
+      'kind': 'file',
+      'id': id,
+      'roomId': roomId,
+      'channelId': channelId,
+      'fromName': fromName,
+      'fromPeerId': fromPeerId,
+      'ts': ts,
+      ...extra,
+    };
+    // Plaintext-ack gate BEFORE any file bytes move: a rejected packet
+    // must not leave the file on the guest's disk.
+    if (!kRoomPlaintextSessionAck.allowsPacket(packet)) return false;
+    if (_peerCanUseNative(to) &&
+        localPath != null &&
+        localPath.isNotEmpty) {
+      final transferId = trySanitizeTransferId(id) ?? '';
+      if (transferId.isNotEmpty) {
+        final nativeOk = await _sendNativeRoomFile(
+          to,
+          path: localPath,
+          sizeBytes: bytes.isNotEmpty
+              ? bytes.length
+              : (attachment['size'] as num?)?.toInt() ?? 0,
+          fileName: attachment['name']?.toString() ?? 'file',
+          mime: attachment['mime']?.toString() ?? 'application/octet-stream',
+          transferId: transferId,
+        );
+        if (nativeOk) {
+          packet['attachment'] = <String, Object?>{
+            ...attachment,
+            'transferId': transferId,
+            'native': true,
+            if (sha256hex != null && sha256hex.isNotEmpty) 'sha256': sha256hex,
+          };
+          packet['native'] = true;
+          packet['transferId'] = transferId;
+          if (sha256hex != null && sha256hex.isNotEmpty) {
+            packet['sha256'] = sha256hex;
+          }
+          return _connections.sendRoomPacket(to, packet);
+        }
+        // Native peer, native failed: fail closed, never whole-file b64.
+        return false;
+      }
+    }
+    if (_peerCanUseNative(to)) return false;
+    var payload = bytes;
+    if (payload.isEmpty && localPath != null && localPath.isNotEmpty) {
+      // Native-sourced relay to a PeerJS guest: read capped bytes from
+      // the jail path (stat-checked, never unbounded).
+      final onDisk = attachmentPathSize(localPath);
+      if (onDisk <= 0 || onDisk > kMaxRoomFileRawBytes) return false;
+      try {
+        final fromDisk = await readAttachmentPath(
+          localPath,
+          maxBytes: kMaxRoomFileRawBytes,
+        );
+        if (fromDisk == null || fromDisk.isEmpty) return false;
+        payload = Uint8List.fromList(fromDisk);
+      } catch (_) {
+        return false;
+      }
+    }
+    if (payload.isEmpty) return false;
+    final b64 = convert.base64Encode(payload);
+    if (b64.length > kMaxRoomFileB64Len) return false;
+    packet['attachment'] = attachment;
+    packet['b64'] = b64;
+    return _connections.sendRoomPacket(to, packet);
   }
 
   // ─── Room outbox (audit Round 5 A.3) ──────────────────────────────
@@ -1058,16 +1336,31 @@ class RoomManager extends StateNotifier<RoomState> {
           try {
             final blob = await db.getFileBlob(id);
             final bytes = blob?['blob'];
-            if (bytes is! Uint8List || bytes.isEmpty) continue;
-            final b64 = base64Encode(bytes);
-            if (b64.length > kMaxRoomFileB64Len) continue;
-            packet['kind'] = 'file';
-            packet['attachment'] = Map<String, Object?>.from(att);
-            packet['b64'] = b64;
+            final path = blob?['path'] as String?;
+            final digest = blob?['sha256'] as String?;
+            if (bytes is! Uint8List ||
+                (bytes.isEmpty && (path == null || path.isEmpty))) {
+              continue;
+            }
+            final ok = await _dispatchRoomFile(
+              id: id,
+              roomId: roomId,
+              channelId: channelId,
+              fromName: fromName,
+              fromPeerId: r['peerId'] as String? ?? '',
+              ts: ts,
+              attachment: Map<String, Object?>.from(att),
+              localPath: path,
+              sha256hex: digest,
+              bytes: bytes,
+            );
+            if (!ok) break;
+            await db.updateMessageStatus(id, 'sent');
+            delivered++;
           } catch (_) {
             continue;
           }
-          break;
+          continue;
         default:
           continue;
       }
@@ -1240,6 +1533,7 @@ class RoomManager extends StateNotifier<RoomState> {
     await _teardownSelfHost();
     _security.reset();
     kRoomPlaintextSessionAck.reset();
+    roomLog.clear();
     state = const RoomState();
   }
 
@@ -1258,6 +1552,16 @@ class RoomManager extends StateNotifier<RoomState> {
     if (trimmed.isEmpty) return;
     final channel = await db.createChannel(roomId, trimmed, type);
     if (channel.isEmpty) return;
+    final channelId = channel['id'] as String?;
+    final channelName = channel['name'] as String?;
+    if (channelId != null && channelName != null) {
+      final event = roomLog.append(
+        writerId: _selfPeerId(),
+        kind: 'channel',
+        payload: {'id': channelId, 'name': channelName},
+      );
+      _replicateAutobase(event);
+    }
     _broadcastToGuests({
       'type': 'room_channel_create',
       'roomId': roomId,
@@ -1328,6 +1632,9 @@ class RoomManager extends StateNotifier<RoomState> {
           break;
         case 'room_spatial_update':
           await _onSpatialUpdate(remoteId, packet);
+          break;
+        case 'room_autobase':
+          _onRoomAutobase(remoteId, packet);
           break;
       }
     } catch (e) {
@@ -1413,7 +1720,18 @@ class RoomManager extends StateNotifier<RoomState> {
       'isOnline': true,
       'joinedAt': now(),
     });
+    final joinEvent = roomLog.append(
+      writerId: _selfPeerId().isEmpty ? guestId : _selfPeerId(),
+      kind: 'membership',
+      payload: {
+        'peerId': guestId,
+        'action': 'join',
+        'displayName': _clampName(packet['guestName'] as String?),
+      },
+    );
     state = state.copyWith(guestPeerIds: {...state.guestPeerIds, guestId});
+    _replayAutobaseTo(guestId);
+    _replicateAutobase(joinEvent, except: guestId);
 
     // Replicate the channel list to the newcomer (host ids are canonical).
     final channels = await db.getRoomChannels(roomId);
@@ -1437,6 +1755,7 @@ class RoomManager extends StateNotifier<RoomState> {
     await _stopVoice();
     _security.reset();
     kRoomPlaintextSessionAck.reset();
+    roomLog.clear();
     state = RoomState(
       joinError: _rejectReasonMessage(packet['reason'] as String?),
     );
@@ -1498,23 +1817,92 @@ class RoomManager extends StateNotifier<RoomState> {
       await _saveRoomContent(
         id: canonicalId,
         author: remoteId,
+        trustedSenderId: remoteId,
         roomId: roomId,
         channelId: channelId,
         fromName: fromName,
         ts: hostTs,
         content: content,
       );
-      _broadcastToGuests({
-        'type': 'room_msg',
-        'kind': content.kind,
-        'id': canonicalId,
-        'roomId': roomId,
-        'channelId': channelId,
-        'fromName': fromName,
-        'fromPeerId': remoteId,
-        'ts': hostTs,
-        ...content.wireFields(),
-      }, except: remoteId);
+      final event = roomLog.append(
+        writerId: _selfPeerId().isEmpty ? remoteId : _selfPeerId(),
+        kind: 'message',
+        payload: {
+          'id': canonicalId,
+          'text': content.kind == 'text' ? content.text : content.kind,
+          'roomId': roomId,
+          'channelId': channelId,
+        },
+      );
+      if (content.kind == 'file') {
+        Uint8List fileBytes = Uint8List(0);
+        if (content.b64 != null) {
+          try {
+            fileBytes = Uint8List.fromList(convert.base64Decode(content.b64!));
+          } catch (_) {}
+        }
+        String? filePath;
+        var fileSha = content.sha256hex;
+        if (content.native) {
+          // Native descriptor: resolve the jail path without reading the
+          // bytes into RAM. Relay re-sends from disk for native guests.
+          filePath = lookupIncomingTransferPath(
+            transferId: content.transferId ?? '',
+            name: content.attachment?['name']?.toString() ?? 'file',
+            trustedSenderId: remoteId,
+          );
+          if (filePath != null) {
+            final onDisk = attachmentPathSize(filePath);
+            if (onDisk <= 0 || onDisk > kMaxRoomFileRawBytes) {
+              return;
+            }
+          }
+        } else {
+          Map<String, Object?>? stored;
+          try {
+            stored = await db.getFileBlob(canonicalId);
+          } catch (_) {
+            return;
+          }
+          if (stored != null) {
+            filePath = stored['path'] as String?;
+            fileSha = stored['sha256'] as String? ?? fileSha;
+            final raw = stored['blob'];
+            if (raw is Uint8List && raw.isNotEmpty) fileBytes = raw;
+          }
+        }
+        await _dispatchRoomFile(
+          id: canonicalId,
+          roomId: roomId,
+          channelId: channelId,
+          fromName: fromName,
+          fromPeerId: remoteId,
+          ts: hostTs,
+          attachment: content.attachment ?? const <String, Object?>{},
+          localPath: filePath,
+          sha256hex: fileSha,
+          bytes: fileBytes,
+          except: remoteId,
+          extra: {
+            'abWriter': event.writerId,
+            'abSeq': event.seq,
+          },
+        );
+      } else {
+        _broadcastToGuests({
+          'type': 'room_msg',
+          'kind': content.kind,
+          'id': canonicalId,
+          'roomId': roomId,
+          'channelId': channelId,
+          'fromName': fromName,
+          'fromPeerId': remoteId,
+          'ts': hostTs,
+          'abWriter': event.writerId,
+          'abSeq': event.seq,
+          ...content.wireFields(),
+        }, except: remoteId);
+      }
     } else if (state.role == RoomRole.guest) {
       // Guests accept relayed messages ONLY from the host (audit item 1/2).
       if (remoteId != state.hostPeerId) return;
@@ -1528,11 +1916,23 @@ class RoomManager extends StateNotifier<RoomState> {
       await _saveRoomContent(
         id: id,
         author: author,
+        trustedSenderId: remoteId,
         roomId: roomId,
         channelId: channelId,
         fromName: fromName,
         ts: ts,
         content: content,
+      );
+      roomLog.append(
+        writerId: (packet['abWriter'] as String?) ?? remoteId,
+        kind: 'message',
+        payload: {
+          'id': id,
+          'text': content.kind == 'text' ? content.text : content.kind,
+          'roomId': roomId,
+          'channelId': channelId,
+        },
+        seq: (packet['abSeq'] as num?)?.toInt(),
       );
     }
   }
@@ -1555,6 +1955,16 @@ class RoomManager extends StateNotifier<RoomState> {
     m['roomId'] = state.roomId;
     m['name'] = _clampName(m['name'] as String?);
     await db.upsertRoomChannel(m);
+    final id = m['id'] as String?;
+    final name = m['name'] as String?;
+    if (id != null && name != null) {
+      roomLog.append(
+        writerId: (packet['abWriter'] as String?) ?? remoteId,
+        kind: 'channel',
+        payload: {'id': id, 'name': name},
+        seq: (packet['abSeq'] as num?)?.toInt(),
+      );
+    }
   }
 
   /// Guest: host tore the room down. Mark offline, drop voice, reset.
@@ -1570,6 +1980,7 @@ class RoomManager extends StateNotifier<RoomState> {
     await _teardownSelfHost();
     _security.reset();
     kRoomPlaintextSessionAck.reset();
+    roomLog.clear();
     state = const RoomState();
   }
 
@@ -1583,6 +1994,12 @@ class RoomManager extends StateNotifier<RoomState> {
     final guestId = remoteId;
     if (!state.guestPeerIds.contains(guestId)) return;
     await db.removeRoomMember(roomId, guestId);
+    final leaveEvent = roomLog.append(
+      writerId: _selfPeerId().isEmpty ? guestId : _selfPeerId(),
+      kind: 'membership',
+      payload: {'peerId': guestId, 'action': 'leave'},
+    );
+    _replicateAutobase(leaveEvent);
     state = state.copyWith(
       guestPeerIds: state.guestPeerIds.where((g) => g != guestId).toSet(),
     );
@@ -1611,45 +2028,143 @@ class RoomManager extends StateNotifier<RoomState> {
     });
   }
 
-  void _broadcastToGuests(Map<String, Object?> packet, {String? except}) {
-    final conns = _connections;
+  String _replicationFailureReason() {
+    final t = _transport;
+    if (t is _ConnRoomTransport) {
+      final err = t.lastReplicationError;
+      if (err.isNotEmpty) return err;
+    }
+    return 'room-packet-not-sent';
+  }
+
+  void _noteReplicationFailure() {
+    state = state.copyWith(
+      lastReplicationError: _replicationFailureReason(),
+    );
+  }
+
+  bool _broadcastToGuests(Map<String, Object?> packet, {String? except}) {
+    var ok = true;
     for (final g in state.guestPeerIds) {
       if (g == except) continue;
-      conns.sendRoomPacket(g, packet);
+      if (!_connections.sendRoomPacket(g, packet)) {
+        ok = false;
+        _noteReplicationFailure();
+      }
     }
+    return ok;
+  }
+
+  bool _replicateAutobase(RoomEvent event, {String? except}) {
+    final roomId = state.roomId;
+    if (roomId == null) return false;
+    return _broadcastToGuests(
+      encodeRoomAutobasePacket(roomId, event),
+      except: except,
+    );
+  }
+
+  bool _replayAutobaseTo(String guestId) {
+    final roomId = state.roomId;
+    if (roomId == null) return false;
+    if (roomLog.events.length > kMaxRoomAutobaseEvents) {
+      state = state.copyWith(lastReplicationError: 'autobase-cap');
+      return false;
+    }
+    var ok = true;
+    for (final event in roomLog.events) {
+      if (!_connections.sendRoomPacket(
+        guestId,
+        encodeRoomAutobasePacket(roomId, event),
+      )) {
+        ok = false;
+        _noteReplicationFailure();
+      }
+    }
+    return ok;
+  }
+
+  /// Guest-only. Host writes Autobase; guests apply stamped events.
+  void _onRoomAutobase(String remoteId, Map<String, Object?> packet) {
+    if (state.role != RoomRole.guest || remoteId != state.hostPeerId) return;
+    final event = decodeRoomEventFromPacket(packet);
+    if (event == null) return;
+    roomLog.append(
+      writerId: event.writerId,
+      kind: event.kind,
+      payload: event.payload,
+      seq: event.seq,
+    );
   }
 
   /// Persist inbound room content (text / sticker / file) with explicit,
   /// already-validated fields. The caller (host or guest inbound) supplies the
   /// canonical id/author/ts, so nothing here trusts raw packet identity. For a
-  /// file, the base64 bytes are decoded into `file_blobs` (keyed by the message
-  /// id) so [FileTile] can render/download; redelivery of the same id is
-  /// idempotent.
+  /// native descriptor, the blob is the incoming jail path from the
+  /// authenticated transport sender (not the spoofable `fromPeerId`). For
+  /// PeerJS `b64`, bytes are decoded into `file_blobs`. Redelivery of the
+  /// same id is idempotent.
   Future<void> _saveRoomContent({
     required String id,
     required String author,
+    required String trustedSenderId,
     required String roomId,
     required String channelId,
     required String fromName,
     required int ts,
     required _RoomContent content,
   }) async {
-    if (content.kind == 'file' && content.b64 != null) {
+    if (content.kind == 'file' && content.native) {
+      final att = content.attachment ?? const <String, Object?>{};
+      final name = att['name']?.toString() ?? 'file';
+      final path = lookupIncomingTransferPath(
+        transferId: content.transferId ?? '',
+        name: name,
+        trustedSenderId: trustedSenderId,
+      );
+      if (path != null && path.isNotEmpty) {
+        // Stat the actual bytes: claimed att['size'] is untrusted.
+        final onDisk = attachmentPathSize(path);
+        if (onDisk <= 0 || onDisk > kMaxRoomFileRawBytes) return;
+        await db.saveFileBlob(
+          id,
+          const <int>[],
+          mime: att['mime']?.toString() ?? 'application/octet-stream',
+          name: name,
+          kind: att['kind']?.toString() ?? 'file',
+          size: (att['size'] as num?)?.toInt() ?? 0,
+          width: (att['width'] as num?)?.toInt() ?? 0,
+          height: (att['height'] as num?)?.toInt() ?? 0,
+          duration: (att['duration'] as num?)?.toInt() ?? 0,
+          thumb: null,
+          path: path,
+          sha256hex: content.sha256hex,
+        );
+      }
+    } else if (content.kind == 'file' && content.b64 != null) {
       try {
-        final bytes = base64Decode(content.b64!);
+        final bytes = convert.base64Decode(content.b64!);
         if (bytes.isNotEmpty && bytes.length <= kMaxRoomFileRawBytes) {
           final att = content.attachment ?? const <String, Object?>{};
+          final mime = att['mime']?.toString() ?? 'application/octet-stream';
+          final name = att['name']?.toString() ?? 'file';
+          final desc = await writeTempAttachment(
+            bytes: bytes,
+            name: name,
+            mime: mime,
+          );
           await db.saveFileBlob(
             id,
-            bytes,
-            mime: att['mime']?.toString() ?? 'application/octet-stream',
-            name: att['name']?.toString() ?? 'file',
+            desc == null ? bytes : const <int>[],
+            mime: mime,
+            name: name,
             kind: att['kind']?.toString() ?? 'file',
             size: bytes.length,
             width: (att['width'] as num?)?.toInt() ?? 0,
             height: (att['height'] as num?)?.toInt() ?? 0,
             duration: (att['duration'] as num?)?.toInt() ?? 0,
             thumb: null,
+            path: desc?.path,
           );
         }
       } catch (_) {
@@ -1680,14 +2195,37 @@ class RoomManager extends StateNotifier<RoomState> {
         if (s == null) return null;
         return _RoomContent(kind: 'sticker', sticker: s);
       case 'file':
+        final att = _sanitizeRoomAttachment(packet['attachment']);
+        if (att == null) return null;
+        final transferId =
+            (packet['transferId'] ?? att['transferId'])?.toString() ?? '';
+        final digest = (packet['sha256'] ?? att['sha256'])?.toString();
+        final native = packet['native'] == true || att['native'] == true;
+        if (native && transferId.isNotEmpty) {
+          // Claimed size is untrusted metadata: cap it here (the
+          // coordinator also caps the actual bytes at 50 MiB; rooms cap
+          // lower and the on-disk file is stat-checked on save).
+          final claimed = (att['size'] as num?)?.toInt() ?? 0;
+          if (claimed <= 0 || claimed > kMaxRoomFileRawBytes) return null;
+          return _RoomContent(
+            kind: 'file',
+            attachment: <String, Object?>{
+              ...att,
+              'native': true,
+              'transferId': transferId,
+              if (digest != null && digest.isNotEmpty) 'sha256': digest,
+            },
+            native: true,
+            transferId: transferId,
+            sha256hex: digest,
+          );
+        }
         final b64 = packet['b64'];
         if (b64 is! String ||
             b64.isEmpty ||
             b64.length > kMaxRoomFileB64Len) {
           return null;
         }
-        final att = _sanitizeRoomAttachment(packet['attachment']);
-        if (att == null) return null;
         return _RoomContent(kind: 'file', attachment: att, b64: b64);
       default:
         final text = _clampText(packet['text'] as String?);
@@ -1801,8 +2339,10 @@ class RoomManager extends StateNotifier<RoomState> {
 
     MediaStream stream;
     try {
-      stream = await navigator.mediaDevices
-          .getUserMedia({'audio': true, 'video': false});
+      stream = await WebRtcAudioLifecycle.instance.acquireUserMedia(
+        audio: true,
+        video: false,
+      );
     } catch (e) {
       debugPrint('[room] voice: microphone unavailable: $e');
       return;
@@ -1996,7 +2536,22 @@ abstract class RoomTransport {
   PeerJsClient? get rawPeer;
 }
 
-class _ConnRoomTransport implements RoomTransport {
+/// Optional DualStack path-descriptor send. Test fakes omit this mix-in
+/// and stay on host-plaintext base64.
+abstract class RoomNativeFileSink {
+  bool canUseNative(String peerId);
+
+  Future<bool> sendRoomFilePath(
+    String peerId, {
+    required String path,
+    required int sizeBytes,
+    required String fileName,
+    required String mime,
+    required String transferId,
+  });
+}
+
+class _ConnRoomTransport implements RoomTransport, RoomNativeFileSink {
   _ConnRoomTransport(this._ref);
   final Ref _ref;
 
@@ -2010,11 +2565,46 @@ class _ConnRoomTransport implements RoomTransport {
   bool sendRoomPacket(String peerId, Map<String, Object?> packet) =>
       _c.sendRoomPacket(peerId, packet);
 
+  /// Last DualStack send failure, for RoomState diagnostics.
+  String get lastReplicationError =>
+      _c.nativeBridge?.lastReplicationError ?? '';
+
   @override
   bool hasReliable(String peerId) => _c.hasReliable(peerId);
 
   @override
   void openReliable(String peerId) => _c.openReliable(peerId);
+
+  @override
+  bool canUseNative(String peerId) => _c.canUseNative(peerId);
+
+  @override
+  Future<bool> sendRoomFilePath(
+    String peerId, {
+    required String path,
+    required int sizeBytes,
+    required String fileName,
+    required String mime,
+    required String transferId,
+  }) async {
+    try {
+      await _c.sendFile(
+        peerId,
+        TransportFileDescriptor(
+          path: path,
+          sizeBytes: sizeBytes,
+          fileName: fileName,
+          mime: mime,
+          transferId: transferId,
+        ),
+      );
+      return true;
+    } catch (err) {
+      _c.nativeBridge?.lastReplicationError = err.toString();
+      debugPrint('[room] native file send to $peerId failed: $err');
+      return false;
+    }
+  }
 
   @override
   PeerJsClient? get rawPeer =>

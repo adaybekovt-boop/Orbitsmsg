@@ -30,9 +30,12 @@
 import 'dart:async';
 import 'dart:math';
 
+import '../attachments/attachment_keys.dart';
+import '../attachments/temp_attachment.dart';
 import '../core/bundle_cache.dart';
 import '../core/prekey_bundle.dart';
 import '../core/wire_crypto.dart';
+import '../devices/device_ratchet_sessions.dart';
 import '../peer/helpers.dart';
 import '../utils/heavy_codec.dart';
 import '../storage/db.dart' as db;
@@ -96,6 +99,7 @@ class ReliableInboundCtx {
     this.onUnexpectedPlaintext,
     this.persistInbound,
     this.isPeerBlocked,
+    this.attachmentKeys,
     Set<String>? processingMsgIds,
   }) : processingMsgIds = processingMsgIds ?? <String>{};
 
@@ -181,6 +185,9 @@ class ReliableInboundCtx {
   final void Function(Object err)? onHandshakeError;
   final void Function(Object err)? onDecryptError;
   final void Function(Object? data)? onUnexpectedPlaintext;
+
+  /// Per-transfer attachment keys. Filled only after a ratchet decrypt.
+  final AttachmentKeyStore? attachmentKeys;
 }
 
 // в”Ђв”Ђв”Ђ Ephemeral dispatch в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
@@ -223,6 +230,9 @@ Future<bool> dispatchReliableInbound(
 ) async {
   if (ctx.isPeerBlocked?.call(remoteId) == true) {
     return true;
+  }
+  if (data is AuthenticatedPlaintext) {
+    return dispatchReliablePlaintext(data.data, connSend, remoteId, ctx);
   }
   // в”Ђв”Ђ Handshake in plaintext в”Ђв”Ђ
   if (data is Map) {
@@ -302,6 +312,14 @@ Future<bool> dispatchReliablePlaintext(
   }
 
   final type = data['type'];
+
+  if (type == kAttachmentKeyMessageType) {
+    final store = ctx.attachmentKeys;
+    if (store != null) {
+      tryAcceptAttachmentKeyMessage(store, remoteId, data);
+    }
+    return true;
+  }
 
   // в”Ђв”Ђв”Ђ profile_req вЂ” remote wants our profile card в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
   if (type == 'profile_req') {
@@ -657,6 +675,36 @@ Future<bool> dispatchReliablePlaintext(
           );
           attachmentRef = metaOut;
         } catch (_) {
+          attachmentRef = <String, Object?>{...metaOut, 'missing': true};
+        }
+      } else if (attachmentMeta['native'] == true) {
+        // Jail keyed by the AUTHENTICATED transport peer, never the
+        // spoofable payload `from` (rooms already do this).
+        final path = lookupIncomingTransferPath(
+          transferId: attachmentMeta['transferId'] as String? ?? '',
+          name: name,
+          trustedSenderId: remoteId,
+        );
+        if (path != null && path.isNotEmpty) {
+          await db.saveFileBlob(
+            msgId,
+            const <int>[],
+            mime: mime,
+            name: name,
+            kind: kind,
+            size: size,
+            width: width,
+            height: height,
+            duration: duration,
+            path: path,
+            sha256hex: attachmentMeta['sha256'] as String?,
+          );
+          attachmentRef = <String, Object?>{
+            ...metaOut,
+            'path': path,
+            'sha256': attachmentMeta['sha256'],
+          };
+        } else {
           attachmentRef = <String, Object?>{...metaOut, 'missing': true};
         }
       } else {
