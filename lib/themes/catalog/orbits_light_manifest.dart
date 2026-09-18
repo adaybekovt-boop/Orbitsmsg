@@ -1,9 +1,5 @@
-// Orbits Light — clean, cool off-white surface (NOT cream/sand), frosted-white
-// glass panels. STRICTLY monochrome: black / white / gray. The "accent" is a
-// near-black ink, so primary actions read as a confident black material with
-// white text; selected nav / focus rings pick it up automatically. No blue, no
-// teal. Only success (green) / danger (red) stay as functional semantics.
-// High text contrast, hairline borders, airy shadows.
+// Orbits Light — React alpine daylight theme. Cool slate text over the
+// mountain wallpaper. Accent and outgoing bubbles are brand blue (#2563eb).
 
 import 'package:flutter/material.dart';
 
@@ -13,44 +9,34 @@ import '../manifest.dart';
 const ThemeManifest orbitsLightManifest = ThemeManifest(
   id: 'orbits-light',
   name: 'Светлая',
-  subtitle: 'Чистое стекло',
+  subtitle: 'Альпы и стекло',
   family: ThemeFamily.classic,
   colorScheme: Brightness.light,
   tokens: ThemeTokenColors(
-    bg: Color(0xFFF4F6F9),
+    bg: Color(0xFFF8FAFC),
     surface: Color(0xFFFFFFFF),
-    border: Color(0xFFE3E7ED),
-    text: Color(0xFF14181F),
-    muted: Color(0xFF697586),
-    // Monochrome accent: near-black ink. Primary buttons become a confident
-    // black material with white text; nav/focus pick this up automatically.
-    accent: Color(0xFF1C2129),
-    // Secondary = a mid gray (used by "connecting"/secondary states).
-    accent2: Color(0xFF5B6472),
-    success: Color(0xFF1F9D55),
-    danger: Color(0xFFE5484D),
+    border: Color(0x14000000),
+    text: Color(0xFF0F172A),
+    muted: Color(0xFF475569),
+    accent: Color(0xFF2563EB),
+    accent2: Color(0xFF1D4ED8),
+    success: Color(0xFF16A34A),
+    danger: Color(0xFFEF4444),
     scrim: Color(0xCC000000),
-    // Read-tick stays neutral gray (was brand-blue) to keep the palette mono.
-    deliveryRead: Color(0xFF697586),
-    // Outgoing bubbles: confident dark ink (matches the light accent) with
-    // white text — same as before, just no longer tied to `accent` directly.
-    bubbleOut: Color(0xFF1C2129),
+    deliveryRead: Color(0xFF2563EB),
+    bubbleOut: Color(0xFF2563EB),
   ),
   shape: ThemeShape(
-    radiusButton: 14,
-    radiusCard: 18,
-    radiusModal: 26,
+    radiusButton: 16,
+    radiusCard: 24,
+    radiusModal: 24,
     blurSurface: 0,
     shadowCard: <BoxShadow>[
-      BoxShadow(
-        color: Color(0x141B2533),
-        blurRadius: 20,
-        offset: Offset(0, 6),
-      ),
+      BoxShadow(color: Color(0x141B2533), blurRadius: 20, offset: Offset(0, 6)),
     ],
   ),
   typography: ThemeTypography(
-    fontHeading: 'Manrope',
+    fontHeading: 'Inter',
     fontBody: 'Inter',
     fontMono: 'JetBrainsMono',
     letterSpacingHeading: -0.015,
@@ -67,7 +53,5 @@ const ThemeManifest orbitsLightManifest = ThemeManifest(
     messageBubbleStyle: MessageBubbleStyle.rounded,
     modalEnter: ModalEnter.fadeScale,
   ),
-  // Static monochrome backdrop (off-white base + soft neutral clouds) so the
-  // frosted-white glass panels have luminance variation to refract.
   background: orbitsBackdropBuilder,
 );

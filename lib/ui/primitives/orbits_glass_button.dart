@@ -15,10 +15,19 @@ import 'orbits_glass_surface.dart';
 
 enum OrbitsGlassVariant { primary, secondary, subtle, danger }
 
+/// React-facing alias used by the design port.
+typedef LiquidGlassButton = OrbitsGlassButton;
+
 enum OrbitsGlassSize { small, medium, large, icon }
 
 class _Metrics {
-  const _Metrics(this.minHeight, this.padH, this.fontSize, this.iconSize, this.gap);
+  const _Metrics(
+    this.minHeight,
+    this.padH,
+    this.fontSize,
+    this.iconSize,
+    this.gap,
+  );
   final double minHeight;
   final double padH;
   final double fontSize;
@@ -74,7 +83,11 @@ class _GlassButtonCoreState extends State<_GlassButtonCore> {
     final t = OrbitsTokens.of(context);
     final enabled = widget.enabled && widget.onPressed != null;
 
-    Widget core = widget.builder(_hover && enabled, _pressed && enabled, _focused && enabled);
+    Widget core = widget.builder(
+      _hover && enabled,
+      _pressed && enabled,
+      _focused && enabled,
+    );
 
     core = AnimatedScale(
       scale: (_pressed && enabled) ? t.pressScale : 1.0,
@@ -85,8 +98,9 @@ class _GlassButtonCoreState extends State<_GlassButtonCore> {
 
     core = FocusableActionDetector(
       enabled: enabled,
-      mouseCursor:
-          enabled ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      mouseCursor: enabled
+          ? SystemMouseCursors.click
+          : SystemMouseCursors.basic,
       onShowHoverHighlight: (h) {
         if (h != _hover) setState(() => _hover = h);
       },
@@ -154,7 +168,9 @@ Widget _glassFace({
   }
 
   final surface = OrbitsGlassSurface(
-    role: radius.topLeft.x >= 999 ? OrbitsGlassRole.pill : OrbitsGlassRole.button,
+    role: radius.topLeft.x >= 999
+        ? OrbitsGlassRole.pill
+        : OrbitsGlassRole.button,
     borderRadius: radius,
     fill: fill,
     tint: tint,
@@ -314,31 +330,35 @@ class OrbitsGlassIconButton extends StatelessWidget {
           fill: variant == OrbitsGlassVariant.primary
               ? t.accent
               : variant == OrbitsGlassVariant.danger
-                  ? t.danger
-                  : null,
+              ? t.danger
+              : null,
           tint: variant == OrbitsGlassVariant.secondary && hovered
               ? t.accent
               : null,
           child: SizedBox(
             width: dim,
             height: dim,
-            child: Center(child: Icon(icon, size: m.iconSize, color: fg)),
+            child: Center(
+              child: Icon(icon, size: m.iconSize, color: fg),
+            ),
           ),
         );
         if (!focused) return face;
-        return Stack(children: [
-          face,
-          Positioned.fill(
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: radius,
-                  border: Border.all(color: t.accent, width: 2),
+        return Stack(
+          children: [
+            face,
+            Positioned.fill(
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: radius,
+                    border: Border.all(color: t.accent, width: 2),
+                  ),
                 ),
               ),
             ),
-          ),
-        ]);
+          ],
+        );
       },
     );
   }
@@ -412,8 +432,8 @@ class OrbitsGlassPillButton extends StatelessWidget {
           fill: variant == OrbitsGlassVariant.primary
               ? t.accent
               : variant == OrbitsGlassVariant.danger
-                  ? t.danger
-                  : null,
+              ? t.danger
+              : null,
           tint: (variant == OrbitsGlassVariant.secondary && hovered)
               ? t.accent
               : null,
@@ -424,19 +444,21 @@ class OrbitsGlassPillButton extends StatelessWidget {
           ),
         );
         if (!focused) return face;
-        return Stack(children: [
-          face,
-          Positioned.fill(
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: radius,
-                  border: Border.all(color: t.accent, width: 2),
+        return Stack(
+          children: [
+            face,
+            Positioned.fill(
+              child: IgnorePointer(
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    borderRadius: radius,
+                    border: Border.all(color: t.accent, width: 2),
+                  ),
                 ),
               ),
             ),
-          ),
-        ]);
+          ],
+        );
       },
     );
   }

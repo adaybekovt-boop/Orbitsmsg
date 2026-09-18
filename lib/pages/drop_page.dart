@@ -23,13 +23,16 @@ import '../state/peers_provider.dart';
 import '../storage/db.dart' as db;
 import '../themes/orbits_tokens.dart';
 import '../ui/peer/peer_status_pill.dart';
+import '../ui/layout/orbits_breakpoints.dart';
 import '../ui/primitives/adaptive_page_frame.dart';
 import '../ui/primitives/orbits_glass_button.dart';
 import '../ui/primitives/orbits_glass_app_bar.dart';
+import '../ui/primitives/orbits_glass_dialog.dart';
 import '../ui/primitives/orbits_glass_surface.dart';
 import '../ui/profile/add_contact_page.dart';
 import '../ui/chat/web_download_stub.dart'
-    if (dart.library.html) '../ui/chat/web_download_html.dart' as web_download;
+    if (dart.library.html) '../ui/chat/web_download_html.dart'
+    as web_download;
 
 class DropPage extends ConsumerStatefulWidget {
   const DropPage({super.key});
@@ -45,8 +48,11 @@ class _DropPageState extends ConsumerState<DropPage> {
     if (_sendingToPeer != null) return;
     FilePickerResult? picked;
     try {
-      picked = await FilePicker.platform
-          .pickFiles(type: FileType.any, allowMultiple: false, withData: true);
+      picked = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        allowMultiple: false,
+        withData: true,
+      );
     } catch (_) {
       _toast('Не удалось открыть файловый выбор');
       return;
@@ -122,7 +128,8 @@ class _DropPageState extends ConsumerState<DropPage> {
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
       ..showSnackBar(
-          SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
+        SnackBar(content: Text(msg), duration: const Duration(seconds: 2)),
+      );
   }
 
   @override
@@ -150,160 +157,230 @@ class _DropPageState extends ConsumerState<DropPage> {
             color: tokens.text,
           ),
         ),
+        actions: [
+          OrbitsGlassIconButton(
+            icon: Icons.info_outline,
+            tooltip: 'О передаче файлов',
+            variant: OrbitsGlassVariant.subtle,
+            size: OrbitsGlassSize.small,
+            onPressed: _showDropInfo,
+          ),
+          const SizedBox(width: 8),
+        ],
       ),
       body: AdaptivePageFrame(
         maxWidth: 880,
-        child: (peers.isEmpty && transfers.isEmpty)
-            ? _buildEmptyState(tokens)
-            : ListView(
-                padding: const EdgeInsets.only(
-                    top: kPillReserveHeight + 12, bottom: 24),
-                children: [
-                  _hero(tokens),
-                  if (transfers.isNotEmpty) ...[
-                    _SectionHeader(text: 'Передачи', tokens: tokens),
-                    for (final t in transfers)
-                      _TransferRow(
-                        transfer: t,
-                        tokens: tokens,
-                        onCancel: () =>
-                            ref.read(dropNotifierProvider.notifier).cancel(t.id),
-                        onDismiss: () => ref
-                            .read(dropNotifierProvider.notifier)
-                            .dismiss(t.id),
-                        onSave: () => _saveReceived(t),
-                      ),
-                  ],
-                  _SectionHeader(text: 'Отправить контакту', tokens: tokens),
-                  if (peers.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.all(12),
-                      child: _emptyCard(tokens),
-                    )
-                  else
-                    for (final p in peers)
-                      _PeerSendRow(
-                        peer: p,
-                        online: connected.contains((p['id'] as String?) ?? ''),
-                        busy: _sendingToPeer == (p['id'] as String?),
-                        tokens: tokens,
-                        onTap: () {
-                          final id = (p['id'] as String?) ?? '';
-                          if (id.isNotEmpty) _pickAndSend(id);
-                        },
-                      ),
-                ],
-              ),
+        child: ListView(
+          padding: EdgeInsets.only(
+            top: kPillReserveHeight + 12,
+            bottom: isPhoneLayout(context) ? 88 : 24,
+          ),
+          children: [
+            _hero(tokens),
+            _dropActions(peers.isEmpty),
+            if (transfers.isNotEmpty) ...[
+              _SectionHeader(text: 'Передачи', tokens: tokens),
+              for (final t in transfers)
+                _TransferRow(
+                  transfer: t,
+                  tokens: tokens,
+                  onCancel: () =>
+                      ref.read(dropNotifierProvider.notifier).cancel(t.id),
+                  onDismiss: () =>
+                      ref.read(dropNotifierProvider.notifier).dismiss(t.id),
+                  onSave: () => _saveReceived(t),
+                ),
+            ],
+            _SectionHeader(text: 'Отправить контакту', tokens: tokens),
+            if (peers.isEmpty)
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: _emptyCard(tokens),
+              )
+            else
+              for (final p in peers)
+                _PeerSendRow(
+                  peer: p,
+                  online: connected.contains((p['id'] as String?) ?? ''),
+                  busy: _sendingToPeer == (p['id'] as String?),
+                  tokens: tokens,
+                  onTap: () {
+                    final id = (p['id'] as String?) ?? '';
+                    if (id.isNotEmpty) _pickAndSend(id);
+                  },
+                ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _hero(OrbitsTokens tokens) => Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
-        child: Column(
-          children: [
-            Container(
-              width: 64,
-              height: 64,
-              decoration: BoxDecoration(
-                color: tokens.accentAlpha(0.14),
-                shape: BoxShape.circle,
-                border: Border.all(color: tokens.accentAlpha(0.3)),
+    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+    child: Column(
+      children: [
+        SizedBox(
+          width: 200,
+          height: 200,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              Container(
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(color: tokens.border),
+                ),
               ),
-              alignment: Alignment.center,
-              child: Icon(Icons.swap_vert, size: 32, color: tokens.accent),
-            ),
-            const SizedBox(height: 14),
-            Text(
-              'Orbits Drop',
-              style: TextStyle(
-                fontFamily: tokens.fontHeading,
-                fontSize: 22,
-                fontWeight: FontWeight.w600,
-                color: tokens.text,
+              Container(
+                width: 152,
+                height: 152,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: tokens.border,
+                    style: BorderStyle.solid,
+                  ),
+                ),
               ),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Выбери контакт и файл. Передача идёт напрямую между устройствами.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                  fontFamily: tokens.fontBody, fontSize: 13, color: tokens.muted),
-            ),
-          ],
-        ),
-      );
-
-  /// Full centered empty state — shown when there are no contacts and no
-  /// transfers. A single glass card with a clear call to action.
-  Widget _buildEmptyState(OrbitsTokens tokens) => Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 380),
-            child: _emptyCard(tokens),
+              OrbitsGlassSurface(
+                role: OrbitsGlassRole.card,
+                realBlur: true,
+                refract: true,
+                borderRadius: BorderRadius.circular(15),
+                child: const SizedBox(
+                  width: 52,
+                  height: 52,
+                  child: Icon(Icons.swap_vert, size: 26),
+                ),
+              ),
+            ],
           ),
         ),
-      );
+        const SizedBox(height: 14),
+        Text(
+          'Orbits Drop',
+          style: TextStyle(
+            fontFamily: tokens.fontHeading,
+            fontSize: 22,
+            fontWeight: FontWeight.w600,
+            color: tokens.text,
+          ),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          'Выбери контакт и файл. Передача идёт напрямую между устройствами.',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontFamily: tokens.fontBody,
+            fontSize: 13,
+            color: tokens.muted,
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _dropActions(bool noPeers) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          OrbitsGlassButton(
+            label: 'Файл',
+            icon: Icons.insert_drive_file_outlined,
+            onPressed: noPeers
+                ? _openAddContact
+                : () => _toast('Выбери контакт ниже, чтобы отправить файл'),
+          ),
+          OrbitsGlassButton(
+            label: 'Папка',
+            icon: Icons.folder_outlined,
+            onPressed: () => _toast('Передача папок пока недоступна'),
+          ),
+          OrbitsGlassButton(
+            label: 'Текст',
+            icon: Icons.code,
+            onPressed: () => _toast('Текстовые заметки в Drop пока недоступны'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showDropInfo() async {
+    await showOrbitsConfirm(
+      context: context,
+      title: 'Orbits Drop',
+      message:
+          'Файл уходит напрямую выбранному контакту через существующий '
+          'защищённый канал. Папки и текстовые заметки из макета React '
+          'ещё не реализованы — кнопки не имитируют успех.',
+      confirmLabel: 'Понятно',
+      cancelLabel: 'Закрыть',
+    );
+  }
 
   Widget _emptyCard(OrbitsTokens tokens) => OrbitsGlassSurface(
-        role: OrbitsGlassRole.card,
-        borderRadius: BorderRadius.circular(tokens.radiusCard),
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 60,
-              height: 60,
-              decoration: BoxDecoration(
-                color: tokens.accentAlpha(0.14),
-                shape: BoxShape.circle,
-                border: Border.all(color: tokens.accentAlpha(0.3)),
-              ),
-              alignment: Alignment.center,
-              child: Icon(Icons.send_outlined, size: 28, color: tokens.accent),
-            ),
-            const SizedBox(height: 18),
-            Text(
-              'Некому отправить файл',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontFamily: tokens.fontHeading,
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: tokens.text,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Добавь контакт, чтобы отправлять файлы напрямую между '
-              'устройствами.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                fontFamily: tokens.fontBody,
-                fontSize: 14,
-                height: 1.5,
-                color: tokens.muted,
-              ),
-            ),
-            const SizedBox(height: 20),
-            OrbitsGlassButton(
-              key: const Key('drop-add-contact'),
-              label: 'Добавить контакт',
-              icon: Icons.person_add_alt_1,
-              variant: OrbitsGlassVariant.primary,
-              size: OrbitsGlassSize.large,
-              onPressed: _openAddContact,
-            ),
-          ],
+    role: OrbitsGlassRole.card,
+    borderRadius: BorderRadius.circular(tokens.radiusCard),
+    padding: const EdgeInsets.all(24),
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 60,
+          height: 60,
+          decoration: BoxDecoration(
+            color: tokens.accentAlpha(0.14),
+            shape: BoxShape.circle,
+            border: Border.all(color: tokens.accentAlpha(0.3)),
+          ),
+          alignment: Alignment.center,
+          child: Icon(Icons.send_outlined, size: 28, color: tokens.accent),
         ),
-      );
+        const SizedBox(height: 18),
+        Text(
+          'Некому отправить файл',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontFamily: tokens.fontHeading,
+            fontSize: 18,
+            fontWeight: FontWeight.w600,
+            color: tokens.text,
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Добавь контакт, чтобы отправлять файлы напрямую между '
+          'устройствами.',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontFamily: tokens.fontBody,
+            fontSize: 14,
+            height: 1.5,
+            color: tokens.muted,
+          ),
+        ),
+        const SizedBox(height: 20),
+        OrbitsGlassButton(
+          key: const Key('drop-add-contact'),
+          label: 'Добавить контакт',
+          icon: Icons.person_add_alt_1,
+          variant: OrbitsGlassVariant.primary,
+          size: OrbitsGlassSize.large,
+          onPressed: _openAddContact,
+        ),
+      ],
+    ),
+  );
 
   void _openAddContact() {
-    Navigator.of(context).push(
-      MaterialPageRoute<void>(builder: (_) => const AddContactPage()),
-    );
+    Navigator.of(
+      context,
+    ).push(MaterialPageRoute<void>(builder: (_) => const AddContactPage()));
   }
 }
 
@@ -314,18 +391,18 @@ class _SectionHeader extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-        child: Text(
-          text.toUpperCase(),
-          style: TextStyle(
-            fontFamily: tokens.fontHeading,
-            fontSize: 11,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.8,
-            color: tokens.muted,
-          ),
-        ),
-      );
+    padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+    child: Text(
+      text.toUpperCase(),
+      style: TextStyle(
+        fontFamily: tokens.fontHeading,
+        fontSize: 11,
+        fontWeight: FontWeight.w700,
+        letterSpacing: 0.8,
+        color: tokens.muted,
+      ),
+    ),
+  );
 }
 
 class _PeerSendRow extends StatelessWidget {
@@ -348,7 +425,9 @@ class _PeerSendRow extends StatelessWidget {
     final id = (peer['id'] as String?) ?? '';
     final custom = (peer['customName'] as String?) ?? '';
     final display = (peer['displayName'] as String?) ?? '';
-    final label = custom.isNotEmpty ? custom : (display.isNotEmpty ? display : id);
+    final label = custom.isNotEmpty
+        ? custom
+        : (display.isNotEmpty ? display : id);
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: OrbitsGlassSurface(
@@ -373,7 +452,9 @@ class _PeerSendRow extends StatelessWidget {
                               ? label.trim().characters.first.toUpperCase()
                               : '?',
                           style: TextStyle(
-                              color: tokens.accent, fontWeight: FontWeight.w600),
+                            color: tokens.accent,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
                       if (online)
@@ -471,7 +552,8 @@ class _TransferRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final t = transfer;
     final incoming = t.direction == DropDirection.incoming;
-    final active = t.status == DropStatus.queued ||
+    final active =
+        t.status == DropStatus.queued ||
         t.status == DropStatus.sent ||
         t.status == DropStatus.received;
     final completed = t.status == DropStatus.completed;
@@ -493,8 +575,10 @@ class _TransferRow extends StatelessWidget {
     final subtitle = failed
         ? _failureText(t.error, incoming)
         : completed
-            ? (incoming ? 'Получено · ${formatBytes(t.size)}' : 'Отправлено · ${formatBytes(t.size)}')
-            : '${formatBytes(t.transferred)} / ${formatBytes(t.size)} · ${(t.progress * 100).round()}%';
+        ? (incoming
+              ? 'Получено · ${formatBytes(t.size)}'
+              : 'Отправлено · ${formatBytes(t.size)}')
+        : '${formatBytes(t.transferred)} / ${formatBytes(t.size)} · ${(t.progress * 100).round()}%';
 
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
@@ -524,11 +608,12 @@ class _TransferRow extends StatelessWidget {
                             color: tokens.text,
                           ),
                         ),
-                        Text(subtitle,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style:
-                                TextStyle(fontSize: 12, color: tokens.muted)),
+                        Text(
+                          subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(fontSize: 12, color: tokens.muted),
+                        ),
                       ],
                     ),
                   ),

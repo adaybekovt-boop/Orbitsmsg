@@ -19,6 +19,7 @@ import '../peer/room_signaling_host.dart'
 import '../state/local_profile_provider.dart';
 import '../storage/db.dart' as db;
 import '../themes/orbits_tokens.dart';
+import '../ui/layout/orbits_breakpoints.dart';
 import '../ui/peer/peer_status_pill.dart' show kPillReserveHeight;
 import '../ui/primitives/adaptive_page_frame.dart';
 import '../ui/primitives/orbits_glass_button.dart';
@@ -224,69 +225,74 @@ class _ServersHomePageState extends ConsumerState<ServersHomePage> {
             child: StreamBuilder<List<Map<String, Object?>>>(
               stream: db.watchRooms(),
               builder: (context, snap) {
-            final rooms = snap.data ?? const <Map<String, Object?>>[];
-            final activeId =
-                roomState.role != RoomRole.none ? roomState.roomId : null;
-            final activeRoom = _byId(rooms, activeId);
+                final rooms = snap.data ?? const <Map<String, Object?>>[];
+                final activeId = roomState.role != RoomRole.none
+                    ? roomState.roomId
+                    : null;
+                final activeRoom = _byId(rooms, activeId);
 
-            return ListView(
-              padding: const EdgeInsets.fromLTRB(
-                  16, kPillReserveHeight + 8, 16, 24),
-              children: [
-                if (activeRoom != null) ...[
-                  _ActiveServerCard(
-                    room: activeRoom,
-                    isHost: roomState.role == RoomRole.host,
-                    onOpen: () => _openRoom(activeId),
+                return ListView(
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    kPillReserveHeight + 8,
+                    16,
+                    isPhoneLayout(context) ? 88 : 24,
                   ),
-                  const SizedBox(height: 18),
-                ],
-                // Two primary CTAs.
-                OrbitsGlassButton(
-                  label: 'Создать сервер',
-                  icon: Icons.add_circle_outline_rounded,
-                  variant: OrbitsGlassVariant.primary,
-                  size: OrbitsGlassSize.large,
-                  expand: true,
-                  enabled: !_busy,
-                  onPressed: _createServer,
-                ),
-                const SizedBox(height: 10),
-                OrbitsGlassButton(
-                  label: 'Подключиться',
-                  icon: Icons.login_rounded,
-                  variant: OrbitsGlassVariant.secondary,
-                  size: OrbitsGlassSize.large,
-                  expand: true,
-                  enabled: !_busy,
-                  onPressed: _joinServer,
-                ),
-                const SizedBox(height: 22),
-                Text(
-                  'ВАШИ СЕРВЕРЫ',
-                  style: TextStyle(
-                    fontFamily: tokens.fontHeading,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 0.8,
-                    color: tokens.muted,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                if (rooms.isEmpty)
-                  _EmptyHint(tokens: tokens)
-                else
-                  for (final r in rooms)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      child: _ServerRow(
-                        room: r,
-                        isActive: (r['id'] as String?) == activeId,
-                        onTap: () => _openRoom(r['id'] as String?),
+                  children: [
+                    if (activeRoom != null) ...[
+                      _ActiveServerCard(
+                        room: activeRoom,
+                        isHost: roomState.role == RoomRole.host,
+                        onOpen: () => _openRoom(activeId),
+                      ),
+                      const SizedBox(height: 18),
+                    ],
+                    // Two primary CTAs.
+                    OrbitsGlassButton(
+                      label: 'Создать сервер',
+                      icon: Icons.add_circle_outline_rounded,
+                      variant: OrbitsGlassVariant.primary,
+                      size: OrbitsGlassSize.large,
+                      expand: true,
+                      enabled: !_busy,
+                      onPressed: _createServer,
+                    ),
+                    const SizedBox(height: 10),
+                    OrbitsGlassButton(
+                      label: 'Подключиться',
+                      icon: Icons.login_rounded,
+                      variant: OrbitsGlassVariant.secondary,
+                      size: OrbitsGlassSize.large,
+                      expand: true,
+                      enabled: !_busy,
+                      onPressed: _joinServer,
+                    ),
+                    const SizedBox(height: 22),
+                    Text(
+                      'ВАШИ СЕРВЕРЫ',
+                      style: TextStyle(
+                        fontFamily: tokens.fontHeading,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 0.8,
+                        color: tokens.muted,
                       ),
                     ),
-              ],
-            );
+                    const SizedBox(height: 8),
+                    if (rooms.isEmpty)
+                      _EmptyHint(tokens: tokens)
+                    else
+                      for (final r in rooms)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: _ServerRow(
+                            room: r,
+                            isActive: (r['id'] as String?) == activeId,
+                            onTap: () => _openRoom(r['id'] as String?),
+                          ),
+                        ),
+                  ],
+                );
               },
             ),
           ),
@@ -324,7 +330,9 @@ class _ActiveServerCard extends ConsumerWidget {
     final name = ((room['name'] as String?) ?? '').trim();
     final online = (room['status'] as String?) != 'offline';
     // Self-hosted host only: the shareable `orbits-room:` invite.
-    final invite = isHost ? ref.watch(roomManagerProvider).selfHostInvite : null;
+    final invite = isHost
+        ? ref.watch(roomManagerProvider).selfHostInvite
+        : null;
 
     return OrbitsGlassSurface(
       role: OrbitsGlassRole.card,
@@ -429,8 +437,11 @@ class _ReachLine extends StatelessWidget {
     final color = public ? tokens.success : tokens.accent2;
     return Row(
       children: [
-        Icon(public ? Icons.public_rounded : Icons.wifi_rounded,
-            size: 15, color: color),
+        Icon(
+          public ? Icons.public_rounded : Icons.wifi_rounded,
+          size: 15,
+          color: color,
+        ),
         const SizedBox(width: 6),
         Expanded(
           child: Text(
@@ -519,10 +530,12 @@ class _InviteDialog extends StatelessWidget {
             if (context.mounted) {
               ScaffoldMessenger.of(context)
                 ..clearSnackBars()
-                ..showSnackBar(const SnackBar(
-                  content: Text('Код приглашения скопирован'),
-                  duration: Duration(seconds: 2),
-                ));
+                ..showSnackBar(
+                  const SnackBar(
+                    content: Text('Код приглашения скопирован'),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
             }
           },
           child: const Text('Копировать'),
@@ -548,11 +561,11 @@ class _ServerRow extends StatelessWidget {
     final tokens = OrbitsTokens.of(context);
     final id = (room['id'] as String?) ?? '';
     final name = ((room['name'] as String?) ?? '').trim();
-    final isHost = room['isHost'] == true ||
+    final isHost =
+        room['isHost'] == true ||
         (room['isHost'] is num && (room['isHost'] as num).toInt() != 0);
     final online = (room['status'] as String?) != 'offline';
-    final initial =
-        name.isNotEmpty ? name.characters.first.toUpperCase() : '#';
+    final initial = name.isNotEmpty ? name.characters.first.toUpperCase() : '#';
 
     return OrbitsGlassListTile(
       onTap: onTap,
@@ -750,8 +763,9 @@ class _PromptDialog extends StatefulWidget {
 }
 
 class _PromptDialogState extends State<_PromptDialog> {
-  late final TextEditingController _controller =
-      TextEditingController(text: widget.initial);
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initial,
+  );
 
   @override
   void dispose() {
@@ -764,8 +778,10 @@ class _PromptDialogState extends State<_PromptDialog> {
     final tokens = OrbitsTokens.of(context);
     return AlertDialog(
       backgroundColor: tokens.surface,
-      title: Text(widget.title,
-          style: TextStyle(fontFamily: tokens.fontHeading, color: tokens.text)),
+      title: Text(
+        widget.title,
+        style: TextStyle(fontFamily: tokens.fontHeading, color: tokens.text),
+      ),
       content: TextField(
         controller: _controller,
         autofocus: true,
@@ -775,17 +791,21 @@ class _PromptDialogState extends State<_PromptDialog> {
         style: widget.mono
             ? TextStyle(fontFamily: tokens.fontMono, color: tokens.text)
             : TextStyle(color: tokens.text),
-        decoration:
-            InputDecoration(hintText: widget.hint, border: const OutlineInputBorder()),
+        decoration: InputDecoration(
+          hintText: widget.hint,
+          border: const OutlineInputBorder(),
+        ),
         onSubmitted: (v) => Navigator.of(context).pop(v),
       ),
       actions: [
         TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: const Text('Отмена')),
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Отмена'),
+        ),
         TextButton(
-            onPressed: () => Navigator.of(context).pop(_controller.text),
-            child: Text(widget.confirm)),
+          onPressed: () => Navigator.of(context).pop(_controller.text),
+          child: Text(widget.confirm),
+        ),
       ],
     );
   }

@@ -26,9 +26,12 @@ import 'storage/db.dart' as db;
 import 'storage/db_health.dart';
 import 'storage/drift_key_store.dart';
 import 'storage/drift_sticker_store.dart';
+import 'state/appearance_prefs_provider.dart';
+import 'themes/orbits_tokens.dart';
 import 'themes/theme_data_factory.dart';
 import 'themes/theme_notifier.dart';
 import 'ui/auth/auth_gate.dart';
+import 'ui/primitives/orbits_liquid_optics.dart';
 
 Future<void> main() async {
   // Binding first — required before anything that hits a platform channel
@@ -92,14 +95,16 @@ Future<void> main() async {
   if (!kIsWeb && defaultTargetPlatform == TargetPlatform.windows) {
     try {
       await Window.initialize();
-      final isDark = WidgetsBinding.instance.platformDispatcher
-              .platformBrightness ==
+      final isDark =
+          WidgetsBinding.instance.platformDispatcher.platformBrightness ==
           Brightness.dark;
       await Window.setEffect(effect: WindowEffect.mica, dark: isDark);
     } catch (_) {
       // Older Windows (no Mica) / unsupported — fall back to plain fake-glass.
     }
   }
+
+  unawaited(OrbitsLiquidOptics.instance.ensureLoaded());
 
   runApp(const ProviderScope(child: OrbitsApp()));
 }
@@ -113,11 +118,29 @@ class OrbitsApp extends ConsumerWidget {
     // the default (Graphite), so first paint never flashes the wrong
     // theme. After resolution the picker drives this directly.
     final manifest = ref.watch(themeManifestProvider);
+    final appearance = ref.watch(appearancePrefsProvider);
     final background = manifest.background;
+    final baseTheme = buildOrbitsTheme(manifest);
+    final tokens = baseTheme.extension<OrbitsTokens>()!;
+    final theme = baseTheme.copyWith(
+      extensions: <ThemeExtension<dynamic>>[
+        tokens.copyWith(
+          glassBlurSigma: orbitsGlassBlurForStrength(
+            tokens.glassBlurSigma,
+            appearance.glassStrength,
+          ),
+          glassTint: orbitsGlassTintForStrength(
+            tokens.glassTint,
+            appearance.glassStrength,
+          ),
+          allowRealBlur: tokens.allowRealBlur && !appearance.reduceTransparency,
+        ),
+      ],
+    );
     return MaterialApp(
       title: 'Orbits',
       debugShowCheckedModeBanner: false,
-      theme: buildOrbitsTheme(manifest),
+      theme: theme,
       // Mount the atmospheric background once at the app root so every
       // route (auth gate, app shell, modal pages) shares the same animated
       // layer — petals don't restart on navigation, orbs don't snap.
@@ -127,13 +150,20 @@ class OrbitsApp extends ConsumerWidget {
       // wrapping `home:` so dialog/bottom-sheet routes inherit the same
       // backdrop without each page re-mounting it.
       builder: (context, child) {
-        if (background == null) return child ?? const SizedBox.shrink();
-        return Stack(
-          children: [
-            Positioned.fill(child: Builder(builder: background)),
-            if (child != null) Positioned.fill(child: child),
-          ],
-        );
+        Widget tree = child ?? const SizedBox.shrink();
+        if (background != null) {
+          tree = Stack(
+            children: [
+              Positioned.fill(child: Builder(builder: background)),
+              Positioned.fill(child: tree),
+            ],
+          );
+        }
+        if (appearance.reduceTransparency) {
+          final mq = MediaQuery.of(context);
+          tree = MediaQuery(data: mq.copyWith(highContrast: true), child: tree);
+        }
+        return tree;
       },
       home: const AuthGate(),
     );

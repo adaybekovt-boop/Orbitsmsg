@@ -1,15 +1,7 @@
-// App shell — four sections (Чаты / Drop / Игры / Ещё) over an IndexedStack
-// (so each tab's subtree stays mounted across switches).
-//
-// Liquid Glass redesign (Stage 2): the navigation chrome is glass —
-//   • phone  → a floating glass bottom nav bar (OrbitsGlassSurface navBar)
-//   • desktop→ a glass left sidebar + centered, max-width content panel
-//     (fixes the Windows "stretched-mobile / drifts-left" layout).
-// Navigation uses Material's bundled outline/filled pairs. Keeping these icons
-// in the Flutter SDK avoids an obsolete IconData subclass that prevented the
-// project from moving to the Xcode-26-compatible Flutter toolchain.
+// App shell — React workspace: scenery, wordmark, liquid theme switcher,
+// nav rail / floating pill, and the real tab stack (chats / drop / games /
+// rooms / settings / profile).
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -17,25 +9,31 @@ import 'core/haptics.dart';
 import 'pages/chats_page.dart';
 import 'pages/drop_page.dart';
 import 'pages/games_page.dart';
+import 'pages/profile_page.dart';
 import 'pages/servers_page.dart';
 import 'pages/settings_page.dart';
 import 'state/calls_provider.dart';
+import 'state/chat_list_provider.dart';
 import 'state/drop_provider.dart';
+import 'state/local_profile_provider.dart';
 import 'state/messaging_notifier.dart';
+import 'state/shell_providers.dart';
+import 'themes/orbits_tokens.dart';
 import 'transport/native_transport.dart';
 import 'transport/transport_lifecycle_scope.dart';
-import 'themes/orbits_tokens.dart';
+import 'ui/backdrop/orbits_backdrop.dart';
 import 'ui/calls/call_overlay_mount.dart';
+import 'ui/layout/orbits_breakpoints.dart';
 import 'ui/peer/peer_status_pill.dart';
+import 'ui/primitives/liquid_theme_switcher.dart';
+import 'ui/primitives/orbits_glass_button.dart';
 import 'ui/primitives/orbits_glass_surface.dart';
+import 'ui/primitives/orbits_logo.dart';
+import 'ui/primitives/orbs_card.dart';
+import 'ui/shell/orbits_side_drawer.dart';
 
-/// Which tab is currently selected. Exposed as a provider so pages can read
-/// or drive it (e.g. a "go to Chats" call-to-action from settings).
-final activeTabProvider = StateProvider<AppTab>((ref) => AppTab.chats);
+export 'state/shell_providers.dart';
 
-enum AppTab { chats, drop, games, rooms, settings }
-
-/// One navigation destination with an outline/filled icon pair.
 class _NavDest {
   const _NavDest(this.tab, this.icon, this.activeIcon, this.label);
   final AppTab tab;
@@ -44,7 +42,7 @@ class _NavDest {
   final String label;
 }
 
-const List<_NavDest> _destinations = [
+const List<_NavDest> _primaryDestinations = [
   _NavDest(AppTab.chats, Icons.chat_bubble_outline, Icons.chat_bubble, 'Чаты'),
   _NavDest(AppTab.drop, Icons.swap_vert, Icons.swap_vertical_circle, 'Drop'),
   _NavDest(
@@ -53,42 +51,53 @@ const List<_NavDest> _destinations = [
     Icons.sports_esports,
     'Игры',
   ),
-  _NavDest(AppTab.rooms, Icons.groups_outlined, Icons.groups, 'Серверы'),
-  _NavDest(AppTab.settings, Icons.tune_outlined, Icons.tune, 'Ещё'),
+  _NavDest(AppTab.rooms, Icons.dns_outlined, Icons.dns, 'Серверы'),
 ];
 
 class AppShell extends ConsumerWidget {
   const AppShell({super.key});
 
-  static const double _desktopShellMaxWidth = 1280;
-  static const double _desktopSidebarWidth = 116;
-
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final active = ref.watch(activeTabProvider);
     final tokens = OrbitsTokens.of(context);
+    final phone = isPhoneLayout(context);
+    final chatOpen = ref.watch(mobileChatOpenProvider);
+    final unread = ref
+        .watch(chatListProvider)
+        .fold<int>(0, (n, c) => n + c.unreadCount);
 
-    // Eagerly materialise notifiers whose constructors bind to PeerJS events
-    // (see prior comment). ref.listen subscribes without rebuilding the shell.
     ref.listen(messagingNotifierProvider, (_, __) {});
     ref.listen(callsNotifierProvider, (_, __) {});
     ref.listen(dropNotifierProvider, (_, __) {});
     ref.listen(nativeTransportHostProvider, (_, __) {});
 
+    final dropScenery = active == AppTab.drop;
+    ref.listen<AppTab>(activeTabProvider, (_, next) {
+      ref.read(orbitsDropSceneryProvider.notifier).state = next == AppTab.drop;
+    });
+    if (ref.read(orbitsDropSceneryProvider) != dropScenery) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (ref.read(orbitsDropSceneryProvider) != dropScenery) {
+          ref.read(orbitsDropSceneryProvider.notifier).state = dropScenery;
+        }
+      });
+    }
+
+    const pages = [
+      ChatsPage(),
+      DropPage(),
+      GamesPage(),
+      ServersHomePage(),
+      SettingsPage(),
+      ProfilePage(),
+    ];
+
     final shellBody = Stack(
       children: [
         Positioned.fill(
           child: PeerStatusPillOverlay(
-            child: IndexedStack(
-              index: active.index,
-              children: const [
-                ChatsPage(),
-                DropPage(),
-                GamesPage(),
-                ServersHomePage(),
-                SettingsPage(),
-              ],
-            ),
+            child: IndexedStack(index: active.index, children: pages),
           ),
         ),
         const Positioned.fill(child: CallOverlayMount()),
@@ -100,114 +109,266 @@ class AppShell extends ConsumerWidget {
       ref.read(activeTabProvider.notifier).state = tab;
     }
 
-    if (_isDesktopHost(context)) {
-      // On Windows the OS paints Mica behind the window (see main.dart); keep
-      // the margin transparent so it shows through. Elsewhere fill with bg.
-      final onWindows =
-          !kIsWeb && defaultTargetPlatform == TargetPlatform.windows;
-      return TransportLifecycleScope(
-        child: Scaffold(
-        backgroundColor: onWindows ? Colors.transparent : null,
-        body: ColoredBox(
-          color: onWindows ? Colors.transparent : tokens.bg,
-          child: SafeArea(
-            child: Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(
-                  maxWidth: _desktopShellMaxWidth,
+    final hideChrome = phone && chatOpen;
+
+    return TransportLifecycleScope(
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        drawer: const OrbitsSideDrawer(),
+        body: SafeArea(
+          bottom: false,
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: OrbitsBreakpoints.workspaceMax,
+              ),
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(
+                  phone ? 12 : 24,
+                  phone ? 6 : 8,
+                  phone ? 12 : 24,
+                  0,
                 ),
-                child: Padding(
-                  padding: const EdgeInsets.all(18),
-                  child: Row(
-                    children: [
-                      SizedBox(
-                        width: _desktopSidebarWidth,
-                        child: _GlassSidebar(active: active, onTap: go),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: OrbitsGlassSurface(
-                          role: OrbitsGlassRole.card,
-                          borderRadius: BorderRadius.circular(
-                            tokens.radiusModal,
-                          ),
-                          child: shellBody,
+                child: Column(
+                  children: [
+                    if (!hideChrome)
+                      Builder(
+                        builder: (headerContext) => _WorkspaceHeader(
+                          onLogoTap: () => go(AppTab.chats),
+                          onMenuTap: () =>
+                              Scaffold.of(headerContext).openDrawer(),
                         ),
                       ),
-                    ],
-                  ),
+                    if (!hideChrome) SizedBox(height: phone ? 8 : 10),
+                    Expanded(
+                      child: phone
+                          ? Stack(
+                              children: [
+                                Positioned.fill(
+                                  child: OrbitsGlassSurface(
+                                    role: OrbitsGlassRole.card,
+                                    realBlur: true,
+                                    borderRadius: BorderRadius.circular(
+                                      tokens.radiusModal,
+                                    ),
+                                    child: shellBody,
+                                  ),
+                                ),
+                                if (!hideChrome)
+                                  Align(
+                                    alignment: Alignment.bottomCenter,
+                                    child: _GlassBottomNav(
+                                      active: active,
+                                      unread: unread,
+                                      onTap: go,
+                                    ),
+                                  ),
+                              ],
+                            )
+                          : Row(
+                              children: [
+                                SizedBox(
+                                  width: 80,
+                                  child: _GlassSidebar(
+                                    active: active,
+                                    unread: unread,
+                                    onTap: go,
+                                  ),
+                                ),
+                                const SizedBox(width: 14),
+                                Expanded(
+                                  child: OrbitsGlassSurface(
+                                    role: OrbitsGlassRole.card,
+                                    realBlur: true,
+                                    borderRadius: BorderRadius.circular(
+                                      tokens.radiusModal,
+                                    ),
+                                    child: shellBody,
+                                  ),
+                                ),
+                              ],
+                            ),
+                    ),
+                    if (!phone)
+                      SizedBox(
+                        height: 36,
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            'Локальный сеанс · данные остаются на устройстве',
+                            style: TextStyle(
+                              color: tokens.muted.withValues(alpha: 0.8),
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (phone && !hideChrome) const SizedBox(height: 8),
+                  ],
                 ),
               ),
             ),
           ),
         ),
       ),
-      );
-    }
-
-    return TransportLifecycleScope(
-      child: Scaffold(
-        body: shellBody,
-        bottomNavigationBar: _GlassBottomNav(active: active, onTap: go),
-      ),
     );
-  }
-
-  bool _isDesktopHost(BuildContext context) {
-    // Desktop shell (glass sidebar + centered content, no bottom nav) is keyed
-    // to viewport WIDTH, not platform — a wide Web window must behave as a
-    // desktop. Narrow (<900) always gets the mobile bottom-nav shell.
-    final width = MediaQuery.sizeOf(context).width;
-    if (width < 900) return false;
-    if (kIsWeb) return true;
-    return switch (defaultTargetPlatform) {
-      TargetPlatform.macOS ||
-      TargetPlatform.windows ||
-      TargetPlatform.linux => true,
-      _ => false,
-    };
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Mobile — floating glass bottom nav
-// ─────────────────────────────────────────────────────────────
+class _WorkspaceHeader extends StatelessWidget {
+  const _WorkspaceHeader({required this.onLogoTap, required this.onMenuTap});
+  final VoidCallback onLogoTap;
+  final VoidCallback onMenuTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
+    return SizedBox(
+      height: 56,
+      child: Row(
+        children: [
+          OrbitsGlassIconButton(
+            icon: Icons.menu,
+            tooltip: 'Меню',
+            variant: OrbitsGlassVariant.subtle,
+            size: OrbitsGlassSize.small,
+            onPressed: onMenuTap,
+          ),
+          const SizedBox(width: 6),
+          InkWell(
+            onTap: onLogoTap,
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+              child: Row(
+                children: [
+                  OrbitsLogo(size: 26, color: tokens.text),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Orbits',
+                    style: TextStyle(
+                      fontFamily: tokens.fontHeading,
+                      fontSize: 20,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: -0.6,
+                      color: tokens.text,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const Spacer(),
+          const LiquidThemeSwitcher(),
+        ],
+      ),
+    );
+  }
+}
 
 class _GlassBottomNav extends StatelessWidget {
-  const _GlassBottomNav({required this.active, required this.onTap});
+  const _GlassBottomNav({
+    required this.active,
+    required this.unread,
+    required this.onTap,
+  });
 
   final AppTab active;
+  final int unread;
   final ValueChanged<AppTab> onTap;
 
   @override
   Widget build(BuildContext context) {
-    // Full-width monolithic glass "shelf" — no side gaps. Scroll content
-    // disappears cleanly behind it instead of peeking through the old
-    // horizontal:14 margins. Only the top edge is rounded; the bar runs
-    // flush to the screen's left/right/bottom. SafeArea lives *inside* the
-    // glass so the surface fills down into the home-indicator inset.
     return Padding(
-      padding: const EdgeInsets.only(top: 4),
+      padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
       child: OrbitsGlassSurface(
         role: OrbitsGlassRole.navBar,
-        borderRadius: const BorderRadius.vertical(top: Radius.circular(22)),
-        padding: EdgeInsets.zero,
+        realBlur: true,
+        refract: true,
+        refractionStrength: 0.16,
+        borderRadius: BorderRadius.circular(999),
+        padding: const EdgeInsets.all(4),
         child: SafeArea(
           top: false,
-          minimum: const EdgeInsets.fromLTRB(8, 6, 8, 6),
-          child: Row(
-            children: [
-              for (final d in _destinations)
-                Expanded(
-                  child: _NavItem(
-                    dest: d,
-                    active: active == d.tab,
-                    onTap: () => onTap(d.tab),
+          minimum: EdgeInsets.zero,
+          child: SizedBox(
+            height: 52,
+            child: Row(
+              children: [
+                for (final d in _primaryDestinations)
+                  Expanded(
+                    child: _NavItem(
+                      dest: d,
+                      active: active == d.tab,
+                      unread: d.tab == AppTab.chats ? unread : 0,
+                      horizontal: true,
+                      onTap: () => onTap(d.tab),
+                    ),
                   ),
-                ),
-            ],
+                _RailAvatar(active: active, onTap: onTap),
+              ],
+            ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _GlassSidebar extends StatelessWidget {
+  const _GlassSidebar({
+    required this.active,
+    required this.unread,
+    required this.onTap,
+  });
+
+  final AppTab active;
+  final int unread;
+  final ValueChanged<AppTab> onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = OrbitsTokens.of(context);
+    return OrbitsGlassSurface(
+      role: OrbitsGlassRole.sidebar,
+      realBlur: true,
+      refract: true,
+      padding: const EdgeInsets.fromLTRB(9, 18, 9, 14),
+      child: Column(
+        children: [
+          InkWell(
+            onTap: () => onTap(AppTab.chats),
+            borderRadius: BorderRadius.circular(12),
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: OrbitsLogo(size: 28, color: tokens.text),
+            ),
+          ),
+          const SizedBox(height: 22),
+          for (final d in _primaryDestinations)
+            _NavItem(
+              dest: d,
+              active: active == d.tab,
+              unread: d.tab == AppTab.chats ? unread : 0,
+              horizontal: false,
+              onTap: () => onTap(d.tab),
+            ),
+          const Spacer(),
+          _NavItem(
+            dest: const _NavDest(
+              AppTab.settings,
+              Icons.settings_outlined,
+              Icons.settings,
+              'Ещё',
+            ),
+            active: active == AppTab.settings,
+            unread: 0,
+            horizontal: false,
+            onTap: () => onTap(AppTab.settings),
+          ),
+          const SizedBox(height: 12),
+          _RailAvatar(active: active, onTap: onTap),
+        ],
       ),
     );
   }
@@ -217,60 +378,91 @@ class _NavItem extends StatelessWidget {
   const _NavItem({
     required this.dest,
     required this.active,
+    required this.unread,
+    required this.horizontal,
     required this.onTap,
   });
 
   final _NavDest dest;
   final bool active;
+  final int unread;
+  final bool horizontal;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final t = OrbitsTokens.of(context);
-    final fg = active ? t.accent : t.muted;
+    final fg = active ? t.text : t.muted;
     final icon = active ? dest.activeIcon : dest.icon;
-
     return Semantics(
       key: Key('nav-${dest.tab.name}'),
       button: true,
       selected: active,
       label: dest.label,
-      child: InkResponse(
-        onTap: onTap,
-        radius: 44,
-        child: AnimatedContainer(
-          duration: t.durationShort,
-          curve: t.curveStandard,
-          padding: const EdgeInsets.symmetric(vertical: 6),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // Active items get a faint accent halo behind the glyph.
-              Container(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 14,
-                  vertical: 5,
-                ),
-                decoration: BoxDecoration(
-                  color: active ? t.accentAlpha(0.14) : Colors.transparent,
-                  borderRadius: BorderRadius.circular(999),
-                ),
-                child: Icon(icon, size: 22, color: fg),
+      child: Padding(
+        padding: EdgeInsets.symmetric(vertical: horizontal ? 0 : 5),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(horizontal ? 999 : 17),
+          child: AnimatedContainer(
+            duration: t.durationShort,
+            curve: t.curveStandard,
+            padding: EdgeInsets.symmetric(
+              vertical: horizontal ? 8 : 9,
+              horizontal: horizontal ? 6 : 2,
+            ),
+            decoration: BoxDecoration(
+              color: active
+                  ? t.glassTint.withValues(alpha: 0.55)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(horizontal ? 999 : 17),
+              border: Border.all(
+                color: active ? t.glassBorder : Colors.transparent,
               ),
-              const SizedBox(height: 3),
-              Text(
-                dest.label,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  color: fg,
-                  fontFamily: t.fontBody,
-                  fontSize: 11,
-                  fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                  height: 1,
+            ),
+            child: Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.center,
+              children: [
+                Flex(
+                  direction: horizontal ? Axis.horizontal : Axis.vertical,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(icon, size: horizontal ? 19 : 20, color: fg),
+                    SizedBox(
+                      width: horizontal ? 6 : 0,
+                      height: horizontal ? 0 : 5,
+                    ),
+                    Text(
+                      dest.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: fg,
+                        fontFamily: t.fontBody,
+                        fontSize: horizontal ? 12 : 8,
+                        fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+                        height: 1,
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ],
+                if (unread > 0)
+                  Positioned(
+                    top: horizontal ? 4 : -2,
+                    right: horizontal ? 8 : 10,
+                    child: Container(
+                      width: 5,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: t.deliveryRead,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
           ),
         ),
       ),
@@ -278,106 +470,40 @@ class _NavItem extends StatelessWidget {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Desktop — glass sidebar
-// ─────────────────────────────────────────────────────────────
-
-class _GlassSidebar extends StatelessWidget {
-  const _GlassSidebar({required this.active, required this.onTap});
-
+class _RailAvatar extends ConsumerWidget {
+  const _RailAvatar({required this.active, required this.onTap});
   final AppTab active;
   final ValueChanged<AppTab> onTap;
 
   @override
-  Widget build(BuildContext context) {
-    final t = OrbitsTokens.of(context);
-    return OrbitsGlassSurface(
-      role: OrbitsGlassRole.sidebar,
-      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 10),
-      child: Column(
-        children: [
-          // Brand mark — neutral glass tile with a single accent glyph.
-          OrbitsGlassSurface(
-            role: OrbitsGlassRole.card,
-            borderRadius: BorderRadius.circular(16),
-            padding: const EdgeInsets.all(11),
-            child: Icon(Icons.public, color: t.accent, size: 24),
-          ),
-          const SizedBox(height: 20),
-          for (final d in _destinations.where((d) => d.tab != AppTab.settings))
-            _SidebarItem(dest: d, active: active == d.tab, onTap: onTap),
-          const Spacer(),
-          _SidebarItem(
-            dest: _destinations.firstWhere((d) => d.tab == AppTab.settings),
-            active: active == AppTab.settings,
-            onTap: onTap,
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _SidebarItem extends StatelessWidget {
-  const _SidebarItem({
-    required this.dest,
-    required this.active,
-    required this.onTap,
-  });
-
-  final _NavDest dest;
-  final bool active;
-  final ValueChanged<AppTab> onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = OrbitsTokens.of(context);
-    final fg = active ? t.accent : t.muted;
-    final icon = active ? dest.activeIcon : dest.icon;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Semantics(
-        key: Key('nav-${dest.tab.name}'),
-        button: true,
-        selected: active,
-        label: dest.label,
-        child: Tooltip(
-          message: dest.label,
-          child: InkWell(
-            onTap: () => onTap(dest.tab),
-            borderRadius: BorderRadius.circular(t.radiusButton),
-            child: AnimatedContainer(
-              duration: t.durationShort,
-              curve: t.curveStandard,
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 11),
-              decoration: BoxDecoration(
-                color: active ? t.accentAlpha(0.14) : Colors.transparent,
-                border: Border.all(
-                  color: active ? t.accentAlpha(0.30) : Colors.transparent,
-                ),
-                borderRadius: BorderRadius.circular(t.radiusButton),
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Icon(icon, color: fg, size: 23),
-                  const SizedBox(height: 5),
-                  Text(
-                    dest.label,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      color: fg,
-                      fontFamily: t.fontBody,
-                      fontSize: 11,
-                      fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                      height: 1,
-                    ),
-                  ),
-                ],
+  Widget build(BuildContext context, WidgetRef ref) {
+    final user = ref.watch(localProfileProvider);
+    final selected = active == AppTab.profile;
+    final name = user?.displayName ?? '';
+    final initial = name.trim().isNotEmpty
+        ? name.trim().characters.first.toUpperCase()
+        : '•';
+    return Semantics(
+      key: const Key('nav-profile'),
+      button: true,
+      selected: selected,
+      label: 'Мой профиль',
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4),
+        child: InkWell(
+          onTap: () => onTap(AppTab.profile),
+          customBorder: const CircleBorder(),
+          child: Container(
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: selected
+                    ? OrbitsTokens.of(context).accent
+                    : Colors.white.withValues(alpha: 0.45),
+                width: selected ? 2 : 1.5,
               ),
             ),
+            child: OrbsAvatar(fallbackInitial: initial, size: 34),
           ),
         ),
       ),

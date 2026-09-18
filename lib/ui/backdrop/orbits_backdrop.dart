@@ -1,128 +1,120 @@
-// OrbitsBackdrop — the app-wide atmospheric layer painted *behind* everything
-// (mounted once at MaterialApp.builder via each manifest's `background`).
+// OrbitsBackdrop — photographic scenery from the React design, painted
+// once behind the app so glass surfaces have real luminance to refract.
 //
-// Why it exists: Liquid Glass only reads as glass when there is luminance
-// variation *behind* the translucent/painted surface. Over a flat single-colour
-// canvas even a real BackdropFilter shows nothing — which is why the first pass
-// looked like "no glass at all".
-//
-// This is deliberately calm and STRICTLY monochrome — no blobs/orbs/bokeh, no
-// colour. Just layered luminance (a soft top light + a gentle diagonal field),
-// a bottom depth vignette, and a very fine grain so large flat areas don't band
-// or look dead. Static (no ticker) so it costs nothing per frame.
-//   • Dark  → graphite/near-black depth (never blue slate).
-//   • Light → soft off-white / silver depth.
-
-import 'dart:math' show Random;
-import 'dart:ui' show PointMode;
+// Dark: space planet horizon (Drop uses the asteroid field).
+// Light: alpine daylight panorama.
+// Overlay rings stay subtle; the photos are the source of truth.
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../themes/orbits_tokens.dart';
+import 'orbits_wallpaper.dart';
 
-/// Const-friendly top-level builder so a `const ThemeManifest` can reference it
-/// as `background: orbitsBackdropBuilder` (a top-level tear-off is a constant).
+/// Drop tab swaps the dark wallpaper to the asteroid plate.
+final orbitsDropSceneryProvider = StateProvider<bool>((ref) => false);
+
+/// Const-friendly top-level builder so a `const ThemeManifest` can reference it.
 Widget orbitsBackdropBuilder(BuildContext context) => const OrbitsBackdrop();
 
-class OrbitsBackdrop extends StatelessWidget {
+class OrbitsBackdrop extends ConsumerWidget {
   const OrbitsBackdrop({super.key});
 
   @override
-  Widget build(BuildContext context) {
-    final t = OrbitsTokens.of(context);
+  Widget build(BuildContext context, WidgetRef ref) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final drop = ref.watch(orbitsDropSceneryProvider);
+    final asset = isDark
+        ? (drop ? OrbitsWallpaper.spaceAsteroids : OrbitsWallpaper.spaceHorizon)
+        : OrbitsWallpaper.alpineDaylight;
+    final tokens = OrbitsTokens.of(context);
+
     return RepaintBoundary(
-      child: CustomPaint(
-        isComplex: true,
-        willChange: false,
-        size: Size.infinite,
-        painter: _BackdropPainter(base: t.bg, isDark: isDark),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          ColoredBox(color: isDark ? const Color(0xFF000000) : tokens.bg),
+          Positioned.fill(
+            child: Image.asset(
+              asset,
+              key: ValueKey<String>(asset),
+              fit: BoxFit.cover,
+              alignment: Alignment.center,
+              filterQuality: FilterQuality.medium,
+              gaplessPlayback: true,
+              errorBuilder: (_, __, ___) => const SizedBox.shrink(),
+            ),
+          ),
+          const Positioned.fill(child: IgnorePointer(child: _OrbitRings())),
+          Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: isDark
+                      ? const [
+                          Color(0x33000000),
+                          Color(0x00000000),
+                          Color(0x66000000),
+                        ]
+                      : const [
+                          Color(0x14FFFFFF),
+                          Color(0x00FFFFFF),
+                          Color(0x22FFFFFF),
+                        ],
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-class _BackdropPainter extends CustomPainter {
-  _BackdropPainter({required this.base, required this.isDark});
+class _OrbitRings extends StatelessWidget {
+  const _OrbitRings();
 
-  final Color base;
-  final bool isDark;
-
-  // Fixed grain pattern in unit space [0..1]² — generated once with a fixed
-  // seed so it never flickers between repaints. Scaled to size at paint time.
-  static final List<Offset> _grainUnit = _genGrain();
-  static List<Offset> _genGrain() {
-    final r = Random(7);
-    return List<Offset>.generate(
-      900,
-      (_) => Offset(r.nextDouble(), r.nextDouble()),
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    return CustomPaint(
+      painter: _OrbitRingPainter(isDark: isDark),
+      size: Size.infinite,
     );
   }
+}
+
+class _OrbitRingPainter extends CustomPainter {
+  _OrbitRingPainter({required this.isDark});
+  final bool isDark;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final rect = Offset.zero & size;
+    final paint1 = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = Colors.white.withValues(alpha: isDark ? 0.08 : 0.16);
+    final paint2 = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1
+      ..color = Colors.white.withValues(alpha: isDark ? 0.04 : 0.10);
 
-    // 1. Base canvas.
-    canvas.drawRect(rect, Paint()..color = base);
-
-    // 2. Soft top light — a gentle vertical field, brightest at the very top,
-    //    gone by mid-screen.
-    final topLight =
-        Colors.white.withValues(alpha: isDark ? 0.055 : 0.62);
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.center,
-          colors: [topLight, const Color(0x00FFFFFF)],
-        ).createShader(rect),
+    canvas.save();
+    canvas.translate(size.width * 0.78, size.height * 0.92);
+    canvas.rotate(-0.48);
+    canvas.drawOval(
+      Rect.fromCenter(center: Offset.zero, width: 1400, height: 550),
+      paint1,
     );
-
-    // 3. Gentle diagonal luminance field — top-left a touch brighter than
-    //    bottom-right, for quiet dimensionality (single light source).
-    final diag = Colors.white.withValues(alpha: isDark ? 0.035 : 0.34);
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [diag, const Color(0x00FFFFFF)],
-          stops: const [0.0, 0.6],
-        ).createShader(rect),
+    canvas.drawOval(
+      Rect.fromCenter(center: Offset.zero, width: 1700, height: 650),
+      paint2,
     );
-
-    // 4. Bottom depth vignette (monochrome).
-    final sink = Colors.black.withValues(alpha: isDark ? 0.40 : 0.05);
-    canvas.drawRect(
-      rect,
-      Paint()
-        ..shader = LinearGradient(
-          begin: Alignment.center,
-          end: Alignment.bottomCenter,
-          colors: [const Color(0x00000000), sink],
-        ).createShader(rect),
-    );
-
-    // 5. Very fine grain so big flat fields don't band or look dead.
-    final grain = (isDark ? Colors.white : Colors.black)
-        .withValues(alpha: isDark ? 0.018 : 0.012);
-    final pts = <Offset>[
-      for (final u in _grainUnit) Offset(u.dx * size.width, u.dy * size.height),
-    ];
-    canvas.drawPoints(
-      PointMode.points,
-      pts,
-      Paint()
-        ..color = grain
-        ..strokeWidth = 1.2
-        ..strokeCap = StrokeCap.square,
-    );
+    canvas.restore();
   }
 
   @override
-  bool shouldRepaint(_BackdropPainter old) =>
-      old.base != base || old.isDark != isDark;
+  bool shouldRepaint(_OrbitRingPainter old) => old.isDark != isDark;
 }

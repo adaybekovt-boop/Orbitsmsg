@@ -9,6 +9,7 @@ import '../games/blackjack21/blackjack_page.dart';
 import '../games/blockblast/block_blast_page.dart';
 import '../games/chess/chess_page.dart';
 import '../themes/orbits_tokens.dart';
+import '../ui/layout/orbits_breakpoints.dart';
 import '../ui/peer/peer_status_pill.dart';
 import '../ui/primitives/adaptive_page_frame.dart';
 import '../ui/primitives/orbits_glass_list_tile.dart';
@@ -70,7 +71,10 @@ class GamesPage extends StatelessWidget {
       body: AdaptivePageFrame(
         maxWidth: 920,
         child: ListView(
-          padding: const EdgeInsets.only(top: kPillReserveHeight + 8, bottom: 24),
+          padding: EdgeInsets.only(
+            top: kPillReserveHeight + 8,
+            bottom: isPhoneLayout(context) ? 88 : 24,
+          ),
           children: [
             _Hero(tokens: tokens),
             const SizedBox(height: 4),

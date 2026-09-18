@@ -1,10 +1,6 @@
-// Orbits Dark — the default theme. Deep neutral graphite / near-black canvas
-// with a thin luminous glass film. STRICTLY monochrome: black / white / gray.
-// The "accent" is a near-white — primary actions read as a bright frosted
-// material, selected nav as a white glyph, focus rings as a white hairline.
-// No blue, no teal. Only success (green) / danger (red) stay as functional
-// semantic colours. Glass tints/borders/shadows are brightness-derived in
-// theme_data_factory.dart, so the palette here only carries the solid colours.
+// Orbits Dark — React photographic theme. Near-black canvas over the space
+// horizon wallpaper. Accent is white; outgoing bubbles are brand blue
+// (#2563eb). Semantic green / danger stay functional.
 
 import 'package:flutter/material.dart';
 
@@ -14,45 +10,34 @@ import '../manifest.dart';
 const ThemeManifest orbitsDarkManifest = ThemeManifest(
   id: 'orbits-dark',
   name: 'Тёмная',
-  subtitle: 'Графит и стекло',
+  subtitle: 'Космос и стекло',
   family: ThemeFamily.classic,
   colorScheme: Brightness.dark,
   tokens: ThemeTokenColors(
-    bg: Color(0xFF0C0D10),
-    surface: Color(0xFF16181D),
-    border: Color(0x1FFFFFFF),
-    text: Color(0xFFF2F3F5),
-    muted: Color(0xFF9BA1AC),
-    // Monochrome accent: a soft near-white. Primary buttons become a bright
-    // frosted material with dark text; nav/focus pick this up automatically.
-    accent: Color(0xFFEDEFF2),
-    // Secondary = a calm light gray (used by "connecting"/secondary states).
-    accent2: Color(0xFFAEB4BE),
-    success: Color(0xFF34C759),
-    danger: Color(0xFFFF453A),
+    bg: Color(0xFF000000),
+    surface: Color(0xFF0C0C0C),
+    border: Color(0x17FFFFFF),
+    text: Color(0xFFF5F5F7),
+    muted: Color(0xFF8E8E93),
+    accent: Color(0xFFFFFFFF),
+    accent2: Color(0xFF8E8E93),
+    success: Color(0xFF34D399),
+    danger: Color(0xFFEF4444),
     scrim: Color(0xCC000000),
-    // Read-tick stays neutral gray (was brand-blue) to keep the palette mono.
-    deliveryRead: Color(0xFF8E949E),
-    // Outgoing bubbles: deep graphite-blue glass, NOT the blinding near-white
-    // accent. Reads as a calm dark tile at night; a hairline accent rim (added
-    // in message_bubble.dart) gives it the luminous glass edge.
-    bubbleOut: Color(0xFF20293B),
+    deliveryRead: Color(0xFF93C5FD),
+    bubbleOut: Color(0xFF2563EB),
   ),
   shape: ThemeShape(
-    radiusButton: 14,
-    radiusCard: 18,
-    radiusModal: 26,
+    radiusButton: 16,
+    radiusCard: 24,
+    radiusModal: 24,
     blurSurface: 0,
     shadowCard: <BoxShadow>[
-      BoxShadow(
-        color: Color(0x40000000),
-        blurRadius: 24,
-        offset: Offset(0, 8),
-      ),
+      BoxShadow(color: Color(0x40000000), blurRadius: 24, offset: Offset(0, 8)),
     ],
   ),
   typography: ThemeTypography(
-    fontHeading: 'Manrope',
+    fontHeading: 'Inter',
     fontBody: 'Inter',
     fontMono: 'JetBrainsMono',
     letterSpacingHeading: -0.015,
@@ -69,8 +54,5 @@ const ThemeManifest orbitsDarkManifest = ThemeManifest(
     messageBubbleStyle: MessageBubbleStyle.rounded,
     modalEnter: ModalEnter.fadeScale,
   ),
-  // A static monochrome backdrop (graphite base + soft neutral glows) sits
-  // behind the whole app so the glass surfaces have luminance to refract —
-  // without it, blur over a flat fill reads as "no glass".
   background: orbitsBackdropBuilder,
 );

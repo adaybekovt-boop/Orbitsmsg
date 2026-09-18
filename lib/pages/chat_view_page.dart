@@ -28,6 +28,7 @@ import 'package:image/image.dart' as img;
 import 'package:mime/mime.dart';
 
 import '../state/calls_provider.dart';
+import '../state/shell_providers.dart';
 import '../state/chat_prefs_provider.dart';
 import '../state/connections_notifier.dart';
 import '../state/messages_provider.dart';
@@ -42,16 +43,26 @@ import '../ui/chat/message_bubble.dart';
 import '../ui/chat/sticker_picker_sheet.dart';
 import '../ui/chat/typing_indicator.dart';
 import '../ui/chat/voice_recorder_sheet.dart';
+import '../ui/primitives/liquid_glass_sphere.dart';
 import '../ui/primitives/orbits_glass_button.dart';
 import '../ui/primitives/orbits_glass_app_bar.dart';
 import '../ui/primitives/orbits_glass_surface.dart';
 
 class ChatViewPage extends ConsumerStatefulWidget {
-  const ChatViewPage({super.key, required this.peerId});
+  const ChatViewPage({
+    super.key,
+    required this.peerId,
+    this.embedded = false,
+    this.onClose,
+  });
 
   /// Remote peer id in canonical form (already upper-cased). The caller
   /// is expected to pass a normalised id; the page re-normalises defensively.
   final String peerId;
+
+  /// Wide workspace pane — no route pop, optional [onClose].
+  final bool embedded;
+  final VoidCallback? onClose;
 
   @override
   ConsumerState<ChatViewPage> createState() => _ChatViewPageState();
@@ -95,6 +106,9 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
     // is idempotent — if a channel is already open it's a no-op.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      if (!widget.embedded) {
+        ref.read(mobileChatOpenProvider.notifier).state = true;
+      }
       ref
           .read(connectionsNotifierProvider.notifier)
           .openReliable(widget.peerId);
@@ -119,6 +133,12 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
   void dispose() {
     _scrollCtl.removeListener(_onScroll);
     _scrollCtl.dispose();
+    if (!widget.embedded) {
+      // Provider may already be gone in tests — ignore.
+      try {
+        ref.read(mobileChatOpenProvider.notifier).state = false;
+      } catch (_) {}
+    }
     super.dispose();
   }
 
@@ -147,11 +167,7 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
   Future<bool> _handleSend(String text) async {
     final notifier = ref.read(messagingNotifierProvider.notifier);
     final reply = _consumeReplyTarget();
-    final id = await notifier.sendText(
-      widget.peerId,
-      text,
-      replyTo: reply,
-    );
+    final id = await notifier.sendText(widget.peerId, text, replyTo: reply);
     // Null id = validation failure (empty, too long, invalid peer).
     // On failure we restore the reply target so the user can fix and
     // resend without re-picking the quoted bubble — but *only* if the
@@ -184,9 +200,7 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
       isScrollControlled: true,
       useSafeArea: true,
       showDragHandle: true,
-      builder: (ctx) => StickerPickerSheet(
-        onPick: _handleStickerPick,
-      ),
+      builder: (ctx) => StickerPickerSheet(onPick: _handleStickerPick),
     );
   }
 
@@ -231,9 +245,7 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
       showDragHandle: false,
       // Sheet takes ~260dp — not worth the drag handle, and the
       // cancel/send buttons are self-explanatory.
-      builder: (ctx) => VoiceRecorderSheet(
-        onSend: _handleVoiceSend,
-      ),
+      builder: (ctx) => VoiceRecorderSheet(onSend: _handleVoiceSend),
     );
   }
 
@@ -341,9 +353,7 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
         ..clearSnackBars()
         ..showSnackBar(
           SnackBar(
-            content: Text(
-              'Файл больше 12 МБ — отправка невозможна ($mb МБ).',
-            ),
+            content: Text('Файл больше 12 МБ — отправка невозможна ($mb МБ).'),
             duration: const Duration(seconds: 3),
           ),
         );
@@ -468,14 +478,14 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
         : const <String, Object?>{};
     final msgId = (row['id'] as String?) ?? (payload['id'] as String?) ?? '';
     final dir = (row['direction'] as String?) ?? 'in';
-    final selfId =
-        ref.read(messagingNotifierProvider.notifier).currentSelfIdOrEmpty;
+    final selfId = ref
+        .read(messagingNotifierProvider.notifier)
+        .currentSelfIdOrEmpty;
     final from = dir == 'out'
         ? selfId
         : ((payload['from'] as String?) ?? widget.peerId);
     final typeRaw = payload['type'];
-    final type =
-        typeRaw is String && typeRaw.isNotEmpty ? typeRaw : 'text';
+    final type = typeRaw is String && typeRaw.isNotEmpty ? typeRaw : 'text';
     final text = (payload['text'] as String?) ?? '';
 
     // Sticker quote summary — cheapest field the receiver can render.
@@ -560,8 +570,9 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
     final dir = (target['direction'] as String?) ?? 'in';
     final fromId =
         (payload['from'] as String?) ?? (target['peerId'] as String?) ?? '';
-    final selfId =
-        ref.read(messagingNotifierProvider.notifier).currentSelfIdOrEmpty;
+    final selfId = ref
+        .read(messagingNotifierProvider.notifier)
+        .currentSelfIdOrEmpty;
     final isSelf = dir == 'out' || (selfId.isNotEmpty && fromId == selfId);
     // Unified grammar: "Ответ: <who>" on both branches so we don't mix
     // prepositional ("на своё") with dative ("собеседнику") in the same
@@ -689,7 +700,9 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
   Widget build(BuildContext context) {
     final messagesAsync = ref.watch(messagesForPeerProvider(widget.peerId));
     final isTyping = ref.watch(typingForPeerProvider(widget.peerId));
-    final isOnline = ref.watch(connectedPeerIdsProvider).contains(widget.peerId);
+    final isOnline = ref
+        .watch(connectedPeerIdsProvider)
+        .contains(widget.peerId);
 
     // Header name/fallback resolution. Goes through peersProvider rather
     // than chatListProvider because chatListProvider only emits rows for
@@ -714,8 +727,8 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
         displayName = remote;
       }
       final blockedRaw = r['blocked'];
-      isBlocked = blockedRaw == true ||
-          (blockedRaw is num && blockedRaw.toInt() == 1);
+      isBlocked =
+          blockedRaw == true || (blockedRaw is num && blockedRaw.toInt() == 1);
       final trustRaw = r['trustLevel'];
       if (trustRaw is num) trustLevel = trustRaw.toInt();
       break;
@@ -749,17 +762,29 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
       extendBodyBehindAppBar: true,
       appBar: OrbitsGlassAppBar(
         titleSpacing: 0,
-        leading: Navigator.of(context).canPop()
-            ? Center(
-                child: OrbitsGlassIconButton(
-                  icon: Icons.arrow_back,
-                  tooltip: 'Назад',
-                  variant: OrbitsGlassVariant.subtle,
-                  size: OrbitsGlassSize.small,
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-              )
-            : null,
+        leading: widget.embedded
+            ? (widget.onClose == null
+                  ? null
+                  : Center(
+                      child: OrbitsGlassIconButton(
+                        icon: Icons.close,
+                        tooltip: 'Закрыть чат',
+                        variant: OrbitsGlassVariant.subtle,
+                        size: OrbitsGlassSize.small,
+                        onPressed: widget.onClose,
+                      ),
+                    ))
+            : (Navigator.of(context).canPop()
+                  ? Center(
+                      child: OrbitsGlassIconButton(
+                        icon: Icons.arrow_back,
+                        tooltip: 'Назад',
+                        variant: OrbitsGlassVariant.subtle,
+                        size: OrbitsGlassSize.small,
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    )
+                  : null),
         title: InkWell(
           // Tapping the header opens the same sheet as the ⋮ action — the
           // React build did that too, so users rediscover the settings
@@ -789,13 +814,14 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
                     Text(
                       isBlocked
                           ? 'Заблокирован'
-                          : (isOnline ? 'В сети · защищённый чат' : 'Не в сети'),
+                          : (isOnline
+                                ? 'В сети · защищённый чат'
+                                : 'Не в сети'),
                       style: TextStyle(
                         fontSize: 12,
-                        color: Theme.of(context)
-                            .colorScheme
-                            .onSurface
-                            .withValues(alpha: 0.6),
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.onSurface.withValues(alpha: 0.6),
                       ),
                     ),
                   ],
@@ -856,124 +882,123 @@ class _ChatViewPageState extends ConsumerState<ChatViewPage> {
         ],
       ),
       body: isGated
-          ? _VerifyGate(
-              hiddenCount: list.length,
-              onVerify: _openChatSettings,
-            )
+          ? _VerifyGate(hiddenCount: list.length, onVerify: _openChatSettings)
           : Column(
-        children: [
-          Expanded(
-            child: messagesAsync.when(
-              data: (rows) {
-                if (rows.isEmpty) return const _EmptyChat();
-                // Chat appearance prefs (font size / bubble shape / seconds).
-                // Read here (during build) so layout-time itemBuilder doesn't
-                // call ref.watch; the page rebuilds when prefs change.
-                final chatPrefs = ref.watch(chatPrefsProvider);
-                // `reverse: true` means index 0 is the newest; we flip the
-                // row order when indexing so the data stays oldest-first
-                // for everyone else (matches `watchMessagesForPeer`'s
-                // contract).
-                return ListView.builder(
-                  controller: _scrollCtl,
-                  reverse: true,
-                  // Top padding clears the glass header the list now scrolls
-                  // behind (extendBodyBehindAppBar above): window inset +
-                  // toolbar height, so the first message rests just under the
-                  // bar yet still frosts it on scroll. Bottom stays a calm 8px.
-                  padding: EdgeInsets.only(
-                    top: MediaQuery.paddingOf(context).top + kToolbarHeight + 8,
-                    bottom: 8,
-                  ),
-                  itemCount: rows.length,
-                  // Hold ~2000 logical px of off-screen bubbles in memory
-                  // on each side of the viewport. With reverse:true and
-                  // variable-height bubbles, the default 250 px cache is
-                  // way too small — short scrubs back-and-forth through
-                  // history would re-decode replies / re-mount voice
-                  // players, which is what causes the "jitter on scroll
-                  // up" noted in the optimisation doc.
-                  cacheExtent: 2000,
-                  // Disable the implicit RepaintBoundary — we add our own
-                  // per-bubble below so each row composites on its own
-                  // layer (heavy bubbles like images don't invalidate the
-                  // simple text bubbles next to them on every paint).
-                  addRepaintBoundaries: false,
-                  itemBuilder: (context, i) {
-                    final k = rows.length - 1 - i;
-                    final row = rows[k];
-                    // Message clustering: collapse the gap + drop the tail for
-                    // consecutive messages from the same author < 3 min apart.
-                    final prev = k > 0 ? rows[k - 1] : null;
-                    final next = k < rows.length - 1 ? rows[k + 1] : null;
-                    final groupedWithPrevious =
-                        prev != null && _sameCluster(prev, row);
-                    final isTail = next == null || !_sameCluster(row, next);
-                    return RepaintBoundary(
-                      child: MessageBubble(
-                        row: row,
-                        groupedWithPrevious: groupedWithPrevious,
-                        isTail: isTail,
-                        textScale: chatPrefs.fontScale,
-                        bubbleStyle: chatPrefs.bubbleStyle,
-                        showSeconds: chatPrefs.showSeconds,
-                        onRetry: () {
-                          // Touching a pending message re-kicks the
-                          // flusher for this peer. If the reliable channel
-                          // is down this is a no-op until it reopens.
-                          ref
-                              .read(messagingNotifierProvider.notifier)
-                              .flushOutboxForPeer(widget.peerId);
+              children: [
+                Expanded(
+                  child: messagesAsync.when(
+                    data: (rows) {
+                      if (rows.isEmpty) return const _EmptyChat();
+                      // Chat appearance prefs (font size / bubble shape / seconds).
+                      // Read here (during build) so layout-time itemBuilder doesn't
+                      // call ref.watch; the page rebuilds when prefs change.
+                      final chatPrefs = ref.watch(chatPrefsProvider);
+                      // `reverse: true` means index 0 is the newest; we flip the
+                      // row order when indexing so the data stays oldest-first
+                      // for everyone else (matches `watchMessagesForPeer`'s
+                      // contract).
+                      return ListView.builder(
+                        controller: _scrollCtl,
+                        reverse: true,
+                        // Top padding clears the glass header the list now scrolls
+                        // behind (extendBodyBehindAppBar above): window inset +
+                        // toolbar height, so the first message rests just under the
+                        // bar yet still frosts it on scroll. Bottom stays a calm 8px.
+                        padding: EdgeInsets.only(
+                          top:
+                              MediaQuery.paddingOf(context).top +
+                              kToolbarHeight +
+                              8,
+                          bottom: 8,
+                        ),
+                        itemCount: rows.length,
+                        // Hold ~2000 logical px of off-screen bubbles in memory
+                        // on each side of the viewport. With reverse:true and
+                        // variable-height bubbles, the default 250 px cache is
+                        // way too small — short scrubs back-and-forth through
+                        // history would re-decode replies / re-mount voice
+                        // players, which is what causes the "jitter on scroll
+                        // up" noted in the optimisation doc.
+                        cacheExtent: 2000,
+                        // Disable the implicit RepaintBoundary — we add our own
+                        // per-bubble below so each row composites on its own
+                        // layer (heavy bubbles like images don't invalidate the
+                        // simple text bubbles next to them on every paint).
+                        addRepaintBoundaries: false,
+                        itemBuilder: (context, i) {
+                          final k = rows.length - 1 - i;
+                          final row = rows[k];
+                          // Message clustering: collapse the gap + drop the tail for
+                          // consecutive messages from the same author < 3 min apart.
+                          final prev = k > 0 ? rows[k - 1] : null;
+                          final next = k < rows.length - 1 ? rows[k + 1] : null;
+                          final groupedWithPrevious =
+                              prev != null && _sameCluster(prev, row);
+                          final isTail =
+                              next == null || !_sameCluster(row, next);
+                          return RepaintBoundary(
+                            child: MessageBubble(
+                              row: row,
+                              groupedWithPrevious: groupedWithPrevious,
+                              isTail: isTail,
+                              textScale: chatPrefs.fontScale,
+                              bubbleStyle: chatPrefs.bubbleStyle,
+                              showSeconds: chatPrefs.showSeconds,
+                              onRetry: () {
+                                // Touching a pending message re-kicks the
+                                // flusher for this peer. If the reliable channel
+                                // is down this is a no-op until it reopens.
+                                ref
+                                    .read(messagingNotifierProvider.notifier)
+                                    .flushOutboxForPeer(widget.peerId);
+                              },
+                              onReplyRequested: _handleReplyRequested,
+                            ),
+                          );
                         },
-                        onReplyRequested: _handleReplyRequested,
+                      );
+                    },
+                    loading: () =>
+                        const Center(child: CircularProgressIndicator()),
+                    error: (err, _) => Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          'Не удалось загрузить сообщения: $err',
+                          textAlign: TextAlign.center,
+                        ),
                       ),
-                    );
-                  },
-                );
-              },
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (err, _) => Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text(
-                    'Не удалось загрузить сообщения: $err',
-                    textAlign: TextAlign.center,
+                    ),
                   ),
                 ),
-              ),
-            ),
-          ),
-          // Typing bubble floats above the composer when the peer is
-          // typing. `AnimatedSwitcher` gives a soft slide-in without
-          // pulling in a full animation package.
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 180),
-            child: isTyping
-                ? const Align(
-                    key: ValueKey('typing'),
-                    alignment: Alignment.centerLeft,
-                    child: TypingIndicator(),
-                  )
-                : const SizedBox(
-                    key: ValueKey('no-typing'),
-                    height: 0,
+                // Typing bubble floats above the composer when the peer is
+                // typing. `AnimatedSwitcher` gives a soft slide-in without
+                // pulling in a full animation package.
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 180),
+                  child: isTyping
+                      ? const Align(
+                          key: ValueKey('typing'),
+                          alignment: Alignment.centerLeft,
+                          child: TypingIndicator(),
+                        )
+                      : const SizedBox(key: ValueKey('no-typing'), height: 0),
+                ),
+                if (isBlocked)
+                  _BlockedComposerBanner(onUnblock: _openChatSettings)
+                else
+                  ChatComposer(
+                    actions: ComposerActions(
+                      onSend: _handleSend,
+                      onTypingChanged: _handleTyping,
+                      onOpenStickerPicker: _openStickerPicker,
+                      onPickAttachment: _pickAttachment,
+                      onRecordVoice: _openVoiceRecorder,
+                    ),
+                    replyPreview: _replyPreview(),
                   ),
-          ),
-          if (isBlocked)
-            _BlockedComposerBanner(onUnblock: _openChatSettings)
-          else
-            ChatComposer(
-              actions: ComposerActions(
-                onSend: _handleSend,
-                onTypingChanged: _handleTyping,
-                onOpenStickerPicker: _openStickerPicker,
-                onPickAttachment: _pickAttachment,
-                onRecordVoice: _openVoiceRecorder,
-              ),
-              replyPreview: _replyPreview(),
+              ],
             ),
-        ],
-      ),
     );
   }
 }
@@ -1015,8 +1040,11 @@ class _VerifyGate extends StatelessWidget {
                         border: Border.all(color: tokens.accentAlpha(0.24)),
                       ),
                       alignment: Alignment.center,
-                      child: Icon(Icons.shield_outlined,
-                          size: 30, color: tokens.text),
+                      child: Icon(
+                        Icons.shield_outlined,
+                        size: 30,
+                        color: tokens.text,
+                      ),
                     ),
                     const SizedBox(height: 18),
                     Text(
@@ -1047,7 +1075,9 @@ class _VerifyGate extends StatelessWidget {
                       const SizedBox(height: 14),
                       Container(
                         padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 7),
+                          horizontal: 12,
+                          vertical: 7,
+                        ),
                         decoration: BoxDecoration(
                           color: tokens.muted.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(10),
@@ -1111,18 +1141,12 @@ class _BlockedComposerBanner extends StatelessWidget {
         decoration: BoxDecoration(
           color: scheme.surface,
           border: Border(
-            top: BorderSide(
-              color: scheme.onSurface.withValues(alpha: 0.08),
-            ),
+            top: BorderSide(color: scheme.onSurface.withValues(alpha: 0.08)),
           ),
         ),
         child: Row(
           children: [
-            Icon(
-              Icons.block,
-              size: 20,
-              color: scheme.error,
-            ),
+            Icon(Icons.block, size: 20, color: scheme.error),
             const SizedBox(width: 12),
             Expanded(
               child: Text(
@@ -1211,12 +1235,8 @@ class _EmptyChat extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              Icons.lock_outline,
-              size: 48,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            const SizedBox(height: 12),
+            const LiquidGlassSphere(size: 96),
+            const SizedBox(height: 16),
             const Text(
               'Пока ни одного сообщения',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
@@ -1227,10 +1247,9 @@ class _EmptyChat extends StatelessWidget {
               'устройствах.',
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: Theme.of(context)
-                    .colorScheme
-                    .onSurface
-                    .withValues(alpha: 0.6),
+                color: Theme.of(
+                  context,
+                ).colorScheme.onSurface.withValues(alpha: 0.6),
                 fontSize: 13,
               ),
             ),

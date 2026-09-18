@@ -33,8 +33,10 @@ void main() {
       expect(orbitsLightManifest.colorScheme, Brightness.light);
       // Light text must be dark for readability; dark text near-white.
       expect(orbitsLightManifest.tokens.text.computeLuminance(), lessThan(0.2));
-      expect(orbitsDarkManifest.tokens.text.computeLuminance(),
-          greaterThan(0.7));
+      expect(
+        orbitsDarkManifest.tokens.text.computeLuminance(),
+        greaterThan(0.7),
+      );
       // Body font is Inter (Apple-ish, Cyrillic-complete) per the brief.
       expect(orbitsDarkManifest.typography.fontBody, 'Inter');
       expect(orbitsLightManifest.typography.fontBody, 'Inter');
