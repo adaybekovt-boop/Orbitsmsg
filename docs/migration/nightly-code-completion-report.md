@@ -8,7 +8,8 @@ migration is code-complete or safe to merge.
 Software path only. External gates stay open.
 
 - `DeviceRatchetSessions` vault-wraps every session snapshot plus the
-  revoke set. `NativeTransportHost` hydrates before DualStack bind
+  revoke set, including after each fan-out encrypt / decrypt.
+  `NativeTransportHost` hydrates before DualStack bind
 - Host-plaintext `room_autobase` packets carry Autobase events over
   DualStack. RoomManager replays the log to late joiners. Membership
   metadata is appended as `roomMembershipChanged` (no chat bodies,

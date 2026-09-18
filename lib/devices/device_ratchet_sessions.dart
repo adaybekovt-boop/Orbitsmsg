@@ -118,6 +118,7 @@ class DeviceRatchetSessions {
       final env = await ratchetEncrypt(state, plaintext);
       out[target.deviceId] = encodeWire(env);
     }
+    if (out.isNotEmpty) unawaited(persist());
     return out;
   }
 
@@ -137,7 +138,9 @@ class DeviceRatchetSessions {
     if (env == null) {
       throw const FormatException('not a v2 ratchet envelope');
     }
-    return ratchetDecrypt(state, env);
+    final plain = await ratchetDecrypt(state, env);
+    unawaited(persist());
+    return plain;
   }
 
   /// Persistence snapshot. Callers must wrap secret fields; logs must use

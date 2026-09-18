@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:orbits_flutter/core/double_ratchet.dart';
 import 'package:orbits_flutter/devices/device_ratchet_sessions.dart';
+import 'package:orbits_flutter/devices/device_registry.dart';
 
 import '../helpers/pointycastle_ecdh.dart';
 
@@ -47,6 +48,22 @@ void main() {
         state: aliceState,
       );
     live.revoke('dev-gone');
+    final mid = await live.fanoutEncrypt(
+      sendingDeviceId: 'dev-a',
+      targets: [
+        AuthorizedDevice(
+          deviceId: 'dev-b',
+          transportPublicKey: List<int>.filled(32, 1),
+          hypercorePublicKey: List<int>.filled(32, 2),
+          name: 'b',
+          kind: 'phone',
+          createdAt: 1,
+          status: DeviceStatus.active,
+        ),
+      ],
+      plaintext: {'text': 'live'},
+    );
+    expect(mid['dev-b'], isNotEmpty);
     await live.persist();
     expect(saved, isNotEmpty);
     final decoded = jsonDecode(utf8.decode(saved));
